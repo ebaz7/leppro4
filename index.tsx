@@ -1,0 +1,33 @@
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import ErrorBoundary from './components/ErrorBoundary'; // Import ErrorBoundary
+import './index.css'; 
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
+import { installSafeStorageGlobalPolyfill } from './utils/safeStorage';
+import { installGlobalApiFetchInterceptor } from './services/apiService';
+
+// Protect against localStorage QuotaExceededError crashes everywhere
+installSafeStorageGlobalPolyfill();
+// Ensure relative API calls resolve to real server domain on Tauri Desktop and Capacitor Android
+installGlobalApiFetchInterceptor();
+
+// Expose libraries globally
+(window as any).html2canvas = html2canvas;
+(window as any).jspdf = { jsPDF };
+
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  </React.StrictMode>
+);

@@ -1,0 +1,41 @@
+{
+  "appId": "com.delcom.paymentsystem",
+  "productName": "سامانه دلکام",
+  "directories": {
+    "output": "release-electron"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "app-icon.png"
+  ],
+  "extraMetadata": {
+    "main": "electron/main.cjs"
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "app-icon.png",
+    "requestedExecutionLevel": "asInvoker"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": false,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "سامانه دلکام",
+    "uninstallDisplayName": "سامانه دلکام",
+    "differentialPackage": false,
+    "packElevateHelper": false,
+    "artifactName": "dlkam-electron-setup-v${version}.${ext}",
+    "include": "electron/installer.nsh",
+    "guid": "2c45c88c-b358-4255-a539-07eba6414df0"
+  },
+  "compression": "normal"
+}

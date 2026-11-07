@@ -1,0 +1,34 @@
+--- components/TradeModule.tsx
++++ components/TradeModule.tsx
+@@ -440,24 +440,27 @@
+             let extractedAgentPayments: AgentPayment[] = [];
+             const anyRec = selectedRecord as any;
+             
++            const seenSignatures = new Set<string>();
++            
+             const addPayments = (payments: any[]) => {
+                 if (Array.isArray(payments)) {
+                     payments.forEach((p, idx) => {
+                         if (p) {
+-                            // If it has an ID, check if we already added it to prevent duplicates
+-                            if (p.id && extractedAgentPayments.some(existing => existing.id === p.id)) {
++                            const amt = deformatNumberString(String(p.amount || p.cost || 0));
++                            const name = p.agentName || p.name || p.description || 'نامشخص';
++                            const signature = `${p.id || ''}-${amt}-${name}-${p.date || ''}`;
++                            
++                            if (seenSignatures.has(signature)) {
+                                 return;
+                             }
++                            seenSignatures.add(signature);
+                             
+-                            // Handle legacy structures which might use 'cost' instead of 'amount' or 'name' instead of 'agentName'
+                             const pId = p.id || p._id || `legacy-${idx}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                             extractedAgentPayments.push({
+                                 id: pId,
+-                                agentName: p.agentName || p.name || p.description || 'نامشخص',
+-                                amount: Number(p.amount) || Number(p.cost) || 0,
++                                agentName: name,
++                                amount: amt,
+                                 bank: p.bank || '',
+                                 date: p.date || p.paymentDate || '',
+                                 part: p.part || '',

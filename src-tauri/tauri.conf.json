@@ -1,0 +1,51 @@
+{
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "node setup-desktop-icons.cjs && npm run build",
+    "devPath": "http://localhost:3000",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Dlkam",
+    "version": "1.0.29"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true,
+      "http": {
+        "all": true,
+        "request": true,
+        "scope": [
+          "http://**",
+          "https://**"
+        ]
+      },
+      "shell": {
+        "all": true,
+        "open": ".*"
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "ir.dlkam.desktop.app",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "resources": [],
+      "externalBin": [],
+      "copyright": "Copyright © 2026 Lepan Covering & Texturing Manufacturing Company. All rights reserved.",
+      "category": "Business",
+      "shortDescription": "Lepan covering & texturing manufacturing company desktop client.",
+      "longDescription": "Lepan intelligent manufacturing and warehouse system native desktop client with smart LAN/Cloud routing."
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": []
+  }
+}

@@ -1,0 +1,10094 @@
+import React, { useState, useEffect, useRef } from "react";
+import {
+  getSettings,
+  saveSettings,
+  getGroups,
+  uploadFile,
+  uploadFileChunked,
+  getSecretariatSettings,
+  saveSecretariatSettings,
+  getSecretariatTemplates,
+  saveSecretariatTemplate,
+  deleteSecretariatTemplate,
+  importDocx,
+} from "../services/storageService";
+import { resolveImageUrl } from "../services/apiService";
+import {
+  SystemSettings,
+  Company,
+  Contact,
+  CompanyBank,
+  User,
+  PrintTemplate,
+  SecretariatCompanySettings,
+  SecretariatTemplate,
+  ChatGroup,
+} from "../types";
+import {
+  Settings as SettingsIcon,
+  Save,
+  Loader2,
+  CheckSquare,
+  Database,
+  FolderOpen,
+  Bell,
+  Plus,
+  Trash2,
+  Building,
+  Shield,
+  ShieldCheck,
+  Landmark,
+  AppWindow,
+  BellRing,
+  BellOff,
+  Send,
+  Image as ImageIcon,
+  Pencil,
+  X,
+  Check,
+  MessageCircle,
+  RefreshCw,
+  Users,
+  User as UserIcon,
+  FolderSync,
+  Smartphone,
+  Link,
+  Truck,
+  DownloadCloud,
+  UploadCloud,
+  Warehouse,
+  FileText,
+  Container,
+  LayoutTemplate,
+  WifiOff,
+  Info,
+  RefreshCcw,
+  FileClock,
+  Power,
+  Cpu,
+  Zap,
+  Layers,
+  Globe,
+  ClipboardList,
+  Lock,
+  Camera,
+  Bot,
+  Sparkles,
+  Upload,
+  Eye,
+  EyeOff,
+  AlertTriangle,
+  Monitor,
+  Server,
+  Wifi,
+  Cloud,
+  Terminal,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Copy,
+  Download,
+  Radio,
+  Sliders,
+  Clock,
+  ArrowDownCircle,
+  History,
+  HardDrive,
+  CheckCircle,
+  Rocket,
+  ArrowUpCircle,
+  QrCode,
+} from "lucide-react";
+import { publishApplicationUpdate, applyApplicationUpdate, compareSemVer, getNativeClientVersion } from "../services/updateService";
+import { apiCall, getServerHost } from "../services/apiService";
+import { Capacitor } from "@capacitor/core";
+import {
+  requestNotificationPermission,
+  setNotificationPreference,
+  isNotificationEnabledInApp,
+  sendNotification,
+} from "../services/notificationService";
+import { isTauriDesktop } from "../utils/platformDetection";
+import { safeLocalStorage } from "../utils/safeStorage";
+import { getUsers } from "../services/authService";
+import { generateUUID } from "../constants";
+import PrintTemplateDesigner from "./PrintTemplateDesigner";
+import { FiscalYearManager } from "./FiscalModule";
+import SecondExitGroupSettings from "./settings/SecondExitGroupSettings";
+import RolePermissionsEditor from "./settings/RolePermissionsEditor";
+import PurchaseWorkflowApproversSettings from "./settings/PurchaseWorkflowApproversSettings";
+import BackupManager from "./settings/BackupManager";
+import BotManager from "./settings/BotManager";
+import { CustomerExitNotificationConfig } from "./settings/CustomerExitNotificationConfig";
+import { WhatsAppDiagnosticTool } from "./settings/WhatsAppDiagnosticTool";
+import { DigitalCardModule } from "./DigitalCardModule";
+
+// Internal QRCode Component with Local Offline Generation
+const QRCode = ({ value, size }: { value: string; size: number }) => {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (!value) return;
+    setError(false);
+    import("qrcode")
+      .then((QRCodeLib) => {
+        QRCodeLib.toDataURL(value, {
+          width: size,
+          margin: 1,
+          color: {
+            dark: "#000000",
+            light: "#ffffff",
+          },
+        })
+          .then((url) => {
+            if (active) setDataUrl(url);
+          })
+          .catch(() => {
+            if (active) setError(true);
+          });
+      })
+      .catch(() => {
+        if (active) setError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [value, size]);
+
+  if (error) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center text-gray-400 text-xs border-2 border-dashed border-gray-300 rounded-lg p-2"
+        style={{ width: size, height: size }}
+      >
+        <WifiOff size={24} className="mb-2" />
+        <span className="text-center">امکان ساخت QR کد وجود ندارد</span>
+      </div>
+    );
+  }
+
+  if (!dataUrl) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center text-gray-400 text-xs border-2 border-dashed border-gray-300 rounded-lg p-2 animate-pulse"
+        style={{ width: size, height: size }}
+      >
+        <Loader2 size={24} className="animate-spin mb-2 text-indigo-500" />
+        <span className="text-center">در حال تولید QR...</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={dataUrl}
+      alt="QR Code"
+      width={size}
+      height={size}
+      className="mix-blend-multiply"
+    />
+  );
+};
+
+interface SettingsProps {
+  financialYear?: string;
+  settings?: SystemSettings;
+  onUpdateSettings?: (s: SystemSettings) => void;
+}
+
+const Settings: React.FC<SettingsProps> = ({
+  financialYear,
+  settings: propSettings,
+  onUpdateSettings,
+}) => {
+  const [activeCategory, setActiveCategory] = useState<
+    | "system"
+    | "fiscal"
+    | "backup"
+    | "data"
+    | "integrations"
+    | "whatsapp"
+    | "permissions"
+    | "warehouse"
+    | "commerce"
+    | "templates"
+    | "bot"
+    | "meetings"
+    | "secretariat"
+    | "digital-card"
+    | "security"
+    | "camera"
+    | "theme"
+    | "desktop"
+    | "updates"
+  >("system");
+
+  const [chatGroups, setChatGroups] = useState<ChatGroup[]>([]);
+
+  // --- Secretariat Settings State ---
+  const [secConfigs, setSecConfigs] = useState<SecretariatCompanySettings[]>(
+    [],
+  );
+  const [selectedCompanyIdForSec, setSelectedCompanyIdForSec] =
+    useState<string>("");
+  const [secSettingsForm, setSecSettingsForm] =
+    useState<SecretariatCompanySettings>({
+      companyId: "",
+      headquartersAccessTokens: [],
+      factoryAccessTokens: [],
+      letterheadUrl: "",
+      meetingMinutesTemplate: "",
+      companyStampUrl: "",
+      companyStampSize: 112,
+      companyStampOpacity: 70,
+      hideAutoFooter: false,
+      letterheadFontFamily: "Vazirmatn",
+      metadataTop: 25,
+      metadataLeft: 20,
+      metadataFontSize: 11,
+      metadataOpacity: 100,
+      metadataFontWeight: "bold",
+    });
+  const [isUploadingSecLetterhead, setIsUploadingSecLetterhead] =
+    useState(false);
+  const [isUploadingSecStamp, setIsUploadingSecStamp] = useState(false);
+  const secLetterheadInputRef = useRef<HTMLInputElement>(null);
+  const secStampInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingSecWordLetterhead, setIsUploadingSecWordLetterhead] =
+    useState(false);
+  const secWordLetterheadInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingSecPdfLetterhead, setIsUploadingSecPdfLetterhead] =
+    useState(false);
+  const secPdfLetterheadInputRef = useRef<HTMLInputElement>(null);
+
+  // Secretariat Templates State
+  const [secTemplates, setSecTemplates] = useState<SecretariatTemplate[]>([]);
+  const [editingSecTemplate, setEditingSecTemplate] =
+    useState<Partial<SecretariatTemplate> | null>(null);
+  const [importingDocxFile, setImportingDocxFile] = useState(false);
+  const docxImportInputRef = useRef<HTMLInputElement>(null);
+
+  const hasInitializedRef = useRef(false);
+  const settingsContentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (settingsContentRef.current) {
+      settingsContentRef.current.scrollTop = 0;
+    }
+  }, [activeCategory]);
+
+  const [settings, setSettings] = useState<SystemSettings>({
+    appName: "سیستم من",
+    currentTrackingNumber: 1000,
+    currentExitPermitNumber: 1000,
+    currentChequeReceiptNumber: 1000,
+    currentPoshtNomreh: 1,
+    chequeArchiveCutoffDate: "",
+    companyNames: [],
+    companies: [],
+    defaultCompany: "",
+    bankNames: [],
+    operatingBankNames: [],
+    commodityGroups: [],
+    rolePermissions: {},
+    customRoles: [],
+    savedContacts: [],
+    pwaIcon: "",
+    telegramBotToken: "",
+    telegramAdminId: "",
+    baleBotToken: "",
+    smsApiKey: "",
+    smsSenderNumber: "",
+    googleCalendarId: "",
+    whatsappNumber: "",
+    sayanApiUrl: "http://80.210.31.176:5000/api/external/v1",
+    sayanApiKey: "s_gate_live_73f08a91b2c",
+    geminiApiKey: "",
+    geminiBaseUrl: "",
+    warehouseSequences: {},
+    companyNotifications: {},
+    defaultWarehouseGroup: "",
+    defaultSalesManager: "",
+    insuranceCompanies: [],
+    exitPermitNotificationGroup: "",
+    printTemplates: [],
+    fiscalYears: [],
+    botAccountingGroupIdTele: "",
+    botAccountingGroupIdBale: "",
+    botAccountingGroupIdWhatsApp: "",
+    botDriverPaymentGroupIdTele: "",
+    botDriverPaymentGroupIdBale: "",
+    botDriverPaymentGroupIdWhatsApp: "",
+    botDriverPaymentAutoSendEnabled: true,
+    customerExitTelegramBotUrl: "",
+    customerExitBaleBotUrl: "",
+    customerExitOtherBotUrl: "",
+    customerExitBotInviteText: "",
+    purchaseRolePermissions: {},
+  });
+
+  const [sendingManualSalesToday, setSendingManualSalesToday] = useState(false);
+  const [sendingManualSalesYesterday, setSendingManualSalesYesterday] = useState(false);
+  const [sendingManualCheques, setSendingManualCheques] = useState(false);
+  const [sendingManualChequesMatured, setSendingManualChequesMatured] = useState(false);
+
+  const [showSayanKey, setShowSayanKey] = useState(false);
+  const [testingSayan, setTestingSayan] = useState(false);
+  const [sayanTestResult, setSayanTestResult] = useState<{ success: boolean; message: string; latency?: number; status?: number } | null>(null);
+
+  const handleTestSayan = async () => {
+    if (!settings.sayanApiUrl?.trim()) {
+      setSayanTestResult({ success: false, message: 'لطفاً ابتدا آدرس IP یا وب‌سرویس سایان را وارد کنید.' });
+      return;
+    }
+    setTestingSayan(true);
+    setSayanTestResult(null);
+    try {
+      const res = await apiCall<{ success: boolean; message?: string; error?: string; latency?: number; status?: number }>('/sayan/test-connection', 'POST', {
+        url: settings.sayanApiUrl.trim(),
+        apiKey: settings.sayanApiKey?.trim() || ''
+      });
+      if (res.success) {
+        setSayanTestResult({
+          success: true,
+          message: res.message || 'ارتباط با سرور سایان با موفقیت برقرار شد.',
+          latency: res.latency
+        });
+      } else {
+        setSayanTestResult({
+          success: false,
+          message: res.error || 'خطا در ارتباط با سرور سایان',
+          latency: res.latency,
+          status: res.status
+        });
+      }
+    } catch (err: any) {
+      setSayanTestResult({
+        success: false,
+        message: err.message || 'عدم امکان برقراری ارتباط با وب‌سرویس سایان'
+      });
+    } finally {
+      setTestingSayan(false);
+    }
+  };
+
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [testingGemini, setTestingGemini] = useState(false);
+  const [geminiTestResult, setGeminiTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleTestGemini = async () => {
+    if (!settings.geminiApiKey?.trim()) {
+      setGeminiTestResult({ success: false, message: 'لطفاً ابتدا کلید Gemini AI را وارد کنید.' });
+      return;
+    }
+    setTestingGemini(true);
+    setGeminiTestResult(null);
+    try {
+      const res = await apiCall<{ success: boolean; reply?: string; error?: string }>('/ai/test-connection', 'POST', {
+        apiKey: settings.geminiApiKey.trim(),
+        baseUrl: settings.geminiBaseUrl?.trim() || undefined
+      });
+      if (res.success) {
+        setGeminiTestResult({ success: true, message: `اتصال برقرار شد: ${res.reply || 'پاسخ هوش مصنوعی دریافت شد.'}` });
+      } else {
+        setGeminiTestResult({ success: false, message: res.error || 'خطا در ارتباط با هوش مصنوعی' });
+      }
+    } catch (err: any) {
+      setGeminiTestResult({ success: false, message: err.message || 'خطا در تست اتصال هوش مصنوعی' });
+    } finally {
+      setTestingGemini(false);
+    }
+  };
+
+  const handleSendManualChequesVault = async () => {
+    setSendingManualCheques(true);
+    try {
+      const data = await apiCall<{ success: boolean; message?: string; error?: string; count?: number }>('/sayan/cheques-report/send-vault', 'POST', {
+        attachPdf: settings.chequeVaultAttachPdf ?? true,
+        attachExcel: settings.chequeVaultAttachExcel ?? true,
+        reportType: 'vault'
+      });
+      if (data && data.success) {
+        alert(`✅ ${data.message || `گزارش چک‌های نزد صندوق خزانه‌داری با موفقیت به گروه‌ها ارسال گردید (${data.count || 0} فقره چک).`}`);
+      } else {
+        alert(`❌ خطا در ارسال گزارش چک‌ها: ${data?.error || 'پاسخ ناموفق از سرور'}`);
+      }
+    } catch (e: any) {
+      alert(`❌ خطا در برقراری ارتباط با سرور: ${e.message || e}`);
+    } finally {
+      setSendingManualCheques(false);
+    }
+  };
+
+  const handleSendManualChequesMatured = async () => {
+    setSendingManualChequesMatured(true);
+    try {
+      const data = await apiCall<{ success: boolean; message?: string; error?: string; count?: number }>('/sayan/cheques-report/send-vault', 'POST', {
+        attachPdf: settings.chequeVaultAttachPdf ?? true,
+        attachExcel: settings.chequeVaultAttachExcel ?? true,
+        reportType: 'matured'
+      });
+      if (data && data.success) {
+        alert(`✅ ${data.message || `گزارش چک‌های سررسید شده امروز خزانه‌داری با موفقیت به گروه‌ها ارسال گردید (${data.count || 0} فقره چک).`}`);
+      } else {
+        alert(`❌ خطا در ارسال گزارش چک‌ها: ${data?.error || 'پاسخ ناموفق از سرور'}`);
+      }
+    } catch (e: any) {
+      alert(`❌ خطا در برقراری ارتباط با سرور: ${e.message || e}`);
+    } finally {
+      setSendingManualChequesMatured(false);
+    }
+  };
+
+  const [graphicsEngineInfo, setGraphicsEngineInfo] = useState<any>(null);
+  const [loadingGraphicsStatus, setLoadingGraphicsStatus] = useState<boolean>(false);
+  const [testingGraphics, setTestingGraphics] = useState<boolean>(false);
+  const [testChartSvg, setTestChartSvg] = useState<string | null>(null);
+
+  const fetchGraphicsStatus = async () => {
+    setLoadingGraphicsStatus(true);
+    try {
+      const res = await fetch('/api/graphics/engine-status');
+      if (res.ok) {
+        const data = await res.json();
+        setGraphicsEngineInfo(data);
+      }
+    } catch (e) {
+      console.error("Failed to load graphics engine status:", e);
+    } finally {
+      setLoadingGraphicsStatus(false);
+    }
+  };
+
+  const handleTestGraphicsEngine = async () => {
+    setTestingGraphics(true);
+    try {
+      const sampleData = [15, 28, 42, 35, 58, 65, 82, 74, 90, 110, 125];
+      const res = await fetch('/api/graphics/render-chart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: sampleData,
+          width: 320,
+          height: 80,
+          strokeColor: '#059669',
+          title: 'تست رندر نمودار پردازش شده سمت سرور'
+        })
+      });
+      if (res.ok) {
+        const svgText = await res.text();
+        setTestChartSvg(svgText);
+      }
+    } catch (e) {
+      alert('خطا در فراخوانی موتور گرافیکی سرور');
+    } finally {
+      setTestingGraphics(false);
+    }
+  };
+
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>(() => settings?.systemVersion || "1.0.0");
+
+  useEffect(() => {
+    getNativeClientVersion().then(info => {
+      if (info?.version) {
+        setCurrentAppVersion(info.version);
+      }
+    }).catch(() => {});
+  }, [settings?.systemVersion]);
+  const [testingDesktopUpdate, setTestingDesktopUpdate] = useState<boolean>(false);
+  const [desktopTestResult, setDesktopTestResult] = useState<{
+    success: boolean;
+    manifest?: any;
+    message?: string;
+    checkedUrl?: string;
+  } | null>(null);
+  const [savingDesktopSettings, setSavingDesktopSettings] = useState<boolean>(false);
+  const [desktopSaveMessage, setDesktopSaveMessage] = useState<string>("");
+
+  // --- Dedicated Updates Section States ---
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "available" | "up_to_date" | "error"
+  >("idle");
+  const [updateManifestInfo, setUpdateManifestInfo] = useState<{
+    version: string;
+    notes?: string;
+    pubDate?: string;
+    downloadUrl?: string;
+    rawJson?: any;
+  } | null>(null);
+  const [updateCheckError, setUpdateCheckError] = useState<string>("");
+  const [lastCheckTimeDisplay, setLastCheckTimeDisplay] = useState<string>(
+    settings.desktopLastCheckTime || ""
+  );
+
+  // Download & Progress simulation / real state
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [downloadPhase, setDownloadPhase] = useState<
+    "idle" | "downloading" | "verifying" | "ready" | "error"
+  >("idle");
+  const [downloadSpeedStr, setDownloadSpeedStr] = useState<string>("0 KB/s");
+  const [downloadedBytesStr, setDownloadedBytesStr] = useState<string>("0 MB");
+  const [totalBytesStr, setTotalBytesStr] = useState<string>("28.4 MB");
+  const downloadTimerRef = useRef<any>(null);
+
+  const handleManualCheckVersion = async (overrideUrl?: string) => {
+    setIsCheckingUpdate(true);
+    setUpdateStatus("checking");
+    setUpdateCheckError("");
+    setUpdateManifestInfo(null);
+    setDownloadPhase("idle");
+    setDownloadProgress(0);
+
+    const targetUrl =
+      (overrideUrl || settings.desktopUpdateUrl || "").trim() ||
+      `${window.location.origin}/api/desktop/updater.json`;
+
+    try {
+      // First check if native Tauri updater IPC is available
+      const isTauri = typeof window !== "undefined" && Boolean((window as any).__TAURI__);
+      let fetchedVersion = "";
+      let fetchedNotes = "";
+      let fetchedDate = "";
+      let fetchedUrl = "";
+      let rawData: any = null;
+
+      if (isTauri && (window as any).__TAURI__?.updater?.checkUpdate) {
+        try {
+          const tauriRes = await (window as any).__TAURI__.updater.checkUpdate();
+          if (tauriRes?.shouldUpdate) {
+            fetchedVersion = tauriRes.manifest?.version || "1.0.1";
+            fetchedNotes = tauriRes.manifest?.body || tauriRes.manifest?.notes || "";
+            fetchedDate = tauriRes.manifest?.date || new Date().toLocaleDateString("fa-IR");
+            rawData = tauriRes.manifest;
+          }
+        } catch (tauriErr) {
+          console.warn("Tauri native check failed, falling back to HTTP fetch:", tauriErr);
+        }
+      }
+
+      // If not populated by Tauri, fetch HTTP manifest
+      if (!fetchedVersion) {
+        const res = await fetch(targetUrl, { cache: "no-cache" });
+        if (!res.ok) {
+          throw new Error(`خطای سرور (${res.status} ${res.statusText})`);
+        }
+        const data = await res.json();
+        rawData = data;
+        fetchedVersion = data.version || data.latestVersion || "1.0.0";
+        fetchedNotes = data.notes || data.releaseNotes || data.body || "بهبود عملکرد، پایداری و بهینه‌سازی سیستم.";
+        fetchedDate = data.pub_date || data.date || new Date().toLocaleDateString("fa-IR");
+        fetchedUrl =
+          data.platforms?.["windows-x86_64"]?.url ||
+          data.directDownloadUrl ||
+          data.url ||
+          settings.desktopDirectDownloadUrl ||
+          "";
+      }
+
+      const nowPersian = new Date().toLocaleString("fa-IR");
+      setLastCheckTimeDisplay(nowPersian);
+
+      // Save last check time in settings
+      const updatedSettings = {
+        ...settings,
+        desktopLastCheckTime: nowPersian,
+      };
+      setSettings(updatedSettings);
+      saveSettings(updatedSettings).catch(() => {});
+
+      setUpdateManifestInfo({
+        version: fetchedVersion,
+        notes: fetchedNotes,
+        pubDate: fetchedDate,
+        downloadUrl: fetchedUrl,
+        rawJson: rawData,
+      });
+
+      // Semantic comparison using compareSemVer (only show available when server version is strictly greater)
+      const appliedVer = localStorage.getItem('applied_desktop_version') || localStorage.getItem('applied_android_version') || currentAppVersion;
+      const effectiveInstalledVer = compareSemVer(appliedVer, currentAppVersion) > 0 ? appliedVer : currentAppVersion;
+      const semVerDiff = compareSemVer(fetchedVersion, effectiveInstalledVer);
+      if (semVerDiff > 0 && rawData?.hasDesktopInstaller !== false) {
+        setUpdateStatus("available");
+      } else {
+        setUpdateStatus("up_to_date");
+      }
+    } catch (err: any) {
+      console.error("Update check failed:", err);
+      setUpdateStatus("error");
+      setUpdateCheckError(err.message || "برقراری ارتباط با سرور آپدیت ناموفق بود.");
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleStartUpdateDownload = () => {
+    if (downloadPhase === "downloading") return;
+    setDownloadPhase("downloading");
+    setDownloadProgress(0);
+
+    // Realistic progressive download simulation & handling
+    let currentPct = 0;
+    const totalSize = 28.5; // MB
+    setTotalBytesStr(`${totalSize.toFixed(1)} MB`);
+
+    if (downloadTimerRef.current) {
+      clearInterval(downloadTimerRef.current);
+    }
+
+    downloadTimerRef.current = setInterval(() => {
+      // variable speed increment
+      const step = Math.random() * 8 + 4;
+      currentPct += step;
+
+      if (currentPct >= 100) {
+        currentPct = 100;
+        clearInterval(downloadTimerRef.current);
+        setDownloadProgress(100);
+        setDownloadedBytesStr(`${totalSize.toFixed(1)} MB`);
+        setDownloadSpeedStr("تکمیل شد");
+        setDownloadPhase("verifying");
+
+        setTimeout(() => {
+          setDownloadPhase("ready");
+        }, 1200);
+      } else {
+        setDownloadProgress(Math.floor(currentPct));
+        const downloaded = ((currentPct / 100) * totalSize).toFixed(1);
+        setDownloadedBytesStr(`${downloaded} MB`);
+        const currentSpeed = (Math.random() * 3 + 2.5).toFixed(1);
+        setDownloadSpeedStr(`${currentSpeed} MB/s`);
+      }
+    }, 300);
+  };
+
+  const handleCancelDownload = () => {
+    if (downloadTimerRef.current) {
+      clearInterval(downloadTimerRef.current);
+    }
+    setDownloadPhase("idle");
+    setDownloadProgress(0);
+  };
+
+  const handleApplyUpdateAndRelaunch = async () => {
+    const targetVer = updateManifestInfo?.version || settings.desktopLatestVersion || settings.systemVersion || currentAppVersion;
+    await applyApplicationUpdate(
+      {
+        version: targetVer,
+        desktopLatestVersion: targetVer,
+        androidLatestVersion: targetVer,
+        buildNumber: targetVer,
+        downloadUrl: `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer)}&ext=exe`,
+        androidDownloadUrl: `/api/downloads/latest-android?v=${encodeURIComponent(targetVer)}`
+      },
+      (pct) => {
+        setDownloadProgress(pct);
+      }
+    );
+  };
+
+  const handleTestDesktopUpdateFeed = async () => {
+    setTestingDesktopUpdate(true);
+    setDesktopTestResult(null);
+    const targetUrl = (settings.desktopUpdateUrl || "").trim() || `${window.location.origin}/api/desktop/updater.json`;
+    try {
+      const res = await fetch(targetUrl);
+      if (res.ok) {
+        const data = await res.json();
+        setDesktopTestResult({
+          success: true,
+          manifest: data,
+          message: `فایل به‌روزرسانی با موفقیت دریافت شد. نسخه موجود: ${data.version || "نامشخص"}`,
+          checkedUrl: targetUrl,
+        });
+      } else {
+        setDesktopTestResult({
+          success: false,
+          message: `خطای سرور در دریافت فایل آپدیت (کد وضعیت: ${res.status})`,
+          checkedUrl: targetUrl,
+        });
+      }
+    } catch (err: any) {
+      setDesktopTestResult({
+        success: false,
+        message: `عدم برقراری ارتباط با لینک آپدیت: ${err.message || err}`,
+        checkedUrl: targetUrl,
+      });
+    } finally {
+      setTestingDesktopUpdate(false);
+    }
+  };
+
+  const [publishingNewRelease, setPublishingNewRelease] = useState(false);
+  const [releaseVersionInput, setReleaseVersionInput] = useState(() => settings?.desktopLatestVersion || settings?.systemVersion || "");
+  const [releaseTitleInput, setReleaseTitleInput] = useState(() => settings?.releaseTitle || "نسخه جدید سامانه");
+  const [releaseNotesInput, setReleaseNotesInput] = useState(() => settings?.desktopReleaseNotes || settings?.releaseNotes || "بهبود عملکرد، بهینه‌سازی سرعت و اصلاحات پایداری");
+  const [releaseSendToBots, setReleaseSendToBots] = useState(true);
+
+  useEffect(() => {
+    if (settings) {
+      if (settings.desktopLatestVersion || settings.systemVersion) {
+        setReleaseVersionInput(settings.desktopLatestVersion || settings.systemVersion || "");
+      }
+      if (settings.releaseTitle) {
+        setReleaseTitleInput(settings.releaseTitle);
+      }
+      if (settings.desktopReleaseNotes || settings.releaseNotes) {
+        setReleaseNotesInput(settings.desktopReleaseNotes || settings.releaseNotes);
+      }
+    }
+  }, [settings?.desktopLatestVersion, settings?.systemVersion, settings?.releaseTitle, settings?.desktopReleaseNotes, settings?.releaseNotes]);
+
+  const handlePublishNewRelease = async () => {
+    if (!releaseVersionInput.trim()) {
+      alert("لطفاً شماره نسخه را مشخص فرمایید.");
+      return;
+    }
+    setPublishingNewRelease(true);
+    setDesktopSaveMessage("");
+    try {
+      const res = await publishApplicationUpdate({
+        version: releaseVersionInput.trim(),
+        title: releaseTitleInput.trim(),
+        releaseNotes: releaseNotesInput.trim(),
+        sendToBots: releaseSendToBots
+      });
+      if (res.success && res.data) {
+        const updated: SystemSettings = {
+          ...settings,
+          systemVersion: res.data.version,
+          desktopLatestVersion: res.data.version,
+          androidLatestVersion: res.data.version,
+          systemBuildNumber: res.data.buildNumber,
+          releaseTitle: res.data.title,
+          releaseNotes: res.data.releaseNotes,
+          desktopReleaseNotes: res.data.releaseNotes,
+          systemUpdatePublishedAt: res.data.timestamp
+        };
+        await saveSettings(updated);
+        setSettings(updated);
+        if (onUpdateSettings) onUpdateSettings(updated);
+        window.dispatchEvent(new CustomEvent('app:update-settings-changed', { detail: updated }));
+        setDesktopSaveMessage(`🚀 نسخه جدید ${res.data.version} با موفقیت برای اندروید، تائوری و وب منتشر شد!`);
+        setTimeout(() => setDesktopSaveMessage(""), 6000);
+      } else {
+        setDesktopSaveMessage(`خطا در انتشار نسخه جدید: ${res.error || "خطای ناشناخته"} ❌`);
+      }
+    } catch (e: any) {
+      setDesktopSaveMessage(`خطا در انتشار: ${e.message} ❌`);
+    } finally {
+      setPublishingNewRelease(false);
+    }
+  };
+
+  const handleSaveDesktopSettings = async () => {
+    setSavingDesktopSettings(true);
+    setDesktopSaveMessage("");
+    try {
+      const targetVer = settings.desktopLatestVersion?.trim() || settings.systemVersion?.trim() || releaseVersionInput.trim() || "1.0.0";
+      const targetAndroidVer = settings.androidLatestVersion?.trim() || targetVer;
+      const targetNotes = settings.desktopReleaseNotes || settings.releaseNotes || "";
+      const targetTitle = settings.releaseTitle || "نسخه جدید سامانه";
+
+      // Publish update so /api/version and clients receive it immediately
+      const publishRes = await publishApplicationUpdate({
+        version: targetVer,
+        title: targetTitle,
+        releaseNotes: targetNotes,
+        sendToBots: false
+      });
+
+      const updated: SystemSettings = {
+        ...settings,
+        desktopUpdateUrl: settings.desktopUpdateUrl?.trim() || "",
+        desktopDirectDownloadUrl: settings.desktopDirectDownloadUrl?.trim() || "",
+        desktopLatestVersion: targetVer,
+        androidLatestVersion: targetAndroidVer,
+        systemVersion: targetVer,
+        systemBuildNumber: publishRes.data?.buildNumber || settings.systemBuildNumber || `b_${Date.now()}`,
+        releaseTitle: targetTitle,
+        releaseNotes: targetNotes,
+        desktopReleaseNotes: targetNotes,
+        systemUpdatePublishedAt: publishRes.data?.timestamp || Date.now(),
+        desktopAutoCheckUpdates: settings.desktopAutoCheckUpdates !== false,
+        desktopUpdateIntervalMinutes: Math.max(1, Number(settings.desktopUpdateIntervalMinutes) || 60),
+        desktopUpdateChannel: settings.desktopUpdateChannel || "stable",
+        desktopLocalServerUrl: settings.desktopLocalServerUrl?.trim() || "http://localhost:3000",
+        desktopCloudServerUrl: settings.desktopCloudServerUrl?.trim() || window.location.origin,
+      };
+      await saveSettings(updated);
+      setSettings(updated);
+      if (onUpdateSettings) onUpdateSettings(updated);
+      window.dispatchEvent(new CustomEvent('app:update-settings-changed', { detail: updated }));
+      setDesktopSaveMessage("تنظیمات بروزرسانی، زمان‌بندی بررسی خودکار و نسخه‌های اندروید و تائوری با موفقیت ذخیره شد ✅");
+      setTimeout(() => setDesktopSaveMessage(""), 5000);
+    } catch (e: any) {
+      setDesktopSaveMessage("خطا در ذخیره تنظیمات ❌");
+    } finally {
+      setSavingDesktopSettings(false);
+    }
+  };
+
+  const [customBgImage, setCustomBgImage] = useState<string | null>(() => localStorage.getItem('app_custom_bg_image'));
+  const [customBgBlur, setCustomBgBlur] = useState<number>(() => {
+    const saved = localStorage.getItem('app_custom_bg_blur');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const [bgMode, setBgMode] = useState<string>(() => localStorage.getItem('app_bg_mode') || 'preset');
+  const [bgPreset, setBgPreset] = useState<string>(() => localStorage.getItem('app_preset_bg') || 'aurora-light');
+  const [customBgAdapt, setCustomBgAdapt] = useState<boolean>(() => localStorage.getItem('app_custom_bg_adapt') !== 'false');
+  const [isUploadingBg, setIsUploadingBg] = useState<boolean>(false);
+
+  const analyzeImageBrightness = (imageUrl: string): Promise<"dark" | "light"> => {
+    return new Promise((resolve) => {
+      if (!imageUrl) {
+        resolve("light");
+        return;
+      }
+      const img = new Image();
+      img.src = imageUrl;
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = 30;
+          canvas.height = 30;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            resolve("light");
+            return;
+          }
+          ctx.drawImage(img, 0, 0, 30, 30);
+          const imageData = ctx.getImageData(0, 0, 30, 30);
+          const data = imageData.data;
+          let totalLuminance = 0;
+          let count = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const a = data[i + 3];
+            if (a > 50) {
+              const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+              totalLuminance += luma;
+              count++;
+            }
+          }
+          const avgLuminance = count > 0 ? totalLuminance / count : 255;
+          resolve(avgLuminance < 140 ? "dark" : "light");
+        } catch (e) {
+          console.error("Error analyzing background image brightness:", e);
+          resolve("light");
+        }
+      };
+      img.onerror = () => {
+        resolve("light");
+      };
+    });
+  };
+
+  const handleSendManualSales = async (targetDate: 'today' | 'yesterday') => {
+    if (targetDate === 'today') {
+      setSendingManualSalesToday(true);
+    } else {
+      setSendingManualSalesYesterday(true);
+    }
+
+    try {
+      const data = await apiCall<{ success: boolean; message?: string; error?: string }>('/sayan/sales-report/send-manual', 'POST', { targetDate });
+      if (data && data.success) {
+        alert(`✅ ${data.message || 'عملیات با موفقیت انجام شد'}`);
+      } else {
+        alert(`❌ خطا در ارسال گزارش: ${data?.error || 'پاسخ ناموفق از سرور'}`);
+      }
+    } catch (e: any) {
+      alert(`❌ خطا در برقراری ارتباط با سرور: ${e.message || e}`);
+    } finally {
+      if (targetDate === 'today') {
+        setSendingManualSalesToday(false);
+      } else {
+        setSendingManualSalesYesterday(false);
+      }
+    }
+  };
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [tempServerHost, setTempServerHost] = useState(
+    localStorage.getItem("app_server_host") || "",
+  );
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    try {
+      // Use the temp host value if it exists, otherwise it falls back to current runtime BASE_URL
+      const hostToTest = tempServerHost.trim().replace(/\/$/, "");
+      const originalHost = localStorage.getItem("app_server_host");
+
+      if (hostToTest) localStorage.setItem("app_server_host", hostToTest);
+
+      const result = await apiCall<{ status: string }>("/users");
+      if (result) {
+        alert("✅ اتصال با موفقیت برقرار شد. سرور پاسخگو است.");
+        if (hostToTest) localStorage.setItem("app_server_host", hostToTest);
+      } else {
+        throw new Error("No data returned");
+      }
+    } catch (e: any) {
+      alert(`❌ خطا در اتصال: ${e.message || "سرور یافت نشد"}`);
+      // Revert if it failed and we changed it
+      // localStorage.removeItem('app_server_host');
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  // Designer State
+  const [showDesigner, setShowDesigner] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<PrintTemplate | null>(
+    null,
+  );
+
+  // --- CAMERA SETTINGS STATES ---
+  const [localCameras, setLocalCameras] = useState<MediaDeviceInfo[]>([]);
+  const [cameraPermissionGranted, setCameraPermissionGranted] = useState<boolean | null>(null);
+  const [defaultCameraId, setDefaultCameraId] = useState<string>(() => localStorage.getItem("defaultCameraDeviceId") || "");
+  const [cameraResolution, setCameraResolution] = useState<string>(() => localStorage.getItem("cameraResolution") || "720p");
+  const [cameraMirror, setCameraMirror] = useState<boolean>(() => localStorage.getItem("cameraMirror") === "true");
+  const [cameraBeepOnSuccess, setCameraBeepOnSuccess] = useState<boolean>(() => localStorage.getItem("cameraBeepOnSuccess") !== "false");
+  const [cameraAutoStart, setCameraAutoStart] = useState<boolean>(() => localStorage.getItem("cameraAutoStart") === "true");
+  const [cameraType, setCameraType] = useState<"usb" | "network">((localStorage.getItem("cameraType") as "usb" | "network") || "usb");
+  const [cameraNetworkUrl, setCameraNetworkUrl] = useState<string>(() => localStorage.getItem("cameraNetworkUrl") || "");
+  const [cameraNetworkType, setCameraNetworkType] = useState<"mjpeg" | "snapshot">((localStorage.getItem("cameraNetworkType") as "mjpeg" | "snapshot") || "mjpeg");
+  const [cameraSnapshotInterval, setCameraSnapshotInterval] = useState<number>(() => parseInt(localStorage.getItem("cameraSnapshotInterval") || "1000", 10));
+  const [cameraNetworkUsername, setCameraNetworkUsername] = useState<string>(() => localStorage.getItem("cameraNetworkUsername") || "");
+  const [cameraNetworkPassword, setCameraNetworkPassword] = useState<string>(() => localStorage.getItem("cameraNetworkPassword") || "");
+  const [liveSnapshotBase64, setLiveSnapshotBase64] = useState<string | null>(null);
+  const [isLiveFetching, setIsLiveFetching] = useState(false);
+  const [snapshotTime, setSnapshotTime] = useState<number>(Date.now());
+  const [testStream, setTestStream] = useState<MediaStream | null>(null);
+  const [isTestingCamera, setIsTestingCamera] = useState(false);
+  const testVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let timer: any = null;
+
+    const fetchLiveSnapshot = async () => {
+      if (!isTestingCamera || cameraType !== "network") return;
+      if (isLiveFetching) return;
+      setIsLiveFetching(true);
+      try {
+        const data = await apiCall<{ success: boolean; imageBase64: string }>('/security/proxy-snapshot', 'POST', { 
+          url: cameraNetworkUrl,
+          username: cameraNetworkUsername,
+          password: cameraNetworkPassword
+        });
+        if (data && data.success && active) {
+          setLiveSnapshotBase64(data.imageBase64);
+        }
+      } catch (err) {
+        console.error("Live test snapshot proxy error:", err);
+      } finally {
+        setIsLiveFetching(false);
+      }
+    };
+
+    if (isTestingCamera && cameraType === "network") {
+      fetchLiveSnapshot();
+      timer = setInterval(() => {
+        fetchLiveSnapshot();
+        setSnapshotTime(Date.now());
+      }, cameraSnapshotInterval || 1000);
+    } else {
+      setLiveSnapshotBase64(null);
+    }
+
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [isTestingCamera, cameraType, cameraNetworkUrl, cameraSnapshotInterval, cameraNetworkUsername, cameraNetworkPassword]);
+
+  const requestCameraPermissionAndList = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stream.getTracks().forEach(track => track.stop());
+      setCameraPermissionGranted(true);
+      
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === "videoinput");
+      setLocalCameras(videoDevices);
+      
+      if (videoDevices.length > 0 && !defaultCameraId) {
+        setDefaultCameraId(videoDevices[videoDevices.length - 1].deviceId);
+      }
+    } catch (err) {
+      console.error("Camera permissions failed:", err);
+      setCameraPermissionGranted(false);
+    }
+  };
+
+  const startTestCamera = async () => {
+    try {
+      if (testStream) {
+        testStream.getTracks().forEach(t => t.stop());
+      }
+      
+      if (cameraType === "network") {
+        if (!cameraNetworkUrl || !cameraNetworkUrl.startsWith("http")) {
+          alert("لطفاً آدرس صحیح جریان دوربین تحت شبکه (با شروع http) را وارد کنید.");
+          return;
+        }
+        setIsTestingCamera(true);
+        return;
+      }
+
+      let width = 1280;
+      let height = 720;
+      if (cameraResolution === "1080p") {
+        width = 1920;
+        height = 1080;
+      } else if (cameraResolution === "480p") {
+        width = 854;
+        height = 480;
+      }
+        
+      const constraints = {
+        video: defaultCameraId 
+          ? { deviceId: { exact: defaultCameraId }, width: { ideal: width }, height: { ideal: height } } 
+          : { width: { ideal: width }, height: { ideal: height } }
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      setTestStream(stream);
+      setIsTestingCamera(true);
+      setTimeout(() => {
+        if (testVideoRef.current) {
+          testVideoRef.current.srcObject = stream;
+        }
+      }, 100);
+    } catch (e) {
+      console.error("Test camera failed:", e);
+      alert("امکان شروع تست دوربین وجود ندارد. مجوز دسترسی و اتصالات سخت‌افزاری را بررسی کنید.");
+    }
+  };
+  
+  const stopTestCamera = () => {
+    if (testStream) {
+      testStream.getTracks().forEach(t => t.stop());
+      setTestStream(null);
+    }
+    setIsTestingCamera(false);
+    if (testVideoRef.current) {
+      testVideoRef.current.srcObject = null;
+    }
+  };
+
+  useEffect(() => {
+    if (activeCategory === "camera") {
+      navigator.mediaDevices.enumerateDevices().then(devices => {
+        const videoDevices = devices.filter(device => device.kind === "videoinput");
+        const hasLabels = videoDevices.some(d => !!d.label);
+        
+        if (videoDevices.length > 0) {
+          setLocalCameras(videoDevices);
+          if (hasLabels) {
+            setCameraPermissionGranted(true);
+          }
+        }
+      }).catch(err => {
+        console.error("Error enumerating devices:", err);
+      });
+    } else {
+      // Stop test camera if leaving tab
+      if (testStream) {
+        testStream.getTracks().forEach(t => t.stop());
+        setTestStream(null);
+      }
+      setIsTestingCamera(false);
+    }
+    if (activeCategory === "system") {
+      fetchGraphicsStatus();
+    }
+  }, [activeCategory]);
+
+  useEffect(() => {
+    return () => {
+      if (testStream) {
+        testStream.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, [testStream]);
+
+  // Local States for Form Inputs
+  const [newCompanyName, setNewCompanyName] = useState("");
+  const [newCompanyLogo, setNewCompanyLogo] = useState("");
+  const [newCompanyShowInWarehouse, setNewCompanyShowInWarehouse] =
+    useState(true);
+  const [newCompanyBanks, setNewCompanyBanks] = useState<CompanyBank[]>([]);
+  const [newCompanyLetterhead, setNewCompanyLetterhead] = useState("");
+
+  // New Company Fields
+  const [newCompanyRegNum, setNewCompanyRegNum] = useState("");
+  const [newCompanyNatId, setNewCompanyNatId] = useState("");
+  const [newCompanyAddress, setNewCompanyAddress] = useState("");
+  const [newCompanyPhone, setNewCompanyPhone] = useState("");
+  const [newCompanyFax, setNewCompanyFax] = useState("");
+  const [newCompanyPostalCode, setNewCompanyPostalCode] = useState("");
+  const [newCompanyEcoCode, setNewCompanyEcoCode] = useState("");
+
+  const [editingCompanyId, setEditingCompanyId] = useState<string | null>(null);
+  const [editingBankId, setEditingBankId] = useState<string | null>(null);
+
+  // Local states for adding/editing banks
+  const [tempBankName, setTempBankName] = useState("");
+  const [tempAccountNum, setTempAccountNum] = useState("");
+  const [tempBankSheba, setTempBankSheba] = useState("");
+  const [tempBankLayout, setTempBankLayout] = useState<string>("");
+  const [tempInternalLayout, setTempInternalLayout] = useState<string>("");
+  const [tempInternalWithdrawalLayout, setTempInternalWithdrawalLayout] =
+    useState<string>("");
+  const [tempInternalDepositLayout, setTempInternalDepositLayout] =
+    useState<string>("");
+  const [tempDualPrint, setTempDualPrint] = useState(false);
+
+  // Commerce Local States
+  const [newInsuranceCompany, setNewInsuranceCompany] = useState("");
+
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [isUploadingLetterhead, setIsUploadingLetterhead] = useState(false);
+  const companyLogoInputRef = useRef<HTMLInputElement>(null);
+  const companyLetterheadInputRef = useRef<HTMLInputElement>(null);
+
+  const [whatsappStatus, setWhatsappStatus] = useState<{
+    ready: boolean;
+    qr: string | null;
+    qrDataUrl?: string | null;
+    user: string | null;
+    initializing?: boolean;
+    error?: string | null;
+  } | null>(null);
+  const [refreshingWA, setRefreshingWA] = useState(false);
+  const [restartingWA, setRestartingWA] = useState(false);
+
+  // Contact States
+  const [contactName, setContactName] = useState("");
+  const [contactNumber, setContactNumber] = useState("");
+  const [contactBaleId, setContactBaleId] = useState("");
+  const [contactTelegramId, setContactTelegramId] = useState("");
+  const [isGroupContact, setIsGroupContact] = useState(false);
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+
+  const [fetchingGroups, setFetchingGroups] = useState(false);
+  const [newOperatingBank, setNewOperatingBank] = useState("");
+  const [newCommodity, setNewCommodity] = useState("");
+  const [uploadingIcon, setUploadingIcon] = useState(false);
+  const iconInputRef = useRef<HTMLInputElement>(null);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const isSecure = window.isSecureContext;
+
+  // App Users for various settings
+  const [systemUsers, setSystemUsers] = useState<User[]>([]);
+  const [appContacts, setAppContacts] = useState<Contact[]>([]);
+
+  // Current User Permissions
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const userStr = localStorage.getItem("app_current_user");
+    if (userStr) {
+      setCurrentUser(JSON.parse(userStr));
+    }
+  }, []);
+
+  const isAdmin = currentUser?.role === "ADMIN";
+  const hasFullSettings =
+    isAdmin ||
+    (currentUser &&
+      settings?.rolePermissions?.[currentUser.role]?.canManageSettings);
+  const canManageTradeSettings =
+    isAdmin ||
+    hasFullSettings ||
+    (currentUser &&
+      settings?.rolePermissions?.[currentUser.role]?.canManageTradeSettings);
+
+  useEffect(() => {
+    // Force navigation to trade if they ONLY have trade settings
+    if (
+      !hasFullSettings &&
+      canManageTradeSettings &&
+      activeCategory !== "commerce"
+    ) {
+      setActiveCategory("commerce");
+    }
+  }, [hasFullSettings, canManageTradeSettings, activeCategory]);
+
+  useEffect(() => {
+    if (propSettings) {
+      if (!hasInitializedRef.current) {
+        // Normalize salesNotificationUsers if it's the old format (string[])
+        const normalizedSettings = { ...propSettings };
+        if (Array.isArray(normalizedSettings.salesNotificationUsers)) {
+          normalizedSettings.salesNotificationUsers =
+            normalizedSettings.salesNotificationUsers.map((u: any) => {
+              if (typeof u === "string") {
+                return { username: u, platforms: ["telegram", "bale"] };
+              }
+              return u;
+            });
+        }
+        
+        // Ensure companies and companyNames arrays exist and are in sync
+        const companyMap = new Map<string, any>();
+        (normalizedSettings.companies || []).forEach((c: any) => {
+          if (c && c.name && c.name.trim()) {
+            companyMap.set(c.name.trim(), {
+              ...c,
+              name: c.name.trim(),
+              banks: Array.isArray(c.banks) ? c.banks : []
+            });
+          }
+        });
+        (normalizedSettings.companyNames || []).forEach((name: string) => {
+          if (name && name.trim() && !companyMap.has(name.trim())) {
+            companyMap.set(name.trim(), { id: generateUUID(), name: name.trim(), showInWarehouse: true, banks: [] });
+          }
+        });
+        if (Array.isArray(normalizedSettings.fiscalYears)) {
+          normalizedSettings.fiscalYears.forEach((fy: any) => {
+            if (fy && fy.companySequences) {
+              Object.keys(fy.companySequences).forEach((k: string) => {
+                if (k && k.trim() && !companyMap.has(k.trim())) {
+                  companyMap.set(k.trim(), { id: generateUUID(), name: k.trim(), showInWarehouse: true, banks: [] });
+                }
+              });
+            }
+          });
+        }
+        let normCompanies = Array.from(companyMap.values());
+        normCompanies = normCompanies.filter(c => 
+          c.name !== 'شرکت اصلی' || 
+          c.logo || 
+          c.registrationNumber || 
+          c.nationalId || 
+          c.address || 
+          c.economicCode || 
+          (c.banks && c.banks.length > 0)
+        );
+        normalizedSettings.companies = normCompanies;
+        normalizedSettings.companyNames = normCompanies.map((c: any) => c.name);
+        if (!Array.isArray(normalizedSettings.fiscalYears) || normalizedSettings.fiscalYears.length === 0) {
+          normalizedSettings.fiscalYears = [
+            { id: "fy_1402", label: "1402", isClosed: false, createdAt: Date.now() },
+            { id: "fy_1403", label: "1403", isClosed: false, createdAt: Date.now() },
+            { id: "fy_1404", label: "1404", isClosed: false, createdAt: Date.now() },
+            { id: "fy_1405", label: "1405", isClosed: false, createdAt: Date.now() },
+          ];
+          normalizedSettings.activeFiscalYearId = "fy_1404";
+        }
+
+        if (!normalizedSettings.sayanApiUrl) {
+          normalizedSettings.sayanApiUrl = "http://80.210.31.176:5000/api/external/v1";
+        }
+        if (!normalizedSettings.sayanApiKey) {
+          normalizedSettings.sayanApiKey = "s_gate_live_73f08a91b2c";
+        }
+
+        setSettings(normalizedSettings);
+        hasInitializedRef.current = true;
+      }
+    } else {
+      if (!hasInitializedRef.current) {
+        loadSettings().then(() => {
+          hasInitializedRef.current = true;
+        });
+      }
+    }
+    setNotificationsEnabled(isNotificationEnabledInApp());
+    checkWhatsappStatus();
+    loadSystemUsers();
+  }, []);
+
+  useEffect(() => {
+    const handleBgChange = () => {
+      setCustomBgImage(localStorage.getItem('app_custom_bg_image'));
+      setBgMode(localStorage.getItem('app_bg_mode') || 'preset');
+      setBgPreset(localStorage.getItem('app_preset_bg') || 'aurora-light');
+      const savedBlur = localStorage.getItem('app_custom_bg_blur');
+      setCustomBgBlur(savedBlur ? parseInt(savedBlur, 10) : 0);
+      setCustomBgAdapt(localStorage.getItem('app_custom_bg_adapt') !== 'false');
+    };
+    window.addEventListener('APP_THEME_BG_CHANGED', handleBgChange);
+    return () => window.removeEventListener('APP_THEME_BG_CHANGED', handleBgChange);
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const data = await getSettings();
+      let safeData = { ...data };
+      // Ensure arrays exist
+      safeData.currentExitPermitNumber =
+        safeData.currentExitPermitNumber || 1000;
+      safeData.companies = safeData.companies || [];
+      safeData.operatingBankNames = safeData.operatingBankNames || [];
+      safeData.insuranceCompanies = safeData.insuranceCompanies || [];
+      const companyMap = new Map<string, any>();
+      (safeData.companies || []).forEach((c: any) => {
+        if (c && c.name && c.name.trim()) {
+          companyMap.set(c.name.trim(), {
+            ...c,
+            name: c.name.trim(),
+            banks: Array.isArray(c.banks) ? c.banks : []
+          });
+        }
+      });
+      (safeData.companyNames || []).forEach((name: string) => {
+        if (name && name.trim() && !companyMap.has(name.trim())) {
+          companyMap.set(name.trim(), { id: generateUUID(), name: name.trim(), showInWarehouse: true, banks: [] });
+        }
+      });
+      if (Array.isArray(safeData.fiscalYears)) {
+        safeData.fiscalYears.forEach((fy: any) => {
+          if (fy && fy.companySequences) {
+            Object.keys(fy.companySequences).forEach((k: string) => {
+              if (k && k.trim() && !companyMap.has(k.trim())) {
+                companyMap.set(k.trim(), { id: generateUUID(), name: k.trim(), showInWarehouse: true, banks: [] });
+              }
+            });
+          }
+        });
+      }
+      let loadedCompanies = Array.from(companyMap.values());
+      loadedCompanies = loadedCompanies.filter(c => 
+        c.name !== 'شرکت اصلی' || 
+        c.logo || 
+        c.registrationNumber || 
+        c.nationalId || 
+        c.address || 
+        c.economicCode || 
+        (c.banks && c.banks.length > 0)
+      );
+      safeData.companies = loadedCompanies;
+      safeData.companyNames = loadedCompanies.map((c: any) => c.name);
+
+      const allBanksSet = new Set<string>();
+      (safeData.operatingBankNames || []).forEach((b: string) => { if (b && typeof b === 'string' && b.trim()) allBanksSet.add(b.trim()); });
+      (safeData.bankNames || []).forEach((b: string) => { if (b && typeof b === 'string' && b.trim()) allBanksSet.add(b.trim()); });
+      if (safeData.companyBank && typeof safeData.companyBank === 'string' && safeData.companyBank.trim()) {
+        allBanksSet.add(safeData.companyBank.trim());
+      }
+      loadedCompanies.forEach((c: any) => {
+        if (Array.isArray(c.banks)) {
+          c.banks.forEach((b: any) => {
+            if (b) {
+              const bName = typeof b === 'string' ? b : (b.bankName || '');
+              if (bName && bName.trim()) allBanksSet.add(bName.trim());
+            }
+          });
+        }
+      });
+      safeData.operatingBankNames = Array.from(allBanksSet);
+      safeData.bankNames = Array.from(allBanksSet);
+
+      if (!safeData.warehouseSequences) safeData.warehouseSequences = {};
+      if (!safeData.companyNotifications) safeData.companyNotifications = {};
+      if (!safeData.customRoles) safeData.customRoles = [];
+      if (!safeData.printTemplates) safeData.printTemplates = [];
+      if (!Array.isArray(safeData.fiscalYears) || safeData.fiscalYears.length === 0) {
+        safeData.fiscalYears = [
+          { id: "fy_1402", label: "1402", isClosed: false, createdAt: Date.now() },
+          { id: "fy_1403", label: "1403", isClosed: false, createdAt: Date.now() },
+          { id: "fy_1404", label: "1404", isClosed: false, createdAt: Date.now() },
+          { id: "fy_1405", label: "1405", isClosed: false, createdAt: Date.now() },
+        ];
+        safeData.activeFiscalYearId = "fy_1404";
+      }
+      if (!safeData.rolePermissions) safeData.rolePermissions = {}; // Ensure defined
+
+      if (safeData.customBgImage !== undefined) {
+        setCustomBgImage(safeData.customBgImage || null);
+        if (safeData.customBgImage) {
+          localStorage.setItem('app_custom_bg_image', safeData.customBgImage);
+        } else {
+          localStorage.removeItem('app_custom_bg_image');
+        }
+      }
+      if (safeData.bgMode) {
+        setBgMode(safeData.bgMode);
+        localStorage.setItem('app_bg_mode', safeData.bgMode);
+      }
+      if (safeData.bgPreset) {
+        setBgPreset(safeData.bgPreset);
+        localStorage.setItem('app_preset_bg', safeData.bgPreset);
+      }
+      if (safeData.customBgBlur !== undefined) {
+        setCustomBgBlur(safeData.customBgBlur);
+        localStorage.setItem('app_custom_bg_blur', safeData.customBgBlur.toString());
+      }
+      if (safeData.customBgAdapt !== undefined) {
+        setCustomBgAdapt(safeData.customBgAdapt);
+        localStorage.setItem('app_custom_bg_adapt', safeData.customBgAdapt ? 'true' : 'false');
+      }
+
+      if (!safeData.sayanApiUrl) {
+        safeData.sayanApiUrl = "http://80.210.31.176:5000/api/external/v1";
+      }
+      if (!safeData.sayanApiKey) {
+        safeData.sayanApiKey = "s_gate_live_73f08a91b2c";
+      }
+
+      setSettings(safeData);
+    } catch (e) {
+      console.error("Failed to load settings");
+    }
+  };
+
+  const loadSystemUsers = async () => {
+    try {
+      const users = await getUsers();
+      setSystemUsers(users);
+
+      const contacts = users
+        .filter((u) => u.phoneNumber)
+        .map((u) => ({
+          id: u.id,
+          name: `(کاربر) ${u.fullName}`,
+          number: u.phoneNumber!,
+          isGroup: false,
+          baleId: u.baleChatId,
+        }));
+      setAppContacts(contacts);
+    } catch (e) {
+      console.error("Failed to load users");
+    }
+  };
+
+  // Secretariat Settings fetch & sync
+  useEffect(() => {
+    const fetchSecConfigs = async () => {
+      try {
+        const [configs, templates] = await Promise.all([
+          getSecretariatSettings(),
+          getSecretariatTemplates(),
+        ]);
+        setSecConfigs(configs);
+        setSecTemplates(templates);
+        if (
+          settings.companies &&
+          settings.companies.length > 0 &&
+          !selectedCompanyIdForSec &&
+          settings?.companies?.[0]
+        ) {
+          setSelectedCompanyIdForSec(settings.companies[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to load secretariat configs:", err);
+      }
+    };
+    if (
+      activeCategory === "secretariat" ||
+      (settings?.companies && settings.companies.length > 0)
+    ) {
+      fetchSecConfigs();
+    }
+  }, [activeCategory, settings?.companies]);
+
+  useEffect(() => {
+    if (!selectedCompanyIdForSec) return;
+    const existing = secConfigs.find(
+      (c) => c.companyId === selectedCompanyIdForSec,
+    );
+    if (existing) {
+      setSecSettingsForm({
+        companyId: selectedCompanyIdForSec,
+        headquartersAccessTokens: existing.headquartersAccessTokens || [],
+        factoryAccessTokens: existing.factoryAccessTokens || [],
+        editAccessTokens: existing.editAccessTokens || [],
+        deleteAccessTokens: existing.deleteAccessTokens || [],
+        letterheadUrl: existing.letterheadUrl || "",
+        pdfLetterheadUrl: existing.pdfLetterheadUrl || "",
+        wordLetterheadUrl: existing.wordLetterheadUrl || "",
+        meetingMinutesTemplate: existing.meetingMinutesTemplate || "",
+        companyStampUrl: existing.companyStampUrl || "",
+        companyStampSize: existing.companyStampSize || 112,
+        companyStampOpacity: existing.companyStampOpacity || 70,
+        hideAutoFooter: existing.hideAutoFooter || false,
+        letterheadFontFamily: existing.letterheadFontFamily || "Vazirmatn",
+        metadataTop: existing.metadataTop ?? 25,
+        metadataLeft: existing.metadataLeft ?? 20,
+        metadataFontSize: existing.metadataFontSize ?? 11,
+        metadataOpacity: existing.metadataOpacity ?? 100,
+        metadataFontWeight: existing.metadataFontWeight || "bold",
+      });
+    } else {
+      setSecSettingsForm({
+        companyId: selectedCompanyIdForSec,
+        headquartersAccessTokens: [],
+        factoryAccessTokens: [],
+        editAccessTokens: [],
+        deleteAccessTokens: [],
+        letterheadUrl: "",
+        pdfLetterheadUrl: "",
+        wordLetterheadUrl: "",
+        meetingMinutesTemplate: "",
+        companyStampUrl: "",
+        companyStampSize: 112,
+        companyStampOpacity: 70,
+        hideAutoFooter: false,
+        letterheadFontFamily: "Vazirmatn",
+        metadataTop: 25,
+        metadataLeft: 20,
+        metadataFontSize: 11,
+        metadataOpacity: 100,
+        metadataFontWeight: "bold",
+      });
+    }
+  }, [selectedCompanyIdForSec, secConfigs]);
+
+  useEffect(() => {
+    const fetchChatGroups = async () => {
+      try {
+        const groups = await getGroups();
+        if (Array.isArray(groups)) {
+          setChatGroups(groups);
+        }
+      } catch (err) {
+        console.error("Failed to load chat groups in settings:", err);
+      }
+    };
+    fetchChatGroups();
+  }, []);
+
+  const checkWhatsappStatus = async () => {
+    setRefreshingWA(true);
+    try {
+      const status = await apiCall<{
+        ready: boolean;
+        qr: string | null;
+        qrDataUrl?: string | null;
+        user: string | null;
+        initializing?: boolean;
+        error?: string | null;
+      }>("/whatsapp/status");
+      setWhatsappStatus(status);
+    } catch (e) {
+      console.error("Failed to check WA status");
+    } finally {
+      setRefreshingWA(false);
+    }
+  };
+
+  const handleWhatsappLogout = async () => {
+    if (!confirm("آیا برای خروج از حساب واتساپ مطمئن هستید؟")) return;
+    try {
+      await apiCall("/whatsapp/logout", "POST");
+      setTimeout(checkWhatsappStatus, 2000);
+    } catch (e) {
+      alert("خطا در خروج از واتساپ");
+    }
+  };
+
+  // FORCE RESTART HANDLER
+  const handleWhatsappRestart = async (clean: boolean = false) => {
+    if (
+      !confirm(
+        clean
+          ? "آیا می‌خواهید نشست قبلی واتساپ کاملاً پاکسازی و ریستارت شود؟ این کار فایل‌های ذخیره شده را پاک کرده و QR کد جدید تولید می‌کند."
+          : "آیا می‌خواهید سرویس واتساپ را بازنشانی کنید؟ اتصال مجدد برقرار شده و QR کد جدید تولید خواهد شد.",
+      )
+    )
+      return;
+    setRestartingWA(true);
+    try {
+      await apiCall("/whatsapp/restart", "POST", { clean });
+      alert(
+        "درخواست بازنشانی سرویس ارسال شد. در حال بارگذاری مرورگر و دریافت QR کد جدید...",
+      );
+      // Poll immediately
+      setTimeout(checkWhatsappStatus, 2500);
+    } catch (e) {
+      alert("خطا در بازنشانی سرویس");
+    } finally {
+      setRestartingWA(false);
+    }
+  };
+
+  const handleFetchGroups = async () => {
+    if (!whatsappStatus?.ready) {
+      alert("واتساپ متصل نیست.");
+      return;
+    }
+    setFetchingGroups(true);
+    try {
+      const response = await apiCall<{
+        success: boolean;
+        groups: { id: string; name: string }[];
+      }>("/whatsapp/groups");
+      if (response.success && response.groups) {
+        const existingIds = new Set(
+          (settings.savedContacts || []).map((c) => c.number),
+        );
+        const newGroups = response.groups
+          .filter((g) => !existingIds.has(g.id))
+          .map((g) => ({
+            id: generateUUID(),
+            name: g.name,
+            number: g.id,
+            isGroup: true,
+          }));
+        if (newGroups.length > 0) {
+          setSettings({
+            ...settings,
+            savedContacts: [...(settings.savedContacts || []), ...newGroups],
+          });
+          alert(`${newGroups.length} گروه اضافه شد.`);
+        } else alert("گروه جدیدی یافت نشد.");
+      }
+    } catch (e) {
+      alert("خطا در دریافت.");
+    } finally {
+      setFetchingGroups(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval: any;
+    if (
+      activeCategory === "whatsapp" &&
+      whatsappStatus &&
+      !whatsappStatus.ready
+    ) {
+      interval = setInterval(checkWhatsappStatus, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [activeCategory, whatsappStatus]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      let currentCompanies = [...(settings.companies || [])];
+
+      if (
+        activeCategory === "data" &&
+        (newCompanyName.trim() || editingCompanyId)
+      ) {
+        if (editingCompanyId) {
+          currentCompanies = currentCompanies.map((c) =>
+            c.id === editingCompanyId
+              ? {
+                  ...c,
+                  name: newCompanyName.trim(),
+                  logo: newCompanyLogo,
+                  showInWarehouse: newCompanyShowInWarehouse,
+                  banks: newCompanyBanks,
+                  letterhead: newCompanyLetterhead,
+                  registrationNumber: newCompanyRegNum,
+                  nationalId: newCompanyNatId,
+                  address: newCompanyAddress,
+                  phone: newCompanyPhone,
+                  fax: newCompanyFax,
+                  postalCode: newCompanyPostalCode,
+                  economicCode: newCompanyEcoCode,
+                }
+              : c,
+          );
+        } else if (newCompanyName.trim()) {
+          currentCompanies = [
+            ...currentCompanies,
+            {
+              id: generateUUID(),
+              name: newCompanyName.trim(),
+              logo: newCompanyLogo,
+              showInWarehouse: newCompanyShowInWarehouse,
+              banks: newCompanyBanks,
+              letterhead: newCompanyLetterhead,
+              registrationNumber: newCompanyRegNum,
+              nationalId: newCompanyNatId,
+              address: newCompanyAddress,
+              phone: newCompanyPhone,
+              fax: newCompanyFax,
+              postalCode: newCompanyPostalCode,
+              economicCode: newCompanyEcoCode,
+            },
+          ];
+        }
+        resetCompanyForm();
+      }
+
+      const syncedSettings = {
+        ...settings,
+        companies: currentCompanies,
+        companyNames: currentCompanies.map((c) => c.name),
+        // Ensure legacy mapping for notification group
+        exitPermitNotificationGroup: settings.defaultWarehouseGroup,
+        botAccountingGroupIdTele: settings.botAccountingGroupIdTele,
+        botAccountingGroupIdBale: settings.botAccountingGroupIdBale,
+        botAccountingGroupIdWhatsApp: settings.botAccountingGroupIdWhatsApp,
+      };
+
+      await saveSettings(syncedSettings);
+      setSettings(syncedSettings);
+      
+      // Save camera settings to localStorage
+      localStorage.setItem("defaultCameraDeviceId", defaultCameraId);
+      localStorage.setItem("cameraResolution", cameraResolution);
+      localStorage.setItem("cameraMirror", String(cameraMirror));
+      localStorage.setItem("cameraBeepOnSuccess", String(cameraBeepOnSuccess));
+      localStorage.setItem("cameraAutoStart", String(cameraAutoStart));
+      localStorage.setItem("cameraType", cameraType);
+      localStorage.setItem("cameraNetworkUrl", cameraNetworkUrl);
+      localStorage.setItem("cameraNetworkType", cameraNetworkType);
+      localStorage.setItem("cameraSnapshotInterval", String(cameraSnapshotInterval));
+      localStorage.setItem("cameraNetworkUsername", cameraNetworkUsername);
+      localStorage.setItem("cameraNetworkPassword", cameraNetworkPassword);
+
+      if (onUpdateSettings) onUpdateSettings(syncedSettings);
+      setMessage("ذخیره شد ✅");
+      setTimeout(() => setMessage(""), 3000);
+    } catch (e) {
+      setMessage("خطا ❌");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ... (Keep existing contact handlers) ...
+  const handleAddOrUpdateContact = () => {
+    if (!contactName.trim() || !contactNumber.trim()) return;
+
+    const newContactData: Contact = {
+      id: editingContactId || generateUUID(),
+      name: contactName.trim(),
+      number: contactNumber.trim(),
+      baleId: contactBaleId.trim(),
+      telegramId: contactTelegramId.trim(),
+      isGroup: isGroupContact,
+    };
+
+    let updatedContacts;
+    if (editingContactId) {
+      updatedContacts = (settings.savedContacts || []).map((c) =>
+        c.id === editingContactId ? newContactData : c,
+      );
+    } else {
+      updatedContacts = [...(settings.savedContacts || []), newContactData];
+    }
+
+    setSettings({ ...settings, savedContacts: updatedContacts });
+    resetContactForm();
+  };
+
+  const handleEditContact = (c: Contact) => {
+    setEditingContactId(c.id);
+    setContactName(c.name);
+    setContactNumber(c.number);
+    setContactBaleId(c.baleId || "");
+    setContactTelegramId(c.telegramId || "");
+    setIsGroupContact(c.isGroup);
+  };
+
+  const handleDeleteContact = (id: string) => {
+    if (confirm("حذف شود؟")) {
+      setSettings({
+        ...settings,
+        savedContacts: (settings.savedContacts || []).filter(
+          (c) => c.id !== id,
+        ),
+      });
+      if (editingContactId === id) resetContactForm();
+    }
+  };
+
+  const resetContactForm = () => {
+    setContactName("");
+    setContactNumber("");
+    setContactBaleId("");
+    setContactTelegramId("");
+    setIsGroupContact(false);
+    setEditingContactId(null);
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingLogo(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const result = await uploadFile(file.name, ev.target?.result as string);
+        setNewCompanyLogo(result.url);
+      } catch (error) {
+        alert("خطا در آپلود");
+      } finally {
+        setIsUploadingLogo(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  const handleLetterheadUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingLetterhead(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const result = await uploadFile(file.name, ev.target?.result as string);
+        setNewCompanyLetterhead(result.url);
+      } catch (error) {
+        alert("خطا در آپلود");
+      } finally {
+        setIsUploadingLetterhead(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSecLetterheadUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingSecLetterhead(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const result = await uploadFile(file.name, ev.target?.result as string);
+        setSecSettingsForm((prev) => ({ ...prev, letterheadUrl: result.url }));
+        alert("تصویر سربرگ با موفقیت آپلود شد.");
+      } catch (error) {
+        alert("خطا در آپلود سربرگ");
+      } finally {
+        setIsUploadingSecLetterhead(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSecStampUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingSecStamp(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const result = await uploadFile(file.name, ev.target?.result as string);
+        setSecSettingsForm((prev) => ({
+          ...prev,
+          companyStampUrl: result.url,
+        }));
+        alert("تصویر مهر با موفقیت آپلود شد.");
+      } catch (error) {
+        alert("خطا در آپلود مهر");
+      } finally {
+        setIsUploadingSecStamp(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSecWordLetterheadUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingSecWordLetterhead(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const result = await uploadFile(file.name, ev.target?.result as string);
+        setSecSettingsForm((prev) => ({
+          ...prev,
+          wordLetterheadUrl: result.url,
+        }));
+        alert("فایل سربرگ ورد با موفقیت آپلود شد.");
+      } catch (error) {
+        alert("خطا در آپلود سربرگ ورد");
+      } finally {
+        setIsUploadingSecWordLetterhead(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSecPdfLetterheadUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingSecPdfLetterhead(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const result = await uploadFile(file.name, ev.target?.result as string);
+        const previewUrl = `/api/secretariat/pdf-preview?url=${encodeURIComponent(result.url)}`;
+        setSecSettingsForm((prev) => ({
+          ...prev,
+          pdfLetterheadUrl: result.url,
+          letterheadUrl: prev.letterheadUrl && !prev.letterheadUrl.toLowerCase().endsWith(".pdf") ? prev.letterheadUrl : previewUrl,
+        }));
+        alert("فایل سربرگ PDF با موفقیت آپلود شد.");
+      } catch (error) {
+        alert("خطا در آپلود سربرگ PDF");
+      } finally {
+        setIsUploadingSecPdfLetterhead(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveSecSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCompanyIdForSec) return;
+    try {
+      const updated = await saveSecretariatSettings(secSettingsForm);
+      setSecConfigs(updated);
+      alert("تنظیمات دبیرخانه با موفقیت ذخیره شد.");
+    } catch (err) {
+      alert("خطا در ذخیره تنظیمات دبیرخانه");
+    }
+  };
+
+  // --- Secretariat Template Handlers ---
+  const handleSaveSecTemplate = async (templateData: any) => {
+    try {
+      const updatedTemplates = await saveSecretariatTemplate(templateData);
+      setSecTemplates(updatedTemplates);
+      alert("قالب نمونه نامه با موفقیت ذخیره شد.");
+      setEditingSecTemplate(null);
+    } catch (err) {
+      console.error(err);
+      alert("خطا در ذخیره قالب نمونه نامه");
+    }
+  };
+
+  const handleDeleteSecTemplate = async (id: string) => {
+    if (!confirm("آیا از حذف این قالب نمونه نامه مطمئن هستید؟")) return;
+    try {
+      const updatedTemplates = await deleteSecretariatTemplate(id);
+      setSecTemplates(updatedTemplates);
+      alert("قالب نمونه نامه با موفقیت حذف شد.");
+    } catch (err) {
+      console.error(err);
+      alert("خطا در حذف قالب نمونه نامه");
+    }
+  };
+
+  const handleDocxImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportingDocxFile(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const base64 = ev.target?.result as string;
+      try {
+        const res = await importDocx(base64);
+        if (res.success) {
+          if (editingSecTemplate) {
+            setEditingSecTemplate((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    content: res.html,
+                    title: prev.title || file.name.replace(/\.[^/.]+$/, ""),
+                  }
+                : null,
+            );
+          }
+          alert("متن سند ورد با موفقیت استخراج و به ویرایشگر اضافه شد.");
+        } else {
+          alert(
+            "خطا در تبدیل سند ورد: " +
+              (res.success === false ? "قالب ناسازگار" : "خطای سیستم"),
+          );
+        }
+      } catch (err: any) {
+        console.error(err);
+        alert("خطا در استخراج محتوای فایل ورد: " + err.message);
+      } finally {
+        setImportingDocxFile(false);
+        if (e.target) e.target.value = "";
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleWordLetterheadUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingSecWordLetterhead(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const base64 = ev.target?.result as string;
+      try {
+        const res = await uploadFile(file.name, base64);
+        setSecSettingsForm((prev) => ({
+          ...prev,
+          wordLetterheadUrl: res.url,
+        }));
+        alert("فایل سربرگ ورد (.docx) با موفقیت بارگذاری شد.");
+      } catch (err) {
+        console.error(err);
+        alert("خطا در آپلود فایل سربرگ ورد");
+      } finally {
+        setIsUploadingSecWordLetterhead(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  // -------------------------------------
+
+  const handleSaveCompany = async () => {
+    if (!newCompanyName.trim()) return;
+    let updatedCompanies = settings.companies || [];
+    const companyData = {
+      id: editingCompanyId || generateUUID(),
+      name: newCompanyName.trim(),
+      logo: newCompanyLogo,
+      showInWarehouse: newCompanyShowInWarehouse,
+      banks: newCompanyBanks,
+      letterhead: newCompanyLetterhead,
+      registrationNumber: newCompanyRegNum,
+      nationalId: newCompanyNatId,
+      address: newCompanyAddress,
+      phone: newCompanyPhone,
+      fax: newCompanyFax,
+      postalCode: newCompanyPostalCode,
+      economicCode: newCompanyEcoCode,
+    };
+    if (editingCompanyId) {
+      updatedCompanies = updatedCompanies.map((c) =>
+        c.id === editingCompanyId ? companyData : c,
+      );
+    } else {
+      updatedCompanies = updatedCompanies.filter(c => c.name !== 'شرکت اصلی' || c.logo || c.registrationNumber);
+      updatedCompanies = [...updatedCompanies, companyData];
+    }
+    const newSettings = {
+      ...settings,
+      companies: updatedCompanies,
+      companyNames: updatedCompanies.map((c) => c.name),
+    };
+    setSettings(newSettings);
+    try {
+      await saveSettings(newSettings);
+    } catch (err) {
+      console.error("Save company settings error:", err);
+    }
+    resetCompanyForm();
+  };
+  const handleEditCompany = (c: Company) => {
+    setNewCompanyName(c.name);
+    setNewCompanyLogo(c.logo || "");
+    setNewCompanyShowInWarehouse(c.showInWarehouse !== false);
+    setNewCompanyBanks(c.banks || []);
+    setNewCompanyLetterhead(c.letterhead || "");
+    setNewCompanyRegNum(c.registrationNumber || "");
+    setNewCompanyNatId(c.nationalId || "");
+    setNewCompanyAddress(c.address || "");
+    setNewCompanyPhone(c.phone || "");
+    setNewCompanyFax(c.fax || "");
+    setNewCompanyPostalCode(c.postalCode || "");
+    setNewCompanyEcoCode(c.economicCode || "");
+    setEditingCompanyId(c.id);
+  };
+  const resetCompanyForm = () => {
+    setNewCompanyName("");
+    setNewCompanyLogo("");
+    setNewCompanyShowInWarehouse(true);
+    setNewCompanyBanks([]);
+    setNewCompanyLetterhead("");
+    setNewCompanyRegNum("");
+    setNewCompanyNatId("");
+    setNewCompanyAddress("");
+    setNewCompanyPhone("");
+    setNewCompanyFax("");
+    setNewCompanyPostalCode("");
+    setNewCompanyEcoCode("");
+    setEditingCompanyId(null);
+    resetBankForm();
+  };
+  const resetBankForm = () => {
+    setTempBankName("");
+    setTempAccountNum("");
+    setTempBankSheba("");
+    setTempBankLayout("");
+    setTempInternalLayout("");
+    setTempInternalWithdrawalLayout("");
+    setTempInternalDepositLayout("");
+    setTempDualPrint(false);
+    setEditingBankId(null);
+  };
+  const handleRemoveCompany = async (id: string) => {
+    if (confirm("آیا از حذف این شرکت مطمئن هستید؟")) {
+      const updated = (settings.companies || []).filter((c) => c.id !== id);
+      const newSettings = {
+        ...settings,
+        companies: updated,
+        companyNames: updated.map((c) => c.name),
+      };
+      setSettings(newSettings);
+      try {
+        await saveSettings(newSettings);
+      } catch (err) {
+        console.error("Remove company settings error:", err);
+      }
+    }
+  };
+  const addOrUpdateCompanyBank = () => {
+    if (!tempBankName) return;
+    const bankData: CompanyBank = {
+      id: editingBankId || generateUUID(),
+      bankName: tempBankName,
+      accountNumber: tempAccountNum,
+      sheba: tempBankSheba,
+      formLayoutId: tempBankLayout,
+      internalTransferTemplateId: tempInternalLayout,
+      enableDualPrint: tempDualPrint,
+      internalWithdrawalTemplateId: tempInternalWithdrawalLayout,
+      internalDepositTemplateId: tempInternalDepositLayout,
+    };
+    if (editingBankId) {
+      setNewCompanyBanks(
+        newCompanyBanks.map((b) => (b.id === editingBankId ? bankData : b)),
+      );
+    } else {
+      setNewCompanyBanks([...newCompanyBanks, bankData]);
+    }
+    resetBankForm();
+  };
+  const editCompanyBank = (bank: CompanyBank) => {
+    setTempBankName(bank.bankName);
+    setTempAccountNum(bank.accountNumber);
+    setTempBankSheba(bank.sheba || "");
+    setTempBankLayout(bank.formLayoutId || "");
+    setTempInternalLayout(bank.internalTransferTemplateId || "");
+    setTempDualPrint(bank.enableDualPrint || false);
+    setTempInternalWithdrawalLayout(bank.internalWithdrawalTemplateId || "");
+    setTempInternalDepositLayout(bank.internalDepositTemplateId || "");
+    setEditingBankId(bank.id);
+  };
+  const removeCompanyBank = (id: string) => {
+    setNewCompanyBanks(newCompanyBanks.filter((b) => b.id !== id));
+    if (editingBankId === id) resetBankForm();
+  };
+
+  const handleAddOperatingBank = () => {
+    if (
+      newOperatingBank.trim() &&
+      !(settings.operatingBankNames || []).includes(newOperatingBank.trim())
+    ) {
+      setSettings({
+        ...settings,
+        operatingBankNames: [
+          ...(settings.operatingBankNames || []),
+          newOperatingBank.trim(),
+        ],
+      });
+      setNewOperatingBank("");
+    }
+  };
+  const handleRemoveOperatingBank = (name: string) => {
+    setSettings({
+      ...settings,
+      operatingBankNames: (settings.operatingBankNames || []).filter(
+        (b) => b !== name,
+      ),
+    });
+  };
+  const handleAddCommodity = () => {
+    if (
+      newCommodity.trim() &&
+      !settings.commodityGroups.includes(newCommodity.trim())
+    ) {
+      setSettings({
+        ...settings,
+        commodityGroups: [...settings.commodityGroups, newCommodity.trim()],
+      });
+      setNewCommodity("");
+    }
+  };
+  const handleRemoveCommodity = (name: string) => {
+    setSettings({
+      ...settings,
+      commodityGroups: settings.commodityGroups.filter((c) => c !== name),
+    });
+  };
+  const handleAddInsuranceCompany = () => {
+    if (
+      newInsuranceCompany.trim() &&
+      !(settings.insuranceCompanies || []).includes(newInsuranceCompany.trim())
+    ) {
+      setSettings({
+        ...settings,
+        insuranceCompanies: [
+          ...(settings.insuranceCompanies || []),
+          newInsuranceCompany.trim(),
+        ],
+      });
+      setNewInsuranceCompany("");
+    }
+  };
+  const handleRemoveInsuranceCompany = (name: string) => {
+    setSettings({
+      ...settings,
+      insuranceCompanies: (settings.insuranceCompanies || []).filter(
+        (c) => c !== name,
+      ),
+    });
+  };
+
+  const handleIconChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingIcon(true);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const res = await uploadFile(file.name, ev.target?.result as string);
+        setSettings({ ...settings, pwaIcon: res.url });
+      } catch (error) {
+        alert("خطا");
+      } finally {
+        setUploadingIcon(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  const handleToggleNotifications = async () => {
+    if (notificationsEnabled) {
+      setNotificationPreference(false);
+      setNotificationsEnabled(false);
+      alert("اعلان‌ها و نوتیفیکیشن‌ها در این برنامه غیرفعال شدند.");
+      return;
+    }
+    const inTauri = isTauriDesktop();
+    const isNative = Capacitor.isNativePlatform();
+    if (!inTauri && !isNative && !isSecure && window.location.hostname !== "localhost") {
+      alert("برای فعال‌سازی نوتیفیکیشن مرورگر وب نیاز به HTTPS است.");
+      return;
+    }
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      setNotificationPreference(true);
+      setNotificationsEnabled(true);
+      alert("نوتیفیکیشن با موفقیت فعال شد. اتصال به سرور بروزرسانی شد.");
+    } else {
+      alert("دسترسی به نوتیفیکیشن مسدود است یا پشتیبانی نمی‌شود.");
+    }
+  };
+  const handleTestNotification = async () => {
+    try {
+      // Fire immediate local notification on current device
+      sendNotification(
+        "پیام آزمایشی دلکام (سیستم تست)",
+        "سیستم اعلان و نوتیفیکیشن با موفقیت روی دستگاه شما فعال و آماده دریافت پیام‌ها است.",
+        { id: `test_${Date.now()}` }
+      );
+
+      const userStr = localStorage.getItem("app_current_user");
+      const username = userStr ? JSON.parse(userStr).username : "test";
+      await apiCall("/send-test-push", "POST", { username });
+      alert("پیام تست با موفقیت ارسال شد و اتصال سرور تایید گردید ✅");
+    } catch (e: any) {
+      console.warn("Test notification notice:", e);
+      alert("پیام تست محلی با موفقیت روی دستگاه شما اجرا شد ✅");
+    }
+  };
+  const handleSaveTemplate = (template: PrintTemplate) => {
+    const existing = settings.printTemplates || [];
+    const updated = editingTemplate
+      ? existing.map((t) => (t.id === template.id ? template : t))
+      : [...existing, template];
+    setSettings({ ...settings, printTemplates: updated });
+    setShowDesigner(false);
+    setEditingTemplate(null);
+  };
+  const handleEditTemplate = (t: PrintTemplate) => {
+    setEditingTemplate(t);
+    setShowDesigner(true);
+  };
+  const handleDeleteTemplate = (id: string) => {
+    if (!confirm("حذف قالب؟")) return;
+    const updated = (settings.printTemplates || []).filter((t) => t.id !== id);
+    setSettings({ ...settings, printTemplates: updated });
+  };
+
+  const handleUpdateSettings = (newSettings: SystemSettings) => {
+    setSettings(newSettings);
+  };
+
+  if (showDesigner) {
+    return (
+      <PrintTemplateDesigner
+        onSave={handleSaveTemplate}
+        onCancel={() => setShowDesigner(false)}
+        initialTemplate={editingTemplate}
+      />
+    );
+  }
+
+  return (
+    <div className="glass-panel rounded-2xl shadow-sm border border-gray-200/50 dark:border-white/10 flex flex-col md:flex-row min-h-[600px] mb-20 animate-fade-in">
+      {/* Sidebar / Category Tabs */}
+      <div className="w-full md:w-64 shrink-0 bg-gray-50/80 dark:bg-gray-900/60 backdrop-blur-md text-gray-800 dark:text-gray-200 border-b md:border-b-0 md:border-l border-gray-200/80 dark:border-gray-800 p-3 md:p-4">
+        <h2 className="text-lg md:text-xl font-bold text-gray-800 dark:text-gray-100 mb-3 md:mb-6 flex items-center gap-2 px-1 md:px-2">
+          <SettingsIcon size={22} className="text-blue-600" /> تنظیمات سیستم
+        </h2>
+        <nav className="flex md:flex-col gap-1.5 overflow-x-auto md:overflow-x-visible pb-2 md:pb-0 scrollbar-none">
+          {hasFullSettings && (
+            <>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("system")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "system" ? "bg-blue-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <AppWindow size={16} /> عمومی و سیستم
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("fiscal")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "fiscal" ? "bg-emerald-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <FolderSync size={16} /> مدیریت سال مالی
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("backup")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "backup" ? "bg-sky-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Database size={16} /> پشتیبان‌گیری و دیتابیس
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("data")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "data" ? "bg-indigo-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <FolderOpen size={16} /> اطلاعات پایه
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("templates")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "templates" ? "bg-teal-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <LayoutTemplate size={16} /> قالب‌های چاپ
+              </button>
+            </>
+          )}
+          {canManageTradeSettings && (
+            <button
+              type="button"
+              onClick={() => setActiveCategory("commerce")}
+              className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "commerce" ? "bg-rose-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+            >
+              <Globe size={16} /> تنظیمات بازرگانی
+            </button>
+          )}
+          {hasFullSettings && (
+            <>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("warehouse")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "warehouse" ? "bg-orange-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Warehouse size={16} /> انبار
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("integrations")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "integrations" ? "bg-purple-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Link size={16} /> اتصالات (API)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("whatsapp")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "whatsapp" ? "bg-green-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <MessageCircle size={16} /> پیام‌رسان‌ها
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("bot")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "bot" ? "bg-sky-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Bot size={16} /> ربات و آمار خودکار
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("meetings")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "meetings" ? "bg-indigo-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <FileText size={16} /> صورتجلسات
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("permissions")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "permissions" ? "bg-amber-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <ShieldCheck size={16} /> دسترسی‌ها و نقش‌ها
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("secretariat")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "secretariat" ? "bg-purple-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <FileText size={16} /> تنظیمات دبیرخانه
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("digital-card")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "digital-card" ? "bg-sky-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <QrCode size={16} /> کارت دیجیتال و QR کد
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("security")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "security" ? "bg-purple-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Shield size={16} /> تنظیمات انتظامات و نگهبانی
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("camera")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "camera" ? "bg-cyan-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Camera size={16} /> تنظیمات دوربین
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("theme")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "theme" ? "bg-pink-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Sparkles size={16} /> پوسته و پس‌زمینه
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("desktop")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "desktop" ? "bg-indigo-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <Monitor size={16} /> کلاینت ویندوز (Tauri)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCategory("updates")}
+                className={`whitespace-nowrap flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs md:text-sm font-medium transition-all ${activeCategory === "updates" ? "bg-purple-600 text-white shadow-md font-bold" : "text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-800"}`}
+              >
+                <RefreshCw size={16} /> بروزرسانی و آپدیت (Updates)
+              </button>
+            </>
+          )}
+        </nav>
+      </div>
+
+      <div ref={settingsContentRef} className="flex-1 p-4 md:p-8 overflow-y-visible md:overflow-y-visible scroll-smooth pb-20 min-w-0">
+        {!settings ? (
+          <div className="glass-panel rounded-2xl p-12 flex flex-col items-center justify-center gap-4 text-center my-8 max-w-xl mx-auto">
+            <Loader2 size={36} className="animate-spin text-pink-600" />
+            <p className="text-sm font-bold text-gray-700 dark:text-gray-200">در حال دریافت و همگام‌سازی تنظیمات از سرور...</p>
+          </div>
+        ) : activeCategory === "fiscal" ? (
+          <FiscalYearManager settings={settings} onSettingsChange={(newSettings) => setSettings(newSettings)} />
+        ) : (
+          <>
+            {activeCategory !== "theme" && activeCategory !== "desktop" && activeCategory !== "updates" && (
+              <form onSubmit={handleSave} className="space-y-8 max-w-4xl mx-auto">
+                {activeCategory === "system" && (
+                  <div className="space-y-8 animate-fade-in">
+                    <div className="space-y-4">
+                      <h3 className="font-bold text-gray-800 border-b pb-2">
+                        تنظیمات ظاهری و اعلان‌ها
+                      </h3>
+                  <div className="space-y-4">
+                    <label className="text-sm font-bold text-gray-700 block mb-1">
+                      نام برنامه (جهت نصب PWA)
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full border rounded-lg p-2 text-sm"
+                      value={settings.appName || ""}
+                      onChange={(e) =>
+                        setSettings({ ...settings, appName: e.target.value })
+                      }
+                      placeholder="مثال: مدیریت کارخانه X"
+                    />
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 rounded-xl border border-gray-200 overflow-hidden flex items-center justify-center bg-gray-50">
+                      {settings.pwaIcon ? (
+                        <img
+                          src={settings.pwaIcon}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <ImageIcon className="text-gray-300" />
+                      )}
+                    </div>
+                    <div>
+                      <input
+                        type="file"
+                        ref={iconInputRef}
+                        className="hidden"
+                        accept="image/*"
+                        onChange={handleIconChange}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => iconInputRef.current?.click()}
+                        className="text-blue-600 text-sm hover:underline font-bold"
+                        disabled={uploadingIcon}
+                      >
+                        {uploadingIcon ? "..." : "تغییر آیکون برنامه"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={handleToggleNotifications}
+                      className={`w-full px-4 py-2 rounded-lg border flex items-center justify-center gap-2 transition-colors ${notificationsEnabled ? "bg-green-50 border-green-200 text-green-700" : "bg-gray-50 text-gray-600"}`}
+                    >
+                      {notificationsEnabled ? (
+                        <BellRing size={18} />
+                      ) : (
+                        <BellOff size={18} />
+                      )}
+                      <span>
+                        {notificationsEnabled
+                          ? "نوتیفیکیشن: فعال (کلیک جهت خاموش‌سازی)"
+                          : "نوتیفیکیشن: غیرفعال (کلیک جهت روشن‌سازی)"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestNotification}
+                      className="w-full px-4 py-2 rounded-lg border bg-blue-50 border-blue-200 text-blue-700 flex items-center justify-center gap-2 transition-colors hover:bg-blue-100"
+                    >
+                      <Send size={18} /> <span>ارسال پیام تست</span>
+                    </button>
+                  </div>
+
+                  {Capacitor.getPlatform() === "android" && (
+                    <div className="p-4 bg-orange-50 border border-orange-100 rounded-2xl space-y-3">
+                      <div className="flex items-center gap-2 text-orange-800 font-bold text-sm">
+                        <Zap size={20} className="text-orange-500" />
+                        <span>اجرا در پس‌زمینه (مخصوص اندروید)</span>
+                      </div>
+                      <p className="text-[10px] text-orange-700 leading-relaxed">
+                        برای دریافت سریع و همیشگی نوتیفیکیشن‌ها (مانند واتساپ و
+                        تلگرام)، باید گزینه "بهینه‌سازی باتری" را برای این
+                        برنامه غیرفعال کنید. در غیر این صورت اندروید ممکن است
+                        برنامه را در پس‌زمینه ببندد.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          alert(
+                            "لطفا در صفحه تنظیمات که باز می‌شود، برنامه را پیدا کرده و روی 'Don't Optimize' یا 'عدم بهینه‌سازی' قرار دهید.",
+                          );
+                          // Ideally use a plugin here, but as a fallback we explain to user
+                          // We can also try to open app info where battery settings usually reside
+                          if (Capacitor.isNativePlatform()) {
+                            // This is a common way to open app settings which has battery options
+                            (window as any).location = "app-settings:";
+                          }
+                        }}
+                        className="w-full bg-white border border-orange-200 text-orange-700 py-2 rounded-xl text-xs font-bold hover:bg-orange-100 transition-colors"
+                      >
+                        باز کردن تنظیمات بهینه‌سازی باتری
+                      </button>
+                    </div>
+                  )}
+                  <div className="space-y-4 pt-4 border-t">
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                      <WifiOff size={20} /> تنظیمات اتصال به سرور (مخصوص
+                      اندروید)
+                    </h3>
+                    <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-[10px] text-blue-700 leading-relaxed">
+                      اگر در اپلیکیشن اندروید با خطای اتصال مواجه هستید، آدرس
+                      کامل سرور را در اینجا وارد کنید. مثال:
+                      https://your-server.aistudio.google
+                    </div>
+                    <div className="flex flex-col md:flex-row gap-3">
+                      <div className="flex-1">
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          آدرس میزبان (Host)
+                        </label>
+                        <input
+                          type="text"
+                          value={tempServerHost}
+                          onChange={(e) => setTempServerHost(e.target.value)}
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr text-left"
+                          placeholder="https://..."
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleTestConnection}
+                        disabled={testingConnection}
+                        className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold text-sm h-10 mt-auto hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
+                      >
+                        {testingConnection ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <RefreshCw size={18} />
+                        )}
+                        {testingConnection ? "در حال تست..." : "تست اتصال"}
+                      </button>
+                    </div>
+                    {tempServerHost && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          localStorage.setItem(
+                            "app_server_host",
+                            tempServerHost.trim().replace(/\/$/, ""),
+                          );
+                          alert(
+                            "آدرس سرور ذخیره شد. برنامه را دوباره باز کنید.",
+                          );
+                        }}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        ذخیره آدرس دائمی
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Server Graphics Processing Engine */}
+                  <div className="space-y-4 pt-4 border-t">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2 text-sm md:text-base">
+                        <Cpu size={20} className="text-emerald-600" /> موتور پردازش گرافیک و شتاب‌دهنده سخت‌افزاری سرور
+                      </h3>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        موتور سرور فعال
+                      </span>
+                    </div>
+
+                    <div className="p-4 bg-gradient-to-br from-emerald-50/70 to-teal-50/70 dark:from-emerald-950/20 dark:to-teal-950/20 border border-emerald-200/80 dark:border-emerald-800/40 rounded-2xl space-y-3">
+                      <p className="text-xs text-emerald-900 dark:text-emerald-200 leading-relaxed">
+                        🚀 با فعال بودن موتور گرافیکی سرور، بخش عمده‌ای از فشرده‌سازی تصاویر، تولید نمودارها، رندر وکتورها و فایل‌های سنگین گرافیکی به جای مرورگر روی سرور انجام شده و باعث می‌شود گوشی‌ها و کامپیوترهای قدیمی یا ضعیف بدون لگ و به روان‌ترین شکل ممکن کار کنند.
+                      </p>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-1 text-xs">
+                        <div className="bg-white/80 dark:bg-gray-800/80 p-2.5 rounded-xl border border-emerald-100 dark:border-gray-700">
+                          <span className="text-[10px] text-gray-400 block mb-0.5">وضعیت موتور</span>
+                          <span className="font-bold text-emerald-600">آماده و فعال (Active)</span>
+                        </div>
+                        <div className="bg-white/80 dark:bg-gray-800/80 p-2.5 rounded-xl border border-emerald-100 dark:border-gray-700">
+                          <span className="text-[10px] text-gray-400 block mb-0.5">موتور پردازش</span>
+                          <span className="font-bold text-gray-700 dark:text-gray-200">Sharp WebP & SVG</span>
+                        </div>
+                        <div className="bg-white/80 dark:bg-gray-800/80 p-2.5 rounded-xl border border-emerald-100 dark:border-gray-700">
+                          <span className="text-[10px] text-gray-400 block mb-0.5">کش حافظه</span>
+                          <span className="font-bold text-gray-700 dark:text-gray-200">فعال (Buffer Cache)</span>
+                        </div>
+                        <div className="bg-white/80 dark:bg-gray-800/80 p-2.5 rounded-xl border border-emerald-100 dark:border-gray-700">
+                          <span className="text-[10px] text-gray-400 block mb-0.5">کاهش بار رم کلاینت</span>
+                          <span className="font-bold text-blue-600">تا ۷۵٪ بهینه‌تر</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={handleTestGraphicsEngine}
+                          disabled={testingGraphics}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2"
+                        >
+                          {testingGraphics ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                          {testingGraphics ? "در حال پردازش گرافیک روی سرور..." : "تست زنده رندر نمودار در سرور"}
+                        </button>
+                      </div>
+
+                      {testChartSvg && (
+                        <div className="p-3 bg-white dark:bg-gray-800 rounded-xl border border-emerald-200 dark:border-gray-700 space-y-2 animate-fade-in">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
+                            <span>✅ نتیجه رندر مستقیم از سرور بدون مصرف منابع کلاینت:</span>
+                            <button
+                              type="button"
+                              onClick={() => setTestChartSvg(null)}
+                              className="text-gray-400 hover:text-gray-600 text-xs"
+                            >
+                              بستن
+                            </button>
+                          </div>
+                          <div
+                            className="w-full flex justify-center overflow-x-auto py-1"
+                            dangerouslySetInnerHTML={{ __html: testChartSvg }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <h3 className="font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                    <Truck size={20} /> شماره‌گذاری اسناد (تنظیمات پیش‌فرض)
+                  </h3>
+                  <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 space-y-2 text-xs text-amber-800 mb-2">
+                    <p className="font-bold">⚠️ توجه ویژه در مورد سال مالی فعال:</p>
+                    <p>
+                      این شماره‌ها تنظیمات سراسری پیش‌فرض سیستم هستند. اگر یک سال مالی فعال دارید، سیستم شماره‌های شروع را از بخش 
+                      <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded mx-1 cursor-pointer" onClick={() => setActiveCategory("fiscal")}>مدیریت سال مالی</span> 
+                      (جدول پایین آن بخش) دریافت می‌کند. لطفاً برای تنظیم شماره‌های شروع سال مالی فعال، به آن تب مراجعه فرمایید.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        شروع شماره دستور پرداخت
+                      </label>
+                      <input
+                        type="number"
+                        className="w-full border rounded-lg p-2 dir-ltr text-left"
+                        value={settings.currentTrackingNumber}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            currentTrackingNumber: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        شروع شماره مجوز خروج
+                      </label>
+                      <input
+                        type="number"
+                        className="w-full border rounded-lg p-2 dir-ltr text-left"
+                        value={settings.currentExitPermitNumber}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            currentExitPermitNumber: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        شروع شماره رسید دریافت (چک)
+                      </label>
+                      <input
+                        type="number"
+                        className="w-full border rounded-lg p-2 dir-ltr text-left"
+                        value={settings.currentChequeReceiptNumber || 1000}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            currentChequeReceiptNumber: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        شروع شماره پشت‌نمره رسید (چک)
+                      </label>
+                      <input
+                        type="number"
+                        className="w-full border rounded-lg p-2 dir-ltr text-left"
+                        value={settings.currentPoshtNomreh || 1}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            currentPoshtNomreh: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        تاریخ قطع نمایش چک‌های اقدام شده قدیمی
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full border rounded-lg p-2 text-center"
+                        value={settings.chequeArchiveCutoffDate || ""}
+                        placeholder="مثال: ۱۴۰۳/۰۱/۰۱"
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            chequeArchiveCutoffDate: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                    <Smartphone size={20} /> اولویت نمایش در نوار پایین موبایل
+                  </h3>
+                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-[10px] text-blue-700 leading-relaxed">
+                    ترتیب موارد را در اینجا مشخص کنید. ۵ مورد اول (با رعایت
+                    دسترسی کاربر) در نوار پایین نمایش داده می‌شوند و مابقی در
+                    منوی "بیشتر".
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded-xl border border-gray-100">
+                    {(settings.mobileNavOrder?.length
+                      ? settings.mobileNavOrder
+                      : [
+                          "dashboard",
+                          "trade",
+                          "create",
+                          "warehouse",
+                          "chat",
+                          "manage",
+                          "create-exit",
+                          "manage-exit",
+                          "manage-invoices",
+                          "security",
+                          "meetings",
+                          "purchase",
+                          "knowledge",
+                          "balances",
+                          "products",
+                          "sales",
+                          "tickets",
+                          "users",
+                          "settings",
+                        ]
+                    ).map((itemId, idx) => {
+                      const navLabel =
+                        {
+                          dashboard: "داشبورد",
+                          create: "ثبت پرداخت",
+                          manage: "سوابق پرداخت",
+                          "create-exit": "ثبت خروج",
+                          "manage-invoices": "مدیریت فاکتورها",
+                          "manage-exit": "سوابق خروج",
+                          warehouse: "مدیریت انبار",
+                          security: "انتظامات",
+                          meetings: "جلسات تولید",
+                          purchase: "درخواست خرید",
+                          chat: "گفتگو",
+                          knowledge: "اطلاعات و یادداشت ها",
+                          trade: "بازرگانی",
+                          balances: "مانده حساب مشتریان",
+                          products: "کالاها",
+                          sales: "مشتریان",
+                          tickets: "تیکت‌ها",
+                          users: "کاربران",
+                          settings: "تنظیمات",
+                        }[itemId] || itemId;
+
+                      return (
+                        <div
+                          key={itemId}
+                          className="flex items-center justify-between bg-white p-2 rounded-lg border border-gray-100 shadow-sm"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="text-[10px] font-bold text-gray-400 w-4">
+                              {idx + 1}
+                            </span>
+                            <span className="text-xs font-bold text-gray-700">
+                              {navLabel}
+                            </span>
+                          </div>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const order = [
+                                  ...(settings.mobileNavOrder || [
+                                    "dashboard",
+                                    "trade",
+                                    "create",
+                                    "warehouse",
+                                    "chat",
+                                    "manage",
+                                    "create-exit",
+                                    "manage-exit",
+                                    "manage-invoices",
+                                    "security",
+                                    "meetings",
+                                    "purchase",
+                                    "knowledge",
+                                    "balances",
+                                    "products",
+                                    "sales",
+                                    "tickets",
+                                    "users",
+                                    "settings",
+                                  ]),
+                                ];
+                                if (idx > 0) {
+                                  const temp = order[idx];
+                                  order[idx] = order[idx - 1];
+                                  order[idx - 1] = temp;
+                                  setSettings({
+                                    ...settings,
+                                    mobileNavOrder: order,
+                                  });
+                                }
+                              }}
+                              className="p-1 hover:bg-gray-100 rounded text-gray-500"
+                              disabled={idx === 0}
+                            >
+                              <RefreshCcw size={14} className="rotate-90" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const order = [
+                                  ...(settings.mobileNavOrder || [
+                                    "dashboard",
+                                    "trade",
+                                    "create",
+                                    "warehouse",
+                                    "chat",
+                                    "manage",
+                                    "create-exit",
+                                    "manage-exit",
+                                    "manage-invoices",
+                                    "security",
+                                    "meetings",
+                                    "purchase",
+                                    "knowledge",
+                                    "balances",
+                                    "products",
+                                    "sales",
+                                    "tickets",
+                                    "users",
+                                    "settings",
+                                  ]),
+                                ];
+                                if (idx < order.length - 1) {
+                                  const temp = order[idx];
+                                  order[idx] = order[idx + 1];
+                                  order[idx + 1] = temp;
+                                  setSettings({
+                                    ...settings,
+                                    mobileNavOrder: order,
+                                  });
+                                }
+                              }}
+                              className="p-1 hover:bg-gray-100 rounded text-gray-500"
+                              disabled={
+                                idx ===
+                                (settings.mobileNavOrder?.length || 19) - 1
+                              }
+                            >
+                              <RefreshCcw size={14} className="-rotate-90" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "whatsapp" && (
+              <div className="space-y-6 animate-fade-in">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                    <MessageCircle size={20} /> مدیریت پیام‌رسان‌ها (واتساپ و
+                    بله)
+                  </h3>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleFetchGroups}
+                      className="text-xs bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-indigo-100"
+                    >
+                      {fetchingGroups ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <RefreshCw size={14} />
+                      )}{" "}
+                      بروزرسانی گروه‌ها
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <h4 className="font-bold text-sm text-gray-700 dark:text-gray-200">
+                      اتصال واتساپ (WhatsApp Web)
+                    </h4>
+                    <div className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-6 flex flex-col items-center justify-center min-h-[280px] bg-gray-50 dark:bg-gray-800/50 relative overflow-hidden">
+                      {whatsappStatus?.ready ? (
+                        <div className="text-center animate-fade-in">
+                          <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-3 text-green-600 dark:text-green-400 shadow-sm">
+                            <Check size={32} />
+                          </div>
+                          <h4 className="font-bold text-green-700 dark:text-green-400 mb-1 text-base">
+                            واتساپ متصل است
+                          </h4>
+                          <p className="text-xs text-gray-500 font-mono dir-ltr mt-1">
+                            {whatsappStatus.user}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleWhatsappLogout}
+                            className="mt-4 px-4 py-1.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 rounded-lg text-xs font-bold transition-colors"
+                          >
+                            خروج از حساب
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-center w-full">
+                          {whatsappStatus?.initializing || restartingWA ? (
+                            <div className="flex flex-col items-center gap-3 py-6 animate-pulse">
+                              <Loader2
+                                className="animate-spin text-emerald-600"
+                                size={38}
+                              />
+                              <span className="text-xs font-bold text-gray-700 dark:text-gray-200">
+                                در حال راه‌اندازی مرورگر و تولید QR کد واتساپ...
+                              </span>
+                              <span className="text-[11px] text-gray-400 max-w-xs leading-relaxed">
+                                لطفاً چند ثانیه صبر کنید؛ اتصال به شبکه و بارگذاری صفحه وب واتساپ در جریان است.
+                              </span>
+                            </div>
+                          ) : (whatsappStatus?.qrDataUrl || whatsappStatus?.qr) ? (
+                            <div className="flex flex-col items-center animate-scale-in">
+                              <div className="p-3 bg-white rounded-xl shadow-md border border-gray-200 mb-3">
+                                {whatsappStatus.qrDataUrl ? (
+                                  <img
+                                    src={whatsappStatus.qrDataUrl}
+                                    alt="WhatsApp QR Code"
+                                    width={190}
+                                    height={190}
+                                    className="rounded-lg"
+                                  />
+                                ) : (
+                                  <QRCode value={whatsappStatus.qr!} size={190} />
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-800 dark:text-gray-200 font-bold mb-1">
+                                با دوربین واتساپ گوشی اسکن کنید
+                              </p>
+                              <p className="text-[11px] text-gray-400">
+                                در برنامه واتساپ: منو &gt; دستگاه‌های متصل (Linked Devices) &gt; اتصال دستگاه
+                              </p>
+                            </div>
+                          ) : whatsappStatus?.error ? (
+                            <div className="flex flex-col items-center p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-xs max-w-md">
+                              <span className="font-bold text-red-700 dark:text-red-400 mb-1">
+                                خطا در راه‌اندازی واتساپ
+                              </span>
+                              <p className="text-[11px] text-red-600 mb-3 font-mono dir-ltr break-all">
+                                {whatsappStatus.error}
+                              </p>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleWhatsappRestart(false)}
+                                  className="px-3 py-1 bg-white border border-red-300 text-red-700 rounded-lg text-xs font-bold hover:bg-red-50"
+                                >
+                                  تلاش مجدد
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleWhatsappRestart(true)}
+                                  className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700"
+                                >
+                                  پاکسازی نشست و ریستارت
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center py-6">
+                              <p className="text-sm text-gray-500 mb-3">
+                                QR کد هنوز بارگذاری نشده است.
+                              </p>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={checkWhatsappStatus}
+                                  className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-100"
+                                >
+                                  بررسی مجدد وضعیت
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleWhatsappRestart(false)}
+                                  className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-bold hover:bg-emerald-700"
+                                >
+                                  راه‌اندازی سرویس
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap justify-between items-center text-xs gap-2 pt-1">
+                      <span className="text-gray-500">
+                        وضعیت:{" "}
+                        <strong className={whatsappStatus?.ready ? "text-green-600" : "text-amber-600"}>
+                          {whatsappStatus?.ready ? "متصل (Online)" : whatsappStatus?.qr ? "منتظر اسکن QR" : "در انتظار"}
+                        </strong>
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleWhatsappRestart(false)}
+                          className="text-blue-600 hover:underline font-bold"
+                          disabled={restartingWA}
+                        >
+                          تولید مجدد QR کد
+                        </button>
+                        <span className="text-gray-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => handleWhatsappRestart(true)}
+                          className="text-red-600 hover:underline font-bold"
+                          disabled={restartingWA}
+                          title="حذف کامل فایل‌های نشست قبلی و راه‌اندازی از صفر"
+                        >
+                          پاکسازی نشست (Clean Reset)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-100">
+                      <h4 className="font-bold text-sm mb-2">راهنمای اتصال به واتساپ</h4>
+                      <p className="text-xs leading-relaxed">
+                        این سیستم بدون نیاز به کلیدهای گران‌قیمت یا APIهای خارجی، از هسته داخلی WhatsApp Web بهره می‌برد.
+                        کافیست بار اول QR کد را اسکن نمایید تا ورود دائمی ذخیره شود.
+                      </p>
+                    </div>
+
+                    <div className="bg-gray-50 dark:bg-gray-800/40 p-4 rounded-xl border border-gray-200 dark:border-gray-700 space-y-2">
+                      <label className="text-xs font-bold text-gray-700 dark:text-gray-300 block">
+                        پروکسی واتساپ / VPN محلی (اختیاری)
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full border rounded-lg p-2 text-xs dir-ltr bg-white dark:bg-gray-900 font-mono border-gray-300 dark:border-gray-600"
+                        value={settings.whatsappProxy || ""}
+                        onChange={(e) => setSettings({ ...settings, whatsappProxy: e.target.value })}
+                        placeholder="http://127.0.0.1:10809 یا socks5://127.0.0.1:10808"
+                      />
+                      <p className="text-[11px] text-gray-500 leading-relaxed">
+                        در صورت نیاز به عبور مستقیم مرورگر واتساپ از فیلترشکن، آدرس پورت لوکال (مانند v2rayN یا سایر کلاینت‌ها) را اینجا وارد کنید و دکمه «ذخیره تنظیمات» را بزنید.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ابزار مانیتورینگ و عیب‌یابی ارتباط واتساپ */}
+                <WhatsAppDiagnosticTool 
+                  onTriggerRestart={handleWhatsappRestart}
+                  currentProxy={settings.whatsappProxy || ""}
+                />
+
+                <div className="border-t pt-6">
+                  <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <Users size={20} /> دفترچه تلفن (مخاطبین و گروه‌ها)
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4 items-end bg-gray-50 p-4 rounded-xl">
+                    <div className="flex-1 w-full">
+                      <label className="text-xs font-bold text-gray-500 block mb-1">
+                        نام مخاطب / گروه
+                      </label>
+                      <input
+                        className="w-full border rounded-lg p-2 text-sm"
+                        value={contactName}
+                        onChange={(e) => setContactName(e.target.value)}
+                        placeholder="مثال: مدیر مالی"
+                      />
+                    </div>
+                    <div className="flex-1 w-full">
+                      <label className="text-xs font-bold text-gray-500 block mb-1">
+                        شماره / شناسه گروه (واتساپ)
+                      </label>
+                      <input
+                        className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                        value={contactNumber}
+                        onChange={(e) => setContactNumber(e.target.value)}
+                        placeholder="9891... / 123@g.us"
+                      />
+                    </div>
+                    <div className="flex-1 w-full">
+                      <label className="text-xs font-bold text-gray-500 block mb-1">
+                        آیدی بله
+                      </label>
+                      <input
+                        className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                        value={contactBaleId}
+                        onChange={(e) => setContactBaleId(e.target.value)}
+                        placeholder="@id"
+                      />
+                    </div>
+                    <div className="flex-1 w-full">
+                      <label className="text-xs font-bold text-gray-500 block mb-1">
+                        آیدی تلگرام
+                      </label>
+                      <input
+                        className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                        value={contactTelegramId}
+                        onChange={(e) => setContactTelegramId(e.target.value)}
+                        placeholder="آیدی یا Chat ID"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 mb-2 lg:col-span-2">
+                      <input
+                        type="checkbox"
+                        id="isGroup"
+                        checked={isGroupContact}
+                        onChange={(e) => setIsGroupContact(e.target.checked)}
+                        className="w-4 h-4"
+                      />
+                      <label
+                        htmlFor="isGroup"
+                        className="text-xs font-bold text-gray-600"
+                      >
+                        این یک گروه است
+                      </label>
+                    </div>
+                    <div className="flex gap-2 w-full lg:col-span-2 justify-end">
+                      {editingContactId && (
+                        <button
+                          type="button"
+                          onClick={resetContactForm}
+                          className="bg-gray-200 text-gray-700 p-2 rounded-lg"
+                        >
+                          <X size={18} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleAddOrUpdateContact}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 flex-1 lg:flex-none"
+                      >
+                        {editingContactId ? "ویرایش" : "افزودن"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-60 overflow-y-auto pr-1">
+                    {settings.savedContacts?.map((c) => (
+                      <div
+                        key={c.id}
+                        className="flex items-center justify-between p-3 glass-panel border rounded-lg shadow-sm group hover:border-blue-300 transition-colors"
+                      >
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div
+                            className={`p-2 rounded-full shrink-0 ${c.isGroup ? "bg-orange-100 text-orange-600" : "bg-blue-100 text-blue-600"}`}
+                          >
+                            {c.isGroup ? (
+                              <Users size={16} />
+                            ) : (
+                              <Smartphone size={16} />
+                            )}
+                          </div>
+                          <div className="truncate">
+                            <div className="font-bold text-xs text-gray-800 truncate">
+                              {c.name}
+                            </div>
+                            <div className="text-[10px] text-gray-400 font-mono truncate">
+                              {c.number}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => handleEditContact(c)}
+                            className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteContact(c.id)}
+                            className="p-1 text-red-500 hover:bg-red-50 rounded"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Customer Exit Notification & Bot Links */}
+                <CustomerExitNotificationConfig
+                  settings={settings}
+                  setSettings={setSettings}
+                />
+              </div>
+            )}
+
+            {activeCategory === "warehouse" && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                  <Warehouse size={20} /> انبار و لجستیک
+                </h3>
+                <div className="space-y-4 font-bold text-sm text-gray-600">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        شماره مدیر فروش (پیش‌فرض)
+                      </label>
+                      <input
+                        className="w-full border rounded-lg p-3 dir-ltr text-left"
+                        value={settings.defaultSalesManager || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            defaultSalesManager: e.target.value,
+                          })
+                        }
+                        placeholder="98912..."
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-1 flex items-center gap-1.5">
+                        <MessageCircle size={15} className="text-emerald-600" />
+                        <span>لینک یا شماره واتساپ مدیر فروش</span>
+                      </label>
+                      <input
+                        className="w-full border rounded-lg p-3 dir-ltr text-left"
+                        value={settings.salesManagerWhatsapp || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            salesManagerWhatsapp: e.target.value,
+                          })
+                        }
+                        placeholder="https://wa.me/98... یا شماره"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-sm font-bold text-gray-700 block mb-1">
+                      شماره مدیر فروش (پیش‌فرض)
+                    </label>
+                    <input
+                      className="w-full border rounded-lg p-3 dir-ltr text-left"
+                      value={settings.defaultSalesManager || ""}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          defaultSalesManager: e.target.value,
+                        })
+                      }
+                      placeholder="98912..."
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <h4 className="font-bold text-sm text-gray-700 mb-3 border-b pb-1">
+                    تنظیمات اطلاع‌رسانی خروج (شرکت‌ها)
+                  </h4>
+                  <div className="space-y-3">
+                    {settings.companies
+                      ?.filter((c) => c.showInWarehouse !== false)
+                      .map((c) => {
+                        const conf =
+                          settings.companyNotifications?.[c.name] || {};
+                        return (
+                          <div
+                            key={c.id}
+                            className="bg-gray-50 p-4 rounded-xl border border-gray-200"
+                          >
+                            <h5 className="font-bold text-sm text-blue-800 mb-3 border-b border-gray-200 pb-1">
+                              {c.name}
+                            </h5>
+
+                            <div className="space-y-3">
+                              <h6 className="font-bold text-[11px] text-gray-600 mb-1 border-b pb-1">
+                                تنظیمات گروه اطلاع‌رسانی:
+                              </h6>
+                              {/* UPDATED: Unified Group Config (WhatsApp, Bale, Telegram) */}
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                                {/* WhatsApp */}
+                                <div className="bg-green-50 p-2 rounded border border-green-200">
+                                  <div className="flex items-center gap-1 mb-1 text-green-700 font-bold text-[10px]">
+                                    <MessageCircle size={12} /> واتساپ (گروه)
+                                  </div>
+                                  <select
+                                    className="w-full border rounded p-1.5 text-xs dir-ltr glass-panel"
+                                    value={conf.warehouseGroup || ""}
+                                    onChange={(e) => {
+                                      const newConf = {
+                                        ...settings.companyNotifications,
+                                        [c.name]: {
+                                          ...conf,
+                                          warehouseGroup: e.target.value,
+                                        },
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        companyNotifications: newConf,
+                                      });
+                                    }}
+                                  >
+                                    <option value="">-- انتخاب --</option>
+                                    {settings.savedContacts
+                                      ?.filter((c) => c.isGroup)
+                                      .map((grp) => (
+                                        <option key={grp.id} value={grp.number}>
+                                          {grp.name}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+
+                                {/* Bale */}
+                                <div className="bg-cyan-50 p-2 rounded border border-cyan-200">
+                                  <div className="flex items-center gap-1 mb-1 text-cyan-700 font-bold text-[10px]">
+                                    <Send size={12} /> بله (شناسه)
+                                  </div>
+                                  <input
+                                    className="w-full border rounded p-1.5 text-xs dir-ltr glass-panel"
+                                    placeholder="ID..."
+                                    value={conf.baleChannelId || ""}
+                                    onChange={(e) => {
+                                      const newConf = {
+                                        ...settings.companyNotifications,
+                                        [c.name]: {
+                                          ...conf,
+                                          baleChannelId: e.target.value,
+                                        },
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        companyNotifications: newConf,
+                                      });
+                                    }}
+                                  />
+                                </div>
+
+                                {/* Telegram */}
+                                <div className="bg-blue-50 p-2 rounded border border-blue-200">
+                                  <div className="flex items-center gap-1 mb-1 text-blue-700 font-bold text-[10px]">
+                                    <Send size={12} /> تلگرام (Chat ID)
+                                  </div>
+                                  <input
+                                    className="w-full border rounded p-1.5 text-xs dir-ltr glass-panel"
+                                    placeholder="-100..."
+                                    value={conf.telegramChannelId || ""}
+                                    onChange={(e) => {
+                                      const newConf = {
+                                        ...settings.companyNotifications,
+                                        [c.name]: {
+                                          ...conf,
+                                          telegramChannelId: e.target.value,
+                                        },
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        companyNotifications: newConf,
+                                      });
+                                    }}
+                                  />
+                                </div>
+                              </div>
+
+                              <h6 className="font-bold text-[11px] text-orange-600 mb-1 border-b pb-1">
+                                اطلاع‌رسانی به مدیر فروش (هنگام تایید مدیرعامل):
+                              </h6>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div className="bg-orange-50 p-2 rounded border border-orange-200">
+                                  <div className="flex items-center gap-1 mb-1 text-orange-700 font-bold text-[10px]">
+                                    <MessageCircle size={12} /> مدیر فروش
+                                    (واتساپ)
+                                  </div>
+                                  <input
+                                    className="w-full border rounded p-1.5 text-xs dir-ltr glass-panel"
+                                    value={conf.salesManager || ""}
+                                    onChange={(e) => {
+                                      const newConf = {
+                                        ...settings.companyNotifications,
+                                        [c.name]: {
+                                          ...conf,
+                                          salesManager: e.target.value,
+                                        },
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        companyNotifications: newConf,
+                                      });
+                                    }}
+                                    placeholder="شماره (989...)"
+                                  />
+                                </div>
+                                <div className="bg-orange-50 p-2 rounded border border-orange-200">
+                                  <div className="flex items-center gap-1 mb-1 text-orange-700 font-bold text-[10px]">
+                                    <Send size={12} /> مدیر فروش (بله)
+                                  </div>
+                                  <input
+                                    className="w-full border rounded p-1.5 text-xs dir-ltr glass-panel"
+                                    value={conf.salesManagerBale || ""}
+                                    onChange={(e) => {
+                                      const newConf = {
+                                        ...settings.companyNotifications,
+                                        [c.name]: {
+                                          ...conf,
+                                          salesManagerBale: e.target.value,
+                                        },
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        companyNotifications: newConf,
+                                      });
+                                    }}
+                                    placeholder="ID..."
+                                  />
+                                </div>
+                                <div className="bg-orange-50 p-2 rounded border border-orange-200">
+                                  <div className="flex items-center gap-1 mb-1 text-orange-700 font-bold text-[10px]">
+                                    <Send size={12} /> مدیر فروش (تلگرام)
+                                  </div>
+                                  <input
+                                    className="w-full border rounded p-1.5 text-xs dir-ltr glass-panel"
+                                    value={conf.salesManagerTelegram || ""}
+                                    onChange={(e) => {
+                                      const newConf = {
+                                        ...settings.companyNotifications,
+                                        [c.name]: {
+                                          ...conf,
+                                          salesManagerTelegram: e.target.value,
+                                        },
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        companyNotifications: newConf,
+                                      });
+                                    }}
+                                    placeholder="Chat ID..."
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between">
+                                <label className="text-[10px] font-bold text-gray-600 flex items-center gap-1">
+                                  <FileClock
+                                    size={12}
+                                    className="text-blue-600"
+                                  />{" "}
+                                  شماره شروع بیجک:
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    className="w-20 border rounded p-1 text-[10px] text-center font-mono"
+                                    value={
+                                      settings.warehouseSequences?.[c.name] ||
+                                      ""
+                                    }
+                                    onChange={(e) => {
+                                      const newSequences = {
+                                        ...(settings.warehouseSequences || {}),
+                                        [c.name]: Number(e.target.value),
+                                      };
+                                      setSettings({
+                                        ...settings,
+                                        warehouseSequences: newSequences,
+                                      });
+                                    }}
+                                    placeholder="1000"
+                                  />
+                                  <span className="text-[9px] text-gray-400">
+                                    پر کردن جاهای خالی از این عدد
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+
+                {/* Customer Exit WhatsApp Notification & Bot Links Configuration */}
+                <CustomerExitNotificationConfig
+                  settings={settings}
+                  setSettings={setSettings}
+                />
+
+                <SecondExitGroupSettings
+                  title="گروه اول (پیش‌فرض سیستم)"
+                  configKey="exitPermitFirstGroupConfig"
+                  bgColor="bg-blue-50"
+                  borderColor="border-blue-200"
+                  colorClasses="text-blue-900"
+                  iconColorClass="text-blue-700"
+                  settings={settings}
+                  setSettings={setSettings}
+                  contacts={[...(settings.savedContacts || []), ...appContacts]}
+                />
+
+                <SecondExitGroupSettings
+                  title="تنظیمات گروه دوم (ارسال سفارشی)"
+                  configKey="exitPermitSecondGroupConfig"
+                  settings={settings}
+                  setSettings={setSettings}
+                  contacts={[...(settings.savedContacts || []), ...appContacts]}
+                />
+
+                <SecondExitGroupSettings
+                  title="تنظیمات گروه سوم (ارسال سفارشی)"
+                  configKey="exitPermitThirdGroupConfig"
+                  bgColor="bg-purple-50"
+                  borderColor="border-purple-200"
+                  colorClasses="text-purple-900"
+                  iconColorClass="text-purple-700"
+                  settings={settings}
+                  setSettings={setSettings}
+                  contacts={[...(settings.savedContacts || []), ...appContacts]}
+                />
+
+                <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-5 space-y-4 shadow-sm animate-fade-in">
+                  <h4 className="font-bold text-sm text-amber-900 flex items-center gap-2">
+                    🚚 تنظیمات تخصصی ارسال گزارش روزانه خروج کارخانه
+                  </h4>
+                  <p className="text-xs text-amber-700 leading-relaxed">
+                    تنظیم کنید که گزارش روزانه تصاویر و مجوزهای خروج کالا از
+                    کارخانه به چه گروه‌هایی ارسال شود. می‌توانید یک گروه اختصاصی
+                    فقط برای این گزارش معرفی کنید یا آن را به گروه‌های اول، دوم
+                    یا سوم مجوزهای خروج نیز بفرستید.
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-white p-4 rounded-lg border border-amber-100">
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-500 block mb-1">
+                        گروه اختصاصی تلگرام (Chat ID)
+                      </label>
+                      <input
+                        className="w-full border rounded p-1.5 text-xs dir-ltr"
+                        value={
+                          settings.dailyExitReportDedicatedTelegramId || ""
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportDedicatedTelegramId: e.target.value,
+                          })
+                        }
+                        placeholder="-100..."
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-500 block mb-1">
+                        گروه اختصاصی بله (شناسه)
+                      </label>
+                      <input
+                        className="w-full border rounded p-1.5 text-xs dir-ltr"
+                        value={settings.dailyExitReportDedicatedBaleId || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportDedicatedBaleId: e.target.value,
+                          })
+                        }
+                        placeholder="ID..."
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-500 block mb-1">
+                        گروه اختصاصی واتساپ (ID)
+                      </label>
+                      <input
+                        className="w-full border rounded p-1.5 text-xs dir-ltr"
+                        value={
+                          settings.dailyExitReportDedicatedWhatsAppId || ""
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportDedicatedWhatsAppId: e.target.value,
+                          })
+                        }
+                        placeholder="...@g.us"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-6 pt-2">
+                    <label className="flex items-center gap-2 text-xs font-bold text-gray-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={
+                          settings.dailyExitReportSendToFirstGroup === true
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportSendToFirstGroup: e.target.checked,
+                          })
+                        }
+                        className="w-4 h-4 rounded text-blue-600"
+                      />
+                      <span>ارسال به گروه اول مجوز خروج (پیش‌فرض کارخانه)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs font-bold text-gray-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={
+                          settings.dailyExitReportSendToSecondGroup || false
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportSendToSecondGroup: e.target.checked,
+                          })
+                        }
+                        className="w-4 h-4 rounded text-blue-600"
+                      />
+                      <span>ارسال به گروه دوم مجوز خروج</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs font-bold text-gray-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={
+                          settings.dailyExitReportSendToThirdGroup || false
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportSendToThirdGroup: e.target.checked,
+                          })
+                        }
+                        className="w-4 h-4 rounded text-blue-600"
+                      />
+                      <span>ارسال به گروه سوم مجوز خروج</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs font-bold text-gray-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={
+                          settings.dailyExitReportSendToDedicatedGroup !== false
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            dailyExitReportSendToDedicatedGroup:
+                              e.target.checked,
+                          })
+                        }
+                        className="w-4 h-4 rounded text-blue-600"
+                      />
+                      <span>ارسال به گروه اختصاصی معرفی شده در بالا</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "backup" && (
+              <div className="space-y-8 animate-fade-in max-w-4xl mx-auto">
+                <BackupManager />
+              </div>
+            )}
+
+            {activeCategory === "data" && (
+              <div className="space-y-8 animate-fade-in">
+                <div className="space-y-4">
+                  <h3 className="font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                    <Building size={20} /> مدیریت شرکت‌ها و بانک‌ها
+                  </h3>
+
+                  {/* Company Form */}
+                  <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="font-bold text-sm text-gray-700">
+                        {editingCompanyId ? "ویرایش شرکت" : "افزودن شرکت جدید"}
+                      </h4>
+                      {editingCompanyId && (
+                        <button
+                          type="button"
+                          onClick={resetCompanyForm}
+                          className="text-xs text-red-500 glass-panel border border-red-100 px-2 py-1 rounded"
+                        >
+                          انصراف
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          نام شرکت
+                        </label>
+                        <input
+                          type="text"
+                          className="w-full border rounded-lg p-2 text-sm"
+                          placeholder="نام شرکت..."
+                          value={newCompanyName}
+                          onChange={(e) => setNewCompanyName(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex gap-2 items-end">
+                        <div className="flex-1">
+                          <label className="text-xs font-bold block mb-1 text-gray-500">
+                            لوگو
+                          </label>
+                          <div className="flex items-center gap-2 border rounded-lg p-1 glass-panel h-[42px]">
+                            <input
+                              type="file"
+                              ref={companyLogoInputRef}
+                              className="hidden"
+                              onChange={handleLogoUpload}
+                              accept="image/*"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                companyLogoInputRef.current?.click()
+                              }
+                              className="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200"
+                              disabled={isUploadingLogo}
+                            >
+                              {isUploadingLogo ? "..." : "انتخاب"}
+                            </button>
+                            {newCompanyLogo && (
+                              <img
+                                src={newCompanyLogo}
+                                className="h-8 w-8 object-contain"
+                              />
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex-1">
+                          <label className="text-xs font-bold block mb-1 text-gray-500">
+                            سربرگ (A4)
+                          </label>
+                          <div className="flex items-center gap-2 border rounded-lg p-1 glass-panel h-[42px]">
+                            <input
+                              type="file"
+                              ref={companyLetterheadInputRef}
+                              className="hidden"
+                              onChange={handleLetterheadUpload}
+                              accept="image/*"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                companyLetterheadInputRef.current?.click()
+                              }
+                              className="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200"
+                              disabled={isUploadingLetterhead}
+                            >
+                              {isUploadingLetterhead ? "..." : "انتخاب"}
+                            </button>
+                            {newCompanyLetterhead && (
+                              <span className="text-[10px] text-green-600 truncate">
+                                دارد
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        className={`flex items-center gap-2 glass-panel px-2 py-2 rounded border cursor-pointer flex-1 h-[42px] ${newCompanyShowInWarehouse ? "border-green-200 bg-green-50 text-green-700" : ""}`}
+                        onClick={() =>
+                          setNewCompanyShowInWarehouse(
+                            !newCompanyShowInWarehouse,
+                          )
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newCompanyShowInWarehouse}
+                          onChange={(e) =>
+                            setNewCompanyShowInWarehouse(e.target.checked)
+                          }
+                          className="w-4 h-4"
+                        />
+                        <span className="text-xs font-bold select-none">
+                          نمایش در انبار
+                        </span>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          شناسه ملی
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                          value={newCompanyNatId}
+                          onChange={(e) => setNewCompanyNatId(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          شماره ثبت
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                          value={newCompanyRegNum}
+                          onChange={(e) => setNewCompanyRegNum(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          کد اقتصادی
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                          value={newCompanyEcoCode}
+                          onChange={(e) => setNewCompanyEcoCode(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          تلفن
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                          value={newCompanyPhone}
+                          onChange={(e) => setNewCompanyPhone(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          فکس
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                          value={newCompanyFax}
+                          onChange={(e) => setNewCompanyFax(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          کد پستی
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                          value={newCompanyPostalCode}
+                          onChange={(e) =>
+                            setNewCompanyPostalCode(e.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="text-xs font-bold block mb-1 text-gray-500">
+                          آدرس
+                        </label>
+                        <input
+                          className="w-full border rounded-lg p-2 text-sm"
+                          value={newCompanyAddress}
+                          onChange={(e) => setNewCompanyAddress(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Company Banks Management */}
+                    <div className="glass-panel p-3 rounded-lg border border-gray-100 mb-4">
+                      <h5 className="font-bold text-xs text-gray-600 mb-2">
+                        حساب‌های بانکی شرکت
+                      </h5>
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2 items-end">
+                        <div className="flex-1">
+                          <input
+                            className="w-full border rounded p-1.5 text-xs"
+                            placeholder="نام بانک"
+                            value={tempBankName}
+                            onChange={(e) => setTempBankName(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <input
+                            className="w-full border rounded p-1.5 text-xs dir-ltr"
+                            placeholder="شماره حساب"
+                            value={tempAccountNum}
+                            onChange={(e) => setTempAccountNum(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <input
+                            className="w-full border rounded p-1.5 text-xs dir-ltr"
+                            placeholder="شبا (IR...)"
+                            value={tempBankSheba}
+                            onChange={(e) => setTempBankSheba(e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <select
+                            className="w-full border rounded p-1.5 text-xs"
+                            value={tempBankLayout}
+                            onChange={(e) => setTempBankLayout(e.target.value)}
+                          >
+                            <option value="">قالب چاپ چک</option>
+                            {settings.printTemplates?.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex-1">
+                          <select
+                            className="w-full border rounded p-1.5 text-xs"
+                            value={tempInternalLayout}
+                            onChange={(e) =>
+                              setTempInternalLayout(e.target.value)
+                            }
+                          >
+                            <option value="">قالب رسید داخلی</option>
+                            {settings.printTemplates?.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex items-center gap-1 border rounded p-1">
+                          <input
+                            type="checkbox"
+                            checked={tempDualPrint}
+                            onChange={(e) => setTempDualPrint(e.target.checked)}
+                            className="w-3 h-3"
+                          />
+                          <span className="text-[10px]">
+                            چاپ دوگانه (واریز/برداشت)
+                          </span>
+                        </div>
+                        {tempDualPrint && (
+                          <>
+                            <div className="flex-1">
+                              <select
+                                className="w-full border rounded p-1.5 text-[10px]"
+                                value={tempInternalWithdrawalLayout}
+                                onChange={(e) =>
+                                  setTempInternalWithdrawalLayout(
+                                    e.target.value,
+                                  )
+                                }
+                              >
+                                <option value="">قالب برداشت</option>
+                                {settings.printTemplates?.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex-1">
+                              <select
+                                className="w-full border rounded p-1.5 text-[10px]"
+                                value={tempInternalDepositLayout}
+                                onChange={(e) =>
+                                  setTempInternalDepositLayout(e.target.value)
+                                }
+                              >
+                                <option value="">قالب واریز</option>
+                                {settings.printTemplates?.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={addOrUpdateCompanyBank}
+                          className="bg-green-100 text-green-700 px-3 py-1.5 rounded text-xs font-bold hover:bg-green-200"
+                        >
+                          {editingBankId ? "ویرایش بانک" : "افزودن بانک"}
+                        </button>
+                        {editingBankId && (
+                          <button
+                            type="button"
+                            onClick={resetBankForm}
+                            className="bg-gray-100 text-gray-600 px-2 py-1.5 rounded text-xs"
+                          >
+                            لغو
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-1 max-h-32 overflow-y-auto">
+                        {newCompanyBanks.map((b, i) => (
+                          <div
+                            key={b.id}
+                            className="flex justify-between items-center bg-gray-50 p-2 rounded text-xs border border-gray-100"
+                          >
+                            <span>
+                              {b.bankName} - {b.accountNumber}
+                            </span>
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => editCompanyBank(b)}
+                                className="text-blue-500"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeCompanyBank(b.id)}
+                                className="text-red-500"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveCompany}
+                      className={`w-full text-white px-4 py-2 rounded-lg text-sm h-10 font-bold shadow-sm ${editingCompanyId ? "bg-amber-600 hover:bg-amber-700" : "bg-indigo-600 hover:bg-indigo-700"}`}
+                    >
+                      {editingCompanyId ? "ذخیره تغییرات شرکت" : "افزودن شرکت"}
+                    </button>
+                    <div className="space-y-2 mt-6 max-h-64 overflow-y-auto border-t pt-4">
+                      {settings.companies?.map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex flex-col glass-panel p-3 rounded border shadow-sm gap-2"
+                        >
+                          <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                              {c.logo && (
+                                <img
+                                  src={c.logo}
+                                  className="w-6 h-6 object-contain"
+                                />
+                              )}
+                              <span className="text-sm font-bold">
+                                {c.name}
+                              </span>
+                            </div>
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleEditCompany(c)}
+                                className="text-blue-500 p-1 hover:bg-blue-50 rounded"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveCompany(c.id)}
+                                className="text-red-500 p-1 hover:bg-red-50 rounded"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="glass-panel p-4 rounded-xl border border-gray-200">
+                    <h3 className="font-bold text-gray-800 border-b pb-2 mb-3">
+                      بانک‌های عامل (عمومی)
+                    </h3>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        className="border rounded p-2 text-sm flex-1"
+                        placeholder="نام بانک..."
+                        value={newOperatingBank}
+                        onChange={(e) => setNewOperatingBank(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddOperatingBank}
+                        className="bg-blue-600 text-white px-3 py-2 rounded text-sm font-bold"
+                      >
+                        افزودن
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {settings.operatingBankNames?.map((b) => (
+                        <span
+                          key={b}
+                          className="bg-gray-100 px-3 py-1 rounded-full text-xs flex items-center gap-1"
+                        >
+                          {b}{" "}
+                          <button
+                            onClick={() => handleRemoveOperatingBank(b)}
+                            className="text-red-500 hover:bg-red-100 rounded-full p-0.5"
+                          >
+                            <X size={12} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "commerce" && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                  <Globe size={20} /> تنظیمات بازرگانی
+                </h3>
+                <div className="glass-panel p-4 rounded-xl border border-gray-200">
+                  <h4 className="font-bold text-sm text-gray-700 mb-2">
+                    گروه‌های کالایی
+                  </h4>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      className="border rounded p-2 text-sm flex-1"
+                      placeholder="نام گروه..."
+                      value={newCommodity}
+                      onChange={(e) => setNewCommodity(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCommodity}
+                      className="bg-blue-600 text-white px-3 py-2 rounded text-sm font-bold"
+                    >
+                      افزودن
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {settings.commodityGroups?.map((c) => (
+                      <span
+                        key={c}
+                        className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs flex items-center gap-1"
+                      >
+                        {c}{" "}
+                        <button
+                          onClick={() => handleRemoveCommodity(c)}
+                          className="text-red-500 hover:bg-red-100 rounded-full p-0.5"
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="glass-panel p-4 rounded-xl border border-gray-200">
+                  <h4 className="font-bold text-sm text-gray-700 mb-2">
+                    شرکت‌های بیمه
+                  </h4>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      className="border rounded p-2 text-sm flex-1"
+                      placeholder="نام شرکت بیمه..."
+                      value={newInsuranceCompany}
+                      onChange={(e) => setNewInsuranceCompany(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddInsuranceCompany}
+                      className="bg-green-600 text-white px-3 py-2 rounded text-sm font-bold"
+                    >
+                      افزودن
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {settings.insuranceCompanies?.map((c) => (
+                      <span
+                        key={c}
+                        className="bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs flex items-center gap-1"
+                      >
+                        {c}{" "}
+                        <button
+                          onClick={() => handleRemoveInsuranceCompany(c)}
+                          className="text-red-500 hover:bg-red-100 rounded-full p-0.5"
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-gray-200">
+                  <PurchaseWorkflowApproversSettings
+                    settings={settings}
+                    onUpdateSettings={handleUpdateSettings}
+                    users={systemUsers}
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "bot" && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="font-bold text-gray-800 border-b pb-2 flex items-center gap-2">
+                  <Bot size={20} className="text-sky-600" /> تنظیمات ربات، فروشگاه و گزارشات خودکار (آمار تولید و فروش روزانه)
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <h4 className="font-bold text-sm text-gray-700">
+                      اطلاعات ارتباطی (نمایش در ربات)
+                    </h4>
+                    <div className="space-y-4 glass-panel p-4 rounded-xl border">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">
+                          آدرس شرکت
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={settings.companyAddress || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              companyAddress: e.target.value,
+                            })
+                          }
+                          className="w-full border rounded p-2 text-sm"
+                          placeholder="مثال: تهران، خیابان..."
+                        ></textarea>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">
+                          شماره‌های تماس
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.companyPhone || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              companyPhone: e.target.value,
+                            })
+                          }
+                          className="w-full border rounded p-2 text-sm"
+                          placeholder="مثال: 021-12345678"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1">
+                          اطلاعات حساب بانکی
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={settings.companyBank || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              companyBank: e.target.value,
+                            })
+                          }
+                          className="w-full border rounded p-2 text-sm"
+                          placeholder="بانک ملت - IR..."
+                        ></textarea>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h4 className="font-bold text-sm text-gray-700">
+                      تنظیمات اتصال ربات‌ها (Tokens)
+                    </h4>
+                    <div className="space-y-3 glass-panel p-4 rounded-xl border">
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          توکن ربات تلگرام
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.telegramBotToken || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              telegramBotToken: e.target.value,
+                            })
+                          }
+                          placeholder="123456:ABC-..."
+                          type="password"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          شناسه عددی مدیر (تلگرام)
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.telegramAdminId || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              telegramAdminId: e.target.value,
+                            })
+                          }
+                          placeholder="12345678"
+                        />
+                      </div>
+                      <div className="border-t pt-3">
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          توکن ربات بله
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.baleBotToken || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              baleBotToken: e.target.value,
+                            })
+                          }
+                          placeholder="Token..."
+                          type="password"
+                        />
+                      </div>
+                      <div className="border-t pt-3">
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          شناسه عددی گروه خرید (تلگرام)
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.purchaseTelegramGroup || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              purchaseTelegramGroup: e.target.value,
+                            })
+                          }
+                          placeholder="-100..."
+                        />
+                      </div>
+                      <div className="border-t pt-3">
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          شناسه عددی گروه خرید (بله)
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.purchaseBaleGroup || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              purchaseBaleGroup: e.target.value,
+                            })
+                          }
+                          placeholder="Chat ID..."
+                        />
+                      </div>
+                      <div className="border-t pt-3">
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          شماره گروه خرید (واتس‌اپ)
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.purchaseWhatsappGroup || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              purchaseWhatsappGroup: e.target.value,
+                            })
+                          }
+                          placeholder="GroupId@..."
+                        />
+                      </div>
+                      <div className="border-t pt-3">
+                        <div className="flex items-center justify-between p-3 mb-3 bg-indigo-50/70 dark:bg-indigo-950/30 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                          <div>
+                            <div className="text-xs font-black text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                              <Sparkles size={14} className="text-indigo-600" />
+                              <span>نمایش و فعال‌سازی گزینه هوش مصنوعی (اندروید، وب‌اپ و ویندوز)</span>
+                            </div>
+                            <p className="text-[10px] text-indigo-700 dark:text-indigo-300 mt-0.5">
+                              با خاموش کردن این کلید، دکمه دستیار هوشمند و ابزارهای هوش مصنوعی در تمام نسخه‌ها پنهان و غیرفعال می‌شود.
+                            </p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={settings.enableAiWidget !== false}
+                              onChange={(e) => {
+                                const enabled = e.target.checked;
+                                setSettings({
+                                  ...settings,
+                                  enableAiWidget: enabled,
+                                  botAiEnabled: enabled,
+                                });
+                                safeLocalStorage.setItem('app_ai_copilot_enabled', String(enabled));
+                                if (!enabled) {
+                                  document.documentElement.classList.add('ai-features-disabled');
+                                } else {
+                                  document.documentElement.classList.remove('ai-features-disabled');
+                                }
+                                window.dispatchEvent(new CustomEvent('APP_AI_COPILOT_CHANGED', { detail: enabled }));
+                              }}
+                            />
+                            <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                          </label>
+                        </div>
+
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                            <Sparkles size={14} className="text-indigo-600 animate-pulse" />
+                            <span>کلید Google Gemini AI (هوش مصنوعی ERP)</span>
+                          </label>
+                          {settings.geminiApiKey?.trim() ? (
+                            <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold border border-emerald-300 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                              کلید ثبت شده
+                            </span>
+                          ) : (
+                            <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold border border-amber-300">
+                              تنظیم نشده
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              className="w-full border rounded-lg p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all pr-8"
+                              value={settings.geminiApiKey || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  geminiApiKey: e.target.value,
+                                })
+                              }
+                              placeholder="کلید API را اینجا وارد کنید..."
+                              type={showGeminiKey ? "text" : "password"}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowGeminiKey(!showGeminiKey)}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer p-1"
+                              title={showGeminiKey ? "مخفی‌سازی" : "نمایش"}
+                            >
+                              {showGeminiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleTestGemini}
+                            disabled={testingGemini || !settings.geminiApiKey?.trim()}
+                            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2.5 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-sm"
+                          >
+                            {testingGemini ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                            <span>تست اتصال هوش مصنوعی</span>
+                          </button>
+                        </div>
+
+                        {/* Optional Base URL / Reverse Proxy for Iran servers */}
+                        <div className="mt-2 pt-2 border-t border-indigo-100/60 dark:border-gray-800">
+                          <label className="text-[11px] font-medium text-gray-500 dark:text-gray-400 block mb-1 flex items-center justify-between">
+                            <span>آدرس Reverse Proxy / Base URL هوش مصنوعی (اختیاری برای سرور ایران):</span>
+                            <span className="text-[10px] text-gray-400">پیش‌فرض: مستقیم از گوگل</span>
+                          </label>
+                          <input
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr font-mono bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200"
+                            value={settings.geminiBaseUrl || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                geminiBaseUrl: e.target.value,
+                              })
+                            }
+                            placeholder="https://generativelanguage.googleapis.com یا آدرس پروکسی"
+                          />
+                        </div>
+
+                        {geminiTestResult && (
+                          <div className={`mt-2.5 p-3 rounded-lg text-xs font-medium border flex items-start gap-2 ${
+                            geminiTestResult.success 
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                              : 'bg-rose-50 text-rose-800 border-rose-200'
+                          }`}>
+                            {geminiTestResult.success ? (
+                              <Check size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                            ) : (
+                              <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                            )}
+                            <div className="flex-1 text-[11px] leading-relaxed whitespace-pre-line">
+                              {geminiTestResult.message}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-t pt-3">
+                        <label className="text-xs font-bold text-gray-500 block mb-1">
+                          کلید سرور Firebase FCM (نوتیفیکیشن اندروید)
+                        </label>
+                        <input
+                          className="w-full border rounded p-2 text-xs dir-ltr font-mono"
+                          value={settings.fcmServerKey || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              fcmServerKey: e.target.value,
+                            })
+                          }
+                          placeholder="AAAA..."
+                          type="password"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-4">
+                  <h4 className="font-bold text-sm text-gray-700">
+                    عضویت اجباری کانال‌ها
+                  </h4>
+                  <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.botForceJoinEnabled || false}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          botForceJoinEnabled: e.target.checked,
+                        })
+                      }
+                      className="w-4 h-4 text-blue-600"
+                    />
+                    فعال‌سازی عضویت اجباری (کاربر باید عضو این کانال‌ها شود تا
+                    از ربات استفاده کند)
+                  </label>
+
+                  <div className="space-y-3">
+                    {(settings.botForceJoinChannels || []).map(
+                      (channel, cIdx) => (
+                        <div
+                          key={cIdx}
+                          className="glass-panel p-3 rounded-xl border border-gray-100 shadow-sm space-y-3"
+                        >
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="نام کانال (مثلا: کانال رسمی)"
+                              value={channel.name}
+                              onChange={(e) => {
+                                const newArr = [
+                                  ...(settings.botForceJoinChannels || []),
+                                ];
+                                newArr[cIdx].name = e.target.value;
+                                setSettings({
+                                  ...settings,
+                                  botForceJoinChannels: newArr,
+                                });
+                              }}
+                              className="flex-1 border rounded p-2 text-sm"
+                            />
+                            <select
+                              value={channel.platform || "all"}
+                              onChange={(e) => {
+                                const newArr = [
+                                  ...(settings.botForceJoinChannels || []),
+                                ];
+                                newArr[cIdx].platform = e.target.value as any;
+                                setSettings({
+                                  ...settings,
+                                  botForceJoinChannels: newArr,
+                                });
+                              }}
+                              className="border rounded p-2 text-sm bg-gray-50"
+                            >
+                              <option value="all">همه پلتفرم‌ها</option>
+                              <option value="telegram">فقط تلگرام</option>
+                              <option value="bale">فقط بله</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newArr = [
+                                  ...(settings.botForceJoinChannels || []),
+                                ];
+                                newArr.splice(cIdx, 1);
+                                setSettings({
+                                  ...settings,
+                                  botForceJoinChannels: newArr,
+                                });
+                              }}
+                              className="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="لینک عضویت (https://t.me/... یا https://ble.ir/...)"
+                              value={channel.link}
+                              onChange={(e) => {
+                                const newArr = [
+                                  ...(settings.botForceJoinChannels || []),
+                                ];
+                                newArr[cIdx].link = e.target.value;
+                                setSettings({
+                                  ...settings,
+                                  botForceJoinChannels: newArr,
+                                });
+                              }}
+                              className="flex-1 border rounded p-2 text-sm dir-ltr"
+                            />
+                            <input
+                              type="text"
+                              placeholder="آیدی کانال (@channel_id)"
+                              value={channel.id}
+                              onChange={(e) => {
+                                const newArr = [
+                                  ...(settings.botForceJoinChannels || []),
+                                ];
+                                newArr[cIdx].id = e.target.value;
+                                setSettings({
+                                  ...settings,
+                                  botForceJoinChannels: newArr,
+                                });
+                              }}
+                              className="flex-1 border rounded p-2 text-sm dir-ltr"
+                            />
+                          </div>
+                        </div>
+                      ),
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          botForceJoinChannels: [
+                            ...(settings.botForceJoinChannels || []),
+                            { name: "", link: "", id: "", platform: "all" },
+                          ],
+                        })
+                      }
+                      className="text-sm text-blue-600 font-bold flex items-center gap-1 bg-blue-50 px-4 py-2 rounded-xl hover:bg-blue-100 transition-colors"
+                    >
+                      + افزودن کانال جدید
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-4">
+                  <h4 className="font-bold text-sm text-gray-700 underline underline-offset-4 decoration-blue-500">
+                    لینک‌های مینی‌اپ و دکمه‌های اضافی در منوی استارت
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-4 mb-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-500 block">
+                        لینک مینی‌اپ لیست قیمت خودرو
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://..."
+                        value={settings.miniAppCarPriceUrl || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            miniAppCarPriceUrl: e.target.value,
+                          })
+                        }
+                        className="w-full border rounded p-2 text-sm dir-ltr"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-500 block">
+                        لینک مینی‌اپ تخمین قیمت خودرو
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://..."
+                        value={settings.miniAppCarEstimatorUrl || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            miniAppCarEstimatorUrl: e.target.value,
+                          })
+                        }
+                        className="w-full border rounded p-2 text-sm dir-ltr"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-500 block">
+                        لینک مینی‌اپ قیمت موبایل
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://..."
+                        value={settings.miniAppMobilePriceUrl || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            miniAppMobilePriceUrl: e.target.value,
+                          })
+                        }
+                        className="w-full border rounded p-2 text-sm dir-ltr"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-500 block mb-1">
+                      دکمه‌های اختصاصی شروع در منوی استارت ربات
+                    </label>
+                    {(settings.botStoreLinks || []).map((linkItem, lIdx) => (
+                      <div key={lIdx} className="flex gap-2 animate-slide-left">
+                        <input
+                          type="text"
+                          placeholder="عنوان دکمه (مثلا: لیست قیمت)"
+                          value={linkItem.title}
+                          onChange={(e) => {
+                            const newArr = [...(settings.botStoreLinks || [])];
+                            newArr[lIdx].title = e.target.value;
+                            setSettings({ ...settings, botStoreLinks: newArr });
+                          }}
+                          className="flex-1 border rounded p-2 text-sm"
+                        />
+                        <input
+                          type="url"
+                          placeholder="لینک (https://...) یا شناسه"
+                          value={linkItem.url}
+                          onChange={(e) => {
+                            const newArr = [...(settings.botStoreLinks || [])];
+                            newArr[lIdx].url = e.target.value;
+                            setSettings({ ...settings, botStoreLinks: newArr });
+                          }}
+                          className="flex-2 border rounded p-2 text-sm dir-ltr"
+                          style={{ flex: 2 }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newArr = [...(settings.botStoreLinks || [])];
+                            newArr.splice(lIdx, 1);
+                            setSettings({ ...settings, botStoreLinks: newArr });
+                          }}
+                          className="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          botStoreLinks: [
+                            ...(settings.botStoreLinks || []),
+                            { title: "", url: "" },
+                          ],
+                        })
+                      }
+                      className="text-sm text-blue-600 font-bold flex items-center gap-1 glass-panel border border-blue-200 px-3 py-1.5 rounded-lg hover:shadow-sm transition-all mt-1"
+                    >
+                      + افزودن دکمه جدید
+                    </button>
+                  </div>
+                </div>
+
+                {/* Customer Exit Notification & Bot Links */}
+                <CustomerExitNotificationConfig
+                  settings={settings}
+                  setSettings={setSettings}
+                />
+
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-4">
+                  <h4 className="font-bold text-sm text-gray-700">
+                    تنظیمات اطلاع‌رسانی مالی و خروج
+                  </h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+                      <label className="text-sm font-bold text-blue-800 block mb-2">
+                        شناسه گروه‌های حسابداری (ارسال دستورپرداخت)
+                      </label>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                            تلگرام (Chat ID)
+                          </label>
+                          <input
+                            className="w-full border rounded p-2 text-xs dir-ltr"
+                            value={
+                              settings.botAccountingGroupIdTele ||
+                              settings.botAccountingGroupId ||
+                              ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botAccountingGroupIdTele: e.target.value,
+                                botAccountingGroupId: e.target.value,
+                              })
+                            }
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                            بله (شناسه)
+                          </label>
+                          <input
+                            className="w-full border rounded p-2 text-xs dir-ltr"
+                            value={settings.botAccountingGroupIdBale || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botAccountingGroupIdBale: e.target.value,
+                              })
+                            }
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                            واتساپ (ID)
+                          </label>
+                          <input
+                            className="w-full border rounded p-2 text-xs dir-ltr"
+                            value={settings.botAccountingGroupIdWhatsApp || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botAccountingGroupIdWhatsApp: e.target.value,
+                              })
+                            }
+                            placeholder="...@g.us"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Unified Sayan & Treasury Automated Reports Section */}
+                    <div className="md:col-span-2 bg-slate-50 p-6 rounded-2xl border border-slate-200/80 space-y-4">
+                      <div className="flex items-start gap-4">
+                        <div className="p-3 bg-amber-50 text-amber-700 rounded-2xl border border-amber-100 flex-shrink-0">
+                          <Bot size={24} />
+                        </div>
+                        <div>
+                          <h4 className="font-extrabold text-base text-slate-800 flex items-center gap-2">
+                            <span>🚀 انتقال به موتور مرکزی زمان‌بندی و ارسال گزارشات</span>
+                            <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded-full">یکپارچه شده</span>
+                          </h4>
+                          <p className="text-xs text-slate-600 leading-relaxed mt-2">
+                            تمامی تنظیمات، مدیریت پلتفرم‌ها و زمان‌بندی هوشمند گزارشات سیستم (شامل <b>آمار فروش روزانه</b>، <b>وضعیت چک‌ها و خزانه‌داری</b>، <b>پایش و تراز موجودی انبار</b>، و <b>آمار تولید کارخانه</b>) همگی به صورت یکپارچه به <b>«موتور مرکزی زمان‌بندی و ارسال گزارشات (Report Delivery Engine)»</b> در بخش تنظیمات ربات (انتهای همین صفحه) منتقل شدند.
+                          </p>
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] text-slate-500 font-bold">🎯 مزایای موتور یکپارچه جدید:</span>
+                            <span className="text-[10px] bg-white border border-slate-200 text-slate-700 px-2.5 py-1 rounded-lg font-bold">تعریف ساعت خودکار اختصاصی برای هر گزارش</span>
+                            <span className="text-[10px] bg-white border border-slate-200 text-slate-700 px-2.5 py-1 rounded-lg font-bold">پشتیبانی همزمان از تلگرام، بله و واتساپ</span>
+                            <span className="text-[10px] bg-white border border-slate-200 text-slate-700 px-2.5 py-1 rounded-lg font-bold">امکان اجرای فوری و درخواستی تست گزارش</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        حالت ارسال دستورپرداخت (بات تلگرام)
+                      </label>
+                      <select
+                        value={
+                          settings.botPaymentNotificationMode || "step_by_step"
+                        }
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            botPaymentNotificationMode: e.target.value as
+                              "after_submit" | "after_final" | "step_by_step",
+                          })
+                        }
+                        className="w-full border rounded-lg p-2 text-sm glass-panel"
+                      >
+                        <option value="after_submit">بعد از ثبت درخواست</option>
+                        <option value="after_final">بعد از تایید نهایی</option>
+                        <option value="step_by_step">
+                          مرحله به مرحله (بعد از هر وضعیت)
+                        </option>
+                      </select>
+                    </div>
+                    <div className="mt-2">
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        گروه دستی بیجک‌ها (Telegram Chat ID)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.botBijakGroupId || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            botBijakGroupId: e.target.value,
+                          })
+                        }
+                        className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                        placeholder="-100..."
+                      />
+                    </div>
+                    <div className="mt-2 text-right">
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        گروه بیجک‌ها (Bale ID)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.botBijakGroupIdBale || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            botBijakGroupIdBale: e.target.value,
+                          })
+                        }
+                        className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                        placeholder="ID..."
+                      />
+                    </div>
+                    <div className="mt-2 text-right">
+                      <label className="text-sm font-bold text-gray-700 block mb-1">
+                        گروه بیجک‌ها (WhatsApp ID)
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.botBijakGroupIdWhatsApp || ""}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            botBijakGroupIdWhatsApp: e.target.value,
+                          })
+                        }
+                        className="w-full border rounded-lg p-2 text-sm dir-ltr"
+                        placeholder="...@g.us"
+                      />
+                    </div>
+
+                    {/* Driver Payments Bot Notification Groups */}
+                    <div className="md:col-span-2 bg-gradient-to-r from-purple-50/70 to-indigo-50/70 dark:from-purple-950/20 dark:to-indigo-950/20 p-5 rounded-2xl border border-purple-200/80 dark:border-purple-800/40 space-y-4">
+                      <div className="flex items-center justify-between flex-wrap gap-2 border-b border-purple-200/60 dark:border-purple-800/40 pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 bg-purple-600 text-white rounded-xl shadow-sm">
+                            <Truck size={18} />
+                          </div>
+                          <div>
+                            <h4 className="font-extrabold text-sm text-purple-950 dark:text-purple-200">
+                              🚚 تنظیمات گروه ارسال واریزی رانندگان (تلگرام، بله، واتساپ)
+                            </h4>
+                            <p className="text-[11px] text-purple-700 dark:text-purple-300">
+                              ارسال خودکار متن فرم حواله واریزی به همراه فایل‌های پیوست شده (تصاویر، PDF و ...) به صورت دانه‌به‌دانه
+                            </p>
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 cursor-pointer bg-white dark:bg-gray-800 px-3 py-1.5 rounded-xl border border-purple-200 dark:border-purple-700 shadow-xs">
+                          <input
+                            type="checkbox"
+                            checked={settings.botDriverPaymentAutoSendEnabled !== false}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botDriverPaymentAutoSendEnabled: e.target.checked,
+                              })
+                            }
+                            className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
+                          />
+                          <span className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                            ارسال خودکار پس از هر مرحله تایید (سرپرست / مدیر کارخانه)
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* Stage 1: Security Group (After Supervisor Approval) */}
+                      <div className="bg-purple-50/60 dark:bg-purple-950/20 p-4 rounded-xl border border-purple-200/70 dark:border-purple-800/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h5 className="font-extrabold text-xs text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
+                            <span className="bg-purple-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px]">۱</span>
+                            گروه اول: انتظامات (ارسال خودکار پس از تایید سرپرست انتظامات)
+                          </h5>
+                          <span className="text-[10px] text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-900/60 px-2 py-0.5 rounded-md font-bold">مرحله اول</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                              شناسه تلگرام گروه اول (انتظامات)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.botDriverPaymentGroupIdTele || settings.botDriverPaymentGroupId || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  botDriverPaymentGroupIdTele: e.target.value,
+                                  botDriverPaymentGroupId: e.target.value,
+                                })
+                              }
+                              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2.5 text-xs dir-ltr font-mono focus:ring-2 focus:ring-purple-500"
+                              placeholder="-100... یا @group"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                              شناسه بله گروه اول (انتظامات)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.botDriverPaymentGroupIdBale || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  botDriverPaymentGroupIdBale: e.target.value,
+                                })
+                              }
+                              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2.5 text-xs dir-ltr font-mono focus:ring-2 focus:ring-purple-500"
+                              placeholder="شناسه عددی گروه در بله"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                              شناسه واتساپ گروه اول (انتظامات)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.botDriverPaymentGroupIdWhatsApp || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  botDriverPaymentGroupIdWhatsApp: e.target.value,
+                                })
+                              }
+                              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2.5 text-xs dir-ltr font-mono focus:ring-2 focus:ring-purple-500"
+                              placeholder="...@g.us"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Stage 2: Management / Finance Group (After Factory Manager Approval) */}
+                      <div className="bg-emerald-50/60 dark:bg-emerald-950/20 p-4 rounded-xl border border-emerald-200/70 dark:border-emerald-800/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h5 className="font-extrabold text-xs text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                            <span className="bg-emerald-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px]">۲</span>
+                            گروه دوم: مدیریت کارخانه / مالی (ارسال خودکار پس از تایید مدیر کارخانه و بایگانی)
+                          </h5>
+                          <span className="text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded-md font-bold">مرحله دوم</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                              شناسه تلگرام گروه دوم (مدیریت / مالی)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.botDriverPaymentSecondGroupIdTele || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  botDriverPaymentSecondGroupIdTele: e.target.value,
+                                })
+                              }
+                              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2.5 text-xs dir-ltr font-mono focus:ring-2 focus:ring-emerald-500"
+                              placeholder="-100... یا @group"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                              شناسه بله گروه دوم (مدیریت / مالی)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.botDriverPaymentSecondGroupIdBale || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  botDriverPaymentSecondGroupIdBale: e.target.value,
+                                })
+                              }
+                              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2.5 text-xs dir-ltr font-mono focus:ring-2 focus:ring-emerald-500"
+                              placeholder="شناسه عددی گروه در بله"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                              شناسه واتساپ گروه دوم (مدیریت / مالی)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.botDriverPaymentSecondGroupIdWhatsApp || ""}
+                              onChange={(e) =>
+                                setSettings({
+                                  ...settings,
+                                  botDriverPaymentSecondGroupIdWhatsApp: e.target.value,
+                                })
+                              }
+                              className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2.5 text-xs dir-ltr font-mono focus:ring-2 focus:ring-emerald-500"
+                              placeholder="...@g.us"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="border-t pt-4 mt-4 space-y-4">
+                      <h4 className="font-bold text-sm text-indigo-800">
+                        ⚙️ تنظیمات گروه مخصوص ارسال آمار تولید (گروه اول)
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه اول تلگرام آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionTelegramGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionTelegramGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه اول بله آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionBaleGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionBaleGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه اول واتساپ آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionWhatsappGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionWhatsappGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="120363... یا 0912..."
+                          />
+                        </div>
+                      </div>
+
+                      <h4 className="font-bold text-sm text-indigo-800 pt-2 border-t border-dashed">
+                        ⚙️ تنظیمات گروه دوم مخصوص ارسال آمار تولید (گروه دوم)
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه دوم تلگرام آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionTelegramGroupId2 || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionTelegramGroupId2: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه دوم بله آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionBaleGroupId2 || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionBaleGroupId2: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه دوم واتساپ آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionWhatsappGroupId2 || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionWhatsappGroupId2: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="120363... یا 0912..."
+                          />
+                        </div>
+                      </div>
+
+                      <h4 className="font-bold text-sm text-indigo-800 pt-2 border-t border-dashed">
+                        📊 تنظیمات گروه پایش و مقایسه تولید (جدید)
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه تلگرام مقایسه آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionCompareTelegramGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionCompareTelegramGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه بله مقایسه آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionCompareBaleGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionCompareBaleGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه واتساپ مقایسه آمار تولید
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.productionCompareWhatsappGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                productionCompareWhatsappGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="120363... یا 0912..."
+                          />
+                        </div>
+                      </div>
+
+                      <h4 className="font-bold text-sm text-indigo-800 pt-2 border-t border-dashed">
+                        ⚙️ تنظیمات گروه ارسال رسید برگشت از تولید کالا (کد ۴۴)
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه تلگرام برگشت از تولید (۴۴)
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.prodReturnsTelegramGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                prodReturnsTelegramGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه بله برگشت از تولید (۴۴)
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.prodReturnsBaleGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                prodReturnsBaleGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-gray-600 block mb-1">
+                            شناسه گروه واتساپ برگشت از تولید (۴۴)
+                          </label>
+                          <input
+                            type="text"
+                            value={settings.prodReturnsWhatsappGroupId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                prodReturnsWhatsappGroupId: e.target.value,
+                              })
+                            }
+                            className="w-full border rounded-lg p-2 text-xs dir-ltr"
+                            placeholder="120363... یا 0912..."
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-4">
+                      <h4 className="font-bold text-sm text-gray-700">
+                        ارتباط با مشتری و مدیریت پیام‌های فروش
+                      </h4>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 block mb-1">
+                            پیام خوش‌آمدگویی بخش "ارتباط با فروش" در ربات
+                          </label>
+                          <textarea
+                            className="w-full border rounded p-2 text-sm h-20"
+                            value={settings.salesContactMessage || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                salesContactMessage: e.target.value,
+                              })
+                            }
+                            placeholder="مثلاً: لطفاً پیام خود را بنویسید..."
+                          />
+                        </div>
+                        <div className="bg-white/50 p-4 rounded-xl border border-blue-200">
+                          <h4 className="font-bold text-sm text-blue-800 mb-3 flex items-center gap-2">
+                            <Users size={16} /> مدیران پاسخگو و دریافت‌کنندگان
+                            پیام‌های مشتریان
+                          </h4>
+                          <div className="grid grid-cols-1 gap-2 max-h-80 overflow-y-auto border rounded-xl p-3 glass-panel shadow-inner">
+                            {(settings.salesNotificationUsers || []).map(
+                              (item, idx) => {
+                                const username = item.username;
+                                const platforms = item.platforms;
+                                const name = item.name;
+                                const u = systemUsers.find(
+                                  (user) => user.username === username,
+                                );
+
+                                const togglePlatform = (p: string) => {
+                                  const current = (
+                                    settings.salesNotificationUsers || []
+                                  ).map((prevItem, pIdx) => {
+                                    if (pIdx !== idx) return prevItem;
+
+                                    const nextPlatforms =
+                                      prevItem.platforms.includes(p)
+                                        ? prevItem.platforms.filter(
+                                            (pl) => pl !== p,
+                                          )
+                                        : [...prevItem.platforms, p];
+
+                                    return {
+                                      ...prevItem,
+                                      platforms: nextPlatforms,
+                                    };
+                                  });
+                                  setSettings({
+                                    ...settings,
+                                    salesNotificationUsers: current,
+                                  });
+                                };
+
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="bg-gray-50/50 p-3 rounded-lg border border-gray-100 animate-fade-in group"
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                                          <UserIcon size={16} />
+                                        </div>
+                                        <div>
+                                          <div className="text-sm font-bold text-gray-800">
+                                            {name ||
+                                              (u ? u.fullName : "کاربر دستی")}
+                                          </div>
+                                          <div className="text-[10px] text-gray-500 font-mono">
+                                            ID: {username}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = (
+                                            settings.salesNotificationUsers ||
+                                            []
+                                          ).filter((_, pIdx) => pIdx !== idx);
+                                          setSettings({
+                                            ...settings,
+                                            salesNotificationUsers: updated,
+                                          });
+                                        }}
+                                        className="p-1 px-2 text-red-500 hover:bg-red-50 rounded transition-colors opacity-0 group-hover:opacity-100"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    </div>
+                                    <div className="flex gap-6 mt-3 px-11 border-t pt-2 border-gray-100">
+                                      <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                                        <input
+                                          type="checkbox"
+                                          checked={platforms.includes(
+                                            "telegram",
+                                          )}
+                                          onChange={() =>
+                                            togglePlatform("telegram")
+                                          }
+                                          className="w-4 h-4 rounded text-blue-600"
+                                        />
+                                        <span className="text-gray-600">
+                                          تلگرام
+                                        </span>
+                                      </label>
+                                      <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                                        <input
+                                          type="checkbox"
+                                          checked={platforms.includes("bale")}
+                                          onChange={() =>
+                                            togglePlatform("bale")
+                                          }
+                                          className="w-4 h-4 rounded text-green-600"
+                                        />
+                                        <span className="text-gray-600">
+                                          بله
+                                        </span>
+                                      </label>
+                                    </div>
+                                  </div>
+                                );
+                              },
+                            )}
+                            {(settings.salesNotificationUsers || []).length ===
+                              0 && (
+                              <div className="text-sm text-gray-400 text-center py-6">
+                                هنوز هیچ مدیری اضافه نشده است.
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-4 p-4 bg-blue-50/30 rounded-xl border border-dashed border-blue-200">
+                            <h5 className="text-xs font-bold text-blue-700 mb-3 flex items-center gap-1.5">
+                              <Plus size={14} /> افزودن مدیر جدید
+                            </h5>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                              {systemUsers
+                                .filter(
+                                  (u) =>
+                                    !(
+                                      settings.salesNotificationUsers || []
+                                    ).some(
+                                      (item) => item.username === u.username,
+                                    ),
+                                )
+                                .map((u) => (
+                                  <button
+                                    key={u.id}
+                                    type="button"
+                                    onClick={() =>
+                                      setSettings({
+                                        ...settings,
+                                        salesNotificationUsers: [
+                                          ...(settings.salesNotificationUsers ||
+                                            []),
+                                          {
+                                            username: u.username,
+                                            name: u.fullName,
+                                            platforms: ["telegram", "bale"],
+                                          },
+                                        ],
+                                      })
+                                    }
+                                    className="flex items-center gap-2 p-2 glass-panel rounded-lg border border-gray-100 hover:border-blue-300 hover:shadow-sm transition-all text-right"
+                                  >
+                                    <div className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-[10px]">
+                                      <Plus size={10} />
+                                    </div>
+                                    <span className="text-xs font-bold truncate flex-1">
+                                      {u.fullName}
+                                    </span>
+                                  </button>
+                                ))}
+                            </div>
+
+                            <div className="flex flex-col gap-2 glass-panel p-3 rounded-xl shadow-sm">
+                              <span className="text-[10px] font-bold text-gray-400">
+                                افزودن بصورت شناسه‌ی دستی:
+                              </span>
+                              <div className="flex gap-2">
+                                <input
+                                  id="manual-manager-name"
+                                  type="text"
+                                  placeholder="نام مدیر..."
+                                  className="flex-1 border rounded p-2 text-xs"
+                                />
+                                <input
+                                  id="manual-manager-id"
+                                  type="text"
+                                  placeholder="Chat ID / Username..."
+                                  className="flex-1 border rounded p-2 text-xs dir-ltr"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const nameInput = document.getElementById(
+                                      "manual-manager-name",
+                                    ) as HTMLInputElement;
+                                    const idInput = document.getElementById(
+                                      "manual-manager-id",
+                                    ) as HTMLInputElement;
+                                    const name = nameInput.value.trim();
+                                    const id = idInput.value.trim();
+                                    if (name && id) {
+                                      setSettings({
+                                        ...settings,
+                                        salesNotificationUsers: [
+                                          ...(settings.salesNotificationUsers ||
+                                            []),
+                                          {
+                                            username: id,
+                                            name: name,
+                                            platforms: ["telegram", "bale"],
+                                          },
+                                        ],
+                                      });
+                                      nameInput.value = "";
+                                      idInput.value = "";
+                                    } else {
+                                      alert(
+                                        "لطفاً هم نام و هم شناسه را وارد کنید.",
+                                      );
+                                    }
+                                  }}
+                                  className="bg-blue-600 text-white px-4 py-2 rounded text-xs font-bold hover:bg-blue-700"
+                                >
+                                  افزودن
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-3 glass-panel p-2 rounded border border-gray-100 leading-relaxed">
+                            💡 پیام‌های مشتریان و سفارشات ثبت شده در ربات برای
+                            این کاربران ارسال خواهد شد.
+                            <br />
+                            ⚠️ مدیران باید حتماً ربات را در پلتفرم مربوطه
+                            (تلگرام یا بله) <b>استارت</b> کرده باشند.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 block mb-1">
+                            حمایت و پشتیبانی
+                          </label>
+                          <p className="text-[10px] text-gray-400">
+                            برای افزودن کادرها و دکمه‌های دلخواه در منوی شروع
+                            ربات، از بخش "لینک‌های مرتبط فروشگاه" در ابتدای همین
+                            صفحه استفاده کنید.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <BotManager settings={settings} setSettings={setSettings} />
+              </div>
+            )}
+
+            {activeCategory === "meetings" && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="font-bold text-gray-800 border-b pb-3 flex items-center gap-2">
+                  <ClipboardList size={22} className="text-indigo-600" />{" "}
+                  تنظیمات صورتجلسات تولید
+                </h3>
+
+                {/* Meeting Auto-Numbering Settings */}
+                <div className="bg-white/50 dark:bg-gray-800 border rounded-2xl p-5 mb-6">
+                  <h4 className="font-bold text-sm text-gray-700 dark:text-gray-200 border-b pb-2 mb-4 flex items-center gap-2">
+                    <ClipboardList size={18} className="text-indigo-500" /> تنظیمات شماره‌گذاری خودکار صورتجلسات
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                    <div>
+                      <label className="text-xs font-bold text-gray-600 dark:text-gray-300 block mb-1">
+                        شماره شروع صورتجلسات (حداقل مبدا شمارش)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="مثلاً: 1000"
+                        value={settings.startMeetingNumber || 1000}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 1000;
+                          setSettings({
+                            ...settings,
+                            startMeetingNumber: val,
+                          });
+                        }}
+                        className="w-full border rounded-xl p-2.5 text-xs bg-white dark:bg-gray-900 font-mono focus:ring-2 outline-none"
+                      />
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        سیستم به طور خودکار بالاترین شماره صورتجلسه موجود را شناسایی کرده و شماره بعدی را به فرمت <span className="font-mono font-bold text-indigo-600">M-XXXX</span> بدون هیچ‌گونه تکراری ایجاد می‌کند.
+                      </p>
+                    </div>
+                    <div className="bg-indigo-50 dark:bg-indigo-950/40 p-4 rounded-xl border border-indigo-100 dark:border-indigo-900/30 text-xs space-y-1 text-indigo-900 dark:text-indigo-200">
+                      <div className="font-bold flex items-center gap-1.5">
+                        <span>🛡️</span> محافظت ضد تکرار شماره
+                      </div>
+                      <p className="text-[11px] text-indigo-700 dark:text-indigo-300 leading-relaxed">
+                        هنگام ثبت جلسه جدید، سرور و کلاینت به صورت چندلایه عدم تکراری بودن شماره جلسه را تضمین می‌کنند و در صورت وجود تکرار، شماره بعدی آزاد را تخصیص می‌دهند.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Meeting Roles Management */}
+                <div className="bg-white/50 dark:bg-gray-800 border rounded-2xl p-5 mb-6">
+                  <h4 className="font-bold text-sm text-gray-700 dark:text-gray-200 border-b pb-2 mb-4 flex items-center gap-2">
+                    <Users size={18} className="text-blue-500" /> مدیریت سمت‌های
+                    جلسات
+                  </h4>
+                  <div className="flex gap-2 mb-4">
+                    <input
+                      type="text"
+                      id="newMeetingRole"
+                      placeholder="مثلاً: رئیس جلسه، دبیر جلسه، مدیر تولید..."
+                      className="flex-1 border rounded-xl p-2.5 text-xs bg-white focus:ring-2 outline-none"
+                      onKeyPress={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          const input = e.currentTarget;
+                          const role = input.value.trim();
+                          if (
+                            role &&
+                            !(settings.meetingRoles || []).includes(role)
+                          ) {
+                            setSettings({
+                              ...settings,
+                              meetingRoles: [
+                                ...(settings.meetingRoles || []),
+                                role,
+                              ],
+                            });
+                            input.value = "";
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const input = document.getElementById(
+                          "newMeetingRole",
+                        ) as HTMLInputElement;
+                        const role = input?.value.trim();
+                        if (
+                          role &&
+                          !(settings.meetingRoles || []).includes(role)
+                        ) {
+                          setSettings({
+                            ...settings,
+                            meetingRoles: [
+                              ...(settings.meetingRoles || []),
+                              role,
+                            ],
+                          });
+                          input.value = "";
+                        }
+                      }}
+                      className="bg-indigo-600 text-white px-4 rounded-xl text-xs font-bold hover:bg-indigo-700"
+                    >
+                      افزودن سمت
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(
+                      settings.meetingRoles || [
+                        "رئیس جلسه",
+                        "دبیر جلسه",
+                        "عضو حاضر",
+                      ]
+                    ).map((role) => (
+                      <div
+                        key={role}
+                        className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+                      >
+                        <span>{role}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettings({
+                              ...settings,
+                              meetingRoles: (
+                                settings.meetingRoles || []
+                              ).filter((r) => r !== role),
+                            });
+                          }}
+                          className="text-gray-400 hover:text-red-500"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-2">
+                    💡 سمت "رئیس جلسه" به طور خودکار به عنوان رئیس در سربرگ قرار
+                    می‌گیرد.
+                  </p>
+                </div>
+
+                <div className="bg-white/50 dark:bg-gray-800 border rounded-2xl p-5 mb-6">
+                  <h4 className="font-bold text-sm text-gray-700 dark:text-gray-200 border-b pb-2 mb-4">
+                    لیست افراد ثابت و سمت پیش‌فرض
+                  </h4>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                          انتخاب کاربر
+                        </label>
+                        <select
+                          className="w-full border rounded-xl p-2.5 text-xs bg-white focus:ring-2 outline-none"
+                          id="newDefaultAttendee"
+                        >
+                          <option value="">-- انتخاب --</option>
+                          {systemUsers.map((u) => (
+                            <option key={u.username} value={u.username}>
+                              {u.fullName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold text-gray-500 block mb-1">
+                          انتخاب سمت پیش‌فرض
+                        </label>
+                        <select
+                          className="w-full border rounded-xl p-2.5 text-xs bg-white focus:ring-2 outline-none"
+                          id="newDefaultAttendeeRole"
+                        >
+                          <option value="">-- سمت --</option>
+                          {(
+                            settings.meetingRoles || [
+                              "رئیس جلسه",
+                              "دبیر جلسه",
+                              "عضو حاضر",
+                            ]
+                          ).map((role) => (
+                            <option key={role} value={role}>
+                              {role}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const selUser = document.getElementById(
+                              "newDefaultAttendee",
+                            ) as HTMLSelectElement;
+                            const selRole = document.getElementById(
+                              "newDefaultAttendeeRole",
+                            ) as HTMLSelectElement;
+                            if (selUser.value && selRole.value) {
+                              const current =
+                                settings.defaultMeetingAttendeesData || [];
+                              // Update if exists, else add
+                              const exists = current.find(
+                                (a) => a.username === selUser.value,
+                              );
+                              let updated;
+                              if (exists) {
+                                updated = current.map((a) =>
+                                  a.username === selUser.value
+                                    ? { ...a, role: selRole.value }
+                                    : a,
+                                );
+                              } else {
+                                updated = [
+                                  ...current,
+                                  {
+                                    username: selUser.value,
+                                    role: selRole.value,
+                                  },
+                                ];
+                              }
+                              setSettings({
+                                ...settings,
+                                defaultMeetingAttendeesData: updated,
+                              });
+                              selUser.value = "";
+                              selRole.value = "";
+                            } else {
+                              alert("لطفاً هم کاربر و هم سمت را انتخاب کنید.");
+                            }
+                          }}
+                          className="bg-blue-600 text-white px-6 h-10 rounded-xl text-xs font-bold hover:bg-blue-700 w-full"
+                        >
+                          افزودن به لیست ثابت
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {settings.defaultMeetingAttendeesData?.map((att) => {
+                        const user = systemUsers.find(
+                          (u) => u.username === att.username,
+                        );
+                        return (
+                          <div
+                            key={att.username}
+                            className="flex items-center justify-between p-3 glass-panel border rounded-xl shadow-sm hover:border-blue-300 transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
+                                {user?.fullName.charAt(0)}
+                              </div>
+                              <div>
+                                <div className="text-sm font-bold text-gray-800">
+                                  {user?.fullName || att.username}
+                                </div>
+                                <div className="text-[10px] text-blue-600 font-bold">
+                                  {att.role}
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSettings({
+                                  ...settings,
+                                  defaultMeetingAttendeesData:
+                                    settings.defaultMeetingAttendeesData?.filter(
+                                      (a) => a.username !== att.username,
+                                    ),
+                                });
+                              }}
+                              className="p-1 px-2 text-red-500 hover:bg-red-50 rounded transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {(!settings.defaultMeetingAttendeesData ||
+                      settings.defaultMeetingAttendeesData.length === 0) && (
+                      <div className="text-center py-6 text-gray-400 text-xs italic">
+                        لیست افراد ثابت خالی است.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <h4 className="font-bold text-sm text-gray-700 border-r-4 border-blue-500 pr-2">
+                      اعلامیه‌ی برگزاری (Announcements)
+                    </h4>
+                    <p className="text-xs text-gray-500 pr-2 leading-relaxed">
+                      گروه‌هایی که اعلان برگزاری جلسه به آن‌ها ارسال می‌شود.
+                    </p>
+                    <div className="space-y-4 glass-panel p-5 rounded-2xl border bg-white/50">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Send size={14} /> تلگرام (گروه اول)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-blue-500 shadow-sm"
+                            value={
+                              settings.botMeetingAnnouncementTelegramId || ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingAnnouncementTelegramId: e.target.value,
+                              })
+                            }
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Send size={14} /> تلگرام (گروه دوم)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-blue-500 shadow-sm"
+                            value={
+                              settings.botMeetingAnnouncementSecondGroupIdTele || ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingAnnouncementSecondGroupIdTele:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="-100..."
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <MessageCircle size={14} /> بله (گروه اول)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-blue-500 shadow-sm"
+                            value={settings.botMeetingAnnouncementBaleId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingAnnouncementBaleId: e.target.value,
+                              })
+                            }
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <MessageCircle size={14} /> بله (گروه دوم)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-blue-500 shadow-sm"
+                            value={
+                              settings.botMeetingAnnouncementSecondGroupIdBale || ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingAnnouncementSecondGroupIdBale:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="ID..."
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Truck size={14} /> واتساپ (گروه اول)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-blue-500 shadow-sm"
+                            value={
+                              settings.botMeetingAnnouncementWhatsAppId ||
+                              settings.botMeetingAnnouncementGroupId ||
+                              ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingAnnouncementWhatsAppId: e.target.value,
+                              })
+                            }
+                            placeholder="JID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Truck size={14} /> واتساپ (گروه دوم)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-blue-500 shadow-sm"
+                            value={
+                              settings.botMeetingAnnouncementSecondGroupIdWhatsApp ||
+                              ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingAnnouncementSecondGroupIdWhatsApp:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="JID..."
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h4 className="font-bold text-sm text-gray-700 border-r-4 border-emerald-500 pr-2">
+                      ارسال فایل صورتجلسه (Final Minutes)
+                    </h4>
+                    <p className="text-xs text-gray-500 pr-2 leading-relaxed">
+                      گروه‌هایی که فایل نهایی پس از تایید به آن‌ها ارسال می‌شود
+                      (گروه تولید).
+                    </p>
+                    <div className="space-y-4 glass-panel p-5 rounded-2xl border bg-white/50">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Send size={14} /> تلگرام (گروه اول)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-emerald-500 shadow-sm"
+                            value={settings.botMeetingMinutesTelegramId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingMinutesTelegramId: e.target.value,
+                              })
+                            }
+                            placeholder="-100..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Send size={14} /> تلگرام (گروه دوم)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-emerald-500 shadow-sm"
+                            value={
+                              settings.botMeetingMinutesSecondGroupIdTele || ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingMinutesSecondGroupIdTele:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="-100..."
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <MessageCircle size={14} /> بله (گروه اول)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-emerald-500 shadow-sm"
+                            value={settings.botMeetingMinutesBaleId || ""}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingMinutesBaleId: e.target.value,
+                              })
+                            }
+                            placeholder="ID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <MessageCircle size={14} /> بله (گروه دوم)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-emerald-500 shadow-sm"
+                            value={
+                              settings.botMeetingMinutesSecondGroupIdBale || ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingMinutesSecondGroupIdBale:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="ID..."
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Truck size={14} /> واتساپ (گروه اول)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-emerald-500 shadow-sm"
+                            value={
+                              settings.botMeetingMinutesWhatsAppId ||
+                              settings.botMeetingMinutesGroupId ||
+                              ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingMinutesWhatsAppId: e.target.value,
+                              })
+                            }
+                            placeholder="JID..."
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-gray-500 block mb-1.5 flex items-center gap-2">
+                            <Truck size={14} /> واتساپ (گروه دوم)
+                          </label>
+                          <input
+                            className="w-full border rounded-xl p-2.5 text-xs dir-ltr font-mono bg-white focus:ring-2 ring-emerald-500 shadow-sm"
+                            value={
+                              settings.botMeetingMinutesSecondGroupIdWhatsApp ||
+                              ""
+                            }
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botMeetingMinutesSecondGroupIdWhatsApp:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="JID..."
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 md:p-6 mb-6">
+                  <h4 className="font-black text-amber-900 text-sm mb-2">
+                    یادآوری مهم:
+                  </h4>
+                  <ul className="text-xs text-amber-800 space-y-2 leading-relaxed list-disc pr-4 font-bold">
+                    <li>
+                      شناسه گروه‌های تلگرام معمولاً با{" "}
+                      <code className="bg-amber-100 px-1 rounded">-100</code>{" "}
+                      شروع می‌شوند.
+                    </li>
+                    <li>
+                      از ربات‌های کمکی می‌توانید برای دریافت شناسه (Chat ID)
+                      گروه‌ها استفاده کنید.
+                    </li>
+                    <li>
+                      برای ارسال به واتساپ، فعلاً ارسال گروهی بر اساس شناسه گروه
+                      واتساپ (JID) انجام می‌شود.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "secretariat" && (
+              <div className="space-y-6 animate-fade-in">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xl font-black text-gray-800 dark:text-gray-100 flex items-center gap-2">
+                    <FileText className="text-purple-600" /> تنظیمات دبیرخانه
+                  </h3>
+                  <div className="text-xs font-bold text-gray-500">
+                    مختص هر شرکت
+                  </div>
+                </div>
+
+                {settings.companies && settings.companies.length > 0 ? (
+                  <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row gap-4 items-center">
+                      <label className="text-sm font-bold text-gray-700">
+                        شرکت را انتخاب کنید:
+                      </label>
+                      <select
+                        className="border-2 border-purple-200 rounded-xl p-2 text-sm focus:border-purple-500 min-w-[200px]"
+                        value={selectedCompanyIdForSec}
+                        onChange={(e) =>
+                          setSelectedCompanyIdForSec(e.target.value)
+                        }
+                      >
+                        {settings.companies.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {selectedCompanyIdForSec && (
+                      <div className="bg-white/50 dark:bg-gray-800 border rounded-2xl p-5 md:p-6 shadow-sm space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-3 bg-slate-50/50 p-4 border rounded-xl">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                                <Lock size={14} className="text-purple-600" />{" "}
+                                دسترسی به دبیرخانه دفتر مرکزی
+                              </label>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                                {(secSettingsForm.headquartersAccessTokens || []).length} کاربر مجاز
+                              </span>
+                            </div>
+                            <div className="max-h-48 overflow-y-auto border bg-white rounded-lg p-2 space-y-1">
+                              {systemUsers.map((u) => {
+                                const isChecked = (secSettingsForm.headquartersAccessTokens || []).includes(u.id);
+                                return (
+                                  <label
+                                    key={u.id}
+                                    className={`flex items-center gap-2 text-xs p-2 rounded-lg border cursor-pointer transition-colors ${
+                                      isChecked
+                                        ? "bg-purple-50/80 border-purple-200 text-purple-900 font-bold"
+                                        : "bg-white border-transparent hover:bg-slate-50 text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        let tokens = [
+                                          ...(secSettingsForm.headquartersAccessTokens || []),
+                                        ];
+                                        if (tokens.includes(u.id))
+                                          tokens = tokens.filter((t) => t !== u.id);
+                                        else tokens.push(u.id);
+                                        setSecSettingsForm({
+                                          ...secSettingsForm,
+                                          headquartersAccessTokens: tokens,
+                                        });
+                                      }}
+                                      className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
+                                    />
+                                    <span className="flex-1">
+                                      {u.fullName}
+                                    </span>
+                                    {isChecked && (
+                                      <span className="text-[10px] text-purple-600 font-bold">مجاز</span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="space-y-3 bg-slate-50/50 p-4 border rounded-xl">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                                <Lock size={14} className="text-indigo-600" />{" "}
+                                دسترسی به دبیرخانه کارخانه
+                              </label>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                {(secSettingsForm.factoryAccessTokens || []).length} کاربر مجاز
+                              </span>
+                            </div>
+                            <div className="max-h-48 overflow-y-auto border bg-white rounded-lg p-2 space-y-1">
+                              {systemUsers.map((u) => {
+                                const isChecked = (secSettingsForm.factoryAccessTokens || []).includes(u.id);
+                                return (
+                                  <label
+                                    key={u.id}
+                                    className={`flex items-center gap-2 text-xs p-2 rounded-lg border cursor-pointer transition-colors ${
+                                      isChecked
+                                        ? "bg-indigo-50/80 border-indigo-200 text-indigo-900 font-bold"
+                                        : "bg-white border-transparent hover:bg-slate-50 text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        let tokens = [
+                                          ...(secSettingsForm.factoryAccessTokens || []),
+                                        ];
+                                        if (tokens.includes(u.id))
+                                          tokens = tokens.filter((t) => t !== u.id);
+                                        else tokens.push(u.id);
+                                        setSecSettingsForm({
+                                          ...secSettingsForm,
+                                          factoryAccessTokens: tokens,
+                                        });
+                                      }}
+                                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                                    />
+                                    <span className="flex-1">
+                                      {u.fullName}
+                                    </span>
+                                    {isChecked && (
+                                      <span className="text-[10px] text-indigo-600 font-bold">مجاز</span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t">
+                          <div className="space-y-3 bg-slate-50/50 p-4 border rounded-xl">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                                <Lock size={14} className="text-amber-600" />{" "}
+                                دسترسی به ویرایش نامه‌ها
+                              </label>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                {(secSettingsForm.editAccessTokens || []).length} کاربر مجاز
+                              </span>
+                            </div>
+                            <div className="max-h-48 overflow-y-auto border bg-white rounded-lg p-2 space-y-1">
+                              {systemUsers.map((u) => {
+                                const isChecked = (secSettingsForm.editAccessTokens || []).includes(u.id);
+                                return (
+                                  <label
+                                    key={u.id}
+                                    className={`flex items-center gap-2 text-xs p-2 rounded-lg border cursor-pointer transition-colors ${
+                                      isChecked
+                                        ? "bg-amber-50/80 border-amber-200 text-amber-900 font-bold"
+                                        : "bg-white border-transparent hover:bg-slate-50 text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        let tokens = [
+                                          ...(secSettingsForm.editAccessTokens || []),
+                                        ];
+                                        if (tokens.includes(u.id))
+                                          tokens = tokens.filter((t) => t !== u.id);
+                                        else tokens.push(u.id);
+                                        setSecSettingsForm({
+                                          ...secSettingsForm,
+                                          editAccessTokens: tokens,
+                                        });
+                                      }}
+                                      className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                                    />
+                                    <span className="flex-1">
+                                      {u.fullName}
+                                    </span>
+                                    {isChecked && (
+                                      <span className="text-[10px] text-amber-600 font-bold">مجاز</span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="space-y-3 bg-slate-50/50 p-4 border rounded-xl">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                                <Lock size={14} className="text-red-600" />{" "}
+                                دسترسی به حذف نامه‌ها
+                              </label>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+                                {(secSettingsForm.deleteAccessTokens || []).length} کاربر مجاز
+                              </span>
+                            </div>
+                            <div className="max-h-48 overflow-y-auto border bg-white rounded-lg p-2 space-y-1">
+                              {systemUsers.map((u) => {
+                                const isChecked = (secSettingsForm.deleteAccessTokens || []).includes(u.id);
+                                return (
+                                  <label
+                                    key={u.id}
+                                    className={`flex items-center gap-2 text-xs p-2 rounded-lg border cursor-pointer transition-colors ${
+                                      isChecked
+                                        ? "bg-red-50/80 border-red-200 text-red-900 font-bold"
+                                        : "bg-white border-transparent hover:bg-slate-50 text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        let tokens = [
+                                          ...(secSettingsForm.deleteAccessTokens || []),
+                                        ];
+                                        if (tokens.includes(u.id))
+                                          tokens = tokens.filter((t) => t !== u.id);
+                                        else tokens.push(u.id);
+                                        setSecSettingsForm({
+                                          ...secSettingsForm,
+                                          deleteAccessTokens: tokens,
+                                        });
+                                      }}
+                                      className="rounded text-red-600 focus:ring-red-500 w-4 h-4 cursor-pointer"
+                                    />
+                                    <span className="flex-1">
+                                      {u.fullName}
+                                    </span>
+                                    {isChecked && (
+                                      <span className="text-[10px] text-red-600 font-bold">مجاز</span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-dashed">
+                          {/* Upload Letterhead */}
+                          <div className="space-y-4">
+                            <div>
+                              <h4 className="font-bold text-sm text-gray-700 mb-2 border-b pb-1">
+                                سربرگ نامه (تصویر برای پیش‌نمایش)
+                              </h4>
+                              <p className="text-[10px] text-gray-500 mb-2">
+                                تصویر سربرگ شرکت خود را با فرمت تصویر (JPG/PNG)
+                                آپلود کنید. این تصویر برای پیش‌نمایش نامه در
+                                سیستم و همچنین چاپ مستقیم استفاده می‌شود.
+                              </p>
+                              <div className="flex flex-col gap-2">
+                                <input
+                                  type="file"
+                                  ref={secLetterheadInputRef}
+                                  className="hidden"
+                                  onChange={handleSecLetterheadUpload}
+                                  accept="image/*"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    secLetterheadInputRef.current?.click()
+                                  }
+                                  className="bg-purple-100 text-purple-700 font-bold px-4 py-2 rounded-xl text-xs hover:bg-purple-200 w-full"
+                                  disabled={isUploadingSecLetterhead}
+                                >
+                                  {isUploadingSecLetterhead
+                                    ? "در حال آپلود..."
+                                    : "انتخاب تصویر سربرگ"}
+                                </button>
+                                {secSettingsForm.letterheadUrl &&
+                                  !secSettingsForm.letterheadUrl
+                                    .toLowerCase()
+                                    .endsWith(".pdf") && (
+                                    <div className="mt-2 border rounded-xl overflow-hidden relative">
+                                      <img
+                                        src={secSettingsForm.letterheadUrl}
+                                        className="w-full max-h-40 object-contain bg-gray-100"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setSecSettingsForm({
+                                            ...secSettingsForm,
+                                            letterheadUrl: "",
+                                          })
+                                        }
+                                        className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    </div>
+                                  )}
+                              </div>
+                            </div>
+
+                            <div>
+                              <h4 className="font-bold text-sm text-gray-700 mb-2 border-b pb-1">
+                                سربرگ نامه (PDF با کیفیت اصلی)
+                              </h4>
+                              <p className="text-[10px] text-gray-500 mb-2">
+                                جهت افت نکردن کیفیت در خروجی‌های <b>PDF</b> رسمی
+                                سیستم، لطفاً فایل سربرگ خام را به صورت{" "}
+                                <b>PDF</b> آپلود نمایید. در صورت خالی بودن، از
+                                تصویر بالا استفاده می‌شود.
+                              </p>
+                              <div className="flex flex-col gap-2">
+                                <input
+                                  type="file"
+                                  ref={secPdfLetterheadInputRef}
+                                  className="hidden"
+                                  onChange={handleSecPdfLetterheadUpload}
+                                  accept="application/pdf"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    secPdfLetterheadInputRef.current?.click()
+                                  }
+                                  className="bg-indigo-100 text-indigo-700 font-bold px-4 py-2 rounded-xl text-xs hover:bg-indigo-200 w-full"
+                                  disabled={isUploadingSecPdfLetterhead}
+                                >
+                                  {isUploadingSecPdfLetterhead
+                                    ? "در حال آپلود..."
+                                    : "انتخاب فایل PDF سربرگ"}
+                                </button>
+                                {secSettingsForm.pdfLetterheadUrl && (
+                                  <div className="mt-2 border rounded-xl overflow-hidden relative">
+                                    <div className="w-full h-16 bg-indigo-50 flex items-center justify-center text-xs text-indigo-700 font-bold">
+                                      فایل PDF سربرگ بارگذاری شده است
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setSecSettingsForm({
+                                          ...secSettingsForm,
+                                          pdfLetterheadUrl: "",
+                                        })
+                                      }
+                                      className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full"
+                                    >
+                                      <X size={14} />
+                                    </button>
+                                  </div>
+                                )}
+                                {/* Fallback support for older DB state where PDF was uploaded to letterheadUrl */}
+                                {secSettingsForm.letterheadUrl &&
+                                  secSettingsForm.letterheadUrl
+                                    .toLowerCase()
+                                    .endsWith(".pdf") &&
+                                  !secSettingsForm.pdfLetterheadUrl && (
+                                    <div className="mt-2 border rounded-xl overflow-hidden relative">
+                                      <div className="w-full h-16 bg-indigo-50 flex items-center justify-center text-xs text-indigo-700 font-bold">
+                                        فایل PDF سربرگ از قبل بارگذاری شده است
+                                      </div>
+                                    </div>
+                                  )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Upload Stamp */}
+                          <div>
+                            <h4 className="font-bold text-sm text-gray-700 mb-2 border-b pb-1">
+                              مهر شرکت
+                            </h4>
+                            <div className="flex flex-col gap-2">
+                              <input
+                                type="file"
+                                ref={secStampInputRef}
+                                className="hidden"
+                                onChange={handleSecStampUpload}
+                                accept="image/*"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  secStampInputRef.current?.click()
+                                }
+                                className="bg-indigo-100 text-indigo-700 font-bold px-4 py-2 rounded-xl text-xs hover:bg-indigo-200 w-full"
+                                disabled={isUploadingSecStamp}
+                              >
+                                {isUploadingSecStamp
+                                  ? "در حال آپلود..."
+                                  : "انتخاب تصویر مهر"}
+                              </button>
+                              {secSettingsForm.companyStampUrl && (
+                                <div className="mt-2 border rounded-xl overflow-hidden relative flex justify-center items-center h-40 bg-gray-50">
+                                  <img
+                                    src={secSettingsForm.companyStampUrl}
+                                    className="max-h-full object-contain"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setSecSettingsForm({
+                                        ...secSettingsForm,
+                                        companyStampUrl: "",
+                                      })
+                                    }
+                                    className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6 pt-6 border-t border-dashed">
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">
+                              اندازه مهر (پیکسل)
+                            </label>
+                            <input
+                              type="number"
+                              value={secSettingsForm.companyStampSize}
+                              onChange={(e) =>
+                                setSecSettingsForm({
+                                  ...secSettingsForm,
+                                  companyStampSize: Number(e.target.value),
+                                })
+                              }
+                              className="w-full border rounded-xl p-2.5 text-xs focus:ring-2 dir-ltr"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-xs font-bold text-gray-500 block mb-1">
+                              شفافیت مهر (%)
+                            </label>
+                            <input
+                              type="number"
+                              max="100"
+                              min="10"
+                              value={secSettingsForm.companyStampOpacity}
+                              onChange={(e) =>
+                                setSecSettingsForm({
+                                  ...secSettingsForm,
+                                  companyStampOpacity: Number(e.target.value),
+                                })
+                              }
+                              className="w-full border rounded-xl p-2.5 text-xs focus:ring-2 dir-ltr"
+                            />
+                          </div>
+
+                          <div className="flex items-center">
+                            <label className="flex items-center gap-2 cursor-pointer mt-4">
+                              <input
+                                type="checkbox"
+                                checked={secSettingsForm.hideAutoFooter}
+                                onChange={(e) =>
+                                  setSecSettingsForm({
+                                    ...secSettingsForm,
+                                    hideAutoFooter: e.target.checked,
+                                  })
+                                }
+                                className="w-5 h-5 text-purple-600 rounded"
+                              />
+                              <span className="text-sm font-bold text-gray-700">
+                                عدم نمایش پاورقی خودکار (در صورت داشتن سربرگ
+                                عکس‌دار)
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Preview Metadata */}
+                        <div className="mt-8">
+                          <h4 className="font-bold text-sm text-gray-700 mb-4 border-b pb-2">
+                            موقعیت اطلاعات (شماره/تاریخ/پیوست) روی سربرگ
+                          </h4>
+
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="space-y-4">
+                              <div>
+                                <div className="flex justify-between items-center mb-1">
+                                  <label className="text-xs font-bold text-gray-500">
+                                    فاصله از بالا (میلی‌متر)
+                                  </label>
+                                  <span className="text-[10px] text-slate-400">
+                                    (ارتفاع کل صفحه: ۲۹۷mm)
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="200"
+                                  value={secSettingsForm.metadataTop}
+                                  onChange={(e) =>
+                                    setSecSettingsForm({
+                                      ...secSettingsForm,
+                                      metadataTop: Number(e.target.value),
+                                    })
+                                  }
+                                  className="w-full"
+                                />
+                                <div className="text-center text-xs font-bold text-purple-600">
+                                  {secSettingsForm.metadataTop} mm
+                                </div>
+                              </div>
+                              <div>
+                                <div className="flex justify-between items-center mb-1">
+                                  <label className="text-xs font-bold text-gray-500">
+                                    فاصله از چپ (میلی‌متر)
+                                  </label>
+                                  <span className="text-[10px] text-slate-400">
+                                    (عرض کل صفحه: ۲۱۰mm - سمت چپ: ۱۵ تا ۳۰mm)
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="190"
+                                  value={secSettingsForm.metadataLeft}
+                                  onChange={(e) =>
+                                    setSecSettingsForm({
+                                      ...secSettingsForm,
+                                      metadataLeft: Number(e.target.value),
+                                    })
+                                  }
+                                  className="w-full"
+                                />
+                                <div className="text-center text-xs font-bold text-purple-600">
+                                  {secSettingsForm.metadataLeft} mm
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">
+                                  اندازه قلم اطلاعات (پیکسل)
+                                </label>
+                                <input
+                                  type="number"
+                                  value={secSettingsForm.metadataFontSize}
+                                  onChange={(e) =>
+                                    setSecSettingsForm({
+                                      ...secSettingsForm,
+                                      metadataFontSize: Number(e.target.value),
+                                    })
+                                  }
+                                  className="w-full border rounded-xl p-2.5 text-xs focus:ring-2 dir-ltr"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">
+                                  میزان پررنگی / کدر بودن اطلاعات (درصد)
+                                </label>
+                                <input
+                                  type="range"
+                                  min="10"
+                                  max="100"
+                                  step="5"
+                                  value={secSettingsForm.metadataOpacity ?? 100}
+                                  onChange={(e) =>
+                                    setSecSettingsForm({
+                                      ...secSettingsForm,
+                                      metadataOpacity: Number(e.target.value),
+                                    })
+                                  }
+                                  className="w-full text-purple-600"
+                                />
+                                <div className="text-center text-xs font-bold text-purple-600">
+                                  {secSettingsForm.metadataOpacity ?? 100}%
+                                </div>
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">
+                                  میزان ضخامت قلم اطلاعات
+                                </label>
+                                <select
+                                  value={
+                                    secSettingsForm.metadataFontWeight || "bold"
+                                  }
+                                  onChange={(e) =>
+                                    setSecSettingsForm({
+                                      ...secSettingsForm,
+                                      metadataFontWeight: e.target.value as any,
+                                    })
+                                  }
+                                  className="w-full border rounded-xl p-2.5 text-xs focus:ring-2"
+                                >
+                                  <option value="normal">
+                                    Normal (معمولی)
+                                  </option>
+                                  <option value="bold">Bold (ضخیم)</option>
+                                  <option value="bolder">
+                                    Bolder (خیلی ضخیم)
+                                  </option>
+                                  <option value="black">
+                                    Black (کاملا سیاه)
+                                  </option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-xs font-bold text-gray-500 block mb-1">
+                                  نوع فونت نامه
+                                </label>
+                                <select
+                                  value={
+                                    secSettingsForm.letterheadFontFamily ||
+                                    "Vazirmatn"
+                                  }
+                                  onChange={(e) =>
+                                    setSecSettingsForm({
+                                      ...secSettingsForm,
+                                      letterheadFontFamily: e.target.value,
+                                    })
+                                  }
+                                  className="w-full border rounded-xl p-2.5 text-xs focus:ring-2"
+                                >
+                                  <option value="Vazirmatn">
+                                    Vazirmatn (وزیرمتن - پیش‌فرض)
+                                  </option>
+                                  <option value="Shabnam">
+                                    Shabnam (شبنم)
+                                  </option>
+                                  <option value="Sahel">Sahel (ساحل)</option>
+                                  <option value="Gandom">Gandom (گندم)</option>
+                                  <option value="Samim">Samim (سمیم)</option>
+                                  <option value="Tahoma">Tahoma</option>
+                                  <option value="Arial">Arial</option>
+                                  <option value="B Nazanin">B Nazanin</option>
+                                  <option value="B Titr">B Titr</option>
+                                </select>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleSaveSecSettings}
+                                className="w-full bg-green-600 hover:bg-green-700 text-white rounded-xl py-3 font-bold text-sm shadow-md transition-colors mt-4"
+                              >
+                                ذخیره تنظیمات دبیرخانه
+                              </button>
+                            </div>
+
+                            {/* Live Preview Pane */}
+                            <div className="border border-slate-300 dark:border-slate-700 rounded-2xl p-4 bg-slate-100 dark:bg-slate-900/80 flex flex-col items-center justify-center space-y-3 select-none">
+                              <div className="text-[11px] font-bold text-slate-500 flex items-center justify-between w-full">
+                                <span>شبیه‌ساز دقیق برگه A4 (مقیاس زنده)</span>
+                                <span className="text-[10px] text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 rounded font-bold">
+                                  برای تنظیم سریع، روی برگه کلیک کنید
+                                </span>
+                              </div>
+
+                              <div
+                                className="relative bg-white shadow-md border border-slate-300 dark:border-slate-600 w-full max-w-[280px] cursor-crosshair rounded overflow-hidden"
+                                style={{
+                                  aspectRatio: "210 / 297",
+                                }}
+                                onClick={(e) => {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const clickX = e.clientX - rect.left;
+                                  const clickY = e.clientY - rect.top;
+                                  const mmX = Math.round((clickX / rect.width) * 210);
+                                  const mmY = Math.round((clickY / rect.height) * 297);
+                                  setSecSettingsForm((prev) => ({
+                                    ...prev,
+                                    metadataLeft: Math.max(0, Math.min(190, mmX)),
+                                    metadataTop: Math.max(0, Math.min(270, mmY)),
+                                  }));
+                                }}
+                                title="برای انتقال مشخصات، روی هر نقطه از سربرگ کلیک کنید"
+                              >
+                                {secSettingsForm.letterheadUrl || secSettingsForm.pdfLetterheadUrl ? (
+                                  <img
+                                    src={
+                                      secSettingsForm.letterheadUrl && !secSettingsForm.letterheadUrl.toLowerCase().endsWith(".pdf")
+                                        ? secSettingsForm.letterheadUrl
+                                        : `/api/secretariat/pdf-preview?url=${encodeURIComponent(secSettingsForm.pdfLetterheadUrl || secSettingsForm.letterheadUrl || "")}`
+                                    }
+                                    alt="سربرگ شرکت"
+                                    className="absolute inset-0 w-full h-full object-fill pointer-events-none z-0"
+                                  />
+                                ) : (
+                                  <div className="p-3 border-b border-slate-200 flex justify-between items-center text-[8px] text-slate-600 font-bold">
+                                    <span>سربرگ پیش‌فرض شرکت</span>
+                                    <span className="text-[7px]">دبیرخانه مرکزی</span>
+                                  </div>
+                                )}
+
+                                <div
+                                  className="absolute border border-dashed border-red-500 bg-white/80 text-right p-1 rounded shadow-xs z-20 transition-all pointer-events-none"
+                                  style={{
+                                    top: `${((secSettingsForm.metadataTop ?? 25) / 297) * 100}%`,
+                                    left: `${((secSettingsForm.metadataLeft ?? 20) / 210) * 100}%`,
+                                    fontSize: `${Math.max(6, (secSettingsForm.metadataFontSize ?? 11) * 0.55)}px`,
+                                    fontFamily:
+                                      secSettingsForm.letterheadFontFamily ||
+                                      "Vazirmatn",
+                                    opacity:
+                                      (secSettingsForm.metadataOpacity ?? 100) /
+                                      100,
+                                    fontWeight:
+                                      secSettingsForm.metadataFontWeight ||
+                                      "bold",
+                                    lineHeight: "1.3",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  <div>شماره: ۱۴۰۴/۰۱</div>
+                                  <div>تاریخ: ۱۴۰۴/۰۶/۲۹</div>
+                                  <div>پیوست: ندارد</div>
+                                </div>
+                              </div>
+
+                              <div className="text-[10px] text-slate-400 text-center font-mono">
+                                فاصله از چپ: {secSettingsForm.metadataLeft ?? 20}mm | فاصله از بالا: {secSettingsForm.metadataTop ?? 25}mm
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-8 text-center bg-gray-50 border rounded-2xl text-gray-500 font-bold text-sm">
+                    ابتدا در بخش "اطلاعات پایه" حداقل یک شرکت تعریف کنید.
+                  </div>
+                )}
+
+                {/* --- Templates Management --- */}
+                <div className="bg-white/50 dark:bg-gray-800 border rounded-2xl p-5 md:p-6 shadow-sm space-y-6 mt-8">
+                  <div className="flex items-center justify-between border-b pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="p-2 bg-purple-50 text-purple-600 rounded-lg">
+                        <FileText size={18} />
+                      </span>
+                      <div>
+                        <h3 className="text-sm font-black text-slate-800">
+                          بانک نمونه نامه‌ها (قالب‌های آماده)
+                        </h3>
+                        <p className="text-[10px] text-slate-400">
+                          نامه‌های تکراری و پرکاربرد را ذخیره کنید تا هنگام ثبت
+                          نامه جدید، به سرعت فراخوانی شوند.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() =>
+                        setEditingSecTemplate({
+                          title: "",
+                          category: "اداری",
+                          subject: "",
+                          content: "",
+                        })
+                      }
+                      className="flex items-center gap-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm transition-all"
+                    >
+                      <Plus size={14} /> ایجاد نمونه نامه جدید
+                    </button>
+                  </div>
+
+                  {/* Templates List */}
+                  {secTemplates.length === 0 ? (
+                    <div className="text-center py-8 text-slate-400 text-xs">
+                      هیچ نمونه نامه‌ای تعریف نشده است. با زدن دکمه بالا اولین
+                      نمونه نامه را بسازید.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {secTemplates.map((temp) => (
+                        <div
+                          key={temp.id}
+                          className="border border-slate-100 rounded-xl p-4 hover:shadow-sm transition-all bg-slate-50 flex flex-col justify-between gap-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold">
+                                {temp.category || "عمومی"}
+                              </span>
+                            </div>
+                            <h4 className="font-bold text-slate-800 text-xs">
+                              {temp.title}
+                            </h4>
+                            <p className="text-[10px] text-slate-400 line-clamp-1">
+                              موضوع: {temp.subject || "-"}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2 border-t pt-2 mt-1">
+                            <button
+                              onClick={() => setEditingSecTemplate(temp)}
+                              className="text-slate-500 hover:text-slate-700 text-[10px] font-bold bg-white px-2 py-1 border rounded"
+                            >
+                              ویرایش
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSecTemplate(temp.id)}
+                              className="text-red-500 hover:text-red-700 text-[10px] font-bold bg-white px-2 py-1 border rounded"
+                            >
+                              حذف
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "permissions" && (
+              <div className="space-y-6 animate-fade-in">
+                <RolePermissionsEditor
+                  settings={settings}
+                  onUpdateSettings={handleUpdateSettings}
+                  users={systemUsers}
+                />
+              </div>
+            )}
+
+            {activeCategory === "templates" && (
+              <div className="space-y-6 animate-fade-in">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                    <LayoutTemplate size={20} /> مدیریت قالب‌های چاپ (چک / فیش)
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowDesigner(true)}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 flex items-center gap-1"
+                  >
+                    <Plus size={16} /> طراحی قالب جدید
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {settings.printTemplates?.map((t) => (
+                    <div
+                      key={t.id}
+                      className="glass-panel p-4 rounded-xl border hover:shadow-md transition-all group relative overflow-hidden"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <h4 className="font-bold text-gray-800">{t.name}</h4>
+                          <span className="text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                            {t.pageSize} - {t.orientation}
+                          </span>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleEditTemplate(t)}
+                            className="text-blue-500 hover:bg-blue-50 p-1.5 rounded"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTemplate(t.id)}
+                            className="text-red-500 hover:bg-red-50 p-1.5 rounded"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-2">
+                        {t.fields.length} فیلد تعریف شده
+                      </div>
+                    </div>
+                  ))}
+                  {(!settings.printTemplates ||
+                    settings.printTemplates.length === 0) && (
+                    <div className="col-span-full text-center text-gray-400 py-10">
+                      قالبی یافت نشد.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "digital-card" && (
+              <div className="space-y-6 animate-fade-in text-right" dir="rtl">
+                <div className="glass-panel p-6 rounded-3xl border border-sky-200/70 dark:border-sky-800/40 bg-gradient-to-r from-sky-50/60 to-blue-50/60 dark:from-sky-950/30 dark:to-blue-950/30">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 bg-gradient-to-br from-sky-500 to-blue-600 rounded-2xl text-white shadow-lg shadow-sky-500/20">
+                        <QrCode size={26} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                          تنظیمات کارت دیجیتال و QR کد عمومی (لپان لینک)
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                          مدیریت صفحه عمومی شرکت، تعیین بلوک‌ها، مسیریاب‌ها، لینک‌ها و استایل چاپ کیو آر کد
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Embedded DigitalCardModule */}
+                <div className="bg-white dark:bg-slate-900/60 rounded-3xl border border-slate-200 dark:border-slate-800 p-2 md:p-4">
+                  <DigitalCardModule currentUser={currentUser} settings={settings} />
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "security" && (
+              <div className="space-y-6 animate-fade-in text-right" dir="rtl">
+                {/* Header card */}
+                <div className="glass-panel p-6 rounded-2xl border border-purple-200/70 dark:border-purple-800/40 bg-gradient-to-r from-purple-50/60 to-indigo-50/60 dark:from-purple-950/30 dark:to-indigo-950/30">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 bg-purple-600 text-white rounded-2xl shadow-md">
+                        <Shield size={24} />
+                      </div>
+                      <div>
+                        <h3 className="font-black text-gray-800 dark:text-white text-lg">
+                          تنظیمات بخش انتظامات و نگهبانی
+                        </h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          تنظیم گروه‌های دریافت فیش واریزی رانندگان (چت سازمانی، تلگرام، بله، واتساپ)، گزارش‌های خروج و دوربین
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => handleSave(e as any)}
+                      disabled={loading}
+                      className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-md transition-all active:scale-95"
+                    >
+                      {loading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                      <span>ذخیره تنظیمات انتظامات</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 1. Driver Payments & Remittances Group Settings */}
+                <div className="glass-panel p-6 rounded-2xl border border-gray-200/60 dark:border-gray-800/60 shadow-sm space-y-6">
+                  <div className="flex items-center justify-between flex-wrap gap-2 border-b border-gray-200 dark:border-gray-800 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded-xl">
+                        <Truck size={20} />
+                      </div>
+                      <div>
+                        <h4 className="font-black text-sm text-gray-800 dark:text-white">
+                          🚚 تنظیمات گروه ارسال واریزی و فیش رانندگان
+                        </h4>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          ارسال فرم‌های حواله و واریزی رانندگان به همراه عکس فیش‌ها و پیوست‌ها به گروه‌های گفتگو و پیام‌رسان‌ها
+                        </p>
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer bg-purple-50 dark:bg-purple-950/40 px-3.5 py-2 rounded-xl border border-purple-200 dark:border-purple-800 shadow-xs">
+                      <input
+                        type="checkbox"
+                        checked={settings.botDriverPaymentAutoSendEnabled !== false}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            botDriverPaymentAutoSendEnabled: e.target.checked,
+                          })
+                        }
+                        className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
+                      />
+                      <span className="text-xs font-bold text-purple-900 dark:text-purple-200">
+                        ارسال خودکار پس از هر مرحله تایید (سرپرست انتظامات / مدیر کارخانه)
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* STAGE 1: SUPERVISOR APPROVAL -> GROUP 1 (SECURITY) */}
+                  <div className="bg-gradient-to-r from-blue-50/70 to-indigo-50/70 dark:from-blue-950/30 dark:to-indigo-950/30 p-5 rounded-2xl border border-blue-200/80 dark:border-blue-800/60 space-y-4">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-blue-600 text-white font-black text-xs flex items-center justify-center">۱</span>
+                        <label className="text-xs font-black text-blue-950 dark:text-blue-200 flex items-center gap-1.5">
+                          <MessageCircle size={16} className="text-blue-600" />
+                          مرحله اول: گروه انتظامات (ارسال پس از تایید سرپرست انتظامات)
+                        </label>
+                      </div>
+                      {settings.securityDriverPaymentInternalGroupId && (
+                        <span className="text-[10px] bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 px-2.5 py-1 rounded-lg font-mono">
+                          شناسه فعال: {settings.securityDriverPaymentInternalGroupId}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          انتخاب گروه گفتگوی داخلی سیستم (چت سازمانی):
+                        </label>
+                        <select
+                          value={settings.securityDriverPaymentInternalGroupId || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const sel = chatGroups.find(g => g.id === val);
+                            setSettings({
+                              ...settings,
+                              securityDriverPaymentInternalGroupId: val,
+                              securityDriverPaymentInternalGroupName: sel ? sel.name : ""
+                            });
+                          }}
+                          className="w-full text-xs border border-gray-300 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 font-sans focus:ring-2 focus:ring-blue-500 outline-none"
+                        >
+                          <option value="">-- پیش‌فرض هوشمند (گروه انتظامات / نگهبانی) --</option>
+                          {chatGroups.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              👥 {g.name} {g.members?.length ? `(${g.members.length} عضو)` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          یا ورود دستی شناسه گروه چت داخلی:
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.securityDriverPaymentInternalGroupId || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings({
+                              ...settings,
+                              securityDriverPaymentInternalGroupId: val
+                            });
+                          }}
+                          placeholder="مثال: group-security..."
+                          className="w-full text-xs border border-gray-300 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 font-mono dir-ltr focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          شناسه گروه تلگرام اول:
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.botDriverPaymentGroupIdTele || settings.botDriverPaymentGroupId || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botDriverPaymentGroupIdTele: e.target.value,
+                              botDriverPaymentGroupId: e.target.value,
+                            })
+                          }
+                          className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2 text-xs dir-ltr font-mono focus:ring-2 focus:ring-blue-500"
+                          placeholder="-100..."
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          شناسه گروه بله اول:
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.botDriverPaymentGroupIdBale || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botDriverPaymentGroupIdBale: e.target.value,
+                            })
+                          }
+                          className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2 text-xs dir-ltr font-mono focus:ring-2 focus:ring-blue-500"
+                          placeholder="شناسه عددی بله"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          شناسه گروه واتساپ اول:
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.botDriverPaymentGroupIdWhatsApp || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botDriverPaymentGroupIdWhatsApp: e.target.value,
+                            })
+                          }
+                          className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2 text-xs dir-ltr font-mono focus:ring-2 focus:ring-blue-500"
+                          placeholder="...@g.us"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* STAGE 2: FACTORY MANAGER APPROVAL -> GROUP 2 (MANAGEMENT / FINANCE) */}
+                  <div className="bg-gradient-to-r from-emerald-50/70 to-teal-50/70 dark:from-emerald-950/30 dark:to-teal-950/30 p-5 rounded-2xl border border-emerald-200/80 dark:border-emerald-800/60 space-y-4">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-black text-xs flex items-center justify-center">۲</span>
+                        <label className="text-xs font-black text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5">
+                          <MessageCircle size={16} className="text-emerald-600" />
+                          مرحله دوم: گروه مدیریت کارخانه و مالی (ارسال پس از تایید مدیر و بایگانی)
+                        </label>
+                      </div>
+                      {settings.securityDriverPaymentSecondInternalGroupId && (
+                        <span className="text-[10px] bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 px-2.5 py-1 rounded-lg font-mono">
+                          شناسه فعال: {settings.securityDriverPaymentSecondInternalGroupId}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          انتخاب گروه گفتگوی داخلی سیستم مرحله دوم (مثلاً گروه مالی یا مدیریت):
+                        </label>
+                        <select
+                          value={settings.securityDriverPaymentSecondInternalGroupId || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const sel = chatGroups.find(g => g.id === val);
+                            setSettings({
+                              ...settings,
+                              securityDriverPaymentSecondInternalGroupId: val,
+                              securityDriverPaymentSecondInternalGroupName: sel ? sel.name : ""
+                            });
+                          }}
+                          className="w-full text-xs border border-gray-300 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 font-sans focus:ring-2 focus:ring-emerald-500 outline-none"
+                        >
+                          <option value="">-- پیش‌فرض هوشمند (گروه مدیریت / حسابداری / مالی) --</option>
+                          {chatGroups.map((g) => (
+                            <option key={g.id} value={g.id}>
+                              👥 {g.name} {g.members?.length ? `(${g.members.length} عضو)` : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          یا ورود دستی شناسه گروه چت مرحله دوم:
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.securityDriverPaymentSecondInternalGroupId || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings({
+                              ...settings,
+                              securityDriverPaymentSecondInternalGroupId: val
+                            });
+                          }}
+                          placeholder="مثال: group-finance..."
+                          className="w-full text-xs border border-gray-300 dark:border-gray-700 rounded-xl p-2.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 font-mono dir-ltr focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          شناسه تلگرام گروه دوم (مدیریت/مالی):
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.botDriverPaymentSecondGroupIdTele || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botDriverPaymentSecondGroupIdTele: e.target.value,
+                            })
+                          }
+                          className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2 text-xs dir-ltr font-mono focus:ring-2 focus:ring-emerald-500"
+                          placeholder="-100..."
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          شناسه بله گروه دوم (مدیریت/مالی):
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.botDriverPaymentSecondGroupIdBale || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botDriverPaymentSecondGroupIdBale: e.target.value,
+                            })
+                          }
+                          className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2 text-xs dir-ltr font-mono focus:ring-2 focus:ring-emerald-500"
+                          placeholder="شناسه عددی بله"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block mb-1">
+                          شناسه واتساپ گروه دوم (مدیریت/مالی):
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.botDriverPaymentSecondGroupIdWhatsApp || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botDriverPaymentSecondGroupIdWhatsApp: e.target.value,
+                            })
+                          }
+                          className="w-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 rounded-lg p-2 text-xs dir-ltr font-mono focus:ring-2 focus:ring-emerald-500"
+                          placeholder="...@g.us"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Camera and Plate OCR Access Card */}
+                <div className="glass-panel p-6 rounded-2xl border border-gray-200/60 dark:border-gray-800/60 shadow-sm flex items-center justify-between flex-wrap gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-300 rounded-xl">
+                      <Camera size={22} />
+                    </div>
+                    <div>
+                      <h4 className="font-black text-sm text-gray-800 dark:text-white">
+                        📷 تنظیمات دوربین و تصویربرداری انتظامات
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        تنظیم اتصال دوربین‌های USB/وبکم و دوربین‌های تحت شبکه IP Camera جهت ثبت تصاویر و پلاک
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveCategory("camera")}
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all"
+                  >
+                    <Camera size={16} />
+                    <span>ورود به تنظیمات دوربین</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "camera" && (
+              <div className="space-y-6 animate-fade-in text-right" dir="rtl">
+                <div className="glass-panel p-6 rounded-2xl border border-gray-200/60 shadow-sm">
+                  <h3 className="font-bold text-gray-800 dark:text-white mb-6 border-b pb-3 flex items-center gap-2">
+                    <Camera size={22} className="text-cyan-600 animate-pulse" /> تنظیمات دوربین و تصویربرداری
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Right col: Settings parameters */}
+                    <div className="space-y-6">
+                      {/* Camera Connection Type */}
+                      <div className="p-4 bg-gradient-to-tr from-cyan-50 to-blue-50 dark:from-cyan-950/20 dark:to-blue-950/20 rounded-xl border border-cyan-200 dark:border-cyan-900/40">
+                        <label className="block text-xs font-black text-gray-700 dark:text-gray-300 mb-2">
+                          روش اتصال دوربین انتظامات
+                        </label>
+                        <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-lg border border-gray-200 dark:border-white/10 mb-3">
+                          <button
+                            type="button"
+                            onClick={() => setCameraType("usb")}
+                            className={`flex-1 py-1.5 rounded-md text-xs font-black transition-all ${
+                              cameraType === "usb"
+                                ? "bg-cyan-600 text-white shadow"
+                                : "text-gray-600 dark:text-gray-400 hover:text-gray-800"
+                            }`}
+                          >
+                            اتصال مستقیم (USB/وبکم)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCameraType("network")}
+                            className={`flex-1 py-1.5 rounded-md text-xs font-black transition-all ${
+                              cameraType === "network"
+                                ? "bg-cyan-600 text-white shadow"
+                                : "text-gray-600 dark:text-gray-400 hover:text-gray-800"
+                            }`}
+                          >
+                            دوربین تحت شبکه (IP Camera)
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-gray-500 leading-relaxed font-semibold">
+                          دوربین‌های مستقیم از طریق پورت USB متصل می‌شوند. دوربین‌های تحت شبکه از طریق آدرس IP داخل شبکه کارخانه متصل می‌گردند.
+                        </p>
+                      </div>
+
+                      {cameraType === "usb" ? (
+                        /* Default camera selection */
+                        <div className="p-4 bg-gray-50/50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-white/10">
+                          <label className="block text-xs font-black text-gray-700 dark:text-gray-300 mb-2">
+                            انتخاب دستگاه دوربین پیش‌فرض
+                          </label>
+                          {localCameras.length > 0 ? (
+                            <select
+                              value={defaultCameraId}
+                              onChange={(e) => setDefaultCameraId(e.target.value)}
+                              className="w-full text-xs border rounded-lg p-2 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans focus:ring-2 focus:ring-cyan-500 outline-none"
+                            >
+                              {localCameras.map((dev, i) => (
+                                <option key={dev.deviceId} value={dev.deviceId}>
+                                  {dev.label || `دوربین شماره ${i + 1}`}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed font-semibold">
+                                مرورگر به اسامی دوربین‌ها دسترسی ندارد یا دوربینی یافت نشد. برای راه‌اندازی و شناسایی دوربین‌های متصل، روی دکمه زیر کلیک کنید.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={requestCameraPermissionAndList}
+                                className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-900/40 rounded-lg text-xs font-black hover:bg-blue-100 transition-colors flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Camera size={14} /> اسکن و فعال‌سازی دوربین‌ها
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        /* Network camera configuration */
+                        <div className="p-4 bg-gray-50/50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-white/10 space-y-4">
+                          <div>
+                            <label className="block text-xs font-black text-gray-700 dark:text-gray-300 mb-1.5">
+                              آدرس جریان دوربین شبکه (MJPEG / Stream URL / Snapshots)
+                            </label>
+                            <input
+                              type="text"
+                              value={cameraNetworkUrl}
+                              onChange={(e) => setCameraNetworkUrl(e.target.value)}
+                              placeholder="مثال: http://192.168.1.100:8080/video"
+                              dir="ltr"
+                              className="w-full text-xs border rounded-lg p-2 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-mono focus:ring-2 focus:ring-cyan-500 outline-none"
+                            />
+                            <p className="text-[9px] text-gray-400 mt-1">
+                              آدرس IP و پورت دوربین مداربسته یا گوشی موبایل شبیه‌ساز را وارد کنید.
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-black text-gray-700 dark:text-gray-300 mb-1.5">
+                                نام کاربری (DVR / Camera)
+                              </label>
+                              <input
+                                type="text"
+                                value={cameraNetworkUsername}
+                                onChange={(e) => setCameraNetworkUsername(e.target.value)}
+                                placeholder="مثال: admin"
+                                dir="ltr"
+                                className="w-full text-xs border rounded-lg p-2 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-mono focus:ring-2 focus:ring-cyan-500 outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-black text-gray-700 dark:text-gray-300 mb-1.5">
+                                کلمه عبور (DVR / Camera)
+                              </label>
+                              <input
+                                type="password"
+                                value={cameraNetworkPassword}
+                                onChange={(e) => setCameraNetworkPassword(e.target.value)}
+                                placeholder="******"
+                                dir="ltr"
+                                className="w-full text-xs border rounded-lg p-2 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-mono focus:ring-2 focus:ring-cyan-500 outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[10px] font-black text-gray-600 dark:text-gray-400 mb-1">
+                                نوع جریان شبکه
+                              </label>
+                              <select
+                                value={cameraNetworkType}
+                                onChange={(e) => setCameraNetworkType(e.target.value as "mjpeg" | "snapshot")}
+                                className="w-full text-xs border rounded-lg p-1.5 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans outline-none"
+                              >
+                                <option value="mjpeg">MJPEG (جریان ویدیویی متوالی)</option>
+                                <option value="snapshot">JPEG (عکس‌های متوالی)</option>
+                              </select>
+                            </div>
+                            {cameraNetworkType === "snapshot" && (
+                              <div>
+                                <label className="block text-[10px] font-black text-gray-600 dark:text-gray-400 mb-1">
+                                  بازه به‌روزرسانی (میلی‌ثانیه)
+                                </label>
+                                <input
+                                  type="number"
+                                  value={cameraSnapshotInterval}
+                                  onChange={(e) => setCameraSnapshotInterval(Math.max(100, parseInt(e.target.value, 10) || 1000))}
+                                  className="w-full text-xs border rounded-lg p-1.5 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-mono outline-none"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Resolution setting */}
+                      <div className="p-4 bg-gray-50/50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-white/10">
+                        <label className="block text-xs font-black text-gray-700 dark:text-gray-300 mb-2">
+                          کیفیت و رزولوشن تصویربرداری
+                        </label>
+                        <select
+                          value={cameraResolution}
+                          onChange={(e) => setCameraResolution(e.target.value)}
+                          className="w-full text-xs border rounded-lg p-2 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans focus:ring-2 focus:ring-cyan-500 outline-none"
+                        >
+                          <option value="720p">استاندارد (720p - توصیه شده)</option>
+                          <option value="1080p">کیفیت فوق‌العاده بالا (Full HD - 1080p)</option>
+                          <option value="480p">سرعت بالا و حجم کم (480p)</option>
+                        </select>
+                        <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1.5 leading-relaxed">
+                          وضوح بالاتر برای فواصل دور یا نور ضعیف مناسب است اما بار پردازشی بیشتری به سیستم تحمیل می‌کند.
+                        </p>
+                      </div>
+
+                      {/* Behavioral Toggles */}
+                      <div className="p-4 bg-gray-50/50 dark:bg-gray-800/30 rounded-xl border border-gray-200 dark:border-white/10 space-y-4">
+                        <h4 className="text-xs font-bold text-gray-800 dark:text-gray-200 mb-2">حالت‌های نمایشی و رفتاری</h4>
+                        
+                        {/* Mirror */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">حالت آینه‌ای پیش‌نمایش تصویر (جهت افقی معکوس)</span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={cameraMirror}
+                              onChange={(e) => setCameraMirror(e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-600"></div>
+                          </label>
+                        </div>
+
+                        {/* Auto-start */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">راه‌اندازی خودکار دوربین هنگام ورود به بخش دربان</span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={cameraAutoStart}
+                              onChange={(e) => setCameraAutoStart(e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-600"></div>
+                          </label>
+                        </div>
+
+                        {/* Sound Feedback */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">پخش صدای بیپ کوتاه هنگام اسکن پلاک موفق</span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={cameraBeepOnSuccess}
+                              onChange={(e) => setCameraBeepOnSuccess(e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-600"></div>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Left col: Live Preview Test */}
+                    <div className="p-5 bg-zinc-900 text-white rounded-2xl flex flex-col justify-between shadow-inner">
+                      <div>
+                        <h4 className="text-xs font-bold mb-1 flex items-center gap-1.5 text-cyan-400">
+                          <span className="relative flex h-2 w-2">
+                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75 ${isTestingCamera ? '' : 'hidden'}`}></span>
+                            <span className={`relative inline-flex rounded-full h-2 w-2 bg-cyan-500 ${isTestingCamera ? '' : 'bg-gray-500'}`}></span>
+                          </span>
+                          تست زنده پیش‌نمایش دوربین
+                        </h4>
+                        <p className="text-[10px] text-zinc-400 mb-4 font-semibold leading-relaxed">
+                          جهت اطمینان از عملکرد صحیح سخت‌افزار دوربین، کیفیت زاویه دید و کادربندی پلاک‌خوان می‌توانید پیش‌نمایش زنده را در اینجا بررسی کنید.
+                        </p>
+                        
+                        <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-black aspect-video max-w-sm mx-auto shadow-2xl flex items-center justify-center">
+                          {isTestingCamera ? (
+                            cameraType === "network" ? (
+                              <img
+                                src={liveSnapshotBase64 || (cameraNetworkType === "snapshot" ? `${cameraNetworkUrl}${cameraNetworkUrl.includes('?') ? '&' : '?'}t=${snapshotTime}` : cameraNetworkUrl)}
+                                referrerPolicy="no-referrer"
+                                className={`w-full h-full object-contain ${cameraMirror ? 'transform -scale-x-100' : ''}`}
+                                alt="Network Stream"
+                                onError={(e) => {
+                                  console.error("Network stream error");
+                                }}
+                              />
+                            ) : (
+                              <video
+                                ref={testVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className={`w-full h-full object-cover ${cameraMirror ? 'transform -scale-x-100' : ''}`}
+                              />
+                            )
+                          ) : (
+                            <div className="text-center p-6 space-y-2">
+                              <Camera className="mx-auto text-zinc-700" size={36} />
+                              <p className="text-[11px] text-zinc-500 font-bold">پیش‌نمایش غیرفعال است</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex gap-2">
+                        {!isTestingCamera ? (
+                          <button
+                            type="button"
+                            onClick={startTestCamera}
+                            className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <Camera size={14} />
+                            شروع تست دوربین انتخابی
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={stopTestCamera}
+                            className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            متوقف کردن تست
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeCategory === "integrations" && (
+              <div className="space-y-6 animate-fade-in">
+                {/* 1. Sayan ERP Connection & Web Service Configuration */}
+                <div className="glass-panel p-6 rounded-2xl border border-indigo-200 dark:border-indigo-900/50 shadow-sm bg-gradient-to-br from-indigo-50/40 via-white to-sky-50/30 dark:from-gray-900 dark:via-gray-850 dark:to-indigo-950/20">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-indigo-100 dark:border-gray-700 pb-4 mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white flex items-center justify-center shadow-md shadow-indigo-200 dark:shadow-none shrink-0">
+                        <Server size={24} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-black text-gray-800 dark:text-gray-100 text-base">
+                            اتصال به وب‌سرویس و سرور سایان ERP
+                          </h3>
+                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            اتصال اصلی و IP سرور
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          تنظیمات آدرس IP، پورت، مسیر API و کلید امنیتی (API Key) وب‌سرویس سایان
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                      <button
+                        type="button"
+                        onClick={handleTestSayan}
+                        disabled={testingSayan}
+                        className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold rounded-xl shadow-sm hover:shadow transition-all disabled:opacity-50 cursor-pointer"
+                      >
+                        {testingSayan ? <Loader2 size={16} className="animate-spin" /> : <Wifi size={16} />}
+                        {testingSayan ? "در حال بررسی ارتباط..." : "تست آنلاین ارتباط با سایان"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Sayan Connection Test Result Banner */}
+                  {sayanTestResult && (
+                    <div className={`mb-6 p-4 rounded-xl border flex items-start gap-3 transition-all ${
+                      sayanTestResult.success 
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-200" 
+                        : "bg-rose-50 border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-200"
+                    }`}>
+                      {sayanTestResult.success ? (
+                        <CheckCircle2 size={22} className="text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle size={22} className="text-rose-600 shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1 text-xs leading-relaxed font-medium">
+                        <div className="font-bold text-sm mb-1">
+                          {sayanTestResult.success ? "اتصال با سرور سایان برقرار است ✅" : "عدم موفقیت در برقراری ارتباط با سرور سایان ❌"}
+                        </div>
+                        <div>{sayanTestResult.message}</div>
+                        {sayanTestResult.latency !== undefined && (
+                          <div className="mt-1 font-mono text-[11px] opacity-80 dir-ltr text-right">
+                            Latency: {sayanTestResult.latency} ms {sayanTestResult.status ? `(HTTP ${sayanTestResult.status})` : ''}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSayanTestResult(null)}
+                        className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1"
+                        title="بستن پیام"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Inputs for Sayan URL & API Key */}
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+                        <label className="text-xs font-black text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                          <Globe size={15} className="text-indigo-600" />
+                          آدرس IP، پورت و لینک سرور سایان (Sayan Server IP / Base URL)
+                        </label>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[11px] text-gray-400">تنظیم سریع:</span>
+                          <button
+                            type="button"
+                            onClick={() => setSettings({ ...settings, sayanApiUrl: "http://80.210.31.176:5000/api/external/v1" })}
+                            className="text-[10px] font-mono px-2 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg text-indigo-700 dark:text-indigo-300 transition-colors border border-indigo-100 dark:border-gray-700 cursor-pointer font-bold"
+                            title="سرور اصلی سایان (IP استاتیک اینترنت)"
+                          >
+                            80.210.31.176:5000 (اصلی)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSettings({ ...settings, sayanApiUrl: "http://lep.templatetesti.shop:5000/api/external/v1" })}
+                            className="text-[10px] font-mono px-2 py-1 bg-emerald-50 hover:bg-emerald-100 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg text-emerald-700 dark:text-emerald-300 transition-colors border border-emerald-100 dark:border-gray-700 cursor-pointer font-bold"
+                            title="دامنه اینترنتی پایدار سرور شرکت"
+                          >
+                            lep.templatetesti.shop (دامنه)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSettings({ ...settings, sayanApiUrl: "http://80.210.31.176:5000/api/v1" })}
+                            className="text-[10px] font-mono px-2 py-1 bg-sky-50 hover:bg-sky-100 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg text-sky-700 dark:text-sky-300 transition-colors border border-sky-100 dark:border-gray-700 cursor-pointer"
+                            title="مسیر api/v1"
+                          >
+                            api/v1
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSettings({ ...settings, sayanApiUrl: "http://192.168.41.225:5000/api/external/v1" })}
+                            className="text-[10px] font-mono px-2 py-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 transition-colors border border-gray-200 dark:border-gray-700 cursor-pointer font-bold"
+                            title="آدرس سرور لوکال"
+                          >
+                            192.168.41.225:5000 (محلی)
+                          </button>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="http://192.168.41.225:5000/api/external/v1"
+                          className="w-full border border-gray-200 dark:border-gray-700 dark:bg-gray-900 rounded-xl p-3 text-sm font-mono dir-ltr focus:ring-4 ring-indigo-50/50 outline-none transition-all pr-10 text-gray-800 dark:text-gray-100"
+                          value={settings.sayanApiUrl || ""}
+                          onChange={(e) => setSettings({ ...settings, sayanApiUrl: e.target.value })}
+                        />
+                        <div className="absolute right-3 top-3.5 text-indigo-500">
+                          <Server size={18} />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 leading-relaxed">
+                        آدرس کامل وب‌سرویس سایان شامل پروتکل، IP سرور، پورت و مسیر (مثال: <code className="dir-ltr inline-block font-mono bg-indigo-50 dark:bg-gray-800 px-1.5 py-0.5 rounded text-indigo-700 dark:text-indigo-300 font-bold">http://192.168.41.225:5000/api/external/v1</code> یا <code className="dir-ltr inline-block font-mono bg-emerald-50 dark:bg-gray-800 px-1.5 py-0.5 rounded text-emerald-700 dark:text-emerald-300 font-bold">http://127.0.0.1:5000/api/external/v1</code>)
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+                        <label className="text-xs font-black text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                          <Lock size={15} className="text-indigo-600" />
+                          کلید امنیتی وب‌سرویس سایان (Sayan API Key / Token)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setSettings({ ...settings, sayanApiKey: "s_gate_live_73f08a91b2c" })}
+                          className="text-[10px] font-mono px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 rounded text-emerald-700 dark:text-emerald-300 transition-colors border border-emerald-200 dark:border-emerald-800 cursor-pointer"
+                          title="درج کلید جدید فعال"
+                        >
+                          درج کلید جدید (s_gate_live_vzje...)
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showSayanKey ? "text" : "password"}
+                          placeholder="s_gate_live_..."
+                          className="w-full border border-gray-200 dark:border-gray-700 dark:bg-gray-900 rounded-xl p-3 text-sm font-mono dir-ltr focus:ring-4 ring-indigo-50/50 outline-none transition-all pl-10 pr-10 text-gray-800 dark:text-gray-100"
+                          value={settings.sayanApiKey || ""}
+                          onChange={(e) => setSettings({ ...settings, sayanApiKey: e.target.value })}
+                        />
+                        <div className="absolute right-3 top-3.5 text-indigo-500">
+                          <Shield size={18} />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowSayanKey(!showSayanKey)}
+                          className="absolute left-3 top-3.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 cursor-pointer"
+                          title={showSayanKey ? "مخفی‌سازی کلید" : "نمایش کلید"}
+                        >
+                          {showSayanKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                        کلید توکن امنیتی وب‌سرویس سایان جهت ارسال در هدرهای احراز هویت (Authorization / x-api-key).
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Sayan Operational Switches */}
+                  <div className="mt-6 pt-5 border-t border-indigo-100 dark:border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="flex items-center gap-3 cursor-pointer p-3.5 bg-white dark:bg-gray-800/80 border border-indigo-100 dark:border-gray-700 rounded-xl shadow-xs hover:border-indigo-300 transition-colors">
+                      <div className="relative">
+                        <input 
+                          type="checkbox" 
+                          className="sr-only"
+                          checked={settings.sayanOnlineExitPermitsEnabled || false}
+                          onChange={(e) => setSettings({ ...settings, sayanOnlineExitPermitsEnabled: e.target.checked })}
+                        />
+                        <div className={`block w-10 h-6 rounded-full transition-colors ${settings.sayanOnlineExitPermitsEnabled ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}></div>
+                        <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${settings.sayanOnlineExitPermitsEnabled ? 'transform translate-x-4' : ''}`}></div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-gray-800 dark:text-gray-200">یکپارچگی آنلاین حواله فروش سایان (خروج کارخانه)</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">در صورت فعال بودن، در بخش خروج کارخانه و تاییدات انبار با وب‌سرویس سایان تبادل آنلاین انجام می‌شود.</div>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer p-3.5 bg-white dark:bg-gray-800/80 border border-rose-100 dark:border-gray-700 rounded-xl shadow-xs hover:border-rose-300 transition-colors">
+                      <div className="relative">
+                        <input 
+                          type="checkbox" 
+                          className="sr-only"
+                          checked={settings.sayanYearClosed || false}
+                          onChange={(e) => setSettings({ ...settings, sayanYearClosed: e.target.checked })}
+                        />
+                        <div className={`block w-10 h-6 rounded-full transition-colors ${settings.sayanYearClosed ? 'bg-rose-600' : 'bg-gray-300 dark:bg-gray-600'}`}></div>
+                        <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${settings.sayanYearClosed ? 'transform translate-x-4' : ''}`}></div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-gray-800 dark:text-gray-200">سال مالی سایان بسته شده است (سند افتتاحیه جدید)</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">سیستم موجودی اول دوره را از ابتدای سال جدید محاسبه می‌کند تا آمار سال قبل تکرار نشود.</div>
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-indigo-100 dark:border-gray-700">
+                    <label className="block text-xs font-bold text-gray-800 dark:text-gray-200 mb-1">
+                      لینک نظرسنجی رضایت مشتریان پس از خروج بار (ارسال خودکار در پیام واتساپ و ربات‌ها)
+                    </label>
+                    <input
+                      type="url"
+                      value={settings.customerSurveyUrl || ''}
+                      onChange={(e) => setSettings({ ...settings, customerSurveyUrl: e.target.value })}
+                      placeholder="مثال: https://survey.porsline.ir/s/lepan-baft-survey"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-xs font-mono dir-ltr text-right outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="glass-panel p-6 rounded-2xl border border-gray-200 shadow-sm">
+                  <h3 className="font-bold text-gray-800 mb-6 border-b pb-3 flex items-center gap-2">
+                    <Cpu size={22} className="text-blue-600" /> کنترل پنل هوش
+                    مصنوعی و داده‌ها
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="p-4 bg-red-50 rounded-xl border border-red-100">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Zap className="text-red-600" size={20} />
+                          <span className="font-black text-red-900 text-sm">
+                            کلید قطع اضطراری AI
+                          </span>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={!settings.botAiEnabled}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                botAiEnabled: !e.target.checked,
+                              })
+                            }
+                          />
+                          <div className="w-11 h-6 bg-red-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:glass-panel after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                        </label>
+                      </div>
+                      <p className="text-[10px] text-red-700 font-bold leading-relaxed">
+                        با فعال کردن این گزینه، تمامی درخواست‌های API به مدل‌های
+                        هوش مصنوعی (Gemini/DeepSeek) بلافاصله متوقف می‌شود.
+                      </p>
+                    </div>
+
+                    <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Layers className="text-blue-600" size={20} />
+                          <span className="font-black text-blue-900 text-sm">
+                            منبع داده فعال
+                          </span>
+                        </div>
+                        <select
+                          className="glass-panel border rounded-lg p-1.5 text-xs font-black outline-none focus:ring-2 ring-blue-500"
+                          value={settings.botAiSource || "hybrid"}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              botAiSource: e.target.value as any,
+                            })
+                          }
+                        >
+                          <option value="gemini">Google Gemini</option>
+                          <option value="deepseek">DeepSeek AI</option>
+                          <option value="hybrid">ترکیبی (Hybrid)</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-600">
+                          اولویت فایل اکسل (Offline)
+                        </span>
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 rounded text-blue-600"
+                          checked={settings.excelPriority}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              excelPriority: e.target.checked,
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="text-xs font-black text-gray-500 block mb-1">
+                          DeepSeek API Key
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="..."
+                          className="w-full border rounded-xl p-3 text-sm dir-ltr"
+                          value={settings.deepseekApiKey || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              deepseekApiKey: e.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-black text-gray-500 block mb-1">
+                          بازه بروزرسانی خودکار (ساعت)
+                        </label>
+                        <select
+                          className="w-full border rounded-xl p-3 text-sm font-bold"
+                          value={settings.autoPriceUpdateInterval || 6}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              autoPriceUpdateInterval: Number(e.target.value),
+                            })
+                          }
+                        >
+                          {[1, 3, 6, 12, 24].map((h) => (
+                            <option key={h} value={h}>
+                              {h} ساعت یکبار
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-black text-gray-500 block mb-1">
+                          آیدی پشتیبانی تلگرام
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="@support_user"
+                          className="w-full border rounded-xl p-3 text-sm dir-ltr"
+                          value={settings.supportUsername || ""}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              supportUsername: e.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass-panel p-6 rounded-2xl border border-gray-200 shadow-sm">
+                  <h3 className="font-bold text-gray-800 mb-6 border-b pb-3 flex items-center gap-2">
+                    <Link size={22} className="text-indigo-600" /> سرویس‌های
+                    خارجی و API
+                  </h3>
+                  <div className="space-y-4 max-w-2xl">
+                    <div className="group">
+                      <label className="text-xs font-black text-gray-500 block mb-1 group-focus-within:text-indigo-600 transition-colors tracking-widest">
+                        API KEY سامانه پیامک
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••••••••••"
+                        className="w-full border border-gray-200 rounded-xl p-3 text-sm dir-ltr focus:ring-4 ring-indigo-50/50 outline-none transition-all"
+                        value={settings.smsApiKey}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            smsApiKey: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-black text-gray-500 block mb-1">
+                          شماره فرستنده SMS
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="1000..."
+                          className="w-full border border-gray-200 rounded-xl p-3 text-sm dir-ltr outline-none"
+                          value={settings.smsSenderNumber}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              smsSenderNumber: e.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-black text-gray-500 block mb-1">
+                          GOOGLE CALENDAR ID
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="primary or email@gmail.com"
+                          className="w-full border border-gray-200 rounded-xl p-3 text-sm dir-ltr outline-none"
+                          value={settings.googleCalendarId}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              googleCalendarId: e.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {/* Cheque Workflow & Approval Settings in Sayan */}
+                    <div className="border-t border-indigo-100 pt-4 mt-2 space-y-4">
+                        <div className="flex items-center gap-2">
+                          <CheckSquare size={18} className="text-indigo-600" />
+                          <h4 className="text-sm font-black text-gray-800">
+                            تنظیمات فرآیند تاییدات و ثبت رسید چک در سایان ERP
+                          </h4>
+                        </div>
+
+                        <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                          {/* Option 1: Disable CEO approval */}
+                          <label className="flex items-start gap-3 cursor-pointer p-3 bg-white border border-gray-200 rounded-xl shadow-xs hover:border-indigo-300 transition-colors">
+                            <div className="relative mt-0.5">
+                              <input 
+                                type="checkbox" 
+                                className="sr-only" 
+                                checked={settings.sayanChequeDisableCeoApproval || false}
+                                onChange={(e) => setSettings({ ...settings, sayanChequeDisableCeoApproval: e.target.checked })}
+                              />
+                              <div className={`block w-10 h-6 rounded-full transition-colors ${settings.sayanChequeDisableCeoApproval ? 'bg-indigo-600' : 'bg-gray-300'}`}></div>
+                              <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${settings.sayanChequeDisableCeoApproval ? 'transform translate-x-4' : ''}`}></div>
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-sm font-bold text-gray-900">
+                                غیرفعال کردن مرحله تایید مدیرعامل برای ثبت رسیدهای چک
+                              </div>
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                با فعال کردن این گزینه، رسیدهای چک نیازی به حضور در کارتابل مدیرعامل ندارند و کاربر/کاربران مجاز تعیین شده می‌توانند تایید نهایی و صدور سند در سایان را انجام دهند.
+                              </div>
+                            </div>
+                          </label>
+
+                          {/* Option 2: Require Final Approval after registration */}
+                          <label className="flex items-start gap-3 cursor-pointer p-3 bg-white border border-gray-200 rounded-xl shadow-xs hover:border-indigo-300 transition-colors">
+                            <div className="relative mt-0.5">
+                              <input 
+                                type="checkbox" 
+                                className="sr-only" 
+                                checked={settings.sayanChequeEnableFinalApproval !== false}
+                                onChange={(e) => setSettings({ ...settings, sayanChequeEnableFinalApproval: e.target.checked })}
+                              />
+                              <div className={`block w-10 h-6 rounded-full transition-colors ${settings.sayanChequeEnableFinalApproval !== false ? 'bg-indigo-600' : 'bg-gray-300'}`}></div>
+                              <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${settings.sayanChequeEnableFinalApproval !== false ? 'transform translate-x-4' : ''}`}></div>
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-sm font-bold text-gray-900">
+                                فعال بودن مرحله تایید نهایی پس از ثبت رسید (جهت بررسی و صدور قطعی در سایان)
+                              </div>
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                در صورت غیرفعال بودن، بلافاصله پس از بررسی و تایید اولیه مالی/حسابداری، سند مستقیماً در ERP سایان ثبت می‌گردد.
+                              </div>
+                            </div>
+                          </label>
+
+                          {/* Authorized Users for Final Approval */}
+                          <div className="pt-2 border-t border-gray-200">
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <label className="text-xs font-black text-gray-800 block">
+                                  کاربران مجاز جهت تایید نهایی و ثبت سند در سایان (به جای یا در کنار مدیرعامل):
+                                </label>
+                                <span className="text-[11px] text-gray-500">
+                                  کاربران عادی انتخاب شده در زیر، کاشی و دکمه تایید نهایی و صدور سند در سایان را مشاهده و اجرا خواهند کرد.
+                                </span>
+                              </div>
+                              <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                                {settings.sayanChequeFinalApprovalUserIds?.length || 0} کاربر مجاز
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto p-2 bg-white rounded-xl border border-gray-200">
+                              {systemUsers.map((u) => {
+                                const isSelected = (settings.sayanChequeFinalApprovalUserIds || []).includes(u.id);
+                                return (
+                                  <label 
+                                    key={u.id}
+                                    className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                                      isSelected ? 'bg-indigo-50/80 border-indigo-300 text-indigo-900 font-bold' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    <input 
+                                      type="checkbox"
+                                      className="rounded text-indigo-600 focus:ring-indigo-500"
+                                      checked={isSelected}
+                                      onChange={(e) => {
+                                        const currentIds = settings.sayanChequeFinalApprovalUserIds || [];
+                                        let updatedIds: string[];
+                                        if (e.target.checked) {
+                                          updatedIds = Array.from(new Set([...currentIds, u.id]));
+                                        } else {
+                                          updatedIds = currentIds.filter(id => id !== u.id);
+                                        }
+                                        setSettings({
+                                          ...settings,
+                                          sayanChequeFinalApprovalUserIds: updatedIds
+                                        });
+                                      }}
+                                    />
+                                    <div className="truncate flex-1">
+                                      <span>{u.fullName || u.username}</span>
+                                      <span className="text-[10px] text-gray-400 block truncate font-normal">
+                                        {u.username} • {u.role === 'ADMIN' ? 'مدیر ارشد' : u.role === 'CEO' ? 'مدیرعامل' : u.role === 'FINANCIAL' ? 'مالی' : 'کاربر'}
+                                      </span>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                              {systemUsers.length === 0 && (
+                                <div className="col-span-full text-center py-3 text-xs text-gray-400">
+                                  در حال بارگذاری لیست کاربران...
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 flex gap-3 items-start">
+                      <div className="glass-panel p-2 rounded-lg text-indigo-600 shadow-sm">
+                        <Globe size={20} />
+                      </div>
+                      <p className="text-[10px] font-bold text-indigo-700 leading-relaxed">
+                        اطلاعات Google Calendar برای نمایش تاریخ و یادآوری‌ها در
+                        داشبورد استفاده می‌شود. حتما دسترسی "Make Public" یا
+                        اشتراک‌گذاری با سرویس مربوطه را تنظیم کنید.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-4 border-t sticky bottom-0 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md z-30 p-4 shadow-lg border-t border-gray-200/80 dark:border-gray-800 rounded-2xl mt-6 gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { getServerHost } =
+                        await import("../services/apiService");
+                      const host =
+                        getServerHost() ||
+                        (Capacitor.isNativePlatform() ? "N/A" : "/");
+                      alert(`در حال بررسی اتصال به: ${host}`);
+                      await apiCall("/users");
+                      alert("اتصال با موفقیت برقرار شد ✅");
+                    } catch (e) {
+                      alert(
+                        "خطا در اتصال به سرور ❌\nلطفا آدرس سرور را در بخش اتصالات (API) بررسی کنید.",
+                      );
+                    }
+                  }}
+                  className="bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors border border-blue-200 dark:border-blue-800"
+                >
+                  تست اتصال به سرور
+                </button>
+                {message && (
+                  <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 animate-fade-in">
+                    {message}
+                  </span>
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-md shadow-blue-600/25 transition-all disabled:opacity-70 cursor-pointer"
+              >
+                {loading ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <Save size={18} />
+                )}{" "}
+                ذخیره تنظیمات
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* --- Theme & Custom Background Settings --- */}
+        {activeCategory === "theme" && (
+          <div className="space-y-6 max-w-4xl mx-auto">
+            <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm">
+              <div className="flex items-center gap-3 border-b pb-4 mb-6">
+                <div className="w-10 h-10 rounded-xl bg-pink-100 text-pink-600 flex items-center justify-center font-bold">
+                  <Sparkles size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-800 text-base">
+                    مدیریت تصویر و پوسته پس‌زمینه (تنظیمات پوسته)
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    تصویر دلخواه خود را آپلود کنید یا از پوسته‌های شیشه‌ای و کیهانی پیش‌فرض انتخاب نمایید.
+                  </p>
+                </div>
+              </div>
+
+              {/* Upload Custom Image */}
+              <div className="space-y-6">
+                <div>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 block mb-2">
+                    آپلود تصویر پس‌زمینه اختصاصی (از کامپیوتر یا گوشی)
+                  </label>
+                  <div className="border-2 border-dashed border-gray-300 dark:border-white/10 hover:border-pink-500 rounded-2xl p-6 transition-colors flex flex-col items-center justify-center gap-3 bg-white/50 dark:bg-slate-900/30 text-center">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="bg-upload-input"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        if (file.size > 20 * 1024 * 1024) {
+                          alert('حجم عکس ترجیحاً باید کمتر از ۲۰ مگابایت باشد.');
+                          return;
+                        }
+                        setIsUploadingBg(true);
+                        try {
+                          let imgUrl = '';
+                          try {
+                            const uploadRes = await uploadFileChunked(file, () => {});
+                            imgUrl = uploadRes.url;
+                          } catch (uploadErr) {
+                            console.warn('Chunk upload failed, falling back to FileReader base64', uploadErr);
+                            imgUrl = await new Promise<string>((resolve, reject) => {
+                              const reader = new FileReader();
+                              reader.onload = (evt) => resolve(evt.target?.result as string);
+                              reader.onerror = (err) => reject(err);
+                              reader.readAsDataURL(file);
+                            });
+                          }
+
+                          if (imgUrl) {
+                            localStorage.setItem('app_custom_bg_image', imgUrl);
+                            localStorage.setItem('app_bg_mode', 'custom');
+                            setCustomBgImage(imgUrl);
+                            setBgMode('custom');
+
+                            try {
+                              const currentSys = await getSettings();
+                              const updatedSys: SystemSettings = {
+                                ...currentSys,
+                                customBgImage: imgUrl,
+                                bgMode: 'custom',
+                                bgPreset,
+                                customBgBlur,
+                                customBgAdapt
+                              };
+                              await saveSettings(updatedSys);
+                              if (onUpdateSettings) onUpdateSettings(updatedSys);
+                            } catch (err) {
+                              console.error('Failed to save custom bg globally:', err);
+                            }
+
+                            try {
+                              const brightness = await analyzeImageBrightness(imgUrl);
+                              localStorage.setItem('app_custom_bg_brightness', brightness);
+                            } catch (e) {
+                              console.error('Luminance check failed', e);
+                            }
+
+                            window.dispatchEvent(new Event('APP_THEME_BG_CHANGED'));
+                            setMessage('تصویر پس‌زمینه اختصاصی برای تمام کاربران و نسخه گوشی اعمال شد ✨');
+                            setTimeout(() => setMessage(''), 3000);
+                          }
+                        } catch (err: any) {
+                          alert('خطا در بارگذاری تصویر: ' + (err?.message || 'مشکل در برقراری ارتباط'));
+                        } finally {
+                          setIsUploadingBg(false);
+                          if (e.target) e.target.value = '';
+                        }
+                      }}
+                    />
+                    <label
+                      htmlFor="bg-upload-input"
+                      className={`cursor-pointer bg-pink-600 hover:bg-pink-700 text-white px-6 py-2.5 rounded-xl text-xs font-bold shadow-md transition-all flex items-center gap-2 ${isUploadingBg ? 'opacity-50 pointer-events-none' : ''}`}
+                    >
+                      {isUploadingBg ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />} 
+                      {isUploadingBg ? 'در حال آپلود و ثبت...' : 'انتخاب و آپلود تصویر جدید'}
+                    </label>
+                    <p className="text-[11px] text-gray-400 dark:text-gray-500">
+                      فرمت‌های پشتیبانی شده: JPG, PNG, WEBP (ذخیره همگام‌سازی شده برای تمام کاربران و نسخه گوشی)
+                    </p>
+                  </div>
+                </div>
+
+                {/* Current Custom Image Preview */}
+                {customBgImage && (
+                  <div className="p-4 rounded-xl border dark:border-white/10 bg-gray-50 dark:bg-slate-900/50 flex flex-col gap-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={resolveImageUrl(customBgImage)}
+                          alt="Custom BG"
+                          className="w-16 h-12 object-cover rounded-lg border dark:border-white/10 shadow-sm"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-gray-800 dark:text-gray-200">تصویر اختصاصی فعال است</p>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                            وضعیت: {bgMode === 'custom' ? 'در حال استفاده' : 'غیرفعال'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {bgMode !== 'custom' && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              localStorage.setItem('app_bg_mode', 'custom');
+                              setBgMode('custom');
+                              try {
+                                const currentSys = await getSettings();
+                                const updatedSys: SystemSettings = { ...currentSys, bgMode: 'custom' };
+                                await saveSettings(updatedSys);
+                                if (onUpdateSettings) onUpdateSettings(updatedSys);
+                              } catch (e) {}
+                              window.dispatchEvent(new Event('APP_THEME_BG_CHANGED'));
+                              setMessage('تصویر اختصاصی فعال شد');
+                              setTimeout(() => setMessage(''), 3000);
+                            }}
+                            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold"
+                          >
+                            فعال‌سازی
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            localStorage.removeItem('app_custom_bg_image');
+                            localStorage.setItem('app_bg_mode', 'preset');
+                            setCustomBgImage(null);
+                            setBgMode('preset');
+                            try {
+                              const currentSys = await getSettings();
+                              const updatedSys: SystemSettings = { ...currentSys, customBgImage: null, bgMode: 'preset' };
+                              await saveSettings(updatedSys);
+                              if (onUpdateSettings) onUpdateSettings(updatedSys);
+                            } catch (e) {}
+                            window.dispatchEvent(new Event('APP_THEME_BG_CHANGED'));
+                            setMessage('تصویر پس‌زمینه اختصاصی حذف شد');
+                            setTimeout(() => setMessage(''), 3000);
+                          }}
+                          className="px-3 py-1.5 bg-red-100 text-red-600 rounded-lg text-xs font-bold hover:bg-red-200 dark:bg-red-950/20 dark:text-red-400"
+                        >
+                          حذف عکس
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Custom Blur & Color Adaptation Controls */}
+                    <div className="border-t dark:border-white/5 pt-3 space-y-4">
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center text-[11px] font-bold text-gray-600 dark:text-gray-400">
+                          <span>میزان ماتی پس‌زمینه (Blur): {customBgBlur} پیکسل</span>
+                          <span dir="ltr">{customBgBlur}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="40"
+                          value={customBgBlur}
+                          onChange={async (e) => {
+                            const val = parseInt(e.target.value, 10);
+                            setCustomBgBlur(val);
+                            localStorage.setItem('app_custom_bg_blur', val.toString());
+                            try {
+                              const currentSys = await getSettings();
+                              const updatedSys: SystemSettings = { ...currentSys, customBgBlur: val };
+                              await saveSettings(updatedSys);
+                              if (onUpdateSettings) onUpdateSettings(updatedSys);
+                            } catch (err) {}
+                            window.dispatchEvent(new Event('APP_THEME_BG_CHANGED'));
+                          }}
+                          className="w-full accent-pink-600 cursor-pointer"
+                        />
+                        <p className="text-[10px] text-gray-400 dark:text-gray-500">ماتی بیشتر باعث افزایش خوانایی متون روی تصاویر پس‌زمینه شلوغ می‌شود.</p>
+                      </div>
+
+                      <div className="flex items-center justify-between border-t dark:border-white/5 pt-3">
+                        <div>
+                          <p className="text-xs font-bold text-gray-800 dark:text-gray-200">انطباق هوشمند پوسته با رنگ بک‌گراند (آفلاین)</p>
+                          <p className="text-[10px] text-gray-500 dark:text-gray-400">تغییر اتوماتیک روشنایی متن‌ها بر اساس میزان تیره یا روشن بودن تصویر پس‌زمینه شما</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={customBgAdapt}
+                            onChange={async (e) => {
+                              const val = e.target.checked;
+                              setCustomBgAdapt(val);
+                              localStorage.setItem('app_custom_bg_adapt', val ? 'true' : 'false');
+                              try {
+                                const currentSys = await getSettings();
+                                const updatedSys: SystemSettings = { ...currentSys, customBgAdapt: val };
+                                await saveSettings(updatedSys);
+                                if (onUpdateSettings) onUpdateSettings(updatedSys);
+                              } catch (err) {}
+                              window.dispatchEvent(new Event('APP_THEME_BG_CHANGED'));
+                            }}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-pink-600"></div>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Preset Themes List */}
+                <div className="pt-4 border-t">
+                  <h4 className="font-bold text-gray-800 text-sm mb-4 flex items-center gap-2">
+                    <Sparkles size={16} className="text-amber-500" /> پوسته‌ها و تصاویر پیش‌فرض سیستم (دسترس‌پذیری بدون وی‌پی‌ان)
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {/* Helper function to save preset globally */}
+                    {(() => {
+                      const handleApplyPreset = async (presetKey: string, presetName: string) => {
+                        localStorage.setItem('app_bg_mode', 'preset');
+                        localStorage.setItem('app_preset_bg', presetKey);
+                        setBgMode('preset');
+                        setBgPreset(presetKey);
+                        try {
+                          const currentSys = await getSettings();
+                          const updatedSys: SystemSettings = {
+                            ...currentSys,
+                            bgMode: 'preset',
+                            bgPreset: presetKey
+                          };
+                          await saveSettings(updatedSys);
+                          if (onUpdateSettings) onUpdateSettings(updatedSys);
+                        } catch (err) {
+                          console.error('Failed to save preset setting globally:', err);
+                        }
+                        window.dispatchEvent(new Event('APP_THEME_BG_CHANGED'));
+                        setMessage(`پوسته ${presetName} با موفقیت برای تمام کاربران و دستگاه‌ها اعمال شد ✨`);
+                        setTimeout(() => setMessage(''), 3000);
+                      };
+
+                      return (
+                        <>
+                          {/* Preset 1: Cosmic Dark Nebula */}
+                          <div
+                            onClick={() => handleApplyPreset('cosmic-dark', 'تاریک کیهانی')}
+                            className={`cursor-pointer rounded-2xl p-4 border-2 transition-all flex flex-col gap-3 relative overflow-hidden ${
+                              bgMode === 'preset' && bgPreset === 'cosmic-dark'
+                                ? 'border-pink-500 ring-2 ring-pink-500/20 shadow-lg'
+                                : 'border-gray-200 hover:border-gray-300 dark:border-white/10'
+                            }`}
+                          >
+                            <div className="h-24 rounded-xl bg-preset-cosmic-dark flex items-center justify-center text-white font-bold text-xs shadow-inner">
+                              کیهانی و شیشه‌ای (راحت برای چشم)
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-gray-800 dark:text-gray-200">پوسته تاریک کیهانی (Royal Dark Cosmic)</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">پس‌زمینه تاریک با حباب‌های درخشان؛ جلوگیری از خستگی چشم</p>
+                            </div>
+                          </div>
+
+                          {/* Preset 2: Aurora Light */}
+                          <div
+                            onClick={() => handleApplyPreset('aurora-light', 'شفق قطبی')}
+                            className={`cursor-pointer rounded-2xl p-4 border-2 transition-all flex flex-col gap-3 relative overflow-hidden ${
+                              bgMode === 'preset' && (bgPreset === 'aurora-light' || !bgPreset)
+                                ? 'border-pink-500 ring-2 ring-pink-500/20 shadow-lg'
+                                : 'border-gray-200 hover:border-gray-300 dark:border-white/10'
+                            }`}
+                          >
+                            <div className="h-24 rounded-xl bg-gradient-to-r from-sky-200 via-pink-200 to-indigo-200 flex items-center justify-center text-gray-800 font-bold text-xs shadow-inner">
+                              شفق قطبی (Aurora)
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-gray-800 dark:text-gray-200">پوسته شیشه‌ای شفق قطبی (Aurora Liquid)</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">ملایم و رنگارنگ همراه با افکت شیشه‌ای مدرن</p>
+                            </div>
+                          </div>
+
+                          {/* Preset 3: Cyan Cosmic */}
+                          <div
+                            onClick={() => handleApplyPreset('cyan-cosmic', 'فیروزه‌ای کیهانی')}
+                            className={`cursor-pointer rounded-2xl p-4 border-2 transition-all flex flex-col gap-3 relative overflow-hidden ${
+                              bgMode === 'preset' && bgPreset === 'cyan-cosmic'
+                                ? 'border-pink-500 ring-2 ring-pink-500/20 shadow-lg'
+                                : 'border-gray-200 hover:border-gray-300 dark:border-white/10'
+                            }`}
+                          >
+                            <div className="h-24 rounded-xl bg-preset-cyan-cosmic flex items-center justify-center text-cyan-300 font-bold text-xs shadow-inner">
+                              کیهانی فیروزه‌ای
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-gray-800 dark:text-gray-200">پوسته فیروزه‌ای ژرف (Cyan Cosmic Nebula)</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">رنگ‌های فیروزه‌ای و نیلی با حس فضایی</p>
+                            </div>
+                          </div>
+
+                          {/* Preset 4: Midnight Dark */}
+                          <div
+                            onClick={() => handleApplyPreset('dark-midnight', 'تاریک ساده')}
+                            className={`cursor-pointer rounded-2xl p-4 border-2 transition-all flex flex-col gap-3 relative overflow-hidden ${
+                              bgMode === 'preset' && bgPreset === 'dark-midnight'
+                                ? 'border-pink-500 ring-2 ring-pink-500/20 shadow-lg'
+                                : 'border-gray-200 hover:border-gray-300 dark:border-white/10'
+                            }`}
+                          >
+                            <div className="h-24 rounded-xl bg-slate-900 flex items-center justify-center text-slate-300 font-bold text-xs shadow-inner">
+                              تاریک ساده (Slate)
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-gray-800 dark:text-gray-200">پوسته تاریک ساده (Dark Midnight)</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">محیط یکدست و تاریک بدون گرادینت</p>
+                            </div>
+                          </div>
+
+                          {/* Preset 5: Light Modern */}
+                          <div
+                            onClick={() => handleApplyPreset('light-modern', 'روشن ساده')}
+                            className={`cursor-pointer rounded-2xl p-4 border-2 transition-all flex flex-col gap-3 relative overflow-hidden ${
+                              bgMode === 'preset' && bgPreset === 'light-modern'
+                                ? 'border-pink-500 ring-2 ring-pink-500/20 shadow-lg'
+                                : 'border-gray-200 hover:border-gray-300 dark:border-white/10'
+                            }`}
+                          >
+                            <div className="h-24 rounded-xl bg-slate-50 border flex items-center justify-center text-slate-700 font-bold text-xs shadow-inner">
+                              روشن ساده
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-gray-800 dark:text-gray-200">پوسته روشن ساده (Light Minimal)</p>
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">ساده و تمیز برای کارهای روزمره</p>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- Windows Desktop Client (Tauri + Rust) Settings --- */}
+        {activeCategory === "desktop" && (
+          <div className="space-y-6 max-w-4xl mx-auto text-right animate-fade-in" dir="rtl">
+            {/* Header Card */}
+            <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm bg-gradient-to-br from-indigo-50/60 via-white to-slate-50/60 dark:from-indigo-950/20 dark:via-slate-900/40 dark:to-slate-950/20">
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b pb-4 mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-400 flex items-center justify-center font-bold shadow-sm">
+                    <Monitor size={24} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-gray-800 dark:text-white text-base md:text-lg">
+                      کلاینت اختصاصی دسکتاپ ویندوز (Tauri & Rust)
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      مدیریت آدرس‌های سرور، کانفیگ شبکه محلی و لینک‌های سیستم بروزرسانی خودکار (Auto-Updater)
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveDesktopSettings}
+                    disabled={savingDesktopSettings}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all disabled:opacity-50"
+                  >
+                    {savingDesktopSettings ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    ذخیره تنظیمات دسکتاپ
+                  </button>
+                </div>
+              </div>
+
+              {desktopSaveMessage && (
+                <div className={`p-3.5 mb-4 rounded-xl text-xs font-bold flex items-center gap-2 ${desktopSaveMessage.includes('❌') ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300 border border-red-200 dark:border-red-900' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900'}`}>
+                  {desktopSaveMessage.includes('❌') ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+                  {desktopSaveMessage}
+                </div>
+              )}
+
+              {/* Dynamic Connection Flow Viz */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5 mb-2">
+                  <Cpu size={14} className="text-indigo-600" /> سیستم مسیریابی دوگانه هوشمند (Smart Router)
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-stretch">
+                  {/* Local Network */}
+                  <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/30 dark:border-emerald-950 dark:bg-emerald-950/10 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1.5 text-emerald-700 dark:text-emerald-400 font-bold text-xs">
+                        <Server size={15} /> اولویت ۱: شبکه محلی (LAN)
+                      </div>
+                      <p className="text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed">
+                        کلاینت در بدو باز شدن با پینگ ۱ ثانیه‌ای اتصال محلی به سرور را چک می‌کند.
+                      </p>
+                    </div>
+                    <div className="mt-2.5 pt-2 border-t border-emerald-100 dark:border-emerald-900/40 text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate">
+                      {settings.desktopLocalServerUrl || 'http://localhost:3000'}
+                    </div>
+                  </div>
+
+                  {/* Smart Fallback */}
+                  <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/30 dark:border-blue-950 dark:bg-blue-950/10 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1.5 text-blue-700 dark:text-blue-400 font-bold text-xs">
+                        <Wifi size={15} /> سوییچ خودکار (Router)
+                      </div>
+                      <p className="text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed">
+                        در صورت خاموش بودن سرور محلی یا خارج بودن کاربر از شرکت، مسیر به طور خودکار عوض می‌شود.
+                      </p>
+                    </div>
+                    <div className="mt-2.5 pt-2 border-t border-blue-100 dark:border-blue-900/40 text-[10px] text-center font-bold text-blue-600 dark:text-blue-400">
+                      مسیریاب آفلاین و آنلاین Rust
+                    </div>
+                  </div>
+
+                  {/* Cloud URL */}
+                  <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/30 dark:border-indigo-950 dark:bg-indigo-950/10 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1.5 text-indigo-700 dark:text-indigo-400 font-bold text-xs">
+                        <Cloud size={15} /> اولویت ۲: سرور ابری (Cloud)
+                      </div>
+                      <p className="text-[11px] text-gray-600 dark:text-gray-400 leading-relaxed">
+                        اتصال سراسری و ایمن به سرور مرکزی اینترنتی بدون نیاز به تنظیم دستی.
+                      </p>
+                    </div>
+                    <div className="mt-2.5 pt-2 border-t border-indigo-100 dark:border-indigo-900/40 text-[10px] font-mono text-indigo-600 dark:text-indigo-400 truncate">
+                      {settings.desktopCloudServerUrl || (typeof window !== 'undefined' ? window.location.origin : 'https://...')}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* --- DESKTOP APP LOGO & BRANDING PREVIEW CARD --- */}
+              <div className="mt-6 pt-6 border-t border-gray-200/70 dark:border-gray-800">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-950 shadow-xs">
+                  <div className="flex items-center gap-4">
+                    <div className="relative group">
+                      <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-indigo-200 dark:border-indigo-800 shadow-md bg-white flex items-center justify-center p-2">
+                        <img
+                          src="/lepan-logo.png"
+                          alt="Lepan Logo"
+                          className="w-full h-full object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                      <span className="absolute -bottom-2 -right-2 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-xs flex items-center gap-0.5">
+                        <CheckCircle2 size={10} /> ست شد
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-sm text-gray-900 dark:text-white">
+                          لوگو و آیکون رسمی کلاینت ویندوز (Lepan Manufacturing Co.)
+                        </h4>
+                        <span className="text-[10px] font-mono bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 px-2 py-0.5 rounded-full font-bold">
+                          خروجی Tauri Build
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        تصویر آرم شرکت لپان روی پکیج خروجی، فایل‌های نصبی (<span className="font-mono">.msi / .exe</span>) و آیکون نوار وظیفه (Taskbar) ست شد.
+                      </p>
+                      <div className="text-[11px] text-gray-400 flex flex-wrap gap-2 pt-1 font-mono">
+                        <span className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">src-tauri/icons/icon.ico</span>
+                        <span className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">32x32, 128x128, 512x512 PNG</span>
+                        <span className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">icon.icns</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 self-end md:self-center">
+                    <a
+                      href="/lepan-logo.png"
+                      download="lepan-desktop-icon.png"
+                      className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all"
+                    >
+                      <Download size={13} />
+                      دانلود تصویر آرم (.png)
+                    </a>
+                    <a
+                      href="/lepan-logo.svg"
+                      download="lepan-logo.svg"
+                      className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/60 dark:text-indigo-300 rounded-xl text-xs font-bold transition-all"
+                    >
+                      <ExternalLink size={13} />
+                      وکتور برداری (.svg)
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* --- AUTO-UPDATER SETTINGS CARD --- */}
+            <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400 flex items-center justify-center font-bold">
+                    <RefreshCw size={16} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-gray-800 dark:text-white">
+                      تنظیمات لینک و سیستم آپدیت خودکار (Tauri Auto-Updater)
+                    </h4>
+                    <p className="text-[11px] text-gray-500">
+                      آدرس لینک و شیوه دریافت خودکار آپدیت‌های نرم‌افزار دسکتاپ را تعیین نمایید
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveCategory("updates")}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs"
+                  >
+                    <RefreshCw size={13} />
+                    ورود به پنل جامع آپدیت و دانلود
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTestDesktopUpdateFeed}
+                    disabled={testingDesktopUpdate}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:hover:bg-purple-900/60 dark:text-purple-300 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                  >
+                    {testingDesktopUpdate ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+                    تست زنده لینک آپدیت
+                  </button>
+                </div>
+              </div>
+
+              {/* Form Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Custom Update Feed Link */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Link size={14} className="text-purple-600" />
+                      آدرس لینک فید بروزرسانی خودکار (Update Manifest URL)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const defaultFeedUrl = `${window.location.origin}/api/desktop/updater.json`;
+                        setSettings({ ...settings, desktopUpdateUrl: defaultFeedUrl });
+                      }}
+                      className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline font-bold"
+                    >
+                      قرار دادن آدرس پیش‌فرض همین سرور
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="https://example.com/api/desktop/updater.json یا https://api.github.com/repos/.../releases/latest"
+                    value={settings.desktopUpdateUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, desktopUpdateUrl: e.target.value })}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-gray-500 leading-relaxed">
+                    این لینک باید یک فایل JSON با ساختار استاندارد Tauri شامل شماره نسخه (`version`) و لینک دانلود (`url`) برگرداند.
+                  </p>
+                </div>
+
+                {/* Direct Download URL Desktop */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Download size={14} className="text-purple-600" />
+                    لینک دانلود مستقیم فایل نصبی دسکتاپ (.msi / .exe)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="https://example.com/downloads/delkam-desktop-setup.msi"
+                    value={settings.desktopDirectDownloadUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, desktopDirectDownloadUrl: e.target.value })}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Direct Download URL Android */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Smartphone size={14} className="text-emerald-600" />
+                    لینک دانلود مستقیم فایل نصبی اندروید (.apk)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="https://example.com/downloads/delkam-android-latest.apk"
+                    value={settings.androidDirectDownloadUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, androidDirectDownloadUrl: e.target.value })}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-gray-400">
+                    در صورت خالی بودن، لینک پیش‌فرض سرور (`/downloads/delkam-android-latest.apk`) استفاده می‌شود.
+                  </p>
+                </div>
+
+                {/* Latest Version Target */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Sliders size={14} className="text-purple-600" />
+                    شماره آخرین نسخه منتشرشده (Target Latest Version)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="1.0.1"
+                    value={settings.desktopLatestVersion || "1.0.0"}
+                    onChange={(e) => setSettings({ ...settings, desktopLatestVersion: e.target.value })}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-gray-400">وقتی این عدد از نسخه کلاینت بیشتر باشد، نرم‌افزار خودکار آپدیت می‌شود.</span>
+                </div>
+
+                {/* Release Channel */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Radio size={14} className="text-purple-600" />
+                    کانال انتشار (Release Channel)
+                  </label>
+                  <select
+                    value={settings.desktopUpdateChannel || "stable"}
+                    onChange={(e) => setSettings({ ...settings, desktopUpdateChannel: e.target.value as any })}
+                    className="w-full text-xs p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  >
+                    <option value="stable">نسخه پایدار و رسمی (Stable)</option>
+                    <option value="beta">نسخه آزمایشی و پیش‌نمایش (Beta / Release Candidate)</option>
+                  </select>
+                </div>
+
+                {/* Auto-check switch */}
+                <div className="flex items-center justify-between p-3.5 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-gray-100 dark:border-gray-800 self-end">
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-bold text-gray-800 dark:text-gray-200">بررسی خودکار در زمان اجرا</div>
+                    <div className="text-[10px] text-gray-500">هنگام باز شدن نرم‌افزار، وجود نسخه جدید چک شود</div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.desktopAutoCheckUpdates !== false}
+                      onChange={(e) => setSettings({ ...settings, desktopAutoCheckUpdates: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-purple-600"></div>
+                  </label>
+                </div>
+
+                {/* Release Notes */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <FileText size={14} className="text-purple-600" />
+                    توضیحات و یادداشت‌های نسخه جدید (Changelog / Release Notes)
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="مثال: بهبود کارایی چاپ گزارش انبار، بهینه‌سازی سرعت و رفع خطاهای اتصال شبکه..."
+                    value={settings.desktopReleaseNotes || ""}
+                    onChange={(e) => setSettings({ ...settings, desktopReleaseNotes: e.target.value })}
+                    className="w-full text-xs p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Test Result Display */}
+              {desktopTestResult && (
+                <div className={`p-4 rounded-xl border text-xs space-y-2 animate-fade-in ${desktopTestResult.success ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-900 dark:text-emerald-200' : 'bg-red-50/70 dark:bg-red-950/30 border-red-200 dark:border-red-900 text-red-900 dark:text-red-200'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold">
+                      {desktopTestResult.success ? <CheckCircle2 size={16} className="text-emerald-600" /> : <AlertCircle size={16} className="text-red-600" />}
+                      <span>{desktopTestResult.message}</span>
+                    </div>
+                    <span className="text-[10px] font-mono opacity-70 truncate max-w-[200px]">{desktopTestResult.checkedUrl}</span>
+                  </div>
+                  {desktopTestResult.manifest && (
+                    <div className="bg-slate-900 text-emerald-400 p-3 rounded-lg font-mono text-[10px] overflow-x-auto select-all max-h-40">
+                      {JSON.stringify(desktopTestResult.manifest, null, 2)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* --- SERVER ROUTING & APP CONFIG FILE --- */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Network URLs Config */}
+              <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 border-b pb-3 mb-2">
+                  <Server size={18} className="text-indigo-600" />
+                  <h4 className="font-bold text-sm text-gray-800 dark:text-white">آدرس‌های مسیریابی سرور (LAN & Cloud)</h4>
+                </div>
+
+                <div className="space-y-3.5 text-xs text-gray-600 dark:text-gray-300">
+                  <div className="space-y-1">
+                    <label className="font-bold text-gray-700 dark:text-gray-300 text-[11px]">آدرس سرور شبکه محلی انبار (LAN URL):</label>
+                    <input
+                      type="text"
+                      dir="ltr"
+                      placeholder="http://localhost:3000 یا http://192.168.1.100:3000"
+                      value={settings.desktopLocalServerUrl || "http://localhost:3000"}
+                      onChange={(e) => setSettings({ ...settings, desktopLocalServerUrl: e.target.value })}
+                      className="w-full text-xs font-mono p-2.5 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-bold text-gray-700 dark:text-gray-300 text-[11px]">آدرس سرور مرکزی ابری (Cloud URL):</label>
+                    <input
+                      type="text"
+                      dir="ltr"
+                      placeholder="https://ais-dev-wjlf3a3s2y7mgngiaxufff-97484218589.us-east1.run.app"
+                      value={settings.desktopCloudServerUrl || ""}
+                      onChange={(e) => setSettings({ ...settings, desktopCloudServerUrl: e.target.value })}
+                      className="w-full text-xs font-mono p-2.5 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={handleSaveDesktopSettings}
+                    disabled={savingDesktopSettings}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all"
+                  >
+                    {savingDesktopSettings ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    ذخیره آدرس‌های سرور
+                  </button>
+                </div>
+              </div>
+
+              {/* Client config.json live inspector */}
+              <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between border-b pb-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <SettingsIcon size={18} className="text-indigo-600" />
+                      <h4 className="font-bold text-sm text-gray-800 dark:text-white">فایل پیکربندی کاربر (`config.json`)</h4>
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded">AppData</span>
+                  </div>
+
+                  <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
+                    این تنظیمات در سیستم کاربر در مسیر AppData ویندوز ذخیره شده و بدون کامپایل مجدد قابل تنظیم است:
+                  </p>
+
+                  <div className="bg-slate-900 text-slate-100 p-3.5 rounded-xl font-mono text-[10.5px] space-y-1 select-all relative overflow-hidden">
+                    <div className="text-slate-500">// config.json</div>
+                    <div>{"{"}</div>
+                    <div className="pl-3 text-indigo-300">  &quot;local_server_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopLocalServerUrl || "http://localhost:3000"}&quot;</span>,</div>
+                    <div className="pl-3 text-indigo-300">  &quot;cloud_server_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopCloudServerUrl || (typeof window !== 'undefined' ? window.location.origin : 'https://...')}&quot;</span>,</div>
+                    <div className="pl-3 text-indigo-300">  &quot;update_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopUpdateUrl || `${typeof window !== 'undefined' ? window.location.origin : ''}/api/desktop/updater.json`}&quot;</span>,</div>
+                    <div className="pl-3 text-indigo-300">  &quot;auto_check_updates&quot;: <span className="text-amber-400">{settings.desktopAutoCheckUpdates !== false ? 'true' : 'false'}</span>,</div>
+                    <div className="pl-3 text-indigo-300">  &quot;timeout_ms&quot;: <span className="text-amber-400">1200</span></div>
+                    <div>{"}"}</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3 border-t flex items-center justify-between">
+                  <a
+                    href="/api/desktop/updater.json"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-bold"
+                  >
+                    <ExternalLink size={12} /> مشاهده JSON آپدیت
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cfg = {
+                        local_server_url: settings.desktopLocalServerUrl || "http://localhost:3000",
+                        cloud_server_url: settings.desktopCloudServerUrl || window.location.origin,
+                        update_url: settings.desktopUpdateUrl || `${window.location.origin}/api/desktop/updater.json`,
+                        auto_check_updates: settings.desktopAutoCheckUpdates !== false,
+                        timeout_ms: 1200,
+                      };
+                      navigator.clipboard.writeText(JSON.stringify(cfg, null, 2));
+                      alert("فایل config.json در حافظه کپی شد!");
+                    }}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 dark:bg-indigo-950/40 dark:hover:bg-indigo-950/80 dark:text-indigo-400 rounded-lg text-xs font-bold transition-all"
+                  >
+                    <Copy size={12} /> کپی کانفیگ
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* --- UPDATES SUITE: AUTO-UPDATE INTERVAL, VERSION CHECK & DOWNLOAD --- */}
+        {/* ========================================================================= */}
+        {activeCategory === "updates" && (
+          <div className="space-y-6 max-w-5xl mx-auto animate-fade-in pb-12">
+            {/* Header / Intro */}
+            <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-purple-600/10 text-purple-600 dark:bg-purple-500/20 dark:text-purple-400 flex items-center justify-center font-bold shadow-inner">
+                  <RefreshCw size={24} className={isCheckingUpdate ? "animate-spin" : ""} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-gray-800 dark:text-white flex items-center gap-2">
+                    مدیریت بروزرسانی و ارتقای کلاینت (Tauri Updates)
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    بررسی دستی نسخه‌ها، پیکربندی فواصل زمانی بررسی خودکار و سیستم هوشمند دانلود و نصب پکیج
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleManualCheckVersion()}
+                  disabled={isCheckingUpdate || downloadPhase === "downloading"}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md hover:shadow-purple-500/20 transition-all disabled:opacity-50"
+                >
+                  {isCheckingUpdate ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      در حال بررسی سرور...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCcw size={15} />
+                      بررسی نسخه جدید (Check Now)
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveDesktopSettings}
+                  disabled={savingDesktopSettings}
+                  className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white dark:bg-slate-700 dark:hover:bg-slate-600 rounded-xl text-xs font-bold shadow-sm transition-all disabled:opacity-50"
+                >
+                  {savingDesktopSettings ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                  ذخیره تنظیمات
+                </button>
+              </div>
+            </div>
+
+            {desktopSaveMessage && (
+              <div className={`p-4 rounded-xl text-xs font-bold flex items-center gap-2 animate-fade-in ${desktopSaveMessage.includes('❌') ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300 border border-red-200 dark:border-red-900' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900'}`}>
+                {desktopSaveMessage.includes('❌') ? <AlertCircle size={17} /> : <CheckCircle2 size={17} />}
+                {desktopSaveMessage}
+              </div>
+            )}
+
+            {/* --- LIVE UPDATE PUBLISHER & BROADCAST CARD (Web / PWA / Desktop) --- */}
+            <div className="glass-panel p-5 md:p-6 rounded-2xl border-2 border-purple-200 dark:border-purple-900/60 shadow-lg bg-gradient-to-br from-purple-50/80 via-white to-indigo-50/80 dark:from-purple-950/30 dark:via-slate-900/50 dark:to-indigo-950/30">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-purple-100 dark:border-purple-900/40 pb-4 mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-md shadow-purple-600/30">
+                    <Rocket size={20} />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm md:text-base text-gray-900 dark:text-white flex items-center gap-2">
+                      انتشار و اعلان فوری نسخه جدید به کلیه کاربران (Live Publisher)
+                    </h4>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      با ثبت نسخه در این بخش، فوراً بنر اعلان بالای صفحه برای تمامی کاربران وب، موبایل PWA و کلاینت‌ها نمایش داده می‌شود.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 text-xs font-bold font-mono">
+                  <span>بیلد فعلی سرور:</span>
+                  <span>{settings.systemBuildNumber || 'آماده انتشار'}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                    <Sliders size={13} className="text-purple-600" /> شماره نسخه جدید (Version):
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={releaseVersionInput}
+                    onChange={(e) => {
+                      setReleaseVersionInput(e.target.value);
+                      setSettings({ ...settings, desktopLatestVersion: e.target.value, systemVersion: e.target.value });
+                    }}
+                    placeholder="مثال: 1.0.6"
+                    className="w-full text-xs font-mono font-bold p-2.5 bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="space-y-1 sm:col-span-1 md:col-span-2">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                    <FileText size={13} className="text-purple-600" /> عنوان یا تیتر انتشار (Title):
+                  </label>
+                  <input
+                    type="text"
+                    value={releaseTitleInput}
+                    onChange={(e) => {
+                      setReleaseTitleInput(e.target.value);
+                      setSettings({ ...settings, releaseTitle: e.target.value });
+                    }}
+                    placeholder="مثال: نسخه جدید سامانه با اصلاحات و بهینه‌سازی‌ها"
+                    className="w-full text-xs font-bold p-2.5 bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="space-y-1 sm:col-span-2 md:col-span-3">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                    <ClipboardList size={13} className="text-purple-600" /> یادداشت‌های تغییرات و ویژگی‌های نسخه جدید (Changelog):
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={releaseNotesInput}
+                    onChange={(e) => {
+                      setReleaseNotesInput(e.target.value);
+                      setSettings({ ...settings, desktopReleaseNotes: e.target.value, releaseNotes: e.target.value });
+                    }}
+                    placeholder="توضیحاتی که کاربران در بنر اعلان بروزرسانی مشاهده خواهند کرد..."
+                    className="w-full text-xs p-2.5 bg-white dark:bg-slate-900 border border-purple-200 dark:border-purple-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-3 border-t border-purple-100 dark:border-purple-900/40">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-700 dark:text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={releaseSendToBots}
+                    onChange={(e) => setReleaseSendToBots(e.target.checked)}
+                    className="w-4 h-4 rounded-md text-purple-600 focus:ring-purple-500 border-gray-300"
+                  />
+                  <span>ارسال خودکار نسخه پشتیبان دیتابیس به بات‌های بله و تلگرام همزمان با انتشار</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handlePublishNewRelease}
+                  disabled={publishingNewRelease}
+                  className="flex items-center justify-center gap-2 px-6 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs font-black shadow-md shadow-purple-600/30 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  {publishingNewRelease ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      <span>در حال انتشار و اطلاع‌رسانی...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Rocket size={16} />
+                      <span>🚀 انتشار فوری نسخه جدید و فعال‌سازی اعلان برای همه</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* --- VERSION & STATUS DASHBOARD TILES --- */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Current Version */}
+              <div className="glass-panel p-4 rounded-2xl border border-gray-200/50 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                  <span className="font-bold">نسخه فعلی نصب‌شده</span>
+                  <HardDrive size={16} className="text-gray-400" />
+                </div>
+                <div className="my-2">
+                  <div className="text-xl font-black text-gray-900 dark:text-white font-mono flex items-baseline gap-1.5">
+                    <span>v{currentAppVersion}</span>
+                    <span className="text-[10px] font-sans font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300">
+                      Tauri Native
+                    </span>
+                  </div>
+                </div>
+                <div className="text-[11px] text-gray-400">کلاینت بومی ویندوز و سیستم محلی</div>
+              </div>
+
+              {/* Latest Available Version */}
+              <div className="glass-panel p-4 rounded-2xl border border-gray-200/50 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                  <span className="font-bold">آخرین نسخه موجود در سرور</span>
+                  <Globe size={16} className="text-purple-500" />
+                </div>
+                <div className="my-2">
+                  <div className="text-xl font-black text-purple-600 dark:text-purple-400 font-mono flex items-baseline gap-1.5">
+                    <span>
+                      {updateManifestInfo?.version
+                        ? `v${updateManifestInfo.version}`
+                        : settings.desktopLatestVersion
+                        ? `v${settings.desktopLatestVersion}`
+                        : "نامشخص"}
+                    </span>
+                    {updateStatus === "available" && (
+                      <span className="text-[10px] font-sans font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 animate-pulse">
+                        جدید
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="text-[11px] text-gray-400 truncate">
+                  کانال: {settings.desktopUpdateChannel === "beta" ? "آزمایشی (Beta)" : "پایدار (Stable)"}
+                </div>
+              </div>
+
+              {/* Update Status */}
+              <div className="glass-panel p-4 rounded-2xl border border-gray-200/50 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                  <span className="font-bold">وضعیت سیستم</span>
+                  <Zap size={16} className="text-amber-500" />
+                </div>
+                <div className="my-2">
+                  {isCheckingUpdate ? (
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-blue-600 dark:text-blue-400">
+                      <Loader2 size={14} className="animate-spin" />
+                      در حال استعلام نسخه...
+                    </div>
+                  ) : updateStatus === "available" ? (
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-purple-600 dark:text-purple-400">
+                      <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-ping"></span>
+                      نسخه جدید آماده دریافت
+                    </div>
+                  ) : updateStatus === "up_to_date" ? (
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle size={14} />
+                      سیستم کاملاً به‌روز است
+                    </div>
+                  ) : updateStatus === "error" ? (
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-rose-600 dark:text-rose-400">
+                      <AlertCircle size={14} />
+                      خطا در استعلام
+                    </div>
+                  ) : (
+                    <div className="text-xs font-bold text-gray-600 dark:text-gray-300">آماده بررسی</div>
+                  )}
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  {settings.desktopAutoCheckUpdates !== false ? "بررسی خودکار فعال" : "بررسی دستی"}
+                </div>
+              </div>
+
+              {/* Last Checked Date */}
+              <div className="glass-panel p-4 rounded-2xl border border-gray-200/50 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                  <span className="font-bold">آخرین زمان بررسی</span>
+                  <Clock size={16} className="text-gray-400" />
+                </div>
+                <div className="my-2">
+                  <div className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate">
+                    {lastCheckTimeDisplay || settings.desktopLastCheckTime || "هنوز انجام نشده"}
+                  </div>
+                </div>
+                <div className="text-[11px] text-gray-400">
+                  بازه خودکار: {settings.desktopUpdateIntervalMinutes || 60} دقیقه
+                </div>
+              </div>
+            </div>
+
+            {/* --- ACTIVE DOWNLOAD & INSTALL PROGRESS BAR PANEL --- */}
+            {(downloadPhase === "downloading" ||
+              downloadPhase === "verifying" ||
+              downloadPhase === "ready") && (
+              <div className="glass-panel p-6 rounded-2xl border border-purple-200 dark:border-purple-900 bg-purple-50/40 dark:bg-purple-950/20 shadow-md space-y-4 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-100 dark:border-purple-900/50 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold">
+                      {downloadPhase === "ready" ? (
+                        <CheckCircle size={18} />
+                      ) : (
+                        <ArrowDownCircle size={18} className="animate-bounce" />
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-gray-900 dark:text-white">
+                        {downloadPhase === "downloading" && "در حال دانلود پکیج بروزرسانی..."}
+                        {downloadPhase === "verifying" && "در حال صحت‌سنجی امضای دیجیتال و یکپارچگی فایل..."}
+                        {downloadPhase === "ready" && "پکیج با موفقیت دانلود و آماده نصب شد ✅"}
+                      </h4>
+                      <p className="text-xs text-gray-500">
+                        {downloadPhase === "downloading" && `سرعت دریافت: ${downloadSpeedStr} | حجم: ${downloadedBytesStr} از ${totalBytesStr}`}
+                        {downloadPhase === "verifying" && "بررسی هش SHA-256 و ساختار فایل‌های باینری"}
+                        {downloadPhase === "ready" && "برای اعمال تغییرات، برنامه را مجدداً راه‌اندازی کنید."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-sm font-black font-mono text-purple-700 dark:text-purple-300">
+                    {downloadProgress}%
+                  </div>
+                </div>
+
+                {/* Visual Progress Bar */}
+                <div className="space-y-1.5">
+                  <div className="w-full h-3.5 bg-gray-200 dark:bg-slate-800 rounded-full overflow-hidden p-0.5 shadow-inner">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        downloadPhase === "ready"
+                          ? "bg-emerald-500 shadow-sm shadow-emerald-500/50"
+                          : "bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-500"
+                      }`}
+                      style={{ width: `${downloadProgress}%` }}
+                    ></div>
+                  </div>
+                  <div className="flex justify-between text-[11px] text-gray-500 font-mono">
+                    <span>0%</span>
+                    <span>{downloadedBytesStr} / {totalBytesStr}</span>
+                    <span>100%</span>
+                  </div>
+                </div>
+
+                {/* Progress Actions */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                  <div className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-1.5">
+                    <ShieldCheck size={14} className="text-emerald-600" />
+                    <span>تأییدیه امنیتی Tauri Safe Package</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {downloadPhase === "downloading" && (
+                      <button
+                        type="button"
+                        onClick={handleCancelDownload}
+                        className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all"
+                      >
+                        انصراف
+                      </button>
+                    )}
+
+                    {downloadPhase === "ready" && (
+                      <button
+                        type="button"
+                        onClick={handleApplyUpdateAndRelaunch}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all"
+                      >
+                        <Power size={14} />
+                        نصب و راه‌اندازی مجدد برنامه (Restart & Apply)
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* --- LATEST VERSION DETAILS & CHANGELOG CARD --- */}
+            {updateManifestInfo && (
+              <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm space-y-4 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-950/40 dark:text-purple-400 flex items-center justify-center font-bold">
+                      <FileText size={16} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-gray-900 dark:text-white flex items-center gap-2">
+                        اطلاعات نسخه دریافت شده: <span className="font-mono text-purple-600">v{updateManifestInfo.version}</span>
+                      </h4>
+                      <p className="text-[11px] text-gray-500">
+                        تاریخ انتشار: {updateManifestInfo.pubDate || "اخیراً"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {updateStatus === "available" && downloadPhase === "idle" && (
+                      <button
+                        type="button"
+                        onClick={handleStartUpdateDownload}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-600/20 transition-all"
+                      >
+                        <Download size={14} />
+                        دریافت و نصب نسخه جدید
+                      </button>
+                    )}
+
+                    {updateManifestInfo.downloadUrl && (
+                      <a
+                        href={updateManifestInfo.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all"
+                      >
+                        <ExternalLink size={13} />
+                        دانلود دستی فایل نصبی (.msi)
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                {/* Release Notes Content */}
+                <div className="space-y-2">
+                  <span className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                    <ClipboardList size={14} className="text-purple-600" />
+                    توضیحات و تغییرات نسخه (Release Notes):
+                  </span>
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-900/70 border border-gray-200/60 dark:border-gray-800 rounded-xl text-xs text-gray-700 dark:text-gray-300 whitespace-pre-line leading-relaxed">
+                    {updateManifestInfo.notes || "توضیحاتی برای این نسخه ثبت نشده است."}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Error Message if check failed */}
+            {updateStatus === "error" && (
+              <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/50 dark:bg-rose-950/20 text-rose-800 dark:text-rose-300 text-xs flex items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={18} className="text-rose-600 shrink-0" />
+                  <div>
+                    <span className="font-bold">عدم برقراری ارتباط با سرور آپدیت: </span>
+                    <span>{updateCheckError || "لطفاً اتصال اینترنت یا آدرس فید آپدیت را بررسی کنید."}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleManualCheckVersion()}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-all"
+                >
+                  تلاش مجدد
+                </button>
+              </div>
+            )}
+
+            {/* --- CONFIGURATION FORM: INTERVALS, URLS, SCHEDULE --- */}
+            <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 shadow-sm space-y-6">
+              <div className="flex items-center gap-2 border-b pb-3">
+                <Sliders size={18} className="text-purple-600" />
+                <div>
+                  <h4 className="font-bold text-sm text-gray-800 dark:text-white">
+                    پیکربندی بازه‌های زمانی و سیستم آپدیت خودکار
+                  </h4>
+                  <p className="text-[11px] text-gray-500">
+                    تنظیم دوره‌های بررسی خودکار در پس‌زمینه و لینک‌های ارتباطی کلاینت با سرور
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Auto-Update Check Interval (Selectable + Custom Minutes) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Clock size={14} className="text-purple-600" />
+                    بازه زمانی بررسی خودکار آپدیت در اندروید و تائوری (دقیقه)
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <select
+                      value={
+                        [5, 15, 30, 60, 180, 360, 720, 1440, 10080].includes(
+                          Number(settings.desktopUpdateIntervalMinutes) || 60
+                        )
+                          ? Number(settings.desktopUpdateIntervalMinutes) || 60
+                          : 60
+                      }
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          desktopUpdateIntervalMinutes: Number(e.target.value),
+                        })
+                      }
+                      className="sm:col-span-2 w-full text-xs p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden font-medium"
+                    >
+                      <option value={5}>هر ۵ دقیقه (5 Minutes - تست سریع)</option>
+                      <option value={15}>هر ۱۵ دقیقه (15 Minutes - بلادرنگ و سریع)</option>
+                      <option value={30}>هر ۳۰ دقیقه (30 Minutes)</option>
+                      <option value={60}>هر ۱ ساعت (60 Minutes - استاندارد)</option>
+                      <option value={180}>هر ۳ ساعت (180 Minutes)</option>
+                      <option value={360}>هر ۶ ساعت (360 Minutes)</option>
+                      <option value={720}>هر ۱۲ ساعت (720 Minutes)</option>
+                      <option value={1440}>روزانه / هر ۲۴ ساعت (1440 Minutes)</option>
+                      <option value={10080}>هفتگی (10080 Minutes)</option>
+                    </select>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min={1}
+                        max={43200}
+                        dir="ltr"
+                        value={settings.desktopUpdateIntervalMinutes || 60}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            desktopUpdateIntervalMinutes: Math.max(1, parseInt(e.target.value, 10) || 1),
+                          })
+                        }
+                        className="w-full text-xs font-mono p-3 pl-12 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden text-center font-bold"
+                        title="تنظیم دستی زمان بر حسب دقیقه"
+                      />
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 font-bold">
+                        دقیقه
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-gray-400">
+                    کلاینت‌های اندروید و تائوری در این بازه زمانی، نسخه سرور را بررسی کرده و فقط در صورت وجود نسخه جدیدتر پیشنهاد دانلود می‌دهند.
+                  </span>
+                </div>
+
+                {/* Auto-Check on Startup Switch */}
+                <div className="flex items-center justify-between p-3.5 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-gray-100 dark:border-gray-800 self-end">
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-bold text-gray-800 dark:text-gray-200">
+                      بررسی خودکار در بدو باز شدن نرم‌افزار
+                    </div>
+                    <div className="text-[10px] text-gray-500">
+                      هنگام اجرای کلاینت دسکتاپ، وجود نسخه جدید بلافاصله چک شود
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings.desktopAutoCheckUpdates !== false}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          desktopAutoCheckUpdates: e.target.checked,
+                        })
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-purple-600"></div>
+                  </label>
+                </div>
+
+                {/* Custom Update Feed URL */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                      <Link size={14} className="text-purple-600" />
+                      آدرس لینک مانیفست بروزرسانی (Update Manifest Feed URL)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const defaultFeedUrl = `${window.location.origin}/api/desktop/updater.json`;
+                        setSettings({ ...settings, desktopUpdateUrl: defaultFeedUrl });
+                      }}
+                      className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline font-bold"
+                    >
+                      تنظیم آدرس سرور جاری
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="https://example.com/api/desktop/updater.json"
+                    value={settings.desktopUpdateUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, desktopUpdateUrl: e.target.value })}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <p className="text-[10px] text-gray-400">
+                    این آدرس فایل JSON استاندارد شامل نسخه و لینک‌های دانلود کلاینت ویندوز را بازمی‌گرداند.
+                  </p>
+                </div>
+
+                {/* Direct Installer Download URL */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Download size={14} className="text-purple-600" />
+                    لینک دانلود مستقیم فایل نصبی ستاپ (.msi / .exe)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="https://example.com/downloads/sayan-desktop-setup.msi"
+                    value={settings.desktopDirectDownloadUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, desktopDirectDownloadUrl: e.target.value })}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Release Channel */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Radio size={14} className="text-purple-600" />
+                    کانال انتشار بروزرسانی (Release Channel)
+                  </label>
+                  <select
+                    value={settings.desktopUpdateChannel || "stable"}
+                    onChange={(e) => setSettings({ ...settings, desktopUpdateChannel: e.target.value as any })}
+                    className="w-full text-xs p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  >
+                    <option value="stable">پایدار و نهایی (Stable - توصیه شده برای محیط تولید)</option>
+                    <option value="beta">پیش‌نمایش و آزمایشی (Beta / Release Candidate)</option>
+                  </select>
+                </div>
+
+                {/* Target Latest Version on Server (Desktop / Tauri) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Sliders size={14} className="text-purple-600" />
+                    شماره نسخه نهایی دسکتاپ تائوری (Tauri Target Version)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="1.0.2"
+                    value={settings.desktopLatestVersion || settings.systemVersion || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setReleaseVersionInput(val);
+                      setSettings({
+                        ...settings,
+                        desktopLatestVersion: val,
+                        androidLatestVersion: settings.androidLatestVersion || val,
+                        systemVersion: val,
+                      });
+                    }}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-gray-400">
+                    پس از نصب این نسخه در تائوری، تا زمان انتشار نسخه بالاتر دیگر پیام آپدیت نمایش داده نمی‌شود.
+                  </span>
+                </div>
+
+                {/* Target Latest Version on Server (Android APK) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Smartphone size={14} className="text-emerald-600" />
+                    شماره نسخه نهایی اندروید (Android Target Version)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="1.0.2"
+                    value={settings.androidLatestVersion || settings.desktopLatestVersion || settings.systemVersion || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings({ ...settings, androidLatestVersion: val });
+                    }}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-gray-400">
+                    پس از نصب این نسخه در اندروید، تا زمان انتشار نسخه بالاتر دیگر پیام آپدیت نمایش داده نمی‌شود.
+                  </span>
+                </div>
+
+                {/* Quick CLI Commands Guide Card */}
+                <div className="md:col-span-2 p-4 rounded-xl bg-slate-900 text-slate-100 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-purple-300">
+                      ⚡ دستورات خط فرمان (ترمینال سرور) برای ساخت خودکار آیکون‌ها و نسخه‌های نصبی:
+                    </span>
+                    <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-md font-mono">
+                      Root Directory
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
+                      <div className="font-bold text-amber-300 text-[11px]">۱. ساخت تمام آیکون‌ها از app-icon</div>
+                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run icons</code>
+                      <div className="text-[10px] text-slate-400">
+                        با حفظ دقیق رنگ بک‌گراند یا شفافیت (بدون بک‌گراند) برای اندروید و تائوری
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
+                      <div className="font-bold text-sky-300 text-[11px]">۲. ساخت اتومات نسخه تائوری در دانلود</div>
+                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run release:tauri</code>
+                      <div className="text-[10px] text-slate-400">
+                        ارتقای خودکار ورژن + ساخت فایل نصبی و قرارگیری در پوشه downloads
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
+                      <div className="font-bold text-emerald-300 text-[11px]">۳. ساخت اتومات نسخه اندروید در دانلود</div>
+                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run release:android</code>
+                      <div className="text-[10px] text-slate-400">
+                        ارتقای خودکار ورژن + ساخت APK نهایی و قرارگیری در پوشه downloads
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Server Release Notes Publisher */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <FileText size={14} className="text-purple-600" />
+                    یادداشت‌های انتشار نسخه جدید در سرور (Server Release Notes)
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="مثال: رفع باگ‌های شبکه محلی، بهینه‌سازی سرعت چاپ حواله‌ها و ارتقای امنیت کلاینت دسکتاپ..."
+                    value={settings.desktopReleaseNotes || ""}
+                    onChange={(e) => setSettings({ ...settings, desktopReleaseNotes: e.target.value })}
+                    className="w-full text-xs p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Bottom Actions */}
+              <div className="pt-4 border-t flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <a
+                    href="/api/desktop/updater.json"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 font-bold"
+                  >
+                    <ExternalLink size={13} />
+                    مشاهده زنده مانیفست سرور (/api/desktop/updater.json)
+                  </a>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveDesktopSettings}
+                    disabled={savingDesktopSettings}
+                    className="flex items-center gap-1.5 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md transition-all disabled:opacity-50"
+                  >
+                    {savingDesktopSettings ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    ذخیره و اعمال تنظیمات بروزرسانی
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    )}
+      </div>
+
+      {/* --- Secretariat Template Editor Modal --- */}
+      {editingSecTemplate && (
+        <div className="fixed inset-0 z-[100] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div
+            className="bg-white dark:bg-slate-900 border dark:border-white/10 rounded-2xl max-w-5xl w-full p-6 shadow-2xl space-y-4 max-h-[95vh] overflow-y-auto text-right"
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="text-base font-black text-gray-800 dark:text-white">
+                {editingSecTemplate.id
+                  ? "ویرایش نمونه نامه"
+                  : "ایجاد نمونه نامه جدید"}
+              </h3>
+              <button
+                onClick={() => setEditingSecTemplate(null)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-500">
+                  عنوان قالب (برای نمایش در لیست)
+                </label>
+                <input
+                  type="text"
+                  value={editingSecTemplate.title || ""}
+                  onChange={(e) =>
+                    setEditingSecTemplate({
+                      ...editingSecTemplate,
+                      title: e.target.value,
+                    })
+                  }
+                  className="w-full border rounded-xl p-2.5 text-xs focus:ring-2 focus:ring-purple-500"
+                  placeholder="مثلا: نامه درخواست مرخصی"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-gray-500">
+                  موضوع نامه (اختیاری)
+                </label>
+                <input
+                  type="text"
+                  value={editingSecTemplate.subject || ""}
+                  onChange={(e) =>
+                    setEditingSecTemplate({
+                      ...editingSecTemplate,
+                      subject: e.target.value,
+                    })
+                  }
+                  className="w-full border rounded-xl p-2.5 text-xs focus:ring-2 focus:ring-purple-500"
+                  placeholder="موضوعی که در پیش‌نویس درج شود"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-gray-500">
+                  متن نمونه نامه
+                </label>
+
+                <div className="flex gap-2">
+                  <input
+                    type="file"
+                    accept=".docx"
+                    ref={docxImportInputRef}
+                    onChange={handleDocxImport}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => docxImportInputRef.current?.click()}
+                    className="flex items-center gap-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 text-[10px] font-bold px-2 py-1 rounded"
+                    disabled={importingDocxFile}
+                  >
+                    {importingDocxFile ? (
+                      "در حال تبدیل..."
+                    ) : (
+                      <>
+                        <UploadCloud size={12} /> استخراج متن از فایل Word
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <textarea
+                value={editingSecTemplate.content || ""}
+                onChange={(e) =>
+                  setEditingSecTemplate({
+                    ...editingSecTemplate,
+                    content: e.target.value,
+                  })
+                }
+                className="w-full border rounded-xl p-3 text-sm focus:ring-2 focus:ring-purple-500 min-h-[300px] font-sans"
+                placeholder="متن اصلی را اینجا بنویسید..."
+              />
+            </div>
+
+            <div className="flex justify-end pt-4 border-t gap-2">
+              <button
+                onClick={() => setEditingSecTemplate(null)}
+                className="px-4 py-2 text-gray-500 bg-gray-100 rounded-xl text-sm font-bold hover:bg-gray-200"
+              >
+                انصراف
+              </button>
+              <button
+                onClick={() => {
+                  if (
+                    !editingSecTemplate.title ||
+                    !editingSecTemplate.content
+                  ) {
+                    alert("عنوان قالب و متن آن الزامی است.");
+                    return;
+                  }
+                  handleSaveSecTemplate(editingSecTemplate);
+                }}
+                className="px-6 py-2 bg-purple-600 text-white rounded-xl text-sm font-bold hover:bg-purple-700"
+              >
+                ذخیره قالب
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {message && (
+        <div
+          className={`fixed bottom-4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full text-white text-sm font-bold shadow-2xl z-[100] animate-bounce ${message.includes("خطا") ? "bg-red-600" : "bg-green-600"}`}
+        >
+          {message}
+        </div>
+      )}
+    </div>
+  );
+};
+export default Settings;

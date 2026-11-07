@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+    volumes:
+      - ./database.json:/app/database.json
+      - ./uploads:/app/uploads
+      - ./wauth:/app/wauth
+    depends_on:
+      - onlyoffice
+    restart: always
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: onlyoffice-documentserver
+    ports:
+      - "8088:80"
+    environment:
+      - JWT_ENABLED=false
+      - ALLOW_PRIVATE_IP_ADDRESS=true
+      - USE_UNAUTHORIZED_STORAGE=true
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+      - onlyoffice_log:/var/log/onlyoffice
+    restart: always
+
+volumes:
+  onlyoffice_data:
+  onlyoffice_log:

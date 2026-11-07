@@ -1,0 +1,23 @@
+# Auto detect text files and perform LF normalization
+* text=auto eol=lf
+
+# Explicit binary files to prevent Git CRLF corruption on Windows
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.wasm binary
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.eot binary
+*.xlsx binary
+*.xls binary
+*.docx binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.jar binary

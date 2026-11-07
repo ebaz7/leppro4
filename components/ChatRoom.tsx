@@ -1,0 +1,4554 @@
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { User, ChatMessage, ChatGroup, GroupTask, UserRole } from '../types';
+import { sendMessage, deleteMessage, getGroups, createGroup, updateGroup, deleteGroup, getTasks, createTask, updateTask, deleteTask, uploadFile, uploadFileChunked, updateMessage, getTaskGroups, createTaskGroup, updateTaskGroup, deleteTaskGroup } from '../services/storageService';
+import { getUsers } from '../services/authService';
+import { generateUUID, formatDate } from '../constants';
+import { TaskGroup } from '../types';
+import { 
+    Send, User as UserIcon, MessageSquare, Users, Plus, ListTodo, Paperclip, 
+    CheckSquare, Square, X, Trash2, Reply, Edit2, ArrowRight, Mic, 
+    Play, Pause, Loader2, Search, MoreVertical, File, Image as ImageIcon,
+    Check, CheckCheck, DownloadCloud, Download, UploadCloud, StopCircle, Share2, Copy, Forward, Eye, CornerUpLeft, Bell,
+    Shield, UserMinus, UserPlus, BellOff, Camera, Clock, MessageCircle, RefreshCw, Smile,
+    FileText, Package, CreditCard, BellRing, Volume2, AtSign
+} from 'lucide-react';
+import { FileViewerModal } from './FileViewerModal';
+import { StickerPicker } from './chat/StickerPicker';
+import { StickerItem } from './chat/stickerData';
+import { MediaAttachmentModal } from './chat/MediaAttachmentModal';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem } from '@capacitor/filesystem';
+import { sendNotification, clearAllActiveNotifications } from '../services/notificationService';
+import { playTaskAlarmSound } from '../services/soundService';
+import { downloadAndOpenFile, checkFileExists, saveImageToGallery, isFileMarkedSavedSync } from '../services/fileService';
+import { resolveImageUrl, apiCall, getServerTime } from '../services/apiService';
+import { isTauriDesktop } from '../utils/platformDetection';
+
+interface ChatRoomProps { 
+    currentUser: User | null; 
+    preloadedMessages: ChatMessage[]; 
+    onRefresh: () => void; 
+    sharedData?: { fileUrl?: string; text?: string; title?: string } | null;
+    onClearSharedData?: () => void;
+    onMessagesRead?: (msgIds: string[]) => void;
+    directChatTarget?: { type: 'private' | 'group' | 'public' | 'task_group' | 'system', id: string, taskId?: string } | null;
+    onClearDirectChatTarget?: () => void;
+    onNavigate?: (tab: string) => void;
+}
+
+type TabType = 'ALL' | 'CHATS' | 'GROUPS' | 'TASKS';
+
+interface ChannelItem {
+    type: 'public' | 'private' | 'group' | 'task_group' | 'system';
+    id: string;
+    name: string;
+    avatar: string | null;
+    isOnline: boolean;
+    lastSeen?: number;
+    lastMsg: ChatMessage | null;
+    unread: number;
+    hasMention?: boolean;
+}
+
+// Singleton Persian Intl formatters & caches to avoid expensive Intl.DateTimeFormat instantiation on every render in Tauri/Android WebView
+const faTimeFormatter = new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit' });
+const faDateKeyFormatter = new Intl.DateTimeFormat('fa-IR', { year: 'numeric', month: 'numeric', day: 'numeric' });
+const faFullDateFormatter = new Intl.DateTimeFormat('fa-IR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+const timeFormatCache = new Map<number, string>();
+const dateKeyCache = new Map<number, string>();
+const humanDateCache = new Map<string, string>();
+
+const formatTimeFa = (ts: any): string => {
+    const num = typeof ts === 'number' ? ts : Number(ts) || 0;
+    const minuteBucket = Math.floor(num / 60000);
+    let cached = timeFormatCache.get(minuteBucket);
+    if (!cached) {
+        cached = faTimeFormatter.format(new Date(num || Date.now()));
+        if (timeFormatCache.size > 2000) timeFormatCache.clear();
+        timeFormatCache.set(minuteBucket, cached);
+    }
+    return cached;
+};
+
+const formatDateKeyFa = (ts: number): string => {
+    const tenMinBucket = Math.floor(ts / 600000);
+    let cached = dateKeyCache.get(tenMinBucket);
+    if (!cached) {
+        cached = faDateKeyFormatter.format(new Date(ts || Date.now()));
+        if (dateKeyCache.size > 1000) dateKeyCache.clear();
+        dateKeyCache.set(tenMinBucket, cached);
+    }
+    return cached;
+};
+
+const formatHumanDateFa = (ts: number, dateKey: string): string => {
+    const todayKey = faDateKeyFormatter.format(new Date());
+    if (dateKey === todayKey) return 'امروز';
+    const yestKey = faDateKeyFormatter.format(new Date(Date.now() - 86400000));
+    if (dateKey === yestKey) return 'دیروز';
+    let cached = humanDateCache.get(dateKey);
+    if (!cached) {
+        cached = faFullDateFormatter.format(new Date(ts || Date.now()));
+        if (humanDateCache.size > 500) humanDateCache.clear();
+        humanDateCache.set(dateKey, cached);
+    }
+    return cached;
+};
+
+const AudioPlayer: React.FC<{ url: string; isMe: boolean; duration?: number }> = ({ url, isMe, duration: propDuration }) => {
+    const [playing, setPlaying] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [duration, setDuration] = useState(propDuration || 0);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const [audioSource, setAudioSource] = useState('');
+    
+    // Generate random waveform bars (stable per instance)
+    const waveform = useMemo(() => Array.from({ length: 25 }, () => Math.floor(Math.random() * 60) + 20), []);
+
+    useEffect(() => {
+        let absoluteUrl = url.startsWith('blob:') || url.startsWith('data:') ? url : resolveImageUrl(url);
+        // Capacitor hack: if on Android and using localhost, we might need to ensure it's fully qualified
+        if (Capacitor.getPlatform() === 'android' && absoluteUrl.startsWith('/')) {
+            absoluteUrl = window.location.origin + absoluteUrl;
+        }
+        setAudioSource(absoluteUrl);
+    }, [url]);
+
+    const onLoadedMetadata = () => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        const d = audio.duration;
+        if (d && d !== Infinity && !isNaN(d)) {
+            setDuration(d);
+        }
+    };
+
+    const onTimeUpdate = () => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        if (audio.duration && audio.duration !== Infinity) {
+            setProgress((audio.currentTime / audio.duration) * 100);
+        } else if (duration > 0) {
+             setProgress((audio.currentTime / duration) * 100);
+        }
+    };
+
+    const onEnded = () => { 
+        setPlaying(false); 
+        setProgress(0); 
+    };
+    
+    const onError = (e: any) => {
+        console.error("Audio Playback Error:", e);
+    };
+
+    const togglePlay = () => {
+        if (!audioRef.current) return;
+        if (playing) {
+            audioRef.current.pause();
+            setPlaying(false);
+        } else {
+            audioRef.current.play().then(() => {
+                setPlaying(true);
+            }).catch(err => {
+                console.error("Play failed", err);
+                // On Android, sometimes play() fails if not fully loaded
+                setTimeout(() => {
+                   audioRef.current?.play().then(() => setPlaying(true)).catch(console.error);
+                }, 200);
+            });
+        }
+    };
+
+    const formatTime = (time: number) => {
+        if (isNaN(time) || time === Infinity) return '0:00';
+        const mins = Math.floor(time / 60);
+        const secs = Math.floor(time % 60);
+        return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    };
+
+    return (
+        <div className="flex items-center gap-3 flex-1 px-1">
+            <audio 
+                ref={audioRef}
+                src={audioSource}
+                onLoadedMetadata={onLoadedMetadata}
+                onTimeUpdate={onTimeUpdate}
+                onEnded={onEnded}
+                onError={onError}
+                preload="metadata"
+                className="hidden"
+            />
+            <button 
+                onClick={togglePlay}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-white transition-transform active:scale-90 shadow-sm ${isMe ? 'bg-green-600' : 'bg-blue-600'}`}
+            >
+                {playing ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
+            </button>
+            
+            {/* Waveform Visualization */}
+            <div className="flex items-center gap-[2px] h-8 flex-1 mx-2" dir="ltr">
+                {waveform.map((height, i) => {
+                    const barPercent = (i / waveform.length) * 100;
+                    const isPlayed = barPercent <= progress;
+                    return (
+                        <div 
+                            key={i}
+                            className={`w-[3px] rounded-full transition-colors duration-200 ${isPlayed ? (isMe ? 'bg-green-700' : 'bg-blue-700') : (isMe ? 'bg-green-300/50' : 'bg-blue-300/50')}`}
+                            style={{ height: `${height}%` }}
+                        />
+                    );
+                })}
+            </div>
+
+            <span className="text-[10px] font-mono opacity-80 min-w-[35px] text-right">
+                {playing ? formatTime(audioRef.current?.currentTime || 0) : formatTime(duration)}
+            </span>
+        </div>
+    );
+};
+
+const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onRefresh, sharedData, onClearSharedData, onMessagesRead, directChatTarget, onClearDirectChatTarget }) => {
+    // --- Data State ---
+    const [messages, setMessages] = useState<ChatMessage[]>(Array.isArray(preloadedMessages) ? preloadedMessages : []);
+    const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
+    const [downloadedFiles, setDownloadedFiles] = useState<Record<string, boolean>>(() => {
+        try {
+            const item = localStorage.getItem('chat_downloaded_files');
+            return item ? JSON.parse(item) : {};
+        } catch { return {}; }
+    });
+    
+    const parseTimestamp = (timestamp: any): number => {
+        if (!timestamp) return 0;
+        if (typeof timestamp === 'number') return isNaN(timestamp) ? 0 : timestamp;
+        if (typeof timestamp === 'string') {
+            const parsedNum = Number(timestamp);
+            if (!isNaN(parsedNum) && parsedNum > 1000000000) return parsedNum;
+            const parsedDate = new Date(timestamp).getTime();
+            return isNaN(parsedDate) ? 0 : parsedDate;
+        }
+        return 0;
+    };
+
+    const isUserOnline = (u: User | undefined | null): boolean => {
+        if (!u || !u.lastSeen) return false;
+        const lastSeenMs = parseTimestamp(u.lastSeen);
+        if (!lastSeenMs) return false;
+        // Active within last 2.5 minutes (150,000ms), accounting for any remaining clock drift using Math.abs and getServerTime
+        return Math.abs(getServerTime() - lastSeenMs) < 150000;
+    };
+
+    // Merge remote and local pending messages with strict timestamp normalization and chronological sorting
+    const displayMessages = useMemo(() => {
+        const safeMessages = Array.isArray(messages) ? messages : [];
+        const safePending = Array.isArray(pendingMessages) ? pendingMessages : [];
+        const remoteIds = new Set(safeMessages.map(m => m.id));
+        const filteredPending = safePending.filter(pm => !remoteIds.has(pm.id));
+        
+        return [...safeMessages, ...filteredPending].map(m => ({
+            ...m,
+            timestamp: parseTimestamp(m.timestamp || (m as any).createdAt || (m as any).date) || Date.now()
+        })).sort((a, b) => {
+            if (a.timestamp !== b.timestamp) {
+                return a.timestamp - b.timestamp;
+            }
+            return (a.id || '').localeCompare(b.id || '');
+        });
+    }, [messages, pendingMessages]);
+
+    const [users, setUsers] = useState<User[]>(() => {
+        try {
+            const item = localStorage.getItem('app_data_users');
+            const parsed = item ? JSON.parse(item) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+    });
+    const [groups, setGroups] = useState<ChatGroup[]>(() => {
+        try {
+            const item = localStorage.getItem('app_data_groups');
+            const parsed = item ? JSON.parse(item) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+    });
+    const [tasks, setTasks] = useState<GroupTask[]>(() => {
+        try {
+            const item = localStorage.getItem('app_data_tasks');
+            const parsed = item ? JSON.parse(item) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+    });
+    const [taskGroups, setTaskGroups] = useState<TaskGroup[]>(() => {
+        try {
+            const item = localStorage.getItem('app_data_task_groups');
+            const parsed = item ? JSON.parse(item) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+    });
+    
+    // --- UI State ---
+    const [activeTab, setActiveTab] = useState<TabType>('ALL');
+    const [activeChannel, setActiveChannel] = useState<{type: 'public' | 'private' | 'group' | 'task_group' | 'system', id: string | null} | null>(null);
+    const [searchTerm, setSearchTerm] = useState(''); // Main List Search
+    const [innerSearchTerm, setInnerSearchTerm] = useState(''); // Inside Chat Search
+    const [showInnerSearch, setShowInnerSearch] = useState(false);
+    const [showStickerPicker, setShowStickerPicker] = useState(false);
+    
+    const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
+    const pendingTaskIdRef = useRef<string | null>(null);
+
+    // Initialize the ref with existing messages so they don't trigger new notifications on mount
+    useEffect(() => {
+        if (messages.length > 0 && notifiedMessageIdsRef.current.size === 0) {
+            messages.forEach(m => notifiedMessageIdsRef.current.add(m.id));
+        }
+    }, [messages]);
+
+    // Check URL parameters for direct Chat Navigation on first load
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const pvUser = params.get('pv');
+        const groupUser = params.get('group');
+        if (pvUser) {
+            setActiveTab('CHATS');
+            setActiveChannel({ type: 'private', id: pvUser });
+            window.history.replaceState({}, '', window.location.pathname);
+        } else if (groupUser) {
+            setActiveTab('CHATS');
+            setActiveChannel({ type: 'group', id: groupUser });
+            window.history.replaceState({}, '', window.location.pathname);
+        }
+    }, []);
+
+    // Handle directChatTarget updates dynamically
+    useEffect(() => {
+        if (directChatTarget && directChatTarget.id) {
+            console.log("ChatRoom: Received directChatTarget", directChatTarget);
+            if (directChatTarget.type === 'task_group') {
+                setActiveTab('TASKS');
+            } else if (directChatTarget.type === 'group') {
+                setActiveTab('GROUPS');
+            } else {
+                setActiveTab('CHATS');
+            }
+            
+            setActiveChannel({ type: directChatTarget.type as 'private' | 'group' | 'public' | 'task_group', id: directChatTarget.id });
+            
+            if (directChatTarget.taskId) {
+                pendingTaskIdRef.current = directChatTarget.taskId;
+                const foundTask = tasks.find(t => t.id === directChatTarget.taskId);
+                if (foundTask) {
+                    setActiveTaskForDetail(foundTask);
+                    setTaskReplyText('');
+                    pendingTaskIdRef.current = null;
+                }
+            }
+
+            if (onClearDirectChatTarget) {
+                onClearDirectChatTarget();
+            }
+        }
+    }, [directChatTarget, onClearDirectChatTarget, tasks]);
+
+    // Handle lazy-resolving pending task ID when tasks array loads/updates
+    useEffect(() => {
+        if (pendingTaskIdRef.current && tasks.length > 0) {
+            const foundTask = tasks.find(t => t.id === pendingTaskIdRef.current);
+            if (foundTask) {
+                setActiveTaskForDetail(foundTask);
+                setTaskReplyText('');
+                pendingTaskIdRef.current = null;
+            }
+        }
+    }, [tasks]);
+    
+    // --- File Progress & Management ---
+    const [fileProgress, setFileProgress] = useState<{ [key: string]: number }>({});
+    const [showGroupInfo, setShowGroupInfo] = useState<ChatGroup | (TaskGroup & {isTaskGroup?: boolean, admins?: string[], avatar?: string | null}) | null>(null);
+    const [showContactInfo, setShowContactInfo] = useState<User | null>(null);
+    const [isDownloading, setIsDownloading] = useState<{ [key: string]: boolean }>({});
+    
+    // Check if files are downloaded (only check unverified attachments to avoid native FS bridge spam)
+    const checkedAttachmentIdsRef = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        const isNativeOrDesktop = Capacitor.isNativePlatform() || isTauriDesktop();
+        const unchecked = displayMessages.filter(
+            msg => msg.attachment?.fileName && !checkedAttachmentIdsRef.current.has(msg.id)
+        );
+        if (unchecked.length === 0) return;
+
+        let cancelled = false;
+        const checkDownloads = async () => {
+            const checks: Record<string, boolean> = {};
+            let hasChanges = false;
+            for (const msg of unchecked) {
+                if (cancelled) return;
+                checkedAttachmentIdsRef.current.add(msg.id);
+                const fileName = msg.attachment?.fileName || 'file';
+                const uniqueLocalName = `${msg.id}_${fileName}`;
+                const exists = isNativeOrDesktop
+                    ? (await checkFileExists(uniqueLocalName) || await checkFileExists(fileName))
+                    : (isFileMarkedSavedSync(uniqueLocalName) || isFileMarkedSavedSync(fileName));
+                checks[msg.id] = exists;
+                if (downloadedFiles[msg.id] !== exists) hasChanges = true;
+            }
+            if (!cancelled && hasChanges) {
+                setDownloadedFiles(prev => {
+                    const updated = { ...prev, ...checks };
+                    try {
+                        localStorage.setItem('chat_downloaded_files', JSON.stringify(updated));
+                    } catch (e) { console.error(e); }
+                    return updated;
+                });
+            }
+        };
+        checkDownloads();
+        return () => { cancelled = true; };
+    }, [displayMessages]);
+
+    // Windowed message count to keep DOM fast on Tauri & Android
+    const [visibleMessagesLimit, setVisibleMessagesLimit] = useState<number>(80);
+    useEffect(() => {
+        setVisibleMessagesLimit(80);
+    }, [activeChannel?.id, activeChannel?.type]);
+    
+    // --- Selection & Actions ---
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
+    const [showForwardModal, setShowForwardModal] = useState(false);
+    const [forwardNoQuote, setForwardNoQuote] = useState(false);
+    const [showImageViewer, setShowImageViewer] = useState<string | null>(null);
+    const [previewAttachment, setPreviewAttachment] = useState<{ isOpen: boolean; url: string; fileName: string } | null>(null);
+    const [contextMenuMsg, setContextMenuMsg] = useState<{msg: ChatMessage, x: number, y: number} | null>(null);
+
+    // --- Input & Recording ---
+    const [inputText, setInputText] = useState('');
+    const [localSharedData, setLocalSharedData] = useState<{ fileUrl?: string; text?: string; title?: string } | null>(null);
+
+    useEffect(() => {
+        if (sharedData) {
+            setLocalSharedData({
+                fileUrl: sharedData.fileUrl,
+                text: sharedData.text,
+                title: sharedData.title
+            });
+            if (sharedData.text) {
+                setInputText(sharedData.text);
+            }
+            if (onClearSharedData) onClearSharedData();
+        }
+    }, [sharedData]);
+
+    const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+    const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+
+    const scrollToMessage = (replyMsgId: string) => {
+        if (!replyMsgId) return;
+        const element = document.getElementById(`msg-${replyMsgId}`);
+        if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setHighlightedMessageId(replyMsgId);
+            setTimeout(() => {
+                setHighlightedMessageId(null);
+            }, 2000); // Highlight for 2 seconds
+        } else {
+            alert('پیام مورد نظر یافت نشد (احتمالاً پاک شده یا لود نشده است)');
+        }
+    };
+
+    const [isUploading, setIsUploading] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordingTime, setRecordingTime] = useState(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const recordingTimerRef = useRef<any>(null);
+    const recordedMimeTypeRef = useRef<string>('');
+    const recordingStartTimeRef = useRef<number>(0);
+
+    const handleCopyMessage = (msg: ChatMessage) => {
+        const textToCopy = msg.message || (msg.attachment ? msg.attachment.fileName : 'فایل');
+        if (!textToCopy) return;
+
+        const doCopy = async () => {
+            try {
+                if (navigator.clipboard) {
+                    await navigator.clipboard.writeText(textToCopy);
+                    alert('متن پیام کپی شد');
+                } else {
+                    throw new Error();
+                }
+            } catch (err) {
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                textArea.style.top = "0";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    alert('متن پیام کپی شد');
+                } catch (e) {
+                    console.error('Copy failed', e);
+                }
+                document.body.removeChild(textArea);
+            }
+        };
+        doCopy();
+    };
+
+    const scrollToBottom = () => {
+        if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    };
+
+    const handleDownloadAttachment = async (msgId: string, url: string, fileName: string, e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        if (isDownloading[msgId]) return;
+
+        setIsDownloading(prev => ({ ...prev, [msgId]: true }));
+        setFileProgress(prev => ({ ...prev, [msgId]: 5 }));
+
+        const safeFileName = fileName || 'file';
+        const uniqueLocalName = `${msgId}_${safeFileName}`;
+        const isImageFile = /\.(jpg|jpeg|png|gif|webp)$/i.test(safeFileName) || /^data:image\//i.test(url);
+
+        const ok = isImageFile
+            ? await saveImageToGallery(url, safeFileName, (p) => {
+                setFileProgress(prev => ({ ...prev, [msgId]: p }));
+            })
+            : await downloadAndOpenFile(url, uniqueLocalName, (p) => {
+                setFileProgress(prev => ({ ...prev, [msgId]: p }));
+            });
+
+        setTimeout(() => {
+            setIsDownloading(prev => { const n = { ...prev }; delete n[msgId]; return n; });
+            setFileProgress(prev => { const n = { ...prev }; delete n[msgId]; return n; });
+            if (ok) {
+                setDownloadedFiles(prev => {
+                    const updated = { ...prev, [msgId]: true };
+                    try {
+                        localStorage.setItem('chat_downloaded_files', JSON.stringify(updated));
+                    } catch (e) {}
+                    return updated;
+                });
+            }
+        }, 400);
+    };
+
+    // --- Refs ---
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const pdfInputRef = useRef<HTMLInputElement>(null);
+    const galleryInputRef = useRef<HTMLInputElement>(null);
+    const inputAreaRef = useRef<HTMLTextAreaElement>(null);
+    const taskTitleInputRef = useRef<HTMLInputElement>(null);
+
+    // --- Modals & Drag State ---
+    const [pendingAttachmentModalFiles, setPendingAttachmentModalFiles] = useState<File[] | null>(null);
+    const [isDragOverChat, setIsDragOverChat] = useState(false);
+    const dragCounterRef = useRef(0);
+    const [showGroupModal, setShowGroupModal] = useState<string | false>(false);
+    const [mutedChannels, setMutedChannels] = useState<Set<string>>(new Set());
+    const [newGroupName, setNewGroupName] = useState('');
+    const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
+
+    // Native Tauri File-Drop listener for Windows desktop client
+    useEffect(() => {
+        let unlistenFn: (() => void) | undefined;
+        if (typeof window !== 'undefined' && (window as any).__TAURI__?.event) {
+            (window as any).__TAURI__.event.listen('tauri://file-drop', async (event: any) => {
+                const paths = event.payload;
+                if (Array.isArray(paths) && paths.length > 0) {
+                    try {
+                        const fs = (window as any).__TAURI__.fs;
+                        if (fs && fs.readBinaryFile) {
+                            const fileObjects: File[] = [];
+                            for (const filePath of paths) {
+                                const bytes = await fs.readBinaryFile(filePath);
+                                const name = filePath.replace(/\\/g, '/').split('/').pop() || 'file';
+                                fileObjects.push(new (window as any).File([bytes], name));
+                            }
+                            if (fileObjects.length > 0) {
+                                handleOpenAttachmentModal(fileObjects);
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Failed to read dropped file in Tauri:", e);
+                    }
+                }
+            }).then((unlisten: any) => {
+                unlistenFn = unlisten;
+            }).catch((err: any) => {
+                console.warn("Tauri file drop listener setup error:", err);
+            });
+        }
+        return () => {
+            if (unlistenFn) unlistenFn();
+        };
+    }, []);
+
+    // Task Custom Modals State
+    const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
+    const [taskTitle, setTaskTitle] = useState('');
+    const [taskDescription, setTaskDescription] = useState('');
+    const [taskAssignedTo, setTaskAssignedTo] = useState<string[]>([]);
+    const [taskDueDate, setTaskDueDate] = useState('');
+    const [taskRecurringReminder, setTaskRecurringReminder] = useState(true);
+    const [taskReminderIntervalMinutes, setTaskReminderIntervalMinutes] = useState(10);
+    const [activeTaskForDetail, setActiveTaskForDetail] = useState<GroupTask | null>(null);
+    const [taskReplyText, setTaskReplyText] = useState('');
+    const [userSearchText, setUserSearchText] = useState('');
+
+    // --- Mention / Tag State & Handlers ---
+    const [mentionQuery, setMentionQuery] = useState<{ query: string; index: number } | null>(null);
+    const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+    const mentionMenuRef = useRef<HTMLDivElement>(null);
+
+    // Close mention autocomplete popup when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (
+                mentionMenuRef.current && 
+                !mentionMenuRef.current.contains(e.target as Node) && 
+                !inputAreaRef.current?.contains(e.target as Node)
+            ) {
+                setMentionQuery(null);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const checkIfMessageMentionsUser = (messageText: string | undefined, user: User | null): boolean => {
+        if (!messageText || !user) return false;
+        const lower = messageText.toLowerCase();
+        if (lower.includes('@all') || lower.includes('@همه')) return true;
+        if (user.username && lower.includes(`@${user.username.toLowerCase()}`)) return true;
+        if (user.fullName) {
+            const fLower = user.fullName.toLowerCase();
+            if (lower.includes(`@${fLower}`)) return true;
+            const fUnder = fLower.replace(/\s+/g, '_');
+            if (lower.includes(`@${fUnder}`)) return true;
+            const fCompact = fLower.replace(/[\s\u200c]+/g, '');
+            if (lower.includes(`@${fCompact}`)) return true;
+        }
+        return false;
+    };
+
+    const mentionCandidates = useMemo(() => {
+        if (!mentionQuery) return [];
+        const q = mentionQuery.query.trim().toLowerCase();
+        
+        const pool: { id: string; username: string; fullName: string; role?: string; avatar?: string | null; isAll?: boolean }[] = [];
+        const safeUsers = Array.isArray(users) ? users : [];
+
+        if (activeChannel?.type === 'group') {
+            const currentGroup = groups.find(g => g.id === activeChannel.id);
+            const memberUsernames = new Set(currentGroup?.members || []);
+            if (currentGroup?.createdBy) memberUsernames.add(currentGroup.createdBy);
+
+            pool.push({
+                id: 'ALL_MEMBERS',
+                username: 'all',
+                fullName: 'همه اعضای گروه (@all)',
+                role: 'اعلان به تمامی اعضای این گروه',
+                isAll: true
+            });
+
+            safeUsers.forEach(u => {
+                if (memberUsernames.has(u.username)) {
+                    pool.push({
+                        id: u.id,
+                        username: u.username,
+                        fullName: u.fullName,
+                        role: u.role,
+                        avatar: u.avatar || null
+                    });
+                }
+            });
+        } else if (activeChannel?.type === 'task_group') {
+            const currentGroup = taskGroups.find(g => g.id === activeChannel.id);
+            const memberUsernames = new Set(currentGroup?.members || []);
+            if (currentGroup?.createdBy) memberUsernames.add(currentGroup.createdBy);
+
+            pool.push({
+                id: 'ALL_MEMBERS',
+                username: 'all',
+                fullName: 'همه اعضای گروه تسک (@all)',
+                role: 'اعلان به تمامی اعضا',
+                isAll: true
+            });
+
+            safeUsers.forEach(u => {
+                if (memberUsernames.has(u.username)) {
+                    pool.push({
+                        id: u.id,
+                        username: u.username,
+                        fullName: u.fullName,
+                        role: u.role,
+                        avatar: u.avatar || null
+                    });
+                }
+            });
+        } else if (activeChannel?.type === 'public') {
+            pool.push({
+                id: 'ALL_MEMBERS',
+                username: 'all',
+                fullName: 'همه همکاران و کاربران (@all)',
+                role: 'اعلان عمومی به تمام سازمان',
+                isAll: true
+            });
+
+            safeUsers.forEach(u => {
+                pool.push({
+                    id: u.id,
+                    username: u.username,
+                    fullName: u.fullName,
+                    role: u.role,
+                    avatar: u.avatar || null
+                });
+            });
+        } else if (activeChannel?.type === 'private') {
+            const otherUser = safeUsers.find(u => u.username?.toLowerCase() === activeChannel.id?.toLowerCase());
+            if (otherUser) {
+                pool.push({
+                    id: otherUser.id,
+                    username: otherUser.username,
+                    fullName: otherUser.fullName,
+                    role: otherUser.role,
+                    avatar: otherUser.avatar || null
+                });
+            }
+            safeUsers.forEach(u => {
+                if (!otherUser || u.username !== otherUser.username) {
+                    pool.push({
+                        id: u.id,
+                        username: u.username,
+                        fullName: u.fullName,
+                        role: u.role,
+                        avatar: u.avatar || null
+                    });
+                }
+            });
+        }
+
+        if (!q) return pool.slice(0, 15);
+
+        return pool.filter(item => 
+            item.fullName.toLowerCase().includes(q) ||
+            item.username.toLowerCase().includes(q) ||
+            (item.role && item.role.toLowerCase().includes(q))
+        ).slice(0, 15);
+    }, [mentionQuery, activeChannel, groups, taskGroups, users]);
+
+    const insertMention = (cand: { username: string; fullName: string; isAll?: boolean }) => {
+        if (!mentionQuery) return;
+        const insertStr = cand.isAll ? '@all ' : `@${cand.username} `;
+        const before = inputText.slice(0, mentionQuery.index);
+        const after = inputText.slice(mentionQuery.index + 1 + mentionQuery.query.length);
+        const newFullText = `${before}${insertStr}${after}`;
+        
+        setInputText(newFullText);
+        setMentionQuery(null);
+        setMentionSelectedIndex(0);
+
+        setTimeout(() => {
+            if (inputAreaRef.current) {
+                inputAreaRef.current.focus();
+                const newPos = before.length + insertStr.length;
+                inputAreaRef.current.setSelectionRange(newPos, newPos);
+            }
+        }, 20);
+    };
+
+    const handleTriggerMentionButton = () => {
+        if (!inputAreaRef.current) return;
+        inputAreaRef.current.focus();
+        const cursorPos = inputAreaRef.current.selectionStart || inputText.length;
+        const before = inputText.slice(0, cursorPos);
+        const after = inputText.slice(cursorPos);
+        const needsSpace = before.length > 0 && !before.endsWith(' ') && !before.endsWith('\n');
+        const newText = `${before}${needsSpace ? ' ' : ''}@${after}`;
+        const newMentionIndex = before.length + (needsSpace ? 1 : 0);
+        
+        setInputText(newText);
+        setMentionQuery({
+            query: '',
+            index: newMentionIndex
+        });
+        setMentionSelectedIndex(0);
+        setTimeout(() => {
+            if (inputAreaRef.current) {
+                const pos = newMentionIndex + 1;
+                inputAreaRef.current.setSelectionRange(pos, pos);
+            }
+        }, 10);
+    };
+
+    const textareaResizeRafRef = useRef<number | null>(null);
+
+    const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const target = e.target;
+        const text = target.value;
+        setInputText(text);
+
+        // Avoid synchronous layout reflow on every single character typed; only resize in rAF when needed
+        if (textareaResizeRafRef.current) {
+            cancelAnimationFrame(textareaResizeRafRef.current);
+        }
+        if (!text) {
+            target.style.height = '28px';
+        } else if (text.includes('\n') || text.length > 45 || target.scrollHeight > 36) {
+            textareaResizeRafRef.current = requestAnimationFrame(() => {
+                if (inputAreaRef.current) {
+                    inputAreaRef.current.style.height = 'auto';
+                    inputAreaRef.current.style.height = `${Math.min(inputAreaRef.current.scrollHeight, 140)}px`;
+                }
+            });
+        }
+
+        // Only run regex mention check if text actually contains '@'
+        if (text.includes('@')) {
+            const cursorPos = target.selectionStart || text.length;
+            const textBeforeCursor = text.slice(0, cursorPos);
+            const match = /(?:^|\s)@([^\s@]*)$/.exec(textBeforeCursor);
+            if (match) {
+                setMentionQuery({
+                    query: match[1],
+                    index: match.index + (match[0].startsWith('@') ? 0 : 1)
+                });
+                setMentionSelectedIndex(0);
+            } else if (mentionQuery) {
+                setMentionQuery(null);
+            }
+        } else if (mentionQuery) {
+            setMentionQuery(null);
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (mentionQuery && mentionCandidates.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setMentionSelectedIndex(prev => (prev + 1) % mentionCandidates.length);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setMentionSelectedIndex(prev => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                const chosen = mentionCandidates[mentionSelectedIndex];
+                if (chosen) {
+                    insertMention(chosen);
+                    return;
+                }
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setMentionQuery(null);
+                return;
+            }
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage();
+        }
+    };
+
+    useEffect(() => {
+        if (!inputText && inputAreaRef.current) {
+            inputAreaRef.current.style.height = 'auto';
+        }
+    }, [inputText]);
+
+    // Focus task title input immediately when creation modal opens
+    useEffect(() => {
+        if (showCreateTaskModal) {
+            const timer = setTimeout(() => {
+                taskTitleInputRef.current?.focus();
+            }, 100);
+            return () => clearTimeout(timer);
+        }
+    }, [showCreateTaskModal]);
+
+    // --- Effects ---
+    useEffect(() => { 
+        if (Array.isArray(preloadedMessages)) {
+            setMessages(prev => {
+                // If the messages are identical (check last message and length), avoid unnecessary update
+                if (prev.length === preloadedMessages.length && prev.length > 0) {
+                    const lastPrev = prev[prev.length - 1];
+                    const lastNew = preloadedMessages[preloadedMessages.length - 1];
+                    // Also check for edits if possible, but for simplicity we rely on timestamp/id
+                    if (lastPrev.id === lastNew.id && lastPrev.timestamp === lastNew.timestamp) {
+                        // Check if counts or some other property changed in existing messages
+                        return preloadedMessages; 
+                    }
+                }
+                return preloadedMessages;
+            });
+            // Clean up pending messages that are now on server
+            const remoteIds = new Set(preloadedMessages.map(m => m.id));
+            setPendingMessages(prev => {
+                if (!Array.isArray(prev) || prev.length === 0) return [];
+                const filtered = prev.filter(pm => !remoteIds.has(pm.id));
+                return filtered;
+            });
+        }
+    }, [preloadedMessages]);
+
+    useEffect(() => { 
+        loadMeta();
+        const interval = setInterval(loadMeta, 20000); 
+        return () => clearInterval(interval);
+    }, []);
+
+    // Live Presence Heartbeat while inside ChatRoom
+    useEffect(() => {
+        if (!currentUser?.username) return;
+        const sendChatHeartbeat = () => {
+            const activeChatPayload = activeChannel ? { type: activeChannel.type, id: activeChannel.id } : null;
+            apiCall('/heartbeat', 'POST', { username: currentUser.username, activeChat: activeChatPayload }).catch(() => {});
+        };
+        sendChatHeartbeat();
+        const interval = setInterval(sendChatHeartbeat, 15000);
+        return () => clearInterval(interval);
+    }, [currentUser?.username, activeChannel?.type, activeChannel?.id]);
+
+    useEffect(() => {
+        // Auto scroll with timeout to ensure rendering is done (Fix for Desktop)
+        if (activeChannel && !showInnerSearch) {
+            // Immediate scroll for better UX
+            if (messagesEndRef.current) {
+                messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
+            }
+            // Follow up with smooth scroll to catch any layout shifts
+            setTimeout(scrollToBottom, 150); 
+            
+            // Auto-mark as read ONLY when user is actively inside the open conversation in foreground
+            if (activeChannel.id && typeof document !== 'undefined' && !document.hidden) {
+                markAsRead(activeChannel.id, activeChannel.type);
+            }
+        }
+    }, [activeChannel, messages.length]);
+
+    // Re-verify read status when user switches back to this tab/window while chat is open
+    useEffect(() => {
+        const handleVisibility = () => {
+            if (typeof document !== 'undefined' && !document.hidden && activeChannel && activeChannel.id) {
+                markAsRead(activeChannel.id, activeChannel.type);
+            }
+        };
+        window.addEventListener('focus', handleVisibility);
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            window.removeEventListener('focus', handleVisibility);
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [activeChannel]);
+
+    // Handle Mobile Back Button Logic (Browser History)
+    useEffect(() => {
+        if (activeChannel) {
+            // Push a state so "Back" button closes chat instead of exiting app
+            try {
+                const state = { chatOpen: true };
+                window.history.pushState(state, '', window.location.pathname + (window.location.hash.includes('#chat') ? '' : '#chat'));
+                
+                const handlePopState = (event: PopStateEvent) => {
+                    if (!event.state?.chatOpen) {
+                        setActiveChannel(null);
+                    }
+                };
+    
+                window.addEventListener('popstate', handlePopState);
+                return () => {
+                    window.removeEventListener('popstate', handlePopState);
+                };
+            } catch (e) {
+                console.warn("History push failed", e);
+            }
+        }
+    }, [activeChannel]);
+
+    useEffect(() => {
+        if (activeChannel) {
+            const handleBack = () => {
+                 setActiveChannel(null);
+            };
+            window.dispatchEvent(new CustomEvent('REGISTER_BACK_ACTION', { detail: handleBack }));
+        } else {
+            window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION'));
+        }
+        return () => {
+            window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION'));
+        };
+    }, [activeChannel]);
+
+    // Handle Document Visibility for Notifications
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.hidden) return;
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, []);
+
+    // Notification Trigger with Cross-Device Seen/Read Synchronization
+    useEffect(() => {
+        if (messages.length === 0 || !currentUser) return;
+        const currentU = currentUser.username.toLowerCase();
+
+        // Find genuinely new unread messages that have not been registered in notifiedMessageIdsRef
+        // and have NOT been seen/read on any other device by the current user
+        const newMessages = messages.filter(m => {
+            if (notifiedMessageIdsRef.current.has(m.id)) return false;
+            // If already read by this user on another device, register as processed and never notify
+            if (m.readBy?.some(u => u.toLowerCase() === currentU)) {
+                notifiedMessageIdsRef.current.add(m.id);
+                return false;
+            }
+            return true;
+        });
+
+        // Mark them as processed instantly
+        newMessages.forEach(m => notifiedMessageIdsRef.current.add(m.id));
+
+        // If the window is hidden, process the last newly arrived message
+        const lastNewMsg = newMessages[newMessages.length - 1];
+        if (lastNewMsg && lastNewMsg.senderUsername?.toLowerCase() !== currentU && document.hidden) {
+            // Guard: If seen on another device or already marked read, skip alert
+            if (lastNewMsg.readBy?.some(u => u.toLowerCase() === currentU)) {
+                return;
+            }
+
+            const channelId = lastNewMsg.groupId || lastNewMsg.senderUsername;
+            
+            // Validate if message is intended for the current user
+            const isPublic = !lastNewMsg.groupId && (!lastNewMsg.recipient || lastNewMsg.recipient.trim() === '');
+            const isGroupForMe = lastNewMsg.groupId && groups.some(g => g.id === lastNewMsg.groupId);
+            const isPrivateForMe = lastNewMsg.recipient && lastNewMsg.recipient.trim() !== '' && lastNewMsg.recipient.toLowerCase() === currentU;
+            const isIntendedForMe = isPublic || isGroupForMe || isPrivateForMe;
+
+            if (!mutedChannels.has(channelId) && isIntendedForMe) {
+                let title = lastNewMsg.sender;
+                if (lastNewMsg.groupId) {
+                    const grp = groups.find(g => g.id === lastNewMsg.groupId);
+                    if (grp) title = `${lastNewMsg.sender} @ ${grp.name}`;
+                }
+                
+                let bodyText = 'پیام جدید';
+                if (lastNewMsg.message && lastNewMsg.message.trim() !== '') {
+                    bodyText = lastNewMsg.message;
+                } else if (lastNewMsg.attachment) {
+                    bodyText = `📎 فایل ضمیمه: ${lastNewMsg.attachment.fileName || 'بدون نام'}`;
+                } else if (lastNewMsg.audioUrl) {
+                    bodyText = `🎤 پیام صوتی ${lastNewMsg.audioDuration ? `(${lastNewMsg.audioDuration} ثانیه)` : ''}`;
+                }
+                
+                const targetUrl = lastNewMsg.groupId 
+                    ? `/chat?group=${lastNewMsg.groupId}` 
+                    : `/chat?pv=${lastNewMsg.senderUsername}`;
+                
+                // Pass precise unique message ID to allow reliable deduplication on client and native platforms
+                sendNotification(title, bodyText, { id: lastNewMsg.id, url: targetUrl, tab: 'chat' });
+            }
+        }
+    }, [messages, mutedChannels, groups, currentUser]);
+
+    const loadMeta = async () => {
+        try {
+            const [usrList, grpList, taskGps, tskList] = await Promise.all([
+                getUsers(),
+                getGroups(),
+                getTaskGroups(),
+                getTasks()
+            ]);
+            
+            const safeUsrList = Array.isArray(usrList) ? usrList : (Array.isArray((usrList as any)?.users) ? (usrList as any).users : []);
+            setUsers(prev => {
+                if (prev.length === safeUsrList.length && prev.every((u, idx) => u.username === safeUsrList[idx]?.username && u.lastSeen === safeUsrList[idx]?.lastSeen && u.avatar === safeUsrList[idx]?.avatar)) {
+                    return prev;
+                }
+                return safeUsrList;
+            });
+            
+            const safeGrpList = Array.isArray(grpList) ? grpList : [];
+            const safeTaskGps = Array.isArray(taskGps) ? taskGps : [];
+            const safeTskList = Array.isArray(tskList) ? tskList : [];
+
+            const isManager = currentUser && [UserRole.ADMIN, UserRole.MANAGER, UserRole.CEO].includes(currentUser.role as UserRole);
+            const visibleGroups = safeGrpList.filter(g => isManager || (Array.isArray(g.members) && g.members.includes(currentUser?.username)) || g.createdBy === currentUser?.username);
+            setGroups(prev => {
+                if (prev.length === visibleGroups.length && prev.every((g, idx) => g.id === visibleGroups[idx]?.id && g.name === visibleGroups[idx]?.name && g.members?.length === visibleGroups[idx]?.members?.length)) {
+                    return prev;
+                }
+                return visibleGroups;
+            });
+
+            const visibleTaskGps = safeTaskGps.filter(g => isManager || (Array.isArray(g.members) && g.members.includes(currentUser?.username)) || g.createdBy === currentUser?.username);
+            setTaskGroups(prev => {
+                if (prev.length === visibleTaskGps.length && prev.every((g, idx) => g.id === visibleTaskGps[idx]?.id && g.name === visibleTaskGps[idx]?.name && g.members?.length === visibleTaskGps[idx]?.members?.length)) {
+                    return prev;
+                }
+                return visibleTaskGps;
+            });
+            
+            setTasks(prev => {
+                if (prev.length === safeTskList.length && prev.every((t, idx) => t.id === safeTskList[idx]?.id && t.status === safeTskList[idx]?.status && t.replies?.length === safeTskList[idx]?.replies?.length)) {
+                    return prev;
+                }
+                return safeTskList;
+            });
+        } catch (e) { 
+            console.error("Chat load error", e); 
+        }
+    };
+
+    const formatLastSeen = (timestamp: any) => {
+        const ms = parseTimestamp(timestamp);
+        if (!ms) return 'نامشخص';
+        const now = getServerTime();
+        const diff = now - ms;
+        
+        if (diff < 60000) return 'همین الان';
+        if (diff < 3600000) return `لحظاتی پیش (${Math.max(1, Math.floor(diff/60000))} دقیقه پیش)`;
+        
+        const date = new Date(ms);
+        if (diff < 86400000) {
+            return `امروز ساعت ${date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })}`;
+        }
+        if (diff < 172800000) {
+            return `دیروز ساعت ${date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })}`;
+        }
+        
+        // Over 48 hours: Shamsi Date + Time
+        const shamsiDate = date.toLocaleDateString('fa-IR');
+        const shamsiTime = date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+        return `${shamsiDate} ساعت ${shamsiTime}`;
+    };
+
+    // --- Helpers ---
+    const getUnreadCount = (channelId: string, type: 'private' | 'group' | 'public' | 'task_group' | 'system') => {
+        if (!currentUser || !currentUser.username) return 0;
+        const currentU = currentUser.username.toLowerCase();
+        return messages.filter(m => {
+            if (!m.senderUsername || (m.senderUsername.toLowerCase() === currentU && type !== 'system')) return false;
+            const isRead = m.readBy?.some(u => u.toLowerCase() === currentU);
+            if (isRead) return false;
+            
+            if (type === 'system') {
+                return (m.senderUsername?.toLowerCase() === 'system' || m.role === 'system' || m.sender === 'سیستم') &&
+                       (!m.recipient || m.recipient.toLowerCase() === currentU);
+            } else if (type === 'public') {
+                return !m.recipient && !m.groupId;
+            } else if (type === 'private') {
+                return (m.senderUsername?.toLowerCase() === channelId?.toLowerCase() && m.recipient?.toLowerCase() === currentU);
+            } else if (type === 'group' || type === 'task_group') {
+                return m.groupId === channelId;
+            }
+            return false;
+        }).length;
+    };
+
+    const getLastMessage = (channelId: string, type: 'private' | 'group' | 'public' | 'task_group' | 'system') => {
+        if (!currentUser || !currentUser.username) return null;
+        const currentU = currentUser.username.toLowerCase();
+        const relevant = displayMessages.filter(m => {
+            if (type === 'system') {
+                return (m.senderUsername?.toLowerCase() === 'system' || m.role === 'system' || m.sender === 'سیستم') &&
+                       (!m.recipient || m.recipient.toLowerCase() === currentU);
+            }
+            if (type === 'public') return !m.recipient && !m.groupId;
+            if (type === 'private') return (m.senderUsername?.toLowerCase() === channelId?.toLowerCase() && m.recipient?.toLowerCase() === currentU) || (m.senderUsername?.toLowerCase() === currentU && m.recipient?.toLowerCase() === channelId?.toLowerCase());
+            if (type === 'group' || type === 'task_group') return m.groupId === channelId;
+            return false;
+        });
+        return relevant.length > 0 ? relevant[relevant.length - 1] : null;
+    };
+
+    const markAsRead = async (channelId: string, type: 'private' | 'group' | 'public' | 'task_group' | 'system') => {
+        if (!currentUser || !currentUser.username) return;
+        const currentU = currentUser.username.toLowerCase();
+        const unreadMsgs = messages.filter(m => {
+            if (!m.senderUsername || (m.senderUsername.toLowerCase() === currentU && type !== 'system')) return false;
+            if (m.readBy?.some(u => u.toLowerCase() === currentU)) return false;
+            
+            if (type === 'system') {
+                return (m.senderUsername?.toLowerCase() === 'system' || m.role === 'system' || m.sender === 'سیستم') &&
+                       (!m.recipient || m.recipient.toLowerCase() === currentU);
+            }
+            if (type === 'public') return !m.recipient && !m.groupId;
+            if (type === 'private') return (m.senderUsername?.toLowerCase() === channelId?.toLowerCase() && m.recipient?.toLowerCase() === currentU);
+            if (type === 'group' || type === 'task_group') return m.groupId === channelId;
+            return false;
+        });
+
+        // Whenever any chat is read, clear any status-bar notifications instantly
+        clearAllActiveNotifications().catch(console.error);
+
+        if (unreadMsgs.length > 0) {
+            const updatedIds = unreadMsgs.map(m => m.id);
+            const updatedIdsSet = new Set(updatedIds);
+            setMessages(prev => prev.map(m => updatedIdsSet.has(m.id) ? { ...m, readBy: [...(m.readBy || []), currentUser.username] } : m));
+            
+            if (onMessagesRead) {
+                onMessagesRead(updatedIds);
+            }
+
+            try {
+                await apiCall('/chat/read-batch', 'POST', { username: currentUser.username, messageIds: updatedIds });
+            } catch (e) {
+                console.error("Batch read error:", e);
+                for (const msg of unreadMsgs) {
+                    const reads = msg.readBy || [];
+                    if (!reads.includes(currentUser.username)) {
+                        await updateMessage({ ...msg, readBy: [...reads, currentUser.username] });
+                    }
+                }
+            }
+        }
+    };
+
+    const handleMarkAllAsRead = async () => {
+        if (!currentUser?.username) return;
+        try {
+            await apiCall('/chat/read-all', 'POST', { username: currentUser.username, channelId: 'all' });
+            setMessages(prev => prev.map(m => {
+                const reads = m.readBy || [];
+                return reads.includes(currentUser.username) ? m : { ...m, readBy: [...reads, currentUser.username] };
+            }));
+            if (onMessagesRead) {
+                onMessagesRead(messages.map(m => m.id));
+            }
+            clearAllActiveNotifications().catch(console.error);
+        } catch (e) {
+            console.error("Mark all read failed:", e);
+        }
+    };
+
+    const handleDeleteGroup = async (groupId: string, isTaskGroup: boolean = false, groupName: string = '') => {
+        if (!currentUser) return;
+        const isAdmin = currentUser.role === UserRole.ADMIN;
+        const currentU = currentUser.username.toLowerCase();
+        const grp = isTaskGroup ? taskGroups.find(g => g.id === groupId) : groups.find(g => g.id === groupId);
+        const isCreator = grp?.createdBy?.toLowerCase() === currentU;
+        const isGroupAdmin = !isTaskGroup && ((grp as any)?.admins || []).some((a: string) => a.toLowerCase() === currentU);
+
+        if (!isAdmin && !isCreator && !isGroupAdmin) {
+            alert('شما اجازه حذف این گروه را ندارید.');
+            return;
+        }
+
+        const confirmMsg = isAdmin && !isCreator 
+            ? `آیا مطمئنید که می‌خواهید گروه «${groupName || grp?.name || 'انتخاب شده'}» را به عنوان مدیر سیستم به صورت دائمی حذف کنید؟ تمامی پیام‌ها و تسک‌های مربوطه حذف خواهند شد.`
+            : `آیا از حذف و انحلال گروه «${groupName || grp?.name || 'انتخاب شده'}» اطمینان دارید؟`;
+
+        if (!window.confirm(confirmMsg)) return;
+
+        try {
+            if (isTaskGroup) {
+                await deleteTaskGroup(groupId);
+                setTaskGroups(prev => prev.filter(g => g.id !== groupId));
+            } else {
+                await deleteGroup(groupId);
+                setGroups(prev => prev.filter(g => g.id !== groupId));
+            }
+            setMessages(prev => prev.filter(m => m.groupId !== groupId));
+            if (activeChannel?.id === groupId) {
+                setActiveChannel(null);
+            }
+            setShowGroupInfo(null);
+            await loadMeta();
+            onRefresh();
+        } catch (e) {
+            console.error("Delete group error:", e);
+            alert("خطا در حذف گروه");
+        }
+    };
+
+    // --- Render Logic ---
+    const getAllChannelsForForward = (): ChannelItem[] => {
+        const list: ChannelItem[] = [];
+        const safeUsers = Array.isArray(users) ? users : [];
+        const safeGroups = Array.isArray(groups) ? groups : [];
+        
+        list.push({ type: 'public', id: 'public', name: 'کانال عمومی', avatar: null, isOnline: true, lastMsg: null, unread: 0 });
+        
+        safeUsers.forEach(u => {
+            if (currentUser && u.username === currentUser.username) return;
+            list.push({ type: 'private', id: u.username, name: u.fullName, avatar: resolveImageUrl(u.avatar), isOnline: false, lastMsg: null, unread: 0 });
+        });
+        
+        safeGroups.forEach(g => {
+            list.push({ type: 'group', id: g.id, name: g.name, avatar: g.avatar || null, isOnline: false, lastMsg: null, unread: 0 });
+        });
+        
+        return list;
+    };
+
+    // Pre-index all channel statistics (lastMsg, unread, hasMention) in a single O(N) pass over displayMessages
+    const channelStatsMap = useMemo(() => {
+        const stats = new Map<string, { lastMsg: ChatMessage | null; unread: number; hasMention: boolean }>();
+        if (!currentUser || !currentUser.username) return stats;
+        const currentU = currentUser.username.toLowerCase();
+
+        const ensureStat = (key: string) => {
+            let entry = stats.get(key);
+            if (!entry) {
+                entry = { lastMsg: null, unread: 0, hasMention: false };
+                stats.set(key, entry);
+            }
+            return entry;
+        };
+
+        for (let i = 0; i < displayMessages.length; i++) {
+            const m = displayMessages[i];
+            const senderLower = m.senderUsername?.toLowerCase() || '';
+            const recipientLower = m.recipient?.toLowerCase() || '';
+            const isSystem = senderLower === 'system' || m.role === 'system' || m.sender === 'سیستم';
+
+            let channelKey = '';
+            let isForUnread = false;
+
+            if (isSystem) {
+                if (!recipientLower || recipientLower === currentU) {
+                    channelKey = 'system';
+                    isForUnread = true;
+                }
+            } else if (m.groupId) {
+                channelKey = `group:${m.groupId}`;
+                isForUnread = senderLower !== '' && senderLower !== currentU;
+            } else if (!recipientLower) {
+                channelKey = 'public';
+                isForUnread = senderLower !== '' && senderLower !== currentU;
+            } else if (recipientLower === currentU && senderLower) {
+                channelKey = `private:${senderLower}`;
+                isForUnread = senderLower !== currentU;
+            } else if (senderLower === currentU && recipientLower) {
+                channelKey = `private:${recipientLower}`;
+                isForUnread = false;
+            }
+
+            if (!channelKey) continue;
+
+            const stat = ensureStat(channelKey);
+            stat.lastMsg = m;
+
+            if (isForUnread) {
+                const isRead = m.readBy?.some(u => u.toLowerCase() === currentU);
+                if (!isRead) {
+                    stat.unread++;
+                    if (!stat.hasMention && channelKey !== 'system' && checkIfMessageMentionsUser(m.message, currentUser)) {
+                        stat.hasMention = true;
+                    }
+                }
+            }
+        }
+
+        return stats;
+    }, [displayMessages, currentUser]);
+
+    const sortedChannels = useMemo((): ChannelItem[] => {
+        const list: ChannelItem[] = [];
+        const term = searchTerm.toLowerCase().trim();
+        const safeUsers = Array.isArray(users) ? users : [];
+        const safeGroups = Array.isArray(groups) ? groups : [];
+        const safeTaskGroups = Array.isArray(taskGroups) ? taskGroups : [];
+        const currentUsername = currentUser?.username || '';
+        const currentU = currentUsername.toLowerCase();
+        const isAdmin = currentUser?.role === UserRole.ADMIN;
+
+        const getStat = (key: string) => channelStatsMap.get(key) || { lastMsg: null, unread: 0, hasMention: false };
+
+        if (activeTab === 'ALL') {
+            // 1. System Channel (Cartable / approvals / notices)
+            const sysStat = getStat('system');
+            const sysMatch = !term || 'پیام ها و اعلانات هوشمند سیستم سیستم کارتابل اطلاعیه صورتجلسه'.includes(term);
+            if (sysMatch) {
+                list.push({
+                    type: 'system', id: 'system', name: 'پیام‌ها و اعلانات سیستم', 
+                    avatar: null, isOnline: true, 
+                    lastMsg: sysStat.lastMsg, unread: sysStat.unread,
+                    hasMention: false
+                });
+            }
+
+            // 2. Public Channel
+            const pubStat = getStat('public');
+            list.push({
+                type: 'public', id: 'public', name: 'کانال عمومی', 
+                avatar: null, isOnline: true, 
+                lastMsg: pubStat.lastMsg, unread: pubStat.unread,
+                hasMention: pubStat.hasMention
+            });
+
+            // 3. Groups (with avatars)
+            safeGroups.forEach(g => {
+                const gStat = getStat(`group:${g.id}`);
+                const isMember = isAdmin || (Array.isArray(g.members) && g.members.some(mem => mem?.toLowerCase() === currentU)) || g.createdBy?.toLowerCase() === currentU;
+                if (isMember || gStat.lastMsg || term) {
+                    list.push({
+                        type: 'group', id: g.id, name: g.name,
+                        avatar: g.avatar || null, isOnline: false,
+                        lastMsg: gStat.lastMsg, unread: gStat.unread,
+                        hasMention: gStat.hasMention
+                    });
+                }
+            });
+
+            // 4. Task Groups (with avatars)
+            safeTaskGroups.forEach(g => {
+                const tgStat = getStat(`group:${g.id}`);
+                const isMember = isAdmin || (Array.isArray(g.members) && g.members.some(mem => mem?.toLowerCase() === currentU)) || g.createdBy?.toLowerCase() === currentU;
+                if (isMember || tgStat.lastMsg || term) {
+                    list.push({
+                        type: 'task_group', id: g.id, name: g.name,
+                        avatar: g.avatar || null, isOnline: false,
+                        lastMsg: tgStat.lastMsg, unread: tgStat.unread,
+                        hasMention: tgStat.hasMention
+                    });
+                }
+            });
+
+            // 5. Private chats
+            safeUsers.forEach(u => {
+                if (currentUsername && u.username?.toLowerCase() === currentU) return;
+                const uStat = getStat(`private:${(u.username || '').toLowerCase()}`);
+                const isOnline = isUserOnline(u);
+                
+                list.push({
+                    type: 'private', id: u.username, name: u.fullName || u.username,
+                    avatar: resolveImageUrl(u.avatar), isOnline, lastSeen: parseTimestamp(u.lastSeen),
+                    lastMsg: uStat.lastMsg, unread: uStat.unread,
+                    hasMention: uStat.hasMention
+                });
+            });
+
+            if (list.length <= 1 && !term) {
+                 safeUsers.slice(0, 10).forEach(u => {
+                     if (currentUsername && u.username?.toLowerCase() === currentU) return;
+                     if (!list.find(i => i.id?.toLowerCase() === u.username?.toLowerCase())) {
+                          list.push({
+                             type: 'private', id: u.username, name: u.fullName,
+                             avatar: u.avatar || null, isOnline: false,
+                             lastMsg: null, unread: 0,
+                             hasMention: false
+                          });
+                     }
+                 });
+            }
+        } else if (activeTab === 'CHATS') {
+            // 1. System Channel
+            const sysStat = getStat('system');
+            const sysMatch = !term || 'پیام ها و اعلانات هوشمند سیستم سیستم کارتابل اطلاعیه صورتجلسه'.includes(term);
+            if (sysMatch) {
+                list.push({
+                    type: 'system', id: 'system', name: 'پیام‌ها و اعلانات سیستم', 
+                    avatar: null, isOnline: true, 
+                    lastMsg: sysStat.lastMsg, unread: sysStat.unread,
+                    hasMention: false
+                });
+            }
+
+            const pubStat = getStat('public');
+            list.push({
+                type: 'public', id: 'public', name: 'کانال عمومی', 
+                avatar: null, isOnline: true, 
+                lastMsg: pubStat.lastMsg, unread: pubStat.unread,
+                hasMention: pubStat.hasMention
+            });
+
+            safeGroups.forEach(g => {
+                const gStat = getStat(`group:${g.id}`);
+                const isMember = isAdmin || (Array.isArray(g.members) && g.members.some(mem => mem?.toLowerCase() === currentU)) || g.createdBy?.toLowerCase() === currentU;
+                if (isMember || gStat.lastMsg || term) {
+                    list.push({
+                        type: 'group', id: g.id, name: g.name,
+                        avatar: g.avatar || null, isOnline: false,
+                        lastMsg: gStat.lastMsg, unread: gStat.unread,
+                        hasMention: gStat.hasMention
+                    });
+                }
+            });
+
+            safeTaskGroups.forEach(g => {
+                const tgStat = getStat(`group:${g.id}`);
+                const isMember = isAdmin || (Array.isArray(g.members) && g.members.some(mem => mem?.toLowerCase() === currentU)) || g.createdBy?.toLowerCase() === currentU;
+                if (tgStat.lastMsg || isMember || term) {
+                    list.push({
+                        type: 'task_group', id: g.id, name: g.name,
+                        avatar: g.avatar || null, isOnline: false,
+                        lastMsg: tgStat.lastMsg, unread: tgStat.unread,
+                        hasMention: tgStat.hasMention
+                    });
+                }
+            });
+
+            safeUsers.forEach(u => {
+                if (currentUsername && u.username?.toLowerCase() === currentU) return;
+                const uStat = getStat(`private:${(u.username || '').toLowerCase()}`);
+                const isOnline = isUserOnline(u);
+                
+                list.push({
+                    type: 'private', id: u.username, name: u.fullName || u.username,
+                    avatar: resolveImageUrl(u.avatar), isOnline, lastSeen: parseTimestamp(u.lastSeen),
+                    lastMsg: uStat.lastMsg, unread: uStat.unread,
+                    hasMention: uStat.hasMention
+                });
+            });
+
+            if (list.length <= 1 && !term) {
+                 safeUsers.slice(0, 10).forEach(u => {
+                     if (currentUsername && u.username?.toLowerCase() === currentU) return;
+                     if (!list.find(i => i.id?.toLowerCase() === u.username?.toLowerCase())) {
+                          list.push({
+                             type: 'private', id: u.username, name: u.fullName,
+                             avatar: resolveImageUrl(u.avatar), isOnline: false,
+                             lastMsg: null, unread: 0,
+                             hasMention: false
+                          });
+                     }
+                 });
+            }
+        } else if (activeTab === 'GROUPS') {
+            safeGroups.forEach(g => {
+                const gStat = getStat(`group:${g.id}`);
+                list.push({
+                    type: 'group', id: g.id, name: g.name,
+                    avatar: g.avatar || null, isOnline: false,
+                    lastMsg: gStat.lastMsg, unread: gStat.unread,
+                    hasMention: gStat.hasMention
+                });
+            });
+        } else if (activeTab === 'TASKS') {
+            safeTaskGroups.forEach(g => {
+                const tgStat = getStat(`group:${g.id}`);
+                list.push({
+                    type: 'task_group', id: g.id, name: g.name,
+                    avatar: g.avatar || null, isOnline: false,
+                    lastMsg: tgStat.lastMsg, unread: tgStat.unread,
+                    hasMention: tgStat.hasMention
+                });
+            });
+        }
+
+        return list.filter(item => item.name.toLowerCase().includes(term)).sort((a, b) => {
+            const timeA = a.lastMsg?.timestamp || 0;
+            const timeB = b.lastMsg?.timestamp || 0;
+            if (timeA || timeB) return timeB - timeA;
+            return a.name.localeCompare(b.name);
+        });
+    }, [channelStatsMap, activeTab, searchTerm, users, groups, taskGroups, currentUser]);
+
+    // --- Actions ---
+    const handleSendSticker = async (sticker: StickerItem) => {
+        if (!currentUser || !activeChannel) return;
+        const newMsgId = generateUUID();
+        const newMsg: ChatMessage = {
+            id: newMsgId,
+            sender: currentUser.fullName,
+            senderUsername: currentUser.username,
+            role: currentUser.role,
+            message: sticker.name || 'استیکر',
+            sticker: {
+                packId: sticker.packId,
+                stickerId: sticker.id,
+                name: sticker.name,
+                emoji: sticker.emoji,
+                preview: sticker.preview
+            },
+            timestamp: Date.now(),
+            recipient: activeChannel.type === 'private' ? activeChannel.id! : undefined,
+            groupId: (activeChannel.type === 'group' || activeChannel.type === 'task_group') ? activeChannel.id! : undefined,
+            replyTo: replyingTo ? {
+                id: replyingTo.id,
+                sender: replyingTo.sender,
+                message: replyingTo.message || 'استیکر'
+            } : undefined,
+            readBy: [],
+            isPending: false
+        };
+
+        setPendingMessages(prev => [...prev, newMsg]);
+        setReplyingTo(null);
+        setShowStickerPicker(false);
+        setTimeout(scrollToBottom, 50);
+
+        try {
+            await sendMessage(newMsg);
+            onRefresh();
+        } catch(err) {
+            console.error("Failed to send sticker:", err);
+        }
+    };
+
+    const handleToggleReaction = async (msgId: string, emoji: string) => {
+        if (!currentUser) return;
+        // Optimistic local update
+        setMessages(prev => prev.map(m => {
+            if (m.id !== msgId) return m;
+            const reactions = { ...(m.reactions || {}) };
+            const users = reactions[emoji] ? [...reactions[emoji]] : [];
+            const idx = users.indexOf(currentUser.username);
+            if (idx > -1) {
+                users.splice(idx, 1);
+                if (users.length === 0) delete reactions[emoji];
+                else reactions[emoji] = users;
+            } else {
+                users.push(currentUser.username);
+                reactions[emoji] = users;
+            }
+            return { ...m, reactions };
+        }));
+
+        try {
+            await apiCall(`/api/chat/${msgId}/reaction`, 'POST', {
+                emoji,
+                username: currentUser.username
+            });
+            onRefresh();
+        } catch (err) {
+            console.error("Failed to toggle reaction:", err);
+        }
+    };
+
+    const handleSendMessage = async () => {
+        if ((!inputText.trim() && !localSharedData?.fileUrl) || isUploading) return;
+
+        if (editingMessageId) {
+            const msgToUpdate = displayMessages.find(m => m.id === editingMessageId);
+            if (msgToUpdate) {
+                try {
+                    await updateMessage({ ...msgToUpdate, message: inputText, isEdited: true });
+                    setEditingMessageId(null);
+                    setInputText('');
+                    onRefresh();
+                } catch(e: any) { alert("خطا در ویرایش پیام"); }
+            }
+            return;
+        }
+
+        const newMsgId = generateUUID();
+        const hasLocalFile = !!localSharedData?.fileUrl;
+
+        const newMsg: ChatMessage = {
+            id: newMsgId,
+            sender: currentUser.fullName,
+            senderUsername: currentUser.username,
+            role: currentUser.role,
+            message: inputText,
+            timestamp: Date.now(),
+            recipient: activeChannel?.type === 'private' ? activeChannel.id! : undefined,
+            groupId: (activeChannel?.type === 'group' || activeChannel?.type === 'task_group') ? activeChannel.id! : undefined,
+            attachment: hasLocalFile ? {
+                fileName: localSharedData.fileUrl!.split('/').pop() || 'فایل به اشتراک گذاشته شده',
+                url: '' // Will be filled once uploaded
+            } : undefined,
+            replyTo: replyingTo ? {
+                id: replyingTo.id,
+                sender: replyingTo.sender,
+                message: replyingTo.message || (replyingTo.audioUrl ? 'پیام صوتی' : 'فایل')
+            } : undefined,
+            readBy: [],
+            isPending: true,
+            uploadProgress: hasLocalFile ? 0 : undefined
+        };
+
+        const currentShared = localSharedData;
+
+        // Optimistic UI Update using pendingMessages
+        setPendingMessages(prev => [...prev, newMsg]);
+        setLocalSharedData(null);
+        setInputText('');
+        setReplyingTo(null);
+        setTimeout(scrollToBottom, 50);
+
+        try {
+            if (hasLocalFile && currentShared?.fileUrl) {
+                const isAlreadyUploaded = currentShared.fileUrl.startsWith('/uploads/') || currentShared.fileUrl.includes('/uploads/');
+                
+                if (isAlreadyUploaded) {
+                    // Already hosted on server (e.g. redirected from share-target server helper), send directly!
+                    newMsg.attachment = {
+                        fileName: currentShared.title || currentShared.fileUrl.split('/').pop() || 'فایل به اشتراک گذاشته شده',
+                        url: currentShared.fileUrl
+                    };
+                } else {
+                    setIsUploading(true);
+                    let targetUrl = currentShared.fileUrl;
+                    let blob;
+                    
+                    if (Capacitor.isNativePlatform() && (targetUrl.startsWith('content://') || targetUrl.startsWith('file://'))) {
+                        try {
+                            const readResult = await Filesystem.readFile({
+                                path: currentShared.fileUrl
+                            });
+                            const base64Data = readResult.data;
+                            const base64String = typeof base64Data === 'string' ? base64Data : ''; 
+                            
+                            let mimeType = 'application/octet-stream';
+                            const ext = currentShared.fileUrl.split('.').pop()?.toLowerCase();
+                            if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+                            else if (ext === 'png') mimeType = 'image/png';
+                            else if (ext === 'gif') mimeType = 'image/gif';
+                            else if (ext === 'pdf') mimeType = 'application/pdf';
+                            else if (ext === 'xlsx') mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                            else if (ext === 'xls') mimeType = 'application/vnd.ms-excel';
+                            else if (ext === 'doc' || ext === 'docx') mimeType = 'application/msword';
+                            else if (ext === 'txt') mimeType = 'text/plain';
+                            else if (ext === 'mp4') mimeType = 'video/mp4';
+                            else if (ext === 'mp3') mimeType = 'audio/mpeg';
+
+                            // Safe synchronous base64 to blob conversion instead of fetching data URI
+                            const rawBase64 = base64String.includes(',') ? base64String.split(',')[1] : base64String;
+                            const byteCharacters = atob(rawBase64);
+                            const byteNumbers = new Array(byteCharacters.length);
+                            for (let idx = 0; idx < byteCharacters.length; idx++) {
+                                byteNumbers[idx] = byteCharacters.charCodeAt(idx);
+                            }
+                            const byteArray = new Uint8Array(byteNumbers);
+                            blob = new Blob([byteArray], { type: mimeType });
+                        } catch (readErr) {
+                            console.error("Capacitor Filesystem readFile fallback failed:", readErr);
+                            // @ts-ignore
+                            if (window.Capacitor) {
+                                // @ts-ignore
+                                targetUrl = window.Capacitor.convertFileSrc(targetUrl);
+                            }
+                            try {
+                                const response = await fetch(targetUrl);
+                                blob = await response.blob();
+                            } catch (secFetchErr: any) {
+                                console.error("Converter fetch also failed:", secFetchErr);
+                                throw new Error(`سیستم در دسترسی به فایل گالری با خطا مواجه شد. لطفاً فایل را از دکمه سنجاق انتخاب فرمایید. جزئیات: ${secFetchErr.message || 'خطای دسترسی'}`);
+                            }
+                        }
+                    } else {
+                        if (targetUrl.startsWith('content://') || targetUrl.startsWith('file://')) {
+                            // @ts-ignore
+                            if (window.Capacitor) {
+                                // @ts-ignore
+                                targetUrl = window.Capacitor.convertFileSrc(targetUrl);
+                            }
+                        }
+                        try {
+                            const response = await fetch(targetUrl);
+                            blob = await response.blob();
+                        } catch (fetchErr: any) {
+                            console.error("Standard native path fetch failed:", fetchErr);
+                            throw new Error(`خطا در بارگذاری موقت فایل برای ارسال: ${fetchErr.message || 'خطای شبکه'}`);
+                        }
+                    }
+                    
+                    const defaultName = currentShared.title || `shared_file_${Date.now()}`;
+                    const ext = blob.type.split('/').pop() || 'bin';
+                    const fileSafeName = currentShared.fileUrl.split('/').pop() || `${defaultName}.${ext}`;
+                    // @ts-ignore
+                    const file = new window.File([blob], fileSafeName, { type: blob.type });
+
+                    const result = await uploadFileChunked(file, (progress) => {
+                        setPendingMessages(prev => prev.map(m => m.id === newMsgId ? { ...m, uploadProgress: progress } : m));
+                    });
+                    
+                    newMsg.attachment = {
+                        fileName: result.fileName,
+                        url: result.url
+                    };
+                }
+            }
+
+            await sendMessage({ ...newMsg, isPending: undefined, uploadProgress: undefined });
+            setIsUploading(false);
+            onRefresh();
+        } catch (e: any) { 
+            console.error("Send Error:", e);
+            setPendingMessages(prev => prev.filter(m => m.id !== newMsgId));
+            setIsUploading(false);
+            alert(`خطا در ارسال پیام: ${e.message || 'خطای شبکه'}`);
+        }
+    };
+
+    const getBestMimeType = () => {
+        const types = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/mp4',
+            'audio/ogg;codecs=opus',
+            'audio/aac'
+        ];
+        for (const type of types) {
+            if (MediaRecorder.isTypeSupported(type)) return type;
+        }
+        return '';
+    };
+
+    const startRecording = async () => {
+        if (isRecording) return; 
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            const mimeType = getBestMimeType();
+            const options = mimeType ? { mimeType } : undefined;
+            recordedMimeTypeRef.current = mimeType || '';
+
+            const mediaRecorder = new MediaRecorder(stream, options);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (event) => { 
+                if (event.data && event.data.size > 0) {
+                    audioChunksRef.current.push(event.data); 
+                }
+            };
+            
+            mediaRecorder.onstop = async () => {
+                const tracks = stream.getTracks();
+                tracks.forEach(track => track.stop());
+
+                const durationSec = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+
+                if (audioChunksRef.current.length === 0) {
+                    setIsRecording(false);
+                    return;
+                }
+
+                // Construct blob with correct type
+                const finalMime = recordedMimeTypeRef.current || 'audio/webm';
+                const audioBlob = new Blob(audioChunksRef.current, { type: finalMime });
+                
+                // Only send if substantial data
+                if (audioBlob.size < 100) { 
+                    setIsUploading(false); 
+                    setIsRecording(false);
+                    return; 
+                }
+                
+                setIsUploading(true);
+                const reader = new FileReader();
+                reader.readAsDataURL(audioBlob);
+                reader.onloadend = async () => {
+                    const base64 = (reader.result || '') as string;
+                    
+                    // Optimistic UI for Voice
+                    const tempId = generateUUID();
+                    const tempUrl = URL.createObjectURL(audioBlob);
+                    
+                    const currentVoiceReplyTo = replyingTo ? {
+                        id: replyingTo.id,
+                        sender: replyingTo.sender,
+                        message: replyingTo.message || (replyingTo.audioUrl ? 'پیام صوتی' : 'فایل')
+                    } : undefined;
+
+                    const tempMsg: ChatMessage = {
+                        id: tempId,
+                        sender: currentUser.fullName,
+                        senderUsername: currentUser.username,
+                        role: currentUser.role,
+                        message: '',
+                        timestamp: Date.now(),
+                        recipient: activeChannel?.type === 'private' ? activeChannel.id! : undefined,
+                        groupId: (activeChannel?.type === 'group' || activeChannel?.type === 'task_group') ? activeChannel.id! : undefined,
+                        audioUrl: tempUrl,
+                        audioDuration: durationSec,
+                        replyTo: currentVoiceReplyTo,
+                        readBy: [],
+                        isPending: true,
+                        uploadProgress: 0
+                    };
+                    
+                    setMessages(prev => [...prev, tempMsg]);
+                    setReplyingTo(null);
+                    setTimeout(scrollToBottom, 50);
+                    setIsUploading(false); // Hide spinner, show message immediately
+                    setIsRecording(false);
+                    audioChunksRef.current = [];
+
+                    try {
+                        let ext = 'webm';
+                        if (finalMime.includes('mp4') || finalMime.includes('aac')) ext = 'm4a';
+                        else if (finalMime.includes('ogg')) ext = 'ogg';
+
+                        // Simulate progress for UI
+                        setTimeout(() => setMessages(prev => prev.map(m => m.id === tempId ? { ...m, uploadProgress: 50 } : m)), 200);
+
+                        const result = await uploadFile(`voice_${Date.now()}.${ext}`, base64);
+                        
+                        // Update with real URL and same ID
+                        const realMsg = { ...tempMsg, audioUrl: result.url, replyTo: currentVoiceReplyTo, isPending: false, uploadProgress: undefined };
+                        await sendMessage(realMsg);
+                        
+                        setMessages(prev => prev.map(m => m.id === tempId ? realMsg : m));
+                        onRefresh();
+                    } catch (e: any) { 
+                        alert('خطا در ارسال ویس'); 
+                        setMessages(prev => prev.filter(m => m.id !== tempId));
+                    }
+                };
+            };
+
+            // Start WITHOUT timeslice to let browser manage buffer and headers correctly.
+            // This prevents corruption in some browsers (Safari/Mobile Chrome).
+            mediaRecorder.start(); 
+            recordingStartTimeRef.current = Date.now();
+            setIsRecording(true);
+            setRecordingTime(0);
+            if(recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+            recordingTimerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
+        } catch (err: any) { alert("دسترسی به میکروفون امکان‌پذیر نیست."); }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+            if(recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
+                recordingTimerRef.current = null;
+            }
+        }
+    };
+
+    // --- True File Sharing ---
+    const handleNativeShare = async (msg: ChatMessage) => {
+        const fileUrl = msg.attachment?.url || msg.audioUrl;
+        if (!fileUrl) return;
+
+        // Try to fetch blob for file sharing
+        try {
+            // Need absolute URL for fetch if it's relative
+            const fetchUrl = fileUrl.startsWith('data:') ? fileUrl : resolveImageUrl(fileUrl);
+            
+            const response = await fetch(fetchUrl);
+            const blob = await response.blob();
+            
+            const fileName = msg.attachment?.fileName || `file_${Date.now()}.${blob.type.split('/')[1] || 'bin'}`;
+            const file = new (window as any).File([blob], fileName, { type: blob.type });
+
+            // Check if can share files
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                await navigator.share({
+                    files: [file],
+                    title: 'اشتراک‌گذاری',
+                    text: msg.message || 'فایل ارسال شده'
+                });
+            } else {
+                throw new Error("Cannot share file directly");
+            }
+
+        } catch (error: any) {
+            console.log("File sharing failed, falling back to link share:", error);
+            // Fallback to Link Share
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: 'اشتراک‌گذاری فایل',
+                        text: `فایل ارسالی از طرف ${msg.sender}`,
+                        url: fileUrl.startsWith('http') ? fileUrl : `${window.location.origin}${fileUrl}`
+                    });
+                } catch(e: any) { console.log('Link share failed', e); }
+            } else {
+                // Last resort: Open in new tab
+                window.open(fileUrl, '_blank');
+            }
+        }
+    };
+
+    const handleOpenAttachmentModal = (files: FileList | File[] | null) => {
+        if (!files || files.length === 0) return;
+        setPendingAttachmentModalFiles(Array.from(files));
+    };
+
+    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement> | { target: { files: FileList | null, value: string } }) => {
+        const files = e.target.files;
+        if (files && files.length > 0) {
+            handleOpenAttachmentModal(files);
+        }
+        try {
+            if (e.target) e.target.value = '';
+        } catch(err){}
+    };
+
+    const handleSendFromAttachmentModal = async (items: { file: File; caption: string }[]) => {
+        if (!currentUser || !items || items.length === 0) return;
+
+        // Immediately close the modal and reset input state
+        setPendingAttachmentModalFiles(null);
+        setReplyingTo(null);
+        setInputText('');
+
+        const currentAttachmentReplyTo = replyingTo ? {
+            id: replyingTo.id,
+            sender: replyingTo.sender,
+            message: replyingTo.message || (replyingTo.audioUrl ? 'پیام صوتی' : 'فایل')
+        } : undefined;
+
+        for (const item of items) {
+            const safeName = item.file.name || `unknown_${Date.now()}`;
+            const newMsgId = generateUUID();
+            let localPreviewUrl: string | undefined = undefined;
+            if (item.file.type && item.file.type.startsWith('image/')) {
+                try {
+                    localPreviewUrl = URL.createObjectURL(item.file);
+                } catch (_) {}
+            }
+
+            const pendingMsg: ChatMessage = {
+                id: newMsgId,
+                sender: currentUser.fullName,
+                senderUsername: currentUser.username,
+                role: currentUser.role,
+                message: item.caption || '',
+                timestamp: Date.now(),
+                recipient: activeChannel?.type === 'private' ? activeChannel.id! : undefined,
+                groupId: (activeChannel?.type === 'group' || activeChannel?.type === 'task_group') ? activeChannel.id! : undefined,
+                attachment: { 
+                    fileName: safeName, 
+                    url: '',
+                    localPreview: localPreviewUrl,
+                    fileSize: item.file.size
+                } as any,
+                replyTo: currentAttachmentReplyTo,
+                readBy: [],
+                isPending: true,
+                uploadProgress: 0
+            };
+
+            setPendingMessages(prev => [...prev, pendingMsg]);
+            setTimeout(scrollToBottom, 50);
+
+            try {
+                const result = await uploadFileChunked(item.file, (progress) => {
+                    setPendingMessages(prev => prev.map(m => m.id === newMsgId ? { ...m, uploadProgress: progress } : m));
+                });
+                
+                if (localPreviewUrl) {
+                    try { URL.revokeObjectURL(localPreviewUrl); } catch (_) {}
+                }
+
+                const finalMsg: ChatMessage = {
+                    ...pendingMsg,
+                    message: item.caption || '',
+                    attachment: { fileName: result.fileName, url: result.url },
+                    replyTo: currentAttachmentReplyTo,
+                    isPending: false,
+                    uploadProgress: undefined
+                };
+                
+                await sendMessage(finalMsg);
+                setPendingMessages(prev => prev.filter(m => m.id !== newMsgId));
+                setMessages(prev => [...prev.filter(m => m.id !== newMsgId), finalMsg]);
+                onRefresh();
+            } catch (error: any) { 
+                console.error("Upload Error:", error);
+                if (localPreviewUrl) {
+                    try { URL.revokeObjectURL(localPreviewUrl); } catch (_) {}
+                }
+                alert(`خطا در ارسال فایل: ${error.message || 'خطای شبکه'}`); 
+                setPendingMessages(prev => prev.filter(m => m.id !== newMsgId));
+            }
+        }
+    };
+
+    const handlePaste = (e: React.ClipboardEvent) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+
+        const pastedFiles: File[] = [];
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].kind === 'file') {
+                const file = items[i].getAsFile();
+                if (file) {
+                    pastedFiles.push(file);
+                }
+            }
+        }
+
+        if (pastedFiles.length > 0) {
+            e.preventDefault();
+            handleOpenAttachmentModal(pastedFiles);
+        }
+    };
+
+    const handleContainerDragEnter = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current++;
+        if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+            setIsDragOverChat(true);
+        }
+    };
+
+    const handleContainerDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        if (!isDragOverChat) setIsDragOverChat(true);
+    };
+
+    const handleContainerDragLeave = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current--;
+        if (dragCounterRef.current <= 0) {
+            dragCounterRef.current = 0;
+            setIsDragOverChat(false);
+        }
+    };
+
+    const handleContainerDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current = 0;
+        setIsDragOverChat(false);
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+            handleOpenAttachmentModal(files);
+        }
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+            handleOpenAttachmentModal(files);
+        }
+    };
+
+    const handleDelete = async (forEveryone: boolean) => {
+        const ids = Array.from(selectedMessages);
+        if (ids.length === 0) return;
+
+        // Check permission if trying to delete for everyone
+        const canDeleteForEveryone = ids.every(id => {
+            const msg = messages.find(m => m.id === id);
+            return msg && (msg.senderUsername === currentUser.username || [UserRole.ADMIN, UserRole.MANAGER, UserRole.CEO].includes(currentUser.role as UserRole));
+        });
+
+        if (forEveryone && !canDeleteForEveryone) {
+            alert("شما اجازه حذف دو طرفه برخی پیام‌های انتخاب شده را ندارید.");
+            return;
+        }
+
+        const confirmMsg = forEveryone 
+            ? `آیا از حذف ${ids.length > 1 ? 'پیام‌های انتخاب شده' : 'این پیام'} برای همه اطمینان دارید؟`
+            : `آیا از حذف ${ids.length > 1 ? 'پیام‌های انتخاب شده' : 'این پیام'} برای خودتان اطمینان دارید؟ (این عمل محلی است)`;
+
+        if (!confirm(confirmMsg)) return;
+        
+        for (const id of ids) {
+            try {
+                await deleteMessage(id, forEveryone);
+                setMessages(prev => prev.filter(m => m.id !== id));
+            } catch (e) {
+                console.error("Delete failed", e);
+            }
+        }
+        setSelectionMode(false);
+        setSelectedMessages(new Set());
+        onRefresh();
+    };
+
+    // Corrected Forward Logic
+    const handleForward = async (targetId: string, targetType: 'private' | 'group' | 'public' | 'task_group' | 'system') => {
+        if (targetType === 'task_group' || targetType === 'system') return;
+        const ids = Array.from(selectedMessages);
+        for (const id of ids) {
+            const original = messages.find(m => m.id === id);
+            if (original) {
+                const newMsg: ChatMessage = {
+                    id: generateUUID(),
+                    sender: currentUser.fullName,
+                    senderUsername: currentUser.username,
+                    role: currentUser.role,
+                    message: original.message,
+                    timestamp: Date.now(),
+                    recipient: targetType === 'private' ? targetId : undefined,
+                    groupId: targetType === 'group' ? targetId : undefined,
+                    attachment: original.attachment,
+                    audioUrl: original.audioUrl,
+                    isForwarded: true,
+                    // Use flag from modal
+                    forwardFrom: forwardNoQuote ? undefined : original.sender,
+                    readBy: []
+                };
+                await sendMessage(newMsg);
+            }
+        }
+        setSelectionMode(false);
+        setSelectedMessages(new Set());
+        setShowForwardModal(false);
+        setForwardNoQuote(false); // Reset flag
+        
+        // Navigate to target chat
+        setActiveChannel({ type: targetType, id: targetId });
+        onRefresh();
+        setTimeout(scrollToBottom, 150);
+    };
+
+    const toggleSelection = (id: string) => {
+        const newSet = new Set(selectedMessages);
+        if (newSet.has(id)) newSet.delete(id);
+        else newSet.add(id);
+        setSelectedMessages(newSet);
+        if (newSet.size === 0) setSelectionMode(false);
+    };
+
+    const formatTime = (seconds: number) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    };
+
+    const handleCreateGroup = async () => {
+        if (!newGroupName.trim()) return;
+        try {
+            if (showGroupModal === 'task_group') {
+                const newTaskGroup: TaskGroup = {
+                    id: generateUUID(),
+                    name: newGroupName.trim(),
+                    members: [...selectedGroupMembers, currentUser.username],
+                    createdBy: currentUser.username,
+                    createdAt: Date.now()
+                };
+                await createTaskGroup(newTaskGroup);
+                setTaskGroups(prev => [...prev, newTaskGroup]);
+                setActiveChannel({ type: 'task_group', id: newTaskGroup.id });
+            } else {
+                const newGroup: ChatGroup = {
+                    id: generateUUID(),
+                    name: newGroupName.trim(),
+                    members: [...selectedGroupMembers, currentUser.username],
+                    admins: [currentUser.username],
+                    createdBy: currentUser.username,
+                    createdAt: Date.now(),
+                    avatar: null
+                };
+                await createGroup(newGroup);
+                setGroups(prev => [...prev, newGroup]);
+                setActiveChannel({ type: 'group', id: newGroup.id });
+            }
+            setShowGroupModal(false);
+            setNewGroupName('');
+            setSelectedGroupMembers([]);
+        } catch (e) {
+            alert('خطا در ساخت گروه');
+        }
+    };
+
+    const handleUpdateGroup = async (groupId: string, updates: Partial<ChatGroup>) => {
+        try {
+            if (showGroupInfo?.isTaskGroup) {
+                const group = taskGroups.find(g => g.id === groupId);
+                if (!group) return;
+                const updatedGroup = { ...group, ...updates };
+                await updateTaskGroup(updatedGroup);
+                setTaskGroups(prev => prev.map(g => g.id === groupId ? updatedGroup : g));
+                if (showGroupInfo && showGroupInfo.id === groupId) {
+                    setShowGroupInfo({...updatedGroup, isTaskGroup: true});
+                }
+            } else {
+                const group = groups.find(g => g.id === groupId);
+                if (!group) return;
+                const updatedGroup = { ...group, ...updates };
+                await updateGroup(updatedGroup);
+                setGroups(prev => prev.map(g => g.id === groupId ? updatedGroup : g));
+                if (showGroupInfo && showGroupInfo.id === groupId) {
+                    setShowGroupInfo(updatedGroup);
+                }
+            }
+        } catch (e) {
+            alert('خطا در بروزرسانی گروه');
+        }
+    };
+
+    const handleAddMemberToGroup = async (groupId: string) => {
+        const group = showGroupInfo?.isTaskGroup ? taskGroups.find(g => g.id === groupId) : groups.find(g => g.id === groupId);
+        if (!group) return;
+        
+        const availableUsers = users.filter(u => !group.members.includes(u.username));
+        if (availableUsers.length === 0) {
+            alert('همه کاربران در این گروه عضو هستند.');
+            return;
+        }
+        
+        const userListStr = availableUsers.map(u => `${u.fullName} (${u.username})`).join('\n');
+        const username = prompt(`نام کاربری کاربر جدید را جهت افزودن وارد کنید:\n\n${userListStr}`);
+        if (username && users.find(u => u.username === username)) {
+            const newMembers = [...group.members, username];
+            await handleUpdateGroup(groupId, { members: newMembers });
+        } else if (username) {
+            alert('کاربر یافت نشد');
+        }
+    };
+
+    const handleRemoveMemberFromGroup = async (groupId: string, memberUsername: string) => {
+        const group = showGroupInfo?.isTaskGroup ? taskGroups.find(g => g.id === groupId) : groups.find(g => g.id === groupId);
+        if (!group || group.createdBy === memberUsername) {
+            alert('نمی‌توان سازنده گروه را حذف کرد');
+            return;
+        }
+        
+        if (confirm(`آیا از حذف ${memberUsername} اطمینان دارید؟`)) {
+            const newMembers = group.members.filter(m => m !== memberUsername);
+            const newAdmins = showGroupInfo?.isTaskGroup ? undefined : ((group as ChatGroup).admins || []).filter(a => a !== memberUsername);
+            await handleUpdateGroup(groupId, { members: newMembers, admins: newAdmins });
+        }
+    };
+
+    const handleToggleAdminStatus = async (groupId: string, memberUsername: string) => {
+        if (showGroupInfo?.isTaskGroup) return; // Task groups don't have admins 
+        
+        const group = groups.find(g => g.id === groupId);
+        if (!group) return;
+        
+        const admins = group.admins || [];
+        const isCurrentlyAdmin = admins.includes(memberUsername);
+        
+        let newAdmins;
+        if (isCurrentlyAdmin) {
+            newAdmins = admins.filter(a => a !== memberUsername);
+        } else {
+            newAdmins = [...admins, memberUsername];
+        }
+        
+        await handleUpdateGroup(groupId, { admins: newAdmins });
+    };
+
+    // --- Render Logic & Memoized Views ---
+    const filteredMessages = useMemo(() => {
+        if (!activeChannel || !currentUser) return [];
+        const currentU = currentUser.username?.toLowerCase() || '';
+        const channelIdLower = activeChannel.id?.toLowerCase() || '';
+
+        return displayMessages.filter(msg => {
+            let match = false;
+            if (activeChannel.type === 'public') match = !msg.recipient && !msg.groupId;
+            else if (activeChannel.type === 'system') match = (
+                (msg.senderUsername?.toLowerCase() === 'system' || msg.role === 'system' || msg.sender === 'سیستم') &&
+                (!msg.recipient || msg.recipient.toLowerCase() === currentU)
+            );
+            else if (activeChannel.type === 'private') {
+                const sLower = msg.senderUsername?.toLowerCase() || '';
+                const rLower = msg.recipient?.toLowerCase() || '';
+                match = (sLower === channelIdLower && rLower === currentU) || (sLower === currentU && rLower === channelIdLower);
+            }
+            else if (activeChannel.type === 'group' || activeChannel.type === 'task_group') match = msg.groupId === activeChannel.id;
+            
+            if (!match) return false;
+            if (innerSearchTerm) {
+                return (msg.message?.includes(innerSearchTerm) || msg.sender?.includes(innerSearchTerm));
+            }
+            return true;
+        });
+    }, [displayMessages, activeChannel?.type, activeChannel?.id, innerSearchTerm, currentUser?.username]);
+
+    const windowedMessages = useMemo(() => {
+        if (innerSearchTerm || filteredMessages.length <= visibleMessagesLimit) {
+            return filteredMessages;
+        }
+        return filteredMessages.slice(filteredMessages.length - visibleMessagesLimit);
+    }, [filteredMessages, visibleMessagesLimit, innerSearchTerm]);
+
+    const groupedMessagesByDay = useMemo(() => {
+        const groups: { dateKey: string; title: string; messages: ChatMessage[] }[] = [];
+
+        windowedMessages.forEach((msg) => {
+            const msgTimestamp = parseTimestamp(msg.timestamp);
+            const msgDateKey = formatDateKeyFa(msgTimestamp);
+            
+            let existingGroup = groups.length > 0 && groups[groups.length - 1].dateKey === msgDateKey
+                ? groups[groups.length - 1]
+                : groups.find(g => g.dateKey === msgDateKey);
+            if (!existingGroup) {
+                existingGroup = {
+                    dateKey: msgDateKey,
+                    title: formatHumanDateFa(msgTimestamp, msgDateKey),
+                    messages: []
+                };
+                groups.push(existingGroup);
+            }
+            existingGroup.messages.push(msg);
+        });
+        return groups;
+    }, [windowedMessages]);
+
+    const renderMessageWithMentions = (text: string) => {
+        if (!text) return null;
+        const regex = /@([a-zA-Z0-9_\.\-\u0600-\u06FF\u200c]+)/g;
+        const parts = text.split(regex);
+        if (parts.length === 1) {
+            return <span>{text}</span>;
+        }
+        
+        return parts.map((part, i) => {
+            if (i % 2 === 1) {
+                const token = part.trim();
+                const lowerToken = token.toLowerCase();
+
+                if (lowerToken === 'all' || lowerToken === 'همه') {
+                    const isMentioningMe = !!currentUser;
+                    return (
+                        <span 
+                            key={i} 
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 mx-1 rounded-full text-[11px] font-black select-none align-middle shadow-xs ${
+                                isMentioningMe 
+                                    ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700' 
+                                    : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200'
+                            }`}
+                        >
+                            <span>📢</span>
+                            <span>@همه اعضا</span>
+                        </span>
+                    );
+                }
+
+                const u = users.find(user => 
+                    (user.username && user.username.toLowerCase() === lowerToken) ||
+                    (user.fullName && user.fullName.toLowerCase() === lowerToken) ||
+                    (user.fullName && user.fullName.toLowerCase().replace(/\s+/g, '_') === lowerToken) ||
+                    (user.fullName && user.fullName.toLowerCase().replace(/[\s\u200c]+/g, '') === lowerToken.replace(/[\s\u200c]+/g, ''))
+                );
+
+                if (u) {
+                    const isMentioningMe = currentUser && (
+                        currentUser.username?.toLowerCase() === u.username?.toLowerCase() ||
+                        currentUser.fullName?.toLowerCase() === u.fullName?.toLowerCase()
+                    );
+                    return (
+                        <span 
+                            key={i} 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setShowContactInfo(u);
+                            }}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 mx-1 rounded-full text-[11px] font-black select-none align-middle transition-all duration-200 hover:scale-[1.03] cursor-pointer shadow-xs ${
+                                isMentioningMe 
+                                    ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-900 dark:text-amber-200 border-2 border-amber-400 dark:border-amber-600 ring-2 ring-amber-300/40' 
+                                    : 'bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900 hover:border-indigo-300'
+                            }`}
+                            title={`کلیک برای مشاهده اطلاعات تماس ${u.fullName}`}
+                        >
+                            <div className="w-4 h-4 rounded-full overflow-hidden flex items-center justify-center bg-zinc-200 dark:bg-zinc-800 text-[8px] text-zinc-600 dark:text-zinc-300 shrink-0 font-black">
+                                {u.avatar ? (
+                                    <img 
+                                        src={resolveImageUrl(u.avatar)} 
+                                        className="w-full h-full object-cover" 
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => {
+                                            (e.target as HTMLImageElement).style.display = 'none';
+                                        }}
+                                    />
+                                ) : (
+                                    u.fullName.charAt(0)
+                                )}
+                            </div>
+                            <span>@{u.fullName}</span>
+                        </span>
+                    );
+                } else {
+                    return <span key={i} className="text-blue-500 font-bold bg-blue-50/50 dark:bg-blue-950/30 px-1.5 py-0.2 rounded-md">@{token}</span>;
+                }
+            }
+            return <span key={i}>{part}</span>;
+        });
+    };
+
+    const renderedMessageGroups = useMemo(() => {
+        if (!currentUser || !activeChannel) return null;
+        return groupedMessagesByDay.map((group) => {
+            return (
+                <div key={group.dateKey} className="w-full relative flex flex-col gap-2">
+                    <div className="flex justify-center my-3 select-none pointer-events-none transition-opacity duration-300">
+                        <span className="px-3 py-0.5 text-[11px] font-bold text-slate-700 dark:text-slate-200 bg-slate-200/90 dark:bg-zinc-800/90 rounded-full shadow-xs border border-slate-300/50 dark:border-zinc-700/50">
+                            {group.title}
+                        </span>
+                    </div>
+                    
+                    {group.messages.map((msg: ChatMessage) => {
+                        const isMe = msg.senderUsername === currentUser.username;
+                        const isSystemMsg = msg.senderUsername?.toLowerCase() === 'system' || msg.role === 'system' || msg.sender === 'سیستم' || activeChannel.type === 'system';
+                        const isSelected = selectedMessages.has(msg.id);
+                        const isHighlighted = highlightedMessageId === msg.id;
+                        const isMentionedInMsg = checkIfMessageMentionsUser(msg.message, currentUser);
+
+                        const bubbleStyles = isHighlighted 
+                            ? `bg-amber-100 dark:bg-amber-950/80 border-2 border-amber-400 dark:border-amber-500 text-amber-950 dark:text-amber-100 ring-4 ring-amber-300/60 dark:ring-amber-600/60 scale-[1.02] shadow-md transition-all duration-350 ${
+                                isSystemMsg ? 'rounded-2xl w-full max-w-[92%] md:max-w-[85%]' : 
+                                isMe ? 'rounded-xl rounded-tr-none max-w-[75%] md:max-w-[70%]' : 
+                                'rounded-xl rounded-tl-none max-w-[75%] md:max-w-[70%]'
+                              }`
+                            : isSystemMsg 
+                                ? 'w-full max-w-[92%] md:max-w-[85%] bg-gradient-to-br from-indigo-50/95 via-blue-50/90 to-indigo-50/95 dark:from-indigo-950/60 dark:via-blue-950/40 dark:to-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/60 text-indigo-950 dark:text-indigo-100 rounded-2xl shadow-sm'
+                                : isMe 
+                                    ? 'max-w-[75%] md:max-w-[70%] bg-[#eeffde] dark:bg-[#1a2f16] dark:text-[#eeffde] rounded-xl rounded-tr-none shadow-sm'
+                                    : isMentionedInMsg
+                                        ? 'max-w-[75%] md:max-w-[70%] bg-amber-50/90 dark:bg-amber-950/40 border-r-4 border-amber-500 text-amber-950 dark:text-amber-100 rounded-xl rounded-tl-none shadow-sm ring-1 ring-amber-300/30'
+                                        : 'max-w-[75%] md:max-w-[70%] glass-panel rounded-xl rounded-tl-none shadow-sm';
+                        
+                        return (
+                            <div 
+                                key={msg.id}
+                                id={`msg-${msg.id}`}
+                                className={`chat-msg-row flex w-full mb-1 group ${isSystemMsg ? 'justify-center' : isMe ? 'justify-end' : 'justify-start'} items-end gap-2 ${selectionMode ? 'cursor-pointer' : ''}`}
+                                onClick={() => { if(selectionMode) toggleSelection(msg.id); }}
+                                onContextMenu={(e) => { e.preventDefault(); if(!selectionMode) setContextMenuMsg({msg, x: e.clientX, y: e.clientY}); }}
+                            >
+                                {isMe && !isSystemMsg && (
+                                    <div className="flex flex-col gap-1 opacity-60 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                                         <button onClick={() => setReplyingTo(msg)} className="p-1.5 glass-panel rounded-full text-blue-600 shadow-sm hover:scale-110" title="پاسخ"><CornerUpLeft size={12}/></button>
+                                         <button onClick={() => { setSelectedMessages(new Set([msg.id])); setShowForwardModal(true); }} className="p-1.5 glass-panel rounded-full text-green-600 shadow-sm hover:scale-110" title="فوروارد"><Forward size={12}/></button>
+                                         <button onClick={() => handleCopyMessage(msg)} className="p-1.5 glass-panel rounded-full text-gray-600 shadow-sm hover:scale-110" title="کپی"><Copy size={12}/></button>
+                                         {(msg.attachment || msg.audioUrl) && <button onClick={() => handleNativeShare(msg)} className="p-1.5 glass-panel rounded-full text-orange-600 shadow-sm hover:scale-110" title="اشتراک"><Share2 size={12}/></button>}
+                                    </div>
+                                )}
+
+                                {selectionMode && (
+                                    <div className={`mx-2 self-center w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'bg-green-500 border-green-500' : 'border-gray-400 bg-white/50'}`}>
+                                        {isSelected && <Check size={12} className="text-white"/>}
+                                    </div>
+                                )}
+                                
+                                <div className={`relative ${bubbleStyles} px-3.5 py-2.5 text-sm ${isSelected ? 'ring-2 ring-blue-400' : ''}`}>
+                                    {!isMe && !isSystemMsg && isMentionedInMsg && (
+                                        <div className="flex items-center gap-1.5 text-[10px] font-black text-amber-800 dark:text-amber-200 bg-amber-200/80 dark:bg-amber-900/60 px-2 py-0.5 rounded-lg mb-1.5 w-fit border border-amber-300 dark:border-amber-700 shadow-xs">
+                                            <AtSign size={11} className="text-amber-600 dark:text-amber-400" />
+                                            <span>شما در این پیام تگ شده‌اید</span>
+                                        </div>
+                                    )}
+
+                                    {isSystemMsg && (
+                                        <div className="flex items-center justify-between pb-1.5 mb-2 border-b border-indigo-200/60 dark:border-indigo-800/50">
+                                            <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                                                <span className="p-1 bg-indigo-100 dark:bg-indigo-900/60 rounded-lg text-[13px]">📢</span>
+                                                <span>پیام و اعلان هوشمند سیستم</span>
+                                            </div>
+                                            <span className="text-[10px] bg-indigo-100/70 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-300 px-2 py-0.5 rounded-full font-medium">کارتابل</span>
+                                        </div>
+                                    )}
+
+                                    {msg.isForwarded && msg.forwardFrom && (
+                                        <div className="text-[10px] text-blue-600 font-bold mb-1 flex items-center gap-1">
+                                            <Forward size={10}/> نقل قول از {msg.forwardFrom}
+                                        </div>
+                                    )}
+
+                                    {msg.replyTo && (
+                                        <div 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                scrollToMessage(msg.replyTo.id);
+                                            }}
+                                            className={`mb-1 px-2 py-1 rounded border-r-4 text-[10px] bg-black/5 dark:bg-white/5 cursor-pointer transition-all hover:bg-black/10 dark:hover:bg-white/10 ${isMe ? 'border-green-600' : 'border-blue-600'}`}
+                                            title="برای رفتن به پیام کلیک کنید"
+                                        >
+                                            <div className="font-bold opacity-80">{msg.replyTo.sender}</div>
+                                            <div className="truncate opacity-70">{msg.replyTo.message ? msg.replyTo.message.substring(0, 30) : 'فایل/پیوست'}...</div>
+                                        </div>
+                                    )}
+
+                                    {!isMe && !isSystemMsg && activeChannel.type !== 'private' && (
+                                        <div className="text-[11px] font-bold text-[#e17076] mb-0.5">{msg.sender}</div>
+                                    )}
+
+                                    {msg.sticker ? (
+                                        <div className="py-1">
+                                            {msg.sticker.preview ? (
+                                                <div 
+                                                    className="w-32 h-32 md:w-40 md:h-40 select-none transition-transform hover:scale-105 filter drop-shadow-md"
+                                                    dangerouslySetInnerHTML={{ __html: msg.sticker.preview }}
+                                                />
+                                            ) : msg.sticker.url ? (
+                                                <img 
+                                                    src={resolveImageUrl(msg.sticker.url)} 
+                                                    alt={msg.sticker.name || 'استیکر'} 
+                                                    className="w-32 h-32 md:w-40 md:h-40 object-contain filter drop-shadow-sm select-none transition-transform hover:scale-105"
+                                                    loading="lazy"
+                                                />
+                                            ) : (
+                                                <span className="text-5xl">{msg.sticker.emoji || '🌟'}</span>
+                                            )}
+                                        </div>
+                                    ) : msg.attachment ? (
+                                        <>
+                                        <div className="mb-1">
+                                            {/* PENDING UPLOAD STATE (Immediate Feedback with Live Progress Bar & Percentage) */}
+                                            {msg.isPending ? (
+                                                <div className="border border-blue-200/90 dark:border-blue-800/60 bg-blue-50/70 dark:bg-blue-950/40 rounded-2xl p-3 min-w-[240px] sm:min-w-[280px] max-w-full shadow-xs space-y-2.5">
+                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                        {(msg.attachment as any).localPreview ? (
+                                                            <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-blue-300 dark:border-blue-700 shadow-xs relative">
+                                                                <img src={(msg.attachment as any).localPreview} alt="" className="w-full h-full object-cover" />
+                                                            </div>
+                                                        ) : (
+                                                            <div className="w-11 h-11 rounded-xl bg-blue-600/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-300/40 dark:border-blue-700/50 flex items-center justify-center shrink-0">
+                                                                {msg.attachment.fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                                                                    <ImageIcon size={22} />
+                                                                ) : msg.attachment.fileName.match(/\.pdf$/i) ? (
+                                                                    <FileText size={22} className="text-rose-500" />
+                                                                ) : (
+                                                                    <File size={22} />
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        <div className="flex flex-col min-w-0 flex-1">
+                                                            <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate w-full" dir="ltr" title={msg.attachment.fileName}>
+                                                                {msg.attachment.fileName}
+                                                            </span>
+                                                            <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                                                                {(msg.attachment as any).fileSize ? `${((msg.attachment as any).fileSize / (1024 * 1024)).toFixed(1)} MB · ` : ''}در حال بارگذاری و ارسال
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Animated Progress Bar & Percentage */}
+                                                    <div className="space-y-1">
+                                                        <div className="w-full bg-blue-200/60 dark:bg-zinc-700/80 h-2 rounded-full overflow-hidden">
+                                                            <div 
+                                                                className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out"
+                                                                style={{ width: `${Math.max(6, msg.uploadProgress || 0)}%` }}
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-center justify-between text-[11px] font-bold text-blue-600 dark:text-blue-400 pt-0.5">
+                                                            <span className="flex items-center gap-1.5">
+                                                                <Loader2 size={13} className="animate-spin" />
+                                                                <span>در حال ارسال به گفتگو...</span>
+                                                            </span>
+                                                            <span className="font-mono text-xs">{msg.uploadProgress || 0}%</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ) : msg.attachment.fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                                                <div className="relative group/img overflow-hidden rounded-xl inline-block max-w-full">
+                                                    <img 
+                                                        src={resolveImageUrl(msg.attachment.url)} 
+                                                        alt={msg.attachment.fileName}
+                                                        loading="lazy"
+                                                        className="rounded-xl max-h-60 object-cover cursor-pointer hover:opacity-95 transition-opacity shadow-xs"
+                                                        onClick={(e) => { 
+                                                            e.stopPropagation(); 
+                                                            setPreviewAttachment({ isOpen: true, url: msg.attachment.url, fileName: msg.attachment.fileName }); 
+                                                        }}
+                                                    />
+                                                    <button 
+                                                        onClick={(e) => handleDownloadAttachment(msg.id, msg.attachment.url, msg.attachment.fileName, e)}
+                                                        disabled={isDownloading[msg.id]}
+                                                        className={`absolute bottom-2 left-2 px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md backdrop-blur-md ${
+                                                            downloadedFiles[msg.id]
+                                                                ? 'bg-emerald-600/90 text-white'
+                                                                : 'bg-black/75 hover:bg-black/90 text-white'
+                                                        }`}
+                                                        title={downloadedFiles[msg.id] ? 'ذخیره شده در گالری' : 'ذخیره در گالری'}
+                                                    >
+                                                        {isDownloading[msg.id] ? (
+                                                            <>
+                                                                <Loader2 size={12} className="animate-spin" />
+                                                                <span>{fileProgress[msg.id]}%</span>
+                                                            </>
+                                                        ) : downloadedFiles[msg.id] ? (
+                                                            <>
+                                                                <Check size={12} />
+                                                                <span>در گالری ذخیره شد</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <Download size={12} />
+                                                                <span>ذخیره در گالری</span>
+                                                            </>
+                                                        )}
+                                                    </button>
+                                                </div>
+                                            ) : (msg.attachment.fileName.match(/\.pdf$/i) || msg.attachment.url.match(/\.pdf$/i)) ? (
+                                                <div className={`border rounded-2xl p-2.5 flex items-center justify-between gap-2.5 transition-all shadow-xs min-w-[220px] sm:min-w-[270px] max-w-full ${
+                                                    downloadedFiles[msg.id]
+                                                        ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300/80 dark:border-emerald-800/60'
+                                                        : isMe 
+                                                            ? 'bg-white/85 dark:bg-zinc-800/85 border-rose-200/90 dark:border-rose-900/50 hover:border-rose-400' 
+                                                            : 'bg-white/95 dark:bg-zinc-900/95 border-rose-200/80 dark:border-rose-900/50 hover:border-rose-400 dark:hover:border-rose-700'
+                                                }`}>
+                                                    <div 
+                                                        onClick={(e) => {
+                                                            if (downloadedFiles[msg.id] && (Capacitor.isNativePlatform() || isTauriDesktop())) {
+                                                                handleDownloadAttachment(msg.id, msg.attachment.url, msg.attachment.fileName, e);
+                                                            } else {
+                                                                setPreviewAttachment({ isOpen: true, url: msg.attachment.url, fileName: msg.attachment.fileName });
+                                                            }
+                                                        }}
+                                                        className="flex items-center gap-2.5 cursor-pointer min-w-0 flex-1 group/pdf"
+                                                        title={downloadedFiles[msg.id] ? 'باز کردن فوری از حافظه برنامه (بدون نیاز به دانلود مجدد)' : 'مشاهده سند PDF'}
+                                                    >
+                                                        <div className={`w-10 h-10 border rounded-xl flex items-center justify-center shrink-0 group-hover/pdf:scale-105 transition-transform shadow-xs ${
+                                                            downloadedFiles[msg.id]
+                                                                ? 'bg-emerald-100/80 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400'
+                                                                : 'bg-rose-50 dark:bg-rose-950/50 border-rose-200/70 dark:border-rose-900/50 text-rose-600 dark:text-rose-400'
+                                                        }`}>
+                                                            <FileText size={20} />
+                                                        </div>
+                                                        <div className="flex flex-col items-start gap-1 min-w-0 flex-1">
+                                                            <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100 truncate w-full transition-colors" dir="ltr" title={msg.attachment.fileName}>
+                                                                {msg.attachment.fileName}
+                                                            </span>
+                                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                                {downloadedFiles[msg.id] ? (
+                                                                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-300 font-bold">
+                                                                        <Check size={11} />
+                                                                        <span>ذخیره شده در حافظه اپ · باز کردن</span>
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="inline-flex items-center gap-1 text-[10px] text-rose-600 dark:text-rose-400 font-bold">
+                                                                        <Eye size={11} />
+                                                                        <span>مشاهده سند PDF</span>
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="shrink-0 flex items-center gap-1 border-r border-zinc-200/80 dark:border-zinc-700/80 pr-1.5 mr-0.5">
+                                                        <button 
+                                                            onClick={(e) => handleDownloadAttachment(msg.id, msg.attachment.url, msg.attachment.fileName, e)}
+                                                            disabled={isDownloading[msg.id]}
+                                                            className={`px-2.5 py-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer text-[10px] font-bold ${
+                                                                downloadedFiles[msg.id] 
+                                                                    ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-xs' 
+                                                                    : 'bg-rose-50/80 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50'
+                                                            }`}
+                                                            title={downloadedFiles[msg.id] ? 'باز کردن از پوشه اختصاصی برنامه (بدون دانلود مجدد)' : 'ذخیره در پوشه برنامه و باز کردن'}
+                                                        >
+                                                            {isDownloading[msg.id] ? (
+                                                                <div className="flex items-center gap-1">
+                                                                    <Loader2 size={15} className="animate-spin"/>
+                                                                    <span className="text-[9px] font-black">{fileProgress[msg.id]}%</span>
+                                                                </div>
+                                                            ) : downloadedFiles[msg.id] ? (
+                                                                <>
+                                                                    <Check size={14} />
+                                                                    <span>باز کردن</span>
+                                                                </>
+                                                            ) : (
+                                                                <Download size={16} />
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className={`border rounded-2xl p-2.5 flex items-center justify-between gap-2.5 transition-all shadow-xs min-w-[210px] sm:min-w-[260px] max-w-full ${
+                                                    downloadedFiles[msg.id]
+                                                        ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300/80 dark:border-emerald-800/60'
+                                                        : isMe 
+                                                            ? 'bg-white/85 dark:bg-zinc-800/85 border-blue-200 dark:border-blue-900/40 hover:border-blue-400' 
+                                                            : 'bg-white/95 dark:bg-zinc-900/95 border-zinc-200/80 dark:border-zinc-800 hover:border-blue-300 dark:hover:border-blue-700'
+                                                }`}>
+                                                    <div 
+                                                        onClick={(e) => {
+                                                            if (downloadedFiles[msg.id] && (Capacitor.isNativePlatform() || isTauriDesktop())) {
+                                                                handleDownloadAttachment(msg.id, msg.attachment.url, msg.attachment.fileName, e);
+                                                            } else {
+                                                                setPreviewAttachment({ isOpen: true, url: msg.attachment.url, fileName: msg.attachment.fileName });
+                                                            }
+                                                        }}
+                                                        className="flex items-center gap-2.5 cursor-pointer min-w-0 flex-1 group/file"
+                                                        title={downloadedFiles[msg.id] ? 'باز کردن فوری از حافظه برنامه' : 'مشاهده و بررسی فایل'}
+                                                    >
+                                                        <div className={`w-10 h-10 border rounded-xl flex items-center justify-center shrink-0 group-hover/file:scale-105 transition-transform shadow-xs ${
+                                                            downloadedFiles[msg.id]
+                                                                ? 'bg-emerald-100/80 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400'
+                                                                : 'bg-blue-50 dark:bg-blue-950/50 border-blue-200/70 dark:border-blue-900/50 text-blue-600 dark:text-blue-400'
+                                                        }`}>
+                                                            <File size={20} />
+                                                        </div>
+                                                        <div className="flex flex-col items-start gap-1 min-w-0 flex-1">
+                                                            <span className="text-xs font-bold text-zinc-800 dark:text-zinc-100 truncate w-full transition-colors" dir="ltr" title={msg.attachment.fileName}>
+                                                                {msg.attachment.fileName}
+                                                            </span>
+                                                            <div className="flex items-center gap-1 text-[10px]">
+                                                                {downloadedFiles[msg.id] ? (
+                                                                    <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300 font-bold">
+                                                                        <Check size={11} />
+                                                                        <span>ذخیره شده در حافظه اپ · باز کردن</span>
+                                                                    </span>
+                                                                ) : (
+                                                                    <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 font-medium">
+                                                                        <Eye size={11} />
+                                                                        <span>پیش‌نمایش / دریافت</span>
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="shrink-0 flex items-center gap-1 border-r border-zinc-200/80 dark:border-zinc-700/80 pr-1.5 mr-0.5">
+                                                        <button 
+                                                            onClick={(e) => handleDownloadAttachment(msg.id, msg.attachment.url, msg.attachment.fileName, e)}
+                                                            disabled={isDownloading[msg.id]}
+                                                            className={`px-2.5 py-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer text-[10px] font-bold ${
+                                                                downloadedFiles[msg.id] 
+                                                                    ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-xs' 
+                                                                    : 'bg-blue-50/80 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50'
+                                                            }`}
+                                                            title={downloadedFiles[msg.id] ? 'باز کردن از پوشه اختصاصی برنامه (بدون دانلود مجدد)' : 'ذخیره در پوشه برنامه و باز کردن'}
+                                                        >
+                                                            {isDownloading[msg.id] ? (
+                                                                <div className="flex items-center gap-1">
+                                                                    <Loader2 size={15} className="animate-spin"/>
+                                                                    <span className="text-[9px] font-black">{fileProgress[msg.id]}%</span>
+                                                                </div>
+                                                            ) : downloadedFiles[msg.id] ? (
+                                                                <>
+                                                                    <Check size={14} />
+                                                                    <span>باز کردن</span>
+                                                                </>
+                                                            ) : (
+                                                                <Download size={16} />
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {msg.attachment && msg.message && (
+                                            <div 
+                                                className="whitespace-pre-wrap leading-relaxed message-content cursor-pointer mt-1.5 pt-1 text-xs sm:text-sm text-zinc-800 dark:text-zinc-100 select-text"
+                                                onClick={(e) => { e.stopPropagation(); handleCopyMessage(msg); }}
+                                                title="برای کپی کلیک کنید"
+                                            >
+                                                {renderMessageWithMentions(msg.message)}
+                                            </div>
+                                        )}
+                                        </>
+                                     ) : msg.audioUrl ? (
+                                        <div className="flex items-center gap-2 min-w-[200px] py-1">
+                                            <AudioPlayer url={msg.audioUrl} isMe={isMe} duration={msg.audioDuration} />
+                                        </div>
+                                    ) : (
+                                        <div 
+                                            className="whitespace-pre-wrap leading-relaxed message-content cursor-pointer"
+                                            onClick={(e) => { e.stopPropagation(); handleCopyMessage(msg); }}
+                                            title="برای کپی کلیک کنید"
+                                        >
+                                            {renderMessageWithMentions(msg.message)}
+                                        </div>
+                                    )}
+
+                                    {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+                                        <div className="flex flex-wrap gap-1 mt-1.5 pt-1 border-t border-black/5 dark:border-white/5">
+                                            {Object.entries(msg.reactions).map(([emoji, usersList]) => {
+                                                if (!usersList || usersList.length === 0) return null;
+                                                const hasReacted = usersList.includes(currentUser.username);
+                                                return (
+                                                    <button
+                                                        key={emoji}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleToggleReaction(msg.id, emoji);
+                                                        }}
+                                                        title={`${usersList.join('، ')}`}
+                                                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs transition-all active:scale-90 ${
+                                                            hasReacted 
+                                                                ? 'bg-blue-100 dark:bg-blue-900/60 border border-blue-400 dark:border-blue-700 text-blue-800 dark:text-blue-200 scale-105 font-bold shadow-xs' 
+                                                                : 'bg-black/5 dark:bg-white/10 hover:bg-black/10 text-gray-700 dark:text-gray-300'
+                                                        }`}
+                                                    >
+                                                        <span className="text-sm">{emoji}</span>
+                                                        <span className="text-[10px]">{usersList.length}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    <div className="hidden group-hover:flex absolute -top-7 right-2 bg-white dark:bg-gray-800 shadow-md rounded-full px-1.5 py-0.5 border border-gray-200 dark:border-gray-700 items-center gap-1 z-20 animate-scale-in">
+                                        {['👍', '❤️', '😂', '🔥', '👏', '🎉'].map(emoji => (
+                                            <button
+                                                key={emoji}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleToggleReaction(msg.id, emoji);
+                                                }}
+                                                className="hover:scale-125 transition-transform text-xs p-0.5 active:scale-95"
+                                                title={`واکنش با ${emoji}`}
+                                            >
+                                                {emoji}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="flex justify-end items-center gap-1 mt-1 opacity-90 select-none text-slate-600 dark:text-slate-300">
+                                        {msg.uploadProgress !== undefined && (
+                                            <span className="text-[10px] bg-blue-100 dark:bg-blue-900/60 text-blue-900 dark:text-blue-200 px-1 rounded font-mono font-bold">{msg.uploadProgress}%</span>
+                                        )}
+                                        {msg.isEdited && <span className="text-[9px] font-bold">ویرایش شده</span>}
+                                        <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{formatTimeFa(msg.timestamp)}</span>
+                                        {isMe && (() => {
+                                            if (msg.isPending) {
+                                                return <span title="در حال ارسال..."><Clock size={12} className="text-slate-500 dark:text-slate-400" /></span>;
+                                            }
+                                            // Genuine seen validation:
+                                            // In Private Chat (PV): Must be read by the designated recipient
+                                            // In Group / Public Chat: Must be read by at least one member other than the sender
+                                            const isSeen = msg.recipient
+                                                ? (Array.isArray(msg.readBy) && msg.readBy.some(u => u.toLowerCase() === msg.recipient!.toLowerCase()))
+                                                : (Array.isArray(msg.readBy) && msg.readBy.some(u => u.toLowerCase() !== (msg.senderUsername || '').toLowerCase()));
+
+                                            if (isSeen) {
+                                                return <span title="مشاهده شده (سین خورده)"><CheckCheck size={14} className="text-emerald-600 dark:text-emerald-400" /></span>;
+                                            }
+                                            return <span title="ارسال و تحویل شده (هنوز باز نشده)"><Check size={14} className="text-slate-500 dark:text-slate-400" /></span>;
+                                        })()}
+                                    </div>
+                                </div>
+
+                                {!isMe && (
+                                    <div className="flex flex-col gap-1 opacity-60 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                                         <button onClick={() => setReplyingTo(msg)} className="p-1.5 glass-panel rounded-full text-blue-600 shadow-sm hover:scale-110" title="پاسخ"><CornerUpLeft size={12}/></button>
+                                         <button onClick={() => { setSelectedMessages(new Set([msg.id])); setShowForwardModal(true); }} className="p-1.5 glass-panel rounded-full text-green-600 shadow-sm hover:scale-110" title="فوروارد"><Forward size={12}/></button>
+                                         <button onClick={() => handleCopyMessage(msg)} className="p-1.5 glass-panel rounded-full text-gray-600 shadow-sm hover:scale-110" title="کپی"><Copy size={12}/></button>
+                                         {(msg.attachment || msg.audioUrl) && <button onClick={() => handleNativeShare(msg)} className="p-1.5 glass-panel rounded-full text-orange-600 shadow-sm hover:scale-110" title="اشتراک"><Share2 size={12}/></button>}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        });
+    }, [groupedMessagesByDay, currentUser, activeChannel?.type, selectedMessages, highlightedMessageId, selectionMode, isDownloading, fileProgress, downloadedFiles, users]);
+
+    if (!currentUser) return null;
+
+    return (
+        <div className="w-full h-full flex flex-col flex-1 min-h-0 bg-white dark:bg-[#1c1c1e] text-gray-800 dark:text-gray-200 md:p-2 font-sans no-print overflow-hidden relative">
+            <div className="flex-1 flex flex-row bg-white dark:bg-[#1c1c1e] md:rounded-2xl overflow-hidden md:shadow-xl md:border border-gray-200/50 dark:border-white/5 relative w-full h-full min-h-0">
+                
+                {/* --- LIST SIDEBAR --- */}
+                <div className={`w-full md:w-80 lg:w-96 shrink-0 md:border-l border-gray-100 dark:border-white/5 flex-col min-h-0 h-full bg-white dark:bg-[#1c1c1e] z-20 ${activeChannel ? 'hidden md:flex' : 'flex'}`}>
+                {/* Header */}
+                <div className="sticky top-0 z-10 shrink-0 p-3 pt-12 md:pt-3 border-b bg-gray-50/90 dark:bg-gray-900/60 backdrop-blur-md text-slate-900 dark:text-slate-100">
+                    <div className="flex justify-between items-center mb-3">
+                        <div className="flex flex-wrap md:flex-nowrap gap-1 bg-slate-200/80 dark:bg-white/15 p-1 rounded-lg text-[11px] font-bold w-full">
+                            <button onClick={() => setActiveTab('ALL')} className={`flex-1 py-1.5 px-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'ALL' ? 'bg-white dark:bg-zinc-800 shadow text-blue-700 dark:text-blue-300 font-black' : 'text-slate-700 dark:text-slate-300 hover:text-blue-600 font-bold'}`}>همه</button>
+                            <button onClick={() => setActiveTab('CHATS')} className={`flex-1 py-1.5 px-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'CHATS' ? 'bg-white dark:bg-zinc-800 shadow text-blue-700 dark:text-blue-300 font-black' : 'text-slate-700 dark:text-slate-300 hover:text-blue-600 font-bold'}`}>گفتگوها</button>
+                            <button onClick={() => setActiveTab('GROUPS')} className={`flex-1 py-1.5 px-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'GROUPS' ? 'bg-white dark:bg-zinc-800 shadow text-blue-700 dark:text-blue-300 font-black' : 'text-slate-700 dark:text-slate-300 hover:text-blue-600 font-bold'}`}>گروه‌ها</button>
+                            <button onClick={() => setActiveTab('TASKS')} className={`flex-1 py-1.5 px-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'TASKS' ? 'bg-white dark:bg-zinc-800 shadow text-blue-700 dark:text-blue-300 font-black' : 'text-slate-700 dark:text-slate-300 hover:text-blue-600 font-bold'}`}>تسک‌ها</button>
+                        </div>
+                        {(activeTab === 'GROUPS' || activeTab === 'TASKS') && <button onClick={() => {
+                            setShowGroupModal(activeTab === 'TASKS' ? 'task_group' : 'group');
+                        }} className="mr-2 text-blue-600 bg-blue-50 p-1.5 rounded-full shrink-0" title="ایجاد گروه جدید"><Plus size={16}/></button>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                            <input className="w-full glass-panel border rounded-xl pl-8 pr-3 py-2 text-xs bg-white dark:bg-white/5 text-slate-900 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400 font-medium" placeholder="جستجو در گفتگوها..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                            <Search size={15} className="absolute left-2.5 top-2.5 text-slate-500 dark:text-slate-400"/>
+                        </div>
+                        <button 
+                            onClick={handleMarkAllAsRead} 
+                            className="px-2.5 py-2 rounded-xl bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-[11px] font-bold whitespace-nowrap transition-colors flex items-center gap-1 shrink-0"
+                            title="علامت‌گذاری تمام پیام‌ها به عنوان خوانده شده"
+                        >
+                            <CheckCheck size={14}/>
+                            <span>خواندن همه</span>
+                        </button>
+                    </div>
+                </div>
+
+                {/* List Items */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar bg-white dark:bg-[#1c1c1e]">
+                    {localSharedData && !activeChannel && (
+                        <div className="m-3 p-4 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl text-white shadow-xl animate-bounce-subtle flex flex-col gap-2 border border-white/20">
+                            <div className="flex justify-between items-center">
+                                <h4 className="font-black text-sm flex items-center gap-2">
+                                    <Share2 size={16} />
+                                    محتوای پیوست آماده اشتراک‌گذاری
+                                </h4>
+                                <button onClick={() => setLocalSharedData(null)} className="p-1 hover:bg-white/20 rounded-full transition-colors">
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            <p className="text-[10px] opacity-90 font-bold leading-relaxed line-clamp-2 bg-black/10 p-2 rounded-xl">
+                                {localSharedData.fileUrl ? `📎 فایل: ${localSharedData.fileUrl.split('/').pop()}` : localSharedData.text}
+                            </p>
+                            <div className="bg-white text-blue-700 py-1.5 rounded-xl text-center text-[10px] font-black shadow-inner">
+                                یک گفتگو را برای ارسال انتخاب کنید
+                            </div>
+                        </div>
+                    )}
+                    {sortedChannels.length === 0 && !searchTerm && (
+                        <div className="flex flex-col items-center justify-center h-40 text-slate-500 p-10 text-center">
+                            <MessageCircle size={32} className="mb-2 opacity-30" />
+                            <p className="text-xs font-semibold">پیامی یافت نشد</p>
+                        </div>
+                    )}
+                    {sortedChannels.map((item: ChannelItem) => (
+                        <div key={item.id} onClick={() => { setActiveChannel({type: item.type, id: item.id}); markAsRead(item.id, item.type); }} className={`flex items-center gap-3 p-3 hover:bg-slate-100/70 dark:hover:bg-white/10 cursor-pointer border-b border-slate-100 dark:border-white/5 relative group ${activeChannel?.id === item.id ? 'bg-blue-50/80 dark:bg-blue-500/15' : ''}`}>
+                            <div className="relative">
+                                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm ${item.type === 'system' ? 'bg-gradient-to-br from-indigo-500 to-purple-700' : item.type === 'private' ? 'bg-gradient-to-br from-blue-400 to-blue-600' : item.type === 'task_group' ? 'bg-gradient-to-br from-purple-400 to-purple-600' : 'bg-gradient-to-br from-orange-400 to-orange-600'}`}>
+                                    {item.type === 'system' ? '🤖' : (item.avatar ? <img src={resolveImageUrl(item.avatar)} loading="lazy" className="w-full h-full rounded-full object-cover"/> : item.name.charAt(0))}
+                                </div>
+                                {item.isOnline && item.type !== 'system' && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-800 rounded-full"></div>}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex justify-between items-center mb-1">
+                                    <div className="flex items-center gap-1 overflow-hidden">
+                                        <span className="font-bold text-slate-900 dark:text-slate-50 text-sm truncate">{item.name}</span>
+                                        {mutedChannels.has(item.id) && <BellOff size={10} className="text-slate-500 opacity-70"/>}
+                                    </div>
+                                    {item.lastMsg && <span className="text-[11px] text-slate-600 dark:text-slate-300 font-bold font-mono tracking-tight">{formatTimeFa(item.lastMsg.timestamp)}</span>}
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <p className="text-xs text-slate-700 dark:text-slate-300 font-medium truncate max-w-[170px]">
+                                        {item.type === 'system' ? (item.lastMsg?.message || 'اعلانات و هشدارهای کارتابل') : item.type === 'task_group' ? 'لیست تسک‌ها...' : item.lastMsg ? (item.lastMsg.audioUrl ? '🎤 پیام صوتی' : item.lastMsg.attachment ? '📎 فایل' : item.lastMsg.message) : 'پیامی نیست'}
+                                    </p>
+                                    <div className="flex items-center gap-1.5">
+                                        {item.hasMention && (
+                                            <span 
+                                                className="bg-amber-500 hover:bg-amber-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black shadow-xs flex items-center justify-center animate-bounce-subtle shrink-0"
+                                                title="شما در این گفتگو تگ (منشن) شده‌اید"
+                                            >
+                                                @
+                                            </span>
+                                        )}
+                                        {item.unread > 0 && <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center font-bold shadow-sm animate-pulse">{item.unread}</span>}
+                                        {((item.type === 'group' || item.type === 'task_group') && (currentUser?.role === UserRole.ADMIN)) && (
+                                            <button 
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDeleteGroup(item.id, item.type === 'task_group', item.name);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-all"
+                                                title="حذف گروه توسط ادمین"
+                                            >
+                                                <Trash2 size={14}/>
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* --- CHAT AREA --- */}
+            <div 
+                className={`flex-1 flex flex-col min-h-0 h-full bg-white dark:bg-[#0b141a] md:bg-[#f0f2f5] z-30 md:z-10 w-full relative ${activeChannel ? 'flex' : 'hidden md:flex'}`}
+                onDragEnter={handleContainerDragEnter}
+                onDragOver={handleContainerDragOver}
+                onDragLeave={handleContainerDragLeave}
+                onDrop={handleContainerDrop}
+            >
+                {/* Visual Full-Screen Drag & Drop Overlay */}
+                {isDragOverChat && (
+                    <div className="absolute inset-0 z-50 bg-blue-600/15 dark:bg-blue-900/40 backdrop-blur-sm border-4 border-dashed border-blue-500 rounded-3xl flex flex-col items-center justify-center pointer-events-none animate-fade-in p-6 text-center m-2 shadow-2xl">
+                        <div className="w-16 h-16 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-xl mb-3 animate-bounce">
+                            <UploadCloud size={32} />
+                        </div>
+                        <p className="text-base font-black text-blue-900 dark:text-blue-100">فایل را رها کنید تا به گفتگو اضافه شود</p>
+                        <p className="text-xs text-blue-700 dark:text-blue-300 mt-1 font-medium">پشتیبانی از انواع فایل‌ها بدون محدودیت فرمت (برنامه‌ها، عکس، PDF، اسناد و...)</p>
+                    </div>
+                )}
+                {activeChannel ? (
+                    <>
+                        {/* Chat Header - Slim & compact header */}
+                        <div className="sticky top-0 bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-md px-3 py-1.5 pt-12 md:pt-1.5 sm:py-2 flex justify-between items-center shadow-xs border-b border-gray-100 dark:border-zinc-800/80 z-30 shrink-0">
+                            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+                                <button 
+                                    onClick={() => setActiveChannel(null)} 
+                                    className="md:hidden p-1.5 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full text-zinc-600 dark:text-zinc-300 transition-colors shrink-0 active:scale-95"
+                                    title="بازگشت به گفتگوها"
+                                >
+                                    <ArrowRight size={18} />
+                                </button>
+                                
+                                {/* Dynamic Conversation Avatar */}
+                                {(() => {
+                                    let avatarUrl: string | null = null;
+                                    let initial = '?';
+                                    let bgColor = 'bg-gradient-to-br from-blue-400 to-blue-600';
+                                    
+                                    if (activeChannel.type === 'system') {
+                                        initial = '🤖';
+                                        bgColor = 'bg-gradient-to-br from-indigo-500 to-purple-700';
+                                    } else if (activeChannel.type === 'private') {
+                                        const u = users.find(x => x.username?.toLowerCase() === activeChannel.id?.toLowerCase());
+                                        avatarUrl = u?.avatar || null;
+                                        initial = (u?.fullName || activeChannel.id).charAt(0);
+                                        bgColor = 'bg-gradient-to-br from-blue-400 to-blue-600';
+                                    } else if (activeChannel.type === 'group') {
+                                        const g = groups.find(x => x.id === activeChannel.id);
+                                        avatarUrl = g?.avatar || null;
+                                        initial = g?.name.charAt(0) || '?';
+                                        bgColor = 'bg-gradient-to-br from-orange-400 to-orange-600';
+                                    } else if (activeChannel.type === 'task_group') {
+                                        const tg = taskGroups.find(x => x.id === activeChannel.id);
+                                        avatarUrl = tg?.avatar || null;
+                                        initial = tg?.name.charAt(0) || '?';
+                                        bgColor = 'bg-gradient-to-br from-purple-400 to-purple-600';
+                                    } else {
+                                        initial = 'ع';
+                                        bgColor = 'bg-gradient-to-br from-green-400 to-green-600';
+                                    }
+                                    
+                                    return (
+                                        <div 
+                                            onClick={() => {
+                                                if(activeChannel.type === 'private') setShowContactInfo(users.find(u=>u.username===activeChannel.id) || null);
+                                                else if(activeChannel.type === 'group') setShowGroupInfo(groups.find(g=>g.id===activeChannel.id) || null);
+                                                else if(activeChannel.type === 'task_group') {
+                                                    const tg = taskGroups.find(g=>g.id===activeChannel.id);
+                                                    if (tg) setShowGroupInfo({...tg, isTaskGroup: true});
+                                                }
+                                            }}
+                                            className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-xs cursor-pointer overflow-hidden shrink-0 ${bgColor}`}
+                                        >
+                                            {avatarUrl ? <img src={resolveImageUrl(avatarUrl)} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : initial}
+                                        </div>
+                                    );
+                                })()}
+
+                                <div className="flex flex-col cursor-pointer min-w-0" onClick={() => {
+                                    if(activeChannel.type === 'private') setShowContactInfo(users.find(u=>u.username?.toLowerCase()===activeChannel.id?.toLowerCase()) || null);
+                                    else if(activeChannel.type === 'group') setShowGroupInfo(groups.find(g=>g.id===activeChannel.id) || null);
+                                    else if(activeChannel.type === 'task_group') {
+                                        const tg = taskGroups.find(g=>g.id===activeChannel.id);
+                                        if (tg) setShowGroupInfo({...tg, isTaskGroup: true});
+                                    }
+                                }}>
+                                    <h3 className="font-bold text-gray-800 dark:text-gray-100 text-xs sm:text-sm leading-tight truncate">
+                                        {activeChannel.type === 'system' ? 'پیام‌ها و اعلانات سیستم' :
+                                         activeChannel.type === 'private' ? (users.find(u=>u.username?.toLowerCase()===activeChannel.id?.toLowerCase())?.fullName || activeChannel.id) : 
+                                         activeChannel.type === 'group' ? groups.find(g=>g.id===activeChannel.id)?.name :
+                                         activeChannel.type === 'task_group' ? taskGroups.find(g=>g.id===activeChannel.id)?.name : 'کانال عمومی'}
+                                    </h3>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                        {activeChannel.type === 'system' ? (
+                                            <span className="text-[10px] text-blue-500 font-medium truncate">مرکز دریافت اعلانات کارتابل و پیام‌های خودکار</span>
+                                        ) : activeChannel.type === 'private' ? (() => {
+                                            const targetUser = users.find(u => u.username?.toLowerCase() === activeChannel.id?.toLowerCase());
+                                            const isOnline = isUserOnline(targetUser);
+                                            return isOnline ? (
+                                                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                                                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                                    آنلاین
+                                                </span>
+                                            ) : (
+                                                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                                                    آخرین بازدید {formatLastSeen(targetUser?.lastSeen)}
+                                                </span>
+                                            );
+                                        })() : activeChannel.type === 'task_group' ? (
+                                            <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">گروه تسک و ماموریت</span>
+                                        ) : (
+                                            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                                                {groups.find(g => g.id === activeChannel.id)?.members?.length || 0} عضو
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                                {(activeChannel.type === 'group' || activeChannel.type === 'task_group') && (currentUser?.role === UserRole.ADMIN || groups.find(g=>g.id===activeChannel.id)?.createdBy?.toLowerCase() === currentUser?.username?.toLowerCase() || taskGroups.find(g=>g.id===activeChannel.id)?.createdBy?.toLowerCase() === currentUser?.username?.toLowerCase()) && (
+                                    <button 
+                                        onClick={() => {
+                                            const isTask = activeChannel.type === 'task_group';
+                                            const grpName = isTask ? taskGroups.find(g=>g.id===activeChannel.id)?.name : groups.find(g=>g.id===activeChannel.id)?.name;
+                                            handleDeleteGroup(activeChannel.id, isTask, grpName || '');
+                                        }} 
+                                        className="p-1.5 hover:bg-red-50 text-red-600 rounded-full transition-colors" 
+                                        title={currentUser?.role === UserRole.ADMIN ? "حذف گروه توسط ادمین" : "حذف و انحلال گروه"}
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                )}
+                                {activeChannel.type !== 'task_group' && (
+                                    <div className="flex gap-1 items-center">
+                                        <button onClick={() => onRefresh()} className="p-1.5 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full text-blue-600 transition-colors" title="بروزرسانی"><RefreshCw size={16} className={isUploading ? 'animate-spin' : ''}/></button>
+                                        {selectionMode ? (
+                                            <div className="flex gap-1 animate-fade-in">
+                                                <button onClick={() => setShowForwardModal(true)} className="p-1.5 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100" title="فوروارد"><Forward size={16}/></button>
+                                                <button onClick={() => handleDelete(false)} className="p-1.5 bg-orange-50 text-orange-600 rounded-full hover:bg-orange-100" title="حذف برای من"><Trash2 size={16}/></button>
+                                                <button onClick={() => handleDelete(true)} className="p-1.5 bg-red-50 text-red-600 rounded-full hover:bg-red-100" title="حذف دو طرفه"><Trash2 size={16}/></button>
+                                                <button onClick={() => { setSelectionMode(false); setSelectedMessages(new Set()); }} className="p-1.5 hover:bg-gray-100 rounded-full"><X size={16}/></button>
+                                            </div>
+                                        ) : (
+                                            <button onClick={() => setShowInnerSearch(!showInnerSearch)} className={`p-1.5 rounded-full transition-colors ${showInnerSearch ? 'bg-blue-100 text-blue-600' : 'hover:bg-gray-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300'}`}><Search size={16}/></button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {activeChannel.type === 'task_group' ? (
+                            <div className="flex-1 bg-gray-50 flex flex-col h-full overflow-y-auto w-full custom-scrollbar">
+                                <div className="p-4 border-b glass-panel flex justify-between items-center sticky top-0 z-10 shadow-sm bg-white/90 dark:bg-gray-900/90 backdrop-blur-md">
+                                    <h4 className="font-bold text-gray-800 dark:text-gray-200">تسک‌های این گروه</h4>
+                                    <button 
+                                        onClick={() => {
+                                            setTaskTitle('');
+                                            setTaskDescription('');
+                                            setTaskAssignedTo([]);
+                                            setTaskDueDate('');
+                                            setTaskRecurringReminder(true);
+                                            setTaskReminderIntervalMinutes(10);
+                                            setUserSearchText('');
+                                            setShowCreateTaskModal(true);
+                                        }}
+                                        className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 transition"
+                                    >
+                                        <Plus size={18}/> تسک جدید
+                                    </button>
+                                </div>
+                                <div className="p-4 space-y-6">
+                                    {/* 1. Active Tasks Section */}
+                                    <div>
+                                        <h5 className="text-xs font-black text-gray-400 dark:text-gray-500 mb-3 uppercase tracking-wider flex items-center gap-2">
+                                            <span>تسک‌های فعال</span>
+                                            <span className="bg-blue-100 text-blue-600 text-[10px] font-black px-2 py-0.5 rounded-full">
+                                                {tasks.filter(t => t.groupId === activeChannel.id && t.status !== 'completed').length}
+                                            </span>
+                                        </h5>
+                                        {tasks.filter(t => t.groupId === activeChannel.id && t.status !== 'completed').length === 0 ? (
+                                            <div className="text-center text-gray-400 dark:text-gray-600 py-12 bg-white dark:bg-gray-900/35 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">
+                                                <ListTodo size={32} className="mx-auto mb-2 opacity-20"/>
+                                                <p className="text-xs">تسک فعال و در جریانی در این گروه وجود ندارد</p>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                {tasks.filter(t => t.groupId === activeChannel.id && t.status !== 'completed').map(task => (
+                                                    <div 
+                                                        key={task.id} 
+                                                        onClick={() => { setActiveTaskForDetail(task); setTaskReplyText(''); }}
+                                                        className="glass-panel p-4 rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm group hover:shadow-md transition cursor-pointer flex justify-between items-start"
+                                                    >
+                                                        <div className="flex items-start gap-4 flex-1 min-w-0">
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    const updatedTask = { 
+                                                                        ...task, 
+                                                                        status: 'completed' as const,
+                                                                        completedBy: currentUser.username,
+                                                                        completedAt: Date.now()
+                                                                    };
+                                                                    updateTask(updatedTask).then(() => {
+                                                                        setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+                                                                    });
+                                                                }}
+                                                                className="mt-0.5 rounded-full border-2 border-gray-300 dark:border-gray-700 w-5 h-5 transition-colors flex items-center justify-center hover:border-green-500 bg-white dark:bg-gray-800 shrink-0"
+                                                            >
+                                                                <Check size={14} className="text-white opacity-0 group-hover:opacity-100 group-hover:text-green-500 transition-opacity"/>
+                                                            </button>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <h5 className="font-bold text-gray-800 dark:text-gray-200 text-sm">{task.title}</h5>
+                                                                    {task.recurringReminder && (
+                                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/60 shadow-2xs">
+                                                                            <BellRing size={10} className="animate-bounce text-amber-600 dark:text-amber-400" />
+                                                                            <span>یادآور {task.reminderIntervalMinutes || 10} دقیقه‌ای</span>
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                {task.description && (
+                                                                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 line-clamp-1">{task.description}</p>
+                                                                )}
+                                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-400 mt-2">
+                                                                    <span>توسط: @{task.createdBy}</span>
+                                                                    <span>ثبت: {formatDate(task.createdAt)}</span>
+                                                                    {task.dueDate && (
+                                                                        <span className="text-amber-600 font-bold bg-amber-50 dark:bg-amber-950/20 px-1.5 py-0.5 rounded">مهلت: {formatDate(new Date(task.dueDate).getTime())}</span>
+                                                                    )}
+                                                                    {task.replies && task.replies.length > 0 && (
+                                                                        <span className="text-blue-500 font-semibold">💬 {task.replies.length} پاسخ</span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    const newReminder = !task.recurringReminder;
+                                                                    const updatedTask = {
+                                                                        ...task,
+                                                                        recurringReminder: newReminder,
+                                                                        reminderIntervalMinutes: task.reminderIntervalMinutes || 10,
+                                                                        lastRemindedAt: newReminder ? Date.now() : task.lastRemindedAt
+                                                                    };
+                                                                    updateTask(updatedTask).then(() => {
+                                                                        setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+                                                                        if (newReminder) playTaskAlarmSound();
+                                                                    });
+                                                                }}
+                                                                title={task.recurringReminder ? 'یادآور صوتی فعال است (کلیک برای خاموش کردن)' : 'فعال‌سازی یادآور صوتی و نوتیف ۱۰ دقیقه'}
+                                                                className={`p-1.5 rounded-lg border transition-all ${
+                                                                    task.recurringReminder
+                                                                        ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                                                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-400 border-gray-200 dark:border-gray-700 hover:text-gray-600'
+                                                                }`}
+                                                            >
+                                                                <BellRing size={15} className={task.recurringReminder ? 'text-amber-600 dark:text-amber-400' : ''} />
+                                                            </button>
+                                                            {task.assignedTo && task.assignedTo.length > 0 && (
+                                                                <div className="flex -space-x-1.5 hover:space-x-0.5 transition-all">
+                                                                    {task.assignedTo.slice(0, 3).map(un => {
+                                                                        const uObj = users.find(u => u.username === un);
+                                                                        return (
+                                                                            <div key={un} className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-[10px] font-black flex items-center justify-center border border-white dark:border-gray-800 shadow-sm" title={uObj?.fullName || un}>
+                                                                                {uObj?.avatar ? <img src={resolveImageUrl(uObj.avatar)} className="w-full h-full rounded-full object-cover" /> : un.charAt(0)}
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                    {task.assignedTo.length > 3 && (
+                                                                        <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 text-[9px] font-bold flex items-center justify-center border border-white dark:border-gray-800 shadow-sm">
+                                                                            +{task.assignedTo.length - 3}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (confirm('آیا مایل به حذف این تسک هستید؟')) {
+                                                                        deleteTask(task.id).then(() => setTasks(prev => prev.filter(t => t.id !== task.id)));
+                                                                    }
+                                                                }} 
+                                                                className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg opacity-0 group-hover:opacity-100 transition"
+                                                            >
+                                                                <Trash2 size={16}/>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* 2. Completed Tasks Section */}
+                                    <div className="pt-2">
+                                        <h5 className="text-xs font-black text-gray-400 dark:text-gray-500 mb-3 uppercase tracking-wider flex items-center gap-2">
+                                            <span>تسک‌های انجام‌شده</span>
+                                            <span className="bg-green-100 text-green-600 text-[10px] font-black px-2 py-0.5 rounded-full">
+                                                {tasks.filter(t => t.groupId === activeChannel.id && t.status === 'completed').length}
+                                            </span>
+                                        </h5>
+                                        {tasks.filter(t => t.groupId === activeChannel.id && t.status === 'completed').length === 0 ? (
+                                            <p className="text-xs text-gray-400 dark:text-gray-500 italic py-4">تسکی در لیست انجام‌شده‌ها قرار ندارد.</p>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                {tasks.filter(t => t.groupId === activeChannel.id && t.status === 'completed').map(task => (
+                                                    <div 
+                                                        key={task.id} 
+                                                        onClick={() => { setActiveTaskForDetail(task); setTaskReplyText(''); }}
+                                                        className="glass-panel p-4 rounded-xl border border-gray-100 dark:border-gray-800/80 shadow-sm group hover:shadow transition cursor-pointer flex justify-between items-start opacity-75 hover:opacity-100"
+                                                    >
+                                                        <div className="flex items-start gap-4 flex-1 min-w-0">
+                                                            <button 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    const updatedTask = { 
+                                                                        ...task, 
+                                                                        status: 'pending' as const,
+                                                                        completedBy: undefined,
+                                                                        completedAt: undefined
+                                                                    };
+                                                                    updateTask(updatedTask).then(() => {
+                                                                        setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+                                                                    });
+                                                                }}
+                                                                className="mt-0.5 rounded-full bg-green-500 border-2 border-green-500 w-5 h-5 flex items-center justify-center transition-colors hover:bg-green-600 shrink-0"
+                                                            >
+                                                                <Check size={14} className="text-white"/>
+                                                            </button>
+                                                            <div className="min-w-0 flex-1">
+                                                                <h5 className="font-bold text-gray-400 dark:text-gray-500 text-sm line-through truncate">{task.title}</h5>
+                                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-400 mt-2">
+                                                                    <span>توسط: @{task.createdBy}</span>
+                                                                    {task.completedBy && (
+                                                                        <span className="text-green-600">انجام‌شده توسط: @{task.completedBy}</span>
+                                                                    )}
+                                                                    {task.replies && task.replies.length > 0 && (
+                                                                        <span className="text-blue-500">💬 {task.replies.length} پاسخ</span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <button 
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (confirm('آیا مایل به حذف این تسک هستید؟')) {
+                                                                    deleteTask(task.id).then(() => setTasks(prev => prev.filter(t => t.id !== task.id)));
+                                                                }
+                                                            }} 
+                                                            className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg opacity-0 group-hover:opacity-100 transition shrink-0"
+                                                        >
+                                                            <Trash2 size={16}/>
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Inner Search */}
+                                {showInnerSearch && (
+                                    <div className="glass-panel p-2 border-b flex items-center gap-2 animate-slide-down">
+                                        <input className="flex-1 bg-gray-100 border-none rounded-lg py-2 px-4 text-sm" placeholder="جستجو در پیام‌ها..." value={innerSearchTerm} onChange={e => setInnerSearchTerm(e.target.value)} autoFocus />
+                                        <button onClick={() => { setShowInnerSearch(false); setInnerSearchTerm(''); }}><X size={20} className="text-gray-500"/></button>
+                                    </div>
+                                )}
+
+                                {/* Messages List */}
+                                <div 
+                                    className="chat-messages-Viewport flex-1 overflow-y-auto p-4 flex flex-col gap-2 relative bg-white dark:bg-black"
+                                    onDragOver={handleDragOver}
+                                    onDrop={handleDrop}
+                                    onPaste={handlePaste}
+                                >
+                            {!innerSearchTerm && filteredMessages.length > visibleMessagesLimit && (
+                                <div className="flex justify-center my-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setVisibleMessagesLimit(prev => prev + 80)}
+                                        className="px-4 py-1.5 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 rounded-full border border-blue-200 dark:border-blue-800/60 transition-colors cursor-pointer shadow-2xs"
+                                    >
+                                        نمایش پیام‌های قدیمی‌تر ({filteredMessages.length - visibleMessagesLimit} پیام دیگر)
+                                    </button>
+                                </div>
+                            )}
+                            {renderedMessageGroups}
+                            <div ref={messagesEndRef} />
+                        </div>
+
+                        {/* Input Area */}
+                        <div className="shrink-0 sticky bottom-0 bg-white dark:bg-[#1c1c1e] p-2 sm:p-2.5 px-3 flex items-end gap-1.5 sm:gap-2 border-t border-gray-200/80 dark:border-zinc-800/80 relative z-20 pb-[max(8px,env(safe-area-inset-bottom))] shadow-xs">
+                            {activeChannel.type === 'system' ? (
+                                <div className="flex-1 py-2 px-3 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/40 flex items-center justify-between gap-2 shadow-xs">
+                                    <div className="flex items-center gap-2 text-xs sm:text-sm text-indigo-800 dark:text-indigo-200 font-medium">
+                                        <Bell size={16} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                                        <span>کانال هوشمند اعلانات و پیام‌های اتوماتیک کارتابل</span>
+                                    </div>
+                                    <button
+                                        onClick={() => markAsRead('system', 'system')}
+                                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm shrink-0 flex items-center gap-1.5"
+                                    >
+                                        <CheckCheck size={14} />
+                                        <span>خواندن همه</span>
+                                    </button>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Reply/Edit Preview */}
+                                    {localSharedData && (
+                                        <div className="absolute bottom-full left-0 right-0 glass-panel border-t border-b p-2 flex justify-between items-center shadow-sm z-10 animate-slide-up bg-blue-50/90 dark:bg-blue-950/90">
+                                            <div className="flex items-center gap-2 border-r-4 border-orange-500 pr-2">
+                                                <Paperclip size={16} className="text-orange-500"/>
+                                                <div className="flex flex-col text-xs">
+                                                    <span className="font-bold text-orange-600">فایل پیوست آماده‌ی ارسال</span>
+                                                    <span className="text-gray-500 truncate max-w-[200px]">{localSharedData.fileUrl ? localSharedData.fileUrl.split('/').pop() : localSharedData.text}</span>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => { setLocalSharedData(null); }}><X size={16} className="text-gray-400 hover:text-red-500"/></button>
+                                        </div>
+                                    )}
+
+                                    {(replyingTo || editingMessageId) && (
+                                        <div className="absolute bottom-full left-0 right-0 glass-panel border-t border-b p-2 flex justify-between items-center shadow-sm z-10 animate-slide-up">
+                                            <div className="flex items-center gap-2 border-r-4 border-blue-500 pr-2">
+                                                {editingMessageId ? <Edit2 size={16} className="text-blue-500"/> : <Reply size={16} className="text-blue-500"/>}
+                                                <div className="flex flex-col text-xs">
+                                                    <span className="font-bold text-blue-600">{editingMessageId ? 'ویرایش پیام' : `پاسخ به ${replyingTo?.sender}`}</span>
+                                                    <span className="text-gray-500 truncate max-w-[200px]">{editingMessageId ? '...' : replyingTo?.message}</span>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => { setReplyingTo(null); setEditingMessageId(null); setInputText(''); }}><X size={16} className="text-gray-400 hover:text-red-500"/></button>
+                                        </div>
+                                    )}
+
+                                    {/* Mention Autocomplete Dropdown */}
+                                    {mentionQuery && mentionCandidates.length > 0 && (
+                                        <div 
+                                            ref={mentionMenuRef}
+                                            className="absolute bottom-full mb-2 right-2 left-2 sm:right-10 sm:left-auto sm:w-84 max-h-64 overflow-y-auto glass-panel shadow-2xl rounded-2xl border border-blue-200/90 dark:border-blue-900/60 p-2 flex flex-col gap-1 z-50 backdrop-blur-xl bg-white/98 dark:bg-zinc-900/98 animate-scale-in custom-scrollbar"
+                                        >
+                                            <div className="px-2 py-1 text-[11px] font-black text-blue-600 dark:text-blue-400 flex items-center justify-between border-b border-gray-100 dark:border-zinc-800 pb-1.5">
+                                                <span className="flex items-center gap-1.5">
+                                                    <AtSign size={13} className="text-blue-500" />
+                                                    <span>انتخاب کاربر برای تگ و منشن</span>
+                                                </span>
+                                                <span className="text-[10px] text-gray-400 font-normal">کلیدهای ⬆️ ⬇️ و Enter</span>
+                                            </div>
+                                            <div className="flex flex-col gap-0.5 mt-1">
+                                                {mentionCandidates.map((cand, idx) => (
+                                                    <button
+                                                        key={cand.id + cand.username}
+                                                        type="button"
+                                                        onClick={() => insertMention(cand)}
+                                                        className={`w-full flex items-center gap-2.5 p-2 rounded-xl text-right transition-all cursor-pointer ${
+                                                            idx === mentionSelectedIndex
+                                                                ? 'bg-blue-50 dark:bg-blue-950/70 border border-blue-300 dark:border-blue-800 shadow-xs'
+                                                                : 'hover:bg-gray-100 dark:hover:bg-zinc-800/80 border border-transparent'
+                                                        }`}
+                                                    >
+                                                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-xs shrink-0 overflow-hidden shadow-xs ${
+                                                            cand.isAll ? 'bg-gradient-to-br from-amber-500 to-rose-600' : 'bg-gradient-to-br from-blue-500 to-indigo-600'
+                                                        }`}>
+                                                            {cand.isAll ? (
+                                                                <Users size={14} />
+                                                            ) : cand.avatar ? (
+                                                                <img src={resolveImageUrl(cand.avatar)} className="w-full h-full object-cover" />
+                                                            ) : (
+                                                                cand.fullName.charAt(0)
+                                                            )}
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="font-bold text-xs text-gray-800 dark:text-gray-100 truncate">
+                                                                    {cand.fullName}
+                                                                </span>
+                                                                <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 dir-ltr font-semibold">
+                                                                    @{cand.username}
+                                                                </span>
+                                                            </div>
+                                                            {cand.role && (
+                                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate block mt-0.5">
+                                                                    {cand.role}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <input type="file" ref={galleryInputRef} className="hidden" accept="image/*,video/*" onChange={handleFileUpload}/>
+                                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload}/>
+                                    <input type="file" ref={pdfInputRef} className="hidden" accept=".pdf,application/pdf" onChange={handleFileUpload}/>
+
+                                    {/* Unified Compact Messenger Input Capsule */}
+                                    <div className={`flex-1 rounded-2xl flex items-center px-2 py-1 min-h-[38px] sm:min-h-[42px] relative transition-all duration-200 border gap-1 ${
+                                        inputText.length > 0 
+                                            ? 'bg-white dark:bg-zinc-800/95 border-blue-500/50 dark:border-blue-500/60 shadow-xs ring-1 ring-blue-500/20' 
+                                            : 'bg-zinc-100 dark:bg-zinc-800/80 border-zinc-200/80 dark:border-zinc-700/60 focus-within:border-blue-500/40 focus-within:bg-white dark:focus-within:bg-zinc-800'
+                                    }`}>
+                                        
+                                        {/* Paperclip Button */}
+                                        <div className="relative shrink-0">
+                                            <button 
+                                                onClick={() => document.getElementById('chat-file-menu')?.classList.toggle('hidden')} 
+                                                className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center text-zinc-500 hover:text-blue-600 dark:text-zinc-400 dark:hover:text-blue-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60 rounded-full transition-all active:scale-95 cursor-pointer"
+                                                title="افزودن پیوست"
+                                            >
+                                                <Paperclip size={17} />
+                                            </button>
+
+                                            {/* Attachment Dropup Menu */}
+                                            <div id="chat-file-menu" className="hidden absolute bottom-12 right-0 glass-panel shadow-2xl rounded-2xl border border-zinc-200/80 dark:border-zinc-800/80 p-1.5 flex flex-col gap-1 min-w-[170px] animate-scale-in z-50 backdrop-blur-xl bg-white/95 dark:bg-zinc-900/95">
+                                                <button onClick={() => { galleryInputRef.current?.click(); document.getElementById('chat-file-menu')?.classList.add('hidden'); }} className="flex items-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 p-2 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-200 transition-colors">
+                                                    <ImageIcon size={16} className="text-blue-500"/> 
+                                                    <span>گالری (عکس / فیلم)</span>
+                                                </button>
+                                                <button onClick={() => { pdfInputRef.current?.click(); document.getElementById('chat-file-menu')?.classList.add('hidden'); }} className="flex items-center gap-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 p-2 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-200 transition-colors">
+                                                    <FileText size={16} className="text-rose-500"/> 
+                                                    <span>سند PDF (پیش‌نمایش آنلاین)</span>
+                                                </button>
+                                                <button onClick={() => { fileInputRef.current?.click(); document.getElementById('chat-file-menu')?.classList.add('hidden'); }} className="flex items-center gap-2 hover:bg-amber-50 dark:hover:bg-amber-950/40 p-2 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-200 transition-colors">
+                                                    <File size={16} className="text-amber-500"/> 
+                                                    <span>سند و فایل</span>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Smile / Emoji Button */}
+                                        <button 
+                                            onClick={() => setShowStickerPicker(prev => !prev)} 
+                                            className={`w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-full transition-all shrink-0 active:scale-95 cursor-pointer ${
+                                                showStickerPicker 
+                                                    ? 'text-amber-500 bg-amber-100/80 dark:bg-amber-950/70' 
+                                                    : 'text-zinc-500 hover:text-amber-500 dark:text-zinc-400 dark:hover:text-amber-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60'
+                                            }`}
+                                            title="استیکرها و ایموجی‌ها"
+                                        >
+                                            <Smile size={17} />
+                                        </button>
+
+                                        {/* AtSign / Mention Button */}
+                                        <button 
+                                            type="button"
+                                            onClick={handleTriggerMentionButton}
+                                            className={`w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-full transition-all shrink-0 active:scale-95 cursor-pointer ${
+                                                mentionQuery 
+                                                    ? 'text-blue-600 bg-blue-100/80 dark:bg-blue-950/70 font-bold' 
+                                                    : 'text-zinc-500 hover:text-blue-600 dark:text-zinc-400 dark:hover:text-blue-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60'
+                                            }`}
+                                            title="تگ و منشن کردن افراد (@)"
+                                        >
+                                            <AtSign size={17} />
+                                        </button>
+
+                                        {/* Unified Seamless Auto-resizing Text Input */}
+                                        <textarea 
+                                            ref={inputAreaRef}
+                                            value={inputText}
+                                            onPaste={handlePaste}
+                                            onChange={handleTextareaChange}
+                                            onKeyDown={handleKeyDown}
+                                            placeholder="نوشتن پیام... (برای تگ افراد @ تایپ کنید)"
+                                            className="bg-transparent border-none outline-none w-full text-xs sm:text-sm resize-none custom-scrollbar relative z-10 placeholder-zinc-400 dark:placeholder-zinc-500 text-zinc-800 dark:text-zinc-100 font-medium leading-normal py-1 px-1"
+                                            rows={1}
+                                            style={{ height: 'auto', minHeight: '24px', maxHeight: '140px' }}
+                                        />
+                                    </div>
+
+                                    {/* Sleek Send / Voice Action Button */}
+                                    {inputText.trim() || isUploading || localSharedData?.fileUrl ? (
+                                        <button 
+                                            onClick={handleSendMessage} 
+                                            disabled={isUploading}
+                                            className="w-9 h-9 sm:w-10 sm:h-10 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-full shadow-sm transition-all active:scale-95 shrink-0 flex items-center justify-center cursor-pointer group"
+                                            title="ارسال پیام"
+                                        >
+                                            {isUploading ? (
+                                                <Loader2 size={16} className="animate-spin text-white"/>
+                                            ) : (
+                                                <Send size={16} className="text-white transform -rotate-45 rtl:-rotate-135 transition-transform group-hover:scale-110" />
+                                            )}
+                                        </button>
+                                    ) : (
+                                        <button 
+                                            onMouseDown={startRecording}
+                                            onMouseUp={stopRecording}
+                                            onTouchStart={startRecording}
+                                            onTouchEnd={stopRecording}
+                                            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full shadow-xs transition-all active:scale-95 shrink-0 flex items-center justify-center cursor-pointer ${
+                                                isRecording 
+                                                    ? 'bg-rose-500 text-white scale-105 shadow-rose-500/40 animate-pulse' 
+                                                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600'
+                                            }`}
+                                            title="پیام صوتی (نگه دارید)"
+                                        >
+                                            {isRecording ? (
+                                                <span className="text-white font-mono text-[11px] font-bold">{formatTime(recordingTime)}</span>
+                                            ) : (
+                                                <Mic size={17} />
+                                            )}
+                                        </button>
+                                    )}
+                                </>
+                            )}
+
+                            {/* Sticker Picker Popover */}
+                            {showStickerPicker && (
+                                <StickerPicker 
+                                    onClose={() => setShowStickerPicker(false)}
+                                    onSelectSticker={handleSendSticker}
+                                />
+                            )}
+                        </div>
+                            </>
+                        )}
+                    </>
+                ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-gray-400 bg-gray-50 dark:bg-[#0b141a]/10 relative overflow-hidden">
+                        <div className="absolute inset-0 opacity-[0.03] dark:opacity-[0.05] pointer-events-none select-none flex flex-wrap gap-8 p-10 rotate-[-12deg]">
+                            {Array.from({length: 30}).map((_, i) => (
+                                <MessageSquare key={i} size={40} className={i % 4 === 0 ? 'text-blue-600' : ''} />
+                            ))}
+                        </div>
+                        <div className="relative flex flex-col items-center animate-scale-in">
+                            <div className="w-24 h-24 bg-gradient-to-tr from-blue-50 to-indigo-50 dark:from-blue-500/10 dark:to-indigo-500/10 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                                <MessageSquare size={48} className="text-blue-500/30" />
+                            </div>
+                            <h2 className="text-lg font-black text-gray-700 dark:text-gray-300 mb-2">گفتگوی سازمانی</h2>
+                            <p className="text-xs text-gray-400 dark:text-gray-500 font-bold">برای شروع گفتگو، یک مخاطب یا گروه را انتخاب کنید</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* --- OVERLAYS --- */}
+            
+            {/* 1. Context Menu */}
+            {contextMenuMsg && (() => {
+                const canDeleteForEveryone = contextMenuMsg.msg.senderUsername === currentUser.username || [UserRole.ADMIN, UserRole.MANAGER, UserRole.CEO].includes(currentUser.role as UserRole);
+                const isOwner = contextMenuMsg.msg.senderUsername === currentUser.username;
+                const totalItems = 6 + (isOwner ? 1 : 0) + (canDeleteForEveryone ? 1 : 0);
+                const menuHeight = totalItems * 38 + 10; // Dynamic height based on actual visible items
+                const menuWidth = 192;
+                let topPosition = contextMenuMsg.y;
+                let leftPosition = contextMenuMsg.x;
+
+                // Smart Upward/Downward detection based on click position relative to viewport height
+                if (contextMenuMsg.y > window.innerHeight / 2) {
+                    // Clicked in bottom half, open upwards
+                    topPosition = Math.max(10, contextMenuMsg.y - menuHeight);
+                } else {
+                    // Clicked in top half, open downwards
+                    topPosition = Math.max(10, Math.min(contextMenuMsg.y, window.innerHeight - menuHeight - 10));
+                }
+
+                if (leftPosition + menuWidth > window.innerWidth) {
+                    leftPosition = Math.max(10, window.innerWidth - menuWidth - 10);
+                } else {
+                    leftPosition = Math.max(10, leftPosition);
+                }
+
+                return (
+                    <div className="fixed inset-0 z-[200]" onClick={() => setContextMenuMsg(null)}>
+                        <div 
+                            className="absolute glass-panel rounded-xl shadow-2xl border w-56 py-1 overflow-hidden animate-scale-in"
+                            style={{ top: topPosition, left: leftPosition }}
+                        >
+                            {/* Reactions Bar inside Context Menu */}
+                            <div className="flex items-center justify-around px-2 py-1.5 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/50">
+                                {['👍', '❤️', '😂', '🔥', '👏', '🎉', '😢'].map(emoji => (
+                                    <button
+                                        key={emoji}
+                                        onClick={() => {
+                                            handleToggleReaction(contextMenuMsg.msg.id, emoji);
+                                            setContextMenuMsg(null);
+                                        }}
+                                        className="text-lg hover:scale-130 active:scale-95 transition-transform"
+                                        title={emoji}
+                                    >
+                                        {emoji}
+                                    </button>
+                                ))}
+                            </div>
+                            <button onClick={() => { setReplyingTo(contextMenuMsg.msg); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm"><Reply size={16}/> پاسخ</button>
+                            <button onClick={() => { handleCopyMessage(contextMenuMsg.msg); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm"><Copy size={16}/> کپی</button>
+                            <button onClick={() => { handleNativeShare(contextMenuMsg.msg); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm"><Share2 size={16}/> اشتراک‌گذاری</button>
+                            <button onClick={() => { setSelectedMessages(new Set([contextMenuMsg.msg.id])); setShowForwardModal(true); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm"><Forward size={16}/> فوروارد</button>
+                            {contextMenuMsg.msg.senderUsername === currentUser.username && (
+                                <button onClick={() => { setEditingMessageId(contextMenuMsg.msg.id); setInputText(contextMenuMsg.msg.message); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm"><Edit2 size={16}/> ویرایش</button>
+                            )}
+                            <button onClick={() => { setSelectedMessages(new Set([contextMenuMsg.msg.id])); setSelectionMode(true); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm"><CheckSquare size={16}/> انتخاب</button>
+                            <button onClick={() => { setMessages(prev => prev.filter(m => m.id !== contextMenuMsg.msg.id)); setContextMenuMsg(null); }} className="w-full text-right px-4 py-2 hover:bg-orange-50 text-orange-600 flex items-center gap-2 text-sm"><Trash2 size={16}/> حذف برای من</button>
+                            {(contextMenuMsg.msg.senderUsername === currentUser.username || [UserRole.ADMIN, UserRole.MANAGER, UserRole.CEO].includes(currentUser.role as UserRole)) && (
+                                <button 
+                                    onClick={async () => { 
+                                        if(confirm('آیا از حذف این پیام برای همه اطمینان دارید؟')) {
+                                            try {
+                                                await deleteMessage(contextMenuMsg.msg.id); 
+                                                setMessages(prev => prev.filter(m => m.id !== contextMenuMsg.msg.id));
+                                                onRefresh(); 
+                                            } catch (e) { alert("خطا در حذف پیام"); }
+                                        }
+                                        setContextMenuMsg(null); 
+                                    }} 
+                                    className="w-full text-right px-4 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2 text-sm"
+                                >
+                                    <Trash2 size={16}/> حذف دو طرفه
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* 2. Image Viewer */}
+            {showImageViewer && (
+                <div className="fixed inset-0 bg-black/90 z-[200] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center animate-fade-in" onClick={() => setShowImageViewer(null)}>
+                    <img src={showImageViewer} className="max-w-[90%] max-h-[90%] rounded shadow-2xl" onClick={e => e.stopPropagation()}/>
+                    <div className="absolute top-4 right-4 flex gap-3 z-50">
+                        <button onClick={(e) => { 
+                            e.stopPropagation(); 
+                            saveImageToGallery(showImageViewer, 'image_' + Date.now() + '.jpg'); 
+                        }} className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 shadow-lg cursor-pointer">
+                            <DownloadCloud size={16} />
+                            <span>ذخیره در گالری</span>
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setShowImageViewer(null); }} className="p-2 bg-white/20 rounded-xl hover:bg-white/40 text-white cursor-pointer"><X/></button>
+                    </div>
+                </div>
+            )}
+
+            {/* PDF & File Viewer Modal */}
+            {previewAttachment?.isOpen && (
+                <FileViewerModal
+                    isOpen={previewAttachment.isOpen}
+                    onClose={() => setPreviewAttachment(null)}
+                    fileUrl={previewAttachment.url}
+                    fileName={previewAttachment.fileName}
+                />
+            )}
+
+            {/* 3. Forward Modal */}
+            {showForwardModal && (
+                <div className="fixed inset-0 bg-black/50 z-[200] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center p-4 backdrop-blur-sm">
+                    <div className="glass-panel rounded-xl w-full max-w-md h-[80vh] flex flex-col shadow-2xl">
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                            <span className="font-bold">ارسال به...</span>
+                            <button onClick={() => setShowForwardModal(false)}><X size={20}/></button>
+                        </div>
+                        
+                        {/* New Quote Toggle */}
+                        <div className="px-4 py-2 bg-yellow-50 border-b border-yellow-100">
+                             <label className="flex items-center gap-2 cursor-pointer text-sm text-yellow-800">
+                                 <input type="checkbox" checked={forwardNoQuote} onChange={e => setForwardNoQuote(e.target.checked)} className="w-4 h-4 rounded text-yellow-600"/>
+                                 ارسال بدون نقل قول (مخفی کردن نام فرستنده)
+                             </label>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-2">
+                            {getAllChannelsForForward().map((item: ChannelItem) => (
+                                <div key={item.id} onClick={() => handleForward(item.id, item.type)} className="flex items-center gap-3 p-3 hover:bg-gray-100 rounded-lg cursor-pointer">
+                                    <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold">
+                                        {item.avatar ? <img src={resolveImageUrl(item.avatar)} className="w-full h-full rounded-full"/> : item.name.charAt(0)}
+                                    </div>
+                                    <div className="font-bold text-sm tracking-tight">{item.name} <span className="text-xs text-gray-400 font-normal mr-2">({item.type === 'private' ? 'شخصی' : item.type === 'public' ? 'عمومی' : 'گروه'})</span></div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 3.1 Group Creation Modal */}
+            {showGroupModal && (
+                <div className="fixed inset-0 bg-black/50 z-[202] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center p-4 backdrop-blur-sm animate-fade-in">
+                    <div className="glass-panel rounded-2xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden animate-scale-in">
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h3 className="font-bold flex items-center gap-2"><Users size={20} className="text-orange-500"/> ساخت گروه جدید</h3>
+                            <button onClick={() => setShowGroupModal(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={20}/></button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">نام گروه</label>
+                                <input 
+                                    type="text" 
+                                    value={newGroupName} 
+                                    onChange={e => setNewGroupName(e.target.value)}
+                                    placeholder="مثلاً: واحد حسابداری"
+                                    className="w-full p-3 bg-gray-100 rounded-xl border-none outline-none focus:ring-2 focus:ring-orange-200 text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">انتخاب اعضا</label>
+                                <div className="max-h-48 overflow-y-auto space-y-1 p-1 bg-gray-50 rounded-xl border border-gray-100">
+                                    {users.filter(u => u.username !== currentUser.username).map(user => (
+                                        <label key={user.username} className="flex justify-between items-center p-2 hover:glass-panel rounded-lg cursor-pointer group transition-colors">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs uppercase">
+                                                    {user.fullName.charAt(0)}
+                                                </div>
+                                                <span className="text-sm">{user.fullName}</span>
+                                            </div>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={selectedGroupMembers.includes(user.username)}
+                                                onChange={e => {
+                                                    if (e.target.checked) setSelectedGroupMembers([...selectedGroupMembers, user.username]);
+                                                    else setSelectedGroupMembers(selectedGroupMembers.filter(id => id !== user.username));
+                                                }}
+                                                className="w-4 h-4 rounded text-orange-500"
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="p-4 bg-gray-50 border-t flex gap-3">
+                            <button onClick={handleCreateGroup} className="flex-1 bg-orange-500 text-white font-bold py-3 rounded-xl hover:bg-orange-600 transition-colors shadow-lg shadow-orange-100">ایجاد گروه</button>
+                            <button onClick={() => setShowGroupModal(false)} className="flex-1 bg-gray-200 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-300 transition-colors">انصراف</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 4. Group Info & Management Modal */}
+            {showGroupInfo && (
+                <div className="fixed inset-0 bg-black/50 z-[300] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center p-4 backdrop-blur-sm animate-fade-in">
+                    <div className="glass-panel rounded-2xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl overflow-hidden animate-scale-in">
+                        <div className="relative bg-gradient-to-br from-orange-500 to-orange-700 p-8 text-white flex flex-col items-center">
+                            <button onClick={() => setShowGroupInfo(null)} className="absolute top-4 left-4 p-2 bg-black/20 rounded-full hover:bg-black/30"><X size={20}/></button>
+                            <div className="relative group/avatar">
+                                <div className="w-20 h-20 rounded-3xl bg-white/20 flex items-center justify-center text-3xl font-black mb-3 shadow-lg backdrop-blur-md overflow-hidden">
+                                    {showGroupInfo.avatar ? <img src={resolveImageUrl(showGroupInfo.avatar)} className="w-full h-full object-cover"/> : showGroupInfo.name.charAt(0)}
+                                </div>
+                                {(showGroupInfo.createdBy === currentUser.username || ((showGroupInfo as any).admins || []).includes(currentUser.username) || currentUser.role === UserRole.ADMIN) && (
+                                    <button 
+                                        onClick={() => {
+                                            const input = document.createElement('input');
+                                            input.type = 'file';
+                                            input.accept = 'image/*';
+                                            input.onchange = async (e: any) => {
+                                                const file = e.target.files[0];
+                                                if (file) {
+                                                    const reader = new FileReader();
+                                                    reader.onload = async (re) => {
+                                                        const result = await uploadFile(file.name, re.target?.result as string);
+                                                        handleUpdateGroup(showGroupInfo.id, { avatar: result.url });
+                                                    };
+                                                    reader.readAsDataURL(file);
+                                                }
+                                            };
+                                            input.click();
+                                        }}
+                                        className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-3xl opacity-0 group-hover/avatar:opacity-100 transition-opacity backdrop-blur-[2px]"
+                                    >
+                                        <Camera size={24} className="text-white"/>
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <h3 className="text-xl font-black">{showGroupInfo.name}</h3>
+                                {(showGroupInfo.createdBy === currentUser.username || ((showGroupInfo as any).admins || []).includes(currentUser.username) || currentUser.role === UserRole.ADMIN) && (
+                                    <button 
+                                        onClick={() => {
+                                            const newName = prompt('نام جدید گروه را وارد کنید:', showGroupInfo.name);
+                                            if (newName && newName !== showGroupInfo.name) {
+                                                handleUpdateGroup(showGroupInfo.id, { name: newName });
+                                            }
+                                        }}
+                                        className="p-1.5 bg-white/20 rounded-lg hover:bg-white/30 transition-colors"
+                                    >
+                                        <Edit2 size={14}/>
+                                    </button>
+                                )}
+                            </div>
+                            <p className="text-xs opacity-80 mt-1">{showGroupInfo.members.length} عضو</p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                <div className="flex items-center gap-3">
+                                    <Bell size={20} className={showGroupInfo && mutedChannels.has(showGroupInfo.id) ? "text-gray-300" : "text-blue-500"}/>
+                                    <span className="text-sm font-bold text-gray-700">اعلان‌ها و صدا</span>
+                                </div>
+                                <button 
+                                    onClick={() => {
+                                        const newMuted = new Set(mutedChannels);
+                                        if (newMuted.has(showGroupInfo.id)) newMuted.delete(showGroupInfo.id);
+                                        else newMuted.add(showGroupInfo.id);
+                                        setMutedChannels(newMuted);
+                                    }}
+                                    className={`w-12 h-6 rounded-full relative p-1 transition-colors ${mutedChannels.has(showGroupInfo.id) ? 'bg-gray-300' : 'bg-green-500'}`}
+                                >
+                                    <div className={`w-4 h-4 glass-panel rounded-full absolute top-1 transition-all ${mutedChannels.has(showGroupInfo.id) ? 'left-1' : 'right-1'}`}></div>
+                                </button>
+                            </div>
+
+                            <div className="space-y-3">
+                                <h4 className="text-xs font-black text-gray-400 uppercase tracking-wider">اعضای گروه</h4>
+                                {showGroupInfo.members.map(username => {
+                                    const u = users.find(user => user.username === username);
+                                    const isCreator = showGroupInfo.createdBy === username;
+                                    const isAdmin = (showGroupInfo.admins || []).includes(username);
+                                    const isMe = currentUser.username === username;
+                                    const canManage = (showGroupInfo.admins || []).includes(currentUser.username) || currentUser.role === UserRole.ADMIN;
+                                    
+                                    return (
+                                        <div key={username} className="flex items-center justify-between group/member p-2 hover:bg-gray-50 rounded-xl transition-colors">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-sm font-bold overflow-hidden">
+                                                    {u?.avatar ? <img src={resolveImageUrl(u.avatar)} className="w-full h-full object-cover"/> : (u?.fullName.charAt(0) || username.charAt(0))}
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-sm font-bold text-gray-800">{u?.fullName || username} {isMe && '(شما)'}</span>
+                                                    <span className="text-[10px] text-gray-400">@{username}</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                {isCreator && <span className="text-[9px] bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-bold">سازنده</span>}
+                                                {!isCreator && isAdmin && <span className="text-[9px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-bold">مدیر</span>}
+                                                
+                                                {canManage && !isCreator && !isMe && (
+                                                    <div className="flex gap-1 ml-2">
+                                                        {!showGroupInfo.isTaskGroup && (
+                                                            <button 
+                                                                onClick={() => handleToggleAdminStatus(showGroupInfo.id, username)}
+                                                                className={`p-1.5 rounded-lg hover:glass-panel shadow-sm transition-all ${isAdmin ? 'text-blue-500' : 'text-gray-400'}`}
+                                                                title={isAdmin ? 'سلب مدیریت' : 'ارتقا به مدیر'}
+                                                            >
+                                                                <Shield size={14}/>
+                                                            </button>
+                                                        )}
+                                                        <button 
+                                                            onClick={() => handleRemoveMemberFromGroup(showGroupInfo.id, username)}
+                                                            className="p-1.5 text-red-400 hover:text-red-600 hover:glass-panel shadow-sm rounded-lg transition-all"
+                                                            title="حذف از گروه"
+                                                        >
+                                                            <UserMinus size={14}/>
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {((showGroupInfo.admins || []).includes(currentUser.username) || showGroupInfo.createdBy === currentUser.username || currentUser.role === UserRole.ADMIN) && (
+                                <div className="pt-4 border-t space-y-2">
+                                    <button 
+                                        onClick={() => handleAddMemberToGroup(showGroupInfo.id)}
+                                        className="w-full bg-blue-50 text-blue-600 p-3 rounded-xl font-bold text-sm hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <UserPlus size={18}/> افزودن عضو جدید
+                                    </button>
+                                    <button onClick={() => { 
+                                        handleDeleteGroup(showGroupInfo.id, !!showGroupInfo.isTaskGroup, showGroupInfo.name);
+                                    }} className="w-full bg-red-50 text-red-600 p-3 rounded-xl font-bold text-sm hover:bg-red-100 transition-colors flex items-center justify-center gap-2">
+                                        <Trash2 size={18}/> حذف و انحلال گروه {currentUser.role === UserRole.ADMIN ? '(توسط ادمین)' : ''}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 5. Contact Info Modal */}
+            {showContactInfo && (
+                <div className="fixed inset-0 bg-black/50 z-[300] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center p-4 backdrop-blur-sm animate-fade-in" onClick={()=>setShowContactInfo(null)}>
+                    <div className="glass-panel rounded-2xl w-full max-w-sm flex flex-col shadow-2xl overflow-hidden animate-scale-in" onClick={e=>e.stopPropagation()}>
+                        <div className="relative bg-gradient-to-br from-blue-500 to-blue-700 p-8 text-white flex flex-col items-center">
+                            <button onClick={() => setShowContactInfo(null)} className="absolute top-4 left-4 p-2 bg-black/20 rounded-full hover:bg-black/30"><X size={20}/></button>
+                            <div className="w-24 h-24 rounded-full bg-white/20 p-1 mb-3">
+                                <div className="w-full h-full rounded-full glass-panel flex items-center justify-center text-blue-600 text-4xl font-black shadow-inner overflow-hidden">
+                                    {showContactInfo.avatar ? <img src={resolveImageUrl(showContactInfo.avatar)} className="w-full h-full object-cover"/> : showContactInfo.fullName.charAt(0)}
+                                </div>
+                            </div>
+                            <h3 className="text-xl font-black">{showContactInfo.fullName}</h3>
+                            <p className="text-xs opacity-80 mt-1">@{showContactInfo.username}</p>
+                        </div>
+
+                        <div className="p-6 space-y-4">
+                            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                <div className="flex items-center gap-3">
+                                    <Bell size={20} className="text-gray-400"/>
+                                    <span className="text-sm font-bold text-gray-700">بی‌صدا کردن</span>
+                                </div>
+                                <button className="w-12 h-6 bg-gray-300 rounded-full relative p-1">
+                                    <div className="w-4 h-4 glass-panel rounded-full absolute left-1 transition-all"></div>
+                                </button>
+                            </div>
+
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-3 text-gray-600">
+                                    <UserIcon size={18}/>
+                                    <div className="flex flex-col">
+                                        <span className="text-[10px] text-gray-400">نقش سیستم</span>
+                                        <span className="text-sm font-bold">{showContactInfo.role}</span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-3 text-gray-600">
+                                    <MessageSquare size={18}/>
+                                    <div className="flex flex-col">
+                                        <span className="text-[10px] text-gray-400">آخرین فعالیت</span>
+                                        <span className="text-sm font-medium">{formatLastSeen(showContactInfo.lastSeen)}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button className="w-full bg-blue-600 text-white p-3 rounded-xl font-bold text-sm shadow-lg shadow-blue-100 hover:shadow-xl transition-all" onClick={() => { setActiveChannel({type: 'private', id: showContactInfo.username}); setShowContactInfo(null); }}>
+                                ارسال پیام
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 6. Custom Task Creation Modal */}
+            {showCreateTaskModal && (
+                <div className="fixed inset-0 bg-black/50 z-[301] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center p-4 backdrop-blur-sm animate-fade-in" onClick={() => setShowCreateTaskModal(false)}>
+                    <div className="glass-panel rounded-2xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden animate-scale-in" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50 dark:bg-gray-800 bg-white dark:bg-gray-900">
+                            <h3 className="font-bold flex items-center gap-2 text-gray-800 dark:text-gray-100"><ListTodo size={20} className="text-blue-500"/> ایجاد تسک جدید</h3>
+                            <button onClick={() => setShowCreateTaskModal(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 dark:text-gray-400"><X size={20}/></button>
+                        </div>
+                        
+                        {/* Scrollable Form Body */}
+                        <div className="p-4 space-y-4 overflow-y-auto max-h-[55vh] custom-scrollbar">
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">عنوان تسک <span className="text-red-500">*</span></label>
+                                <input 
+                                    ref={taskTitleInputRef}
+                                    type="text" 
+                                    value={taskTitle} 
+                                    onChange={e => setTaskTitle(e.target.value)}
+                                    placeholder="مثلاً: بررسی تراکنش‌های حسابداری"
+                                    className="w-full p-3 bg-gray-100 dark:bg-gray-950 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-200 text-sm font-bold text-gray-800 dark:text-gray-200"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">توضیحات و جزئیات تسک</label>
+                                <textarea 
+                                    value={taskDescription} 
+                                    onChange={e => setTaskDescription(e.target.value)}
+                                    placeholder="شرح وظایف و جزئیات بیشتر در مورد تسک..."
+                                    rows={4}
+                                    className="w-full p-3 bg-gray-100 dark:bg-gray-950 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-200 text-sm resize-none text-gray-800 dark:text-gray-200"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">ارجاع به کاربر خاص (مسئولین تسک)</label>
+                                
+                                {/* Selected Assignees Chips */}
+                                {taskAssignedTo.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 mb-2 p-2 bg-gray-50 dark:bg-gray-950/40 rounded-xl border border-dashed border-gray-100 dark:border-gray-800">
+                                        {taskAssignedTo.map(username => {
+                                            const matchedUser = users.find(u => u.username === username);
+                                            const name = matchedUser ? matchedUser.fullName : username;
+                                            return (
+                                                <div key={username} className="flex items-center gap-1 bg-blue-50 dark:bg-blue-950/55 border border-blue-100 dark:border-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-lg text-xs font-bold animate-scale-in">
+                                                    <div className="w-4 h-4 rounded-full bg-blue-500 text-white flex items-center justify-center text-[8px] font-black uppercase">
+                                                        {name.charAt(0)}
+                                                    </div>
+                                                    <span>{name}</span>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => setTaskAssignedTo(prev => prev.filter(un => un !== username))}
+                                                        className="hover:bg-blue-100 dark:hover:bg-blue-900/60 p-0.5 rounded text-blue-500 hover:text-blue-700 transition cursor-pointer"
+                                                    >
+                                                        <X size={10} className="stroke-[3]" />
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {/* Searchable Dropdown */}
+                                <div className="relative">
+                                    <div className="relative flex items-center bg-gray-100 dark:bg-gray-950 rounded-xl px-3 border border-transparent focus-within:border-blue-500 transition-colors">
+                                        <Search size={16} className="text-gray-400 shrink-0 ml-2" />
+                                        <input 
+                                            type="text"
+                                            value={userSearchText}
+                                            onChange={e => setUserSearchText(e.target.value)}
+                                            placeholder="جستجو و ارجاع کاربر جدید..."
+                                            className="w-full py-2.5 bg-transparent border-none outline-none text-xs font-bold text-right text-gray-800 dark:text-gray-200"
+                                        />
+                                        {userSearchText && (
+                                            <button 
+                                                type="button"
+                                                onClick={() => setUserSearchText('')}
+                                                className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-full text-gray-400 hover:text-gray-600 transition cursor-pointer"
+                                            >
+                                                <X size={12} />
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* Dropdown Box - Always visible if group has users, filtered by search */}
+                                    <div className="mt-1 max-h-40 overflow-y-auto border border-gray-100 dark:border-gray-800/60 rounded-xl shadow-lg bg-white dark:bg-gray-900 custom-scrollbar absolute w-full z-10 left-0 right-0 animate-fade-in divide-y divide-gray-50 dark:divide-gray-800/40">
+                                        {(() => {
+                                            const tg = taskGroups.find(g => g.id === activeChannel.id);
+                                            const filtered = users.filter(u => {
+                                                const isMember = !tg || (tg.members || []).includes(u.username);
+                                                const isSelf = currentUser && u.username === currentUser.username;
+                                                const matchesSearch = u.fullName.toLowerCase().includes(userSearchText.toLowerCase()) || u.username.toLowerCase().includes(userSearchText.toLowerCase());
+                                                return (isMember || isSelf) && matchesSearch;
+                                            });
+
+                                            if (filtered.length === 0) {
+                                                return (
+                                                    <div className="p-3 text-center text-xs text-gray-400">
+                                                        کاربری یافت نشد 🔍
+                                                    </div>
+                                                );
+                                            }
+
+                                            return filtered.map(u => {
+                                                const isSelected = taskAssignedTo.includes(u.username);
+                                                const isCurrentUser = currentUser && u.username === currentUser.username;
+                                                return (
+                                                    <button
+                                                        key={u.username}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (isSelected) {
+                                                                setTaskAssignedTo(prev => prev.filter(un => un !== u.username));
+                                                            } else {
+                                                                setTaskAssignedTo(prev => [...prev, u.username]);
+                                                            }
+                                                            setUserSearchText('');
+                                                        }}
+                                                        className="w-full flex items-center justify-between p-2 hover:bg-gray-50 dark:hover:bg-gray-850 text-right transition cursor-pointer"
+                                                    >
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center font-black text-[10px]">
+                                                                {u.fullName.charAt(0)}
+                                                            </div>
+                                                            <div className="flex flex-col text-right">
+                                                                <span className="font-bold text-xs text-gray-800 dark:text-gray-200">
+                                                                    {u.fullName} {isCurrentUser && <span className="text-[9px] text-green-600 bg-green-50 dark:bg-green-950/40 px-1 py-0.5 rounded mr-1 font-semibold">(خودم)</span>}
+                                                                </span>
+                                                                <span className="text-[9px] text-gray-400">@{u.username}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center justify-center">
+                                                            {isSelected ? (
+                                                                <div className="w-4 h-4 rounded bg-blue-600 text-white flex items-center justify-center">
+                                                                    <Check size={10} className="stroke-[3]" />
+                                                                </div>
+                                                            ) : (
+                                                                <div className="w-4 h-4 rounded border-2 border-gray-200 dark:border-gray-850" />
+                                                            )}
+                                                        </div>
+                                                    </button>
+                                                );
+                                            });
+                                        })()}
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">زمان و تاریخ مهلت (Due Date)</label>
+                                <input 
+                                    type="datetime-local" 
+                                    value={taskDueDate} 
+                                    onChange={e => setTaskDueDate(e.target.value)}
+                                    className="w-full p-3 bg-gray-100 dark:bg-gray-950 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-200 text-sm text-gray-800 dark:text-gray-200"
+                                />
+                            </div>
+
+                            {/* Recurring 10-Minute Audio & Notification Reminder Switch */}
+                            <div className="bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 p-3.5 rounded-xl space-y-2.5">
+                                <div 
+                                    className="flex items-center justify-between cursor-pointer select-none" 
+                                    onClick={() => setTaskRecurringReminder(!taskRecurringReminder)}
+                                >
+                                    <div className="flex items-center gap-2.5">
+                                        <div className={`p-1.5 rounded-lg transition-colors ${taskRecurringReminder ? 'bg-amber-500 text-white shadow-sm' : 'bg-gray-200 dark:bg-gray-700 text-gray-400'}`}>
+                                            <BellRing size={16} className={taskRecurringReminder ? 'animate-bounce' : ''} />
+                                        </div>
+                                        <div>
+                                            <span className="text-xs font-bold text-gray-800 dark:text-gray-200 block">یادآور صوتی و نوتیفیکیشن هر ۱۰ دقیقه</span>
+                                            <span className="text-[10px] text-gray-500 dark:text-gray-400 block">ارسال هشدار صوتی و نوتیف دوره‌ای برای افراد تگ‌شده تا زمان انجام تسک</span>
+                                        </div>
+                                    </div>
+                                    <div className={`w-10 h-6 flex items-center rounded-full p-1 duration-200 ease-in-out transition-colors ${taskRecurringReminder ? 'bg-amber-500 justify-end' : 'bg-gray-300 dark:bg-gray-700 justify-start'}`}>
+                                        <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform" />
+                                    </div>
+                                </div>
+
+                                {taskRecurringReminder && (
+                                    <div className="flex items-center justify-between pt-2 border-t border-amber-200/70 dark:border-amber-900/40 text-xs">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[11px] text-gray-700 dark:text-gray-300 font-semibold">بازه یادآوری:</span>
+                                            <select
+                                                value={taskReminderIntervalMinutes}
+                                                onChange={(e) => setTaskReminderIntervalMinutes(Number(e.target.value))}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="p-1 px-2 text-xs bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-800/80 rounded-lg text-amber-900 dark:text-amber-200 font-bold focus:outline-none"
+                                            >
+                                                <option value={5}>هر ۵ دقیقه</option>
+                                                <option value={10}>هر ۱۰ دقیقه (پیش‌فرض)</option>
+                                                <option value={15}>هر ۱۵ دقیقه</option>
+                                                <option value={30}>هر ۳۰ دقیقه</option>
+                                                <option value={60}>هر ۱ ساعت</option>
+                                            </select>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                playTaskAlarmSound();
+                                            }}
+                                            className="text-[11px] text-amber-700 dark:text-amber-300 hover:text-amber-900 flex items-center gap-1 font-bold bg-white/90 dark:bg-gray-800 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 hover:shadow-sm transition"
+                                        >
+                                            <Volume2 size={13} />
+                                            <span>🔊 تست صدا</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Fixed Footer for register/submit button */}
+                        <div className="p-4 border-t bg-gray-50 dark:bg-gray-800/50 flex items-center justify-end">
+                            <button 
+                                onClick={() => {
+                                    if (!taskTitle.trim()) return;
+                                    const newTask: GroupTask = {
+                                        id: generateUUID(),
+                                        groupId: activeChannel.id!,
+                                        title: taskTitle.trim(),
+                                        description: taskDescription.trim() || undefined,
+                                        assignedTo: taskAssignedTo,
+                                        dueDate: taskDueDate || undefined,
+                                        status: 'pending',
+                                        createdBy: currentUser.username,
+                                        createdAt: Date.now(),
+                                        replies: [],
+                                        recurringReminder: taskRecurringReminder,
+                                        reminderIntervalMinutes: taskReminderIntervalMinutes || 10,
+                                        lastRemindedAt: Date.now()
+                                    };
+                                    createTask(newTask).then(() => {
+                                        setTasks(prev => [newTask, ...prev]);
+                                        setShowCreateTaskModal(false);
+                                    });
+                                }}
+                                disabled={!taskTitle.trim()}
+                                className="w-full bg-blue-600 text-white p-3 rounded-xl font-bold text-sm shadow-lg shadow-blue-100 disabled:opacity-50 hover:bg-blue-700 transition-all"
+                            >
+                                ثبت و ایجاد تسک
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 7. Custom Task Details & Conversation/Replies Modal */}
+            {activeTaskForDetail && (
+                <div className="fixed inset-0 bg-black/50 z-[301] flex items-start pt-12 md:pt-20 pb-32 overflow-y-auto overflow-x-hidden justify-center p-4 backdrop-blur-sm animate-fade-in" onClick={() => setActiveTaskForDetail(null)}>
+                    <div className="glass-panel rounded-2xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden animate-scale-in" onClick={e => e.stopPropagation()}>
+                        <div className="p-4 border-b flex justify-between items-center bg-gray-50 dark:bg-gray-800">
+                            <div className="flex items-center gap-2">
+                                <ListTodo size={20} className="text-blue-500"/>
+                                <h3 className="font-bold text-gray-800 dark:text-gray-100">جزئیات و گفتگو درباره تسک</h3>
+                            </div>
+                            <button onClick={() => setActiveTaskForDetail(null)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full"><X size={20}/></button>
+                        </div>
+                        <div className="p-5 flex-1 overflow-y-auto max-h-[65vh] space-y-4 custom-scrollbar">
+                            <div className="flex items-start gap-3">
+                                <button 
+                                    onClick={() => {
+                                        const newStatus = activeTaskForDetail.status === 'completed' ? 'pending' : 'completed';
+                                        const updatedTask = { 
+                                            ...activeTaskForDetail, 
+                                            status: newStatus as any,
+                                            completedBy: newStatus === 'completed' ? currentUser.username : undefined,
+                                            completedAt: newStatus === 'completed' ? Date.now() : undefined
+                                        };
+                                        updateTask(updatedTask).then(() => {
+                                            setTasks(prev => prev.map(t => t.id === activeTaskForDetail.id ? updatedTask : t));
+                                            setActiveTaskForDetail(updatedTask);
+                                        });
+                                    }}
+                                    className={`mt-1 rounded-full border-2 transition-colors flex items-center justify-center ${activeTaskForDetail.status === 'completed' ? 'bg-green-500 border-green-500 w-6 h-6' : 'border-gray-300 w-6 h-6 glass-panel shrink-0'}`}
+                                >
+                                    {activeTaskForDetail.status === 'completed' && <Check size={16} className="text-white"/>}
+                                </button>
+                                <div className="flex-1 min-w-0">
+                                    <h4 className={`text-lg font-black leading-snug break-words ${activeTaskForDetail.status === 'completed' ? 'line-through text-gray-400' : 'text-gray-800 dark:text-white'}`}>{activeTaskForDetail.title}</h4>
+                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 mt-2">
+                                        <span>ایجادکننده: @{activeTaskForDetail.createdBy}</span>
+                                        <span>ثبت: {formatDate(activeTaskForDetail.createdAt)}</span>
+                                        {activeTaskForDetail.status === 'completed' && activeTaskForDetail.completedAt && (
+                                            <span className="text-green-600 font-bold bg-green-50 dark:bg-green-950/20 px-2 py-0.5 rounded">توسط: @{activeTaskForDetail.completedBy} در {formatDate(activeTaskForDetail.completedAt)}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Description / Extra Details */}
+                            <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-xl space-y-1">
+                                <h5 className="text-xs font-bold text-gray-400">جزئیات و توضیحات</h5>
+                                <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                    {activeTaskForDetail.description || 'توضیحات بیشتری برای این تسک ثبت نشده است.'}
+                                </p>
+                            </div>
+
+                            {/* Recurring 10-Minute Audio & Notification Reminder Controls */}
+                            <div className="p-3.5 bg-gradient-to-r from-amber-50/90 to-blue-50/70 dark:from-amber-950/30 dark:to-blue-950/20 rounded-xl border border-amber-200/80 dark:border-amber-900/50 space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2.5">
+                                        <div className={`p-1.5 rounded-lg transition-colors ${activeTaskForDetail.recurringReminder ? 'bg-amber-500 text-white shadow-sm' : 'bg-gray-200 dark:bg-gray-700 text-gray-400'}`}>
+                                            <BellRing size={16} className={activeTaskForDetail.recurringReminder ? 'animate-bounce' : ''} />
+                                        </div>
+                                        <div>
+                                            <span className="text-xs font-bold text-gray-800 dark:text-gray-200 block">
+                                                یادآور صوتی و نوتیفیکیشن دوره‌ای ({activeTaskForDetail.reminderIntervalMinutes || 10} دقیقه)
+                                            </span>
+                                            <span className="text-[10px] text-gray-500 dark:text-gray-400 block">
+                                                {activeTaskForDetail.recurringReminder 
+                                                    ? 'فعال: هر ۱۰ دقیقه برای افراد تگ‌شده هشدار صوتی و نوتیفیکیشن ارسال می‌شود.' 
+                                                    : 'غیرفعال: هشدارهای دوره‌ای برای این تسک غیرفعال است.'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            const newRecurring = !activeTaskForDetail.recurringReminder;
+                                            const updatedTask = {
+                                                ...activeTaskForDetail,
+                                                recurringReminder: newRecurring,
+                                                reminderIntervalMinutes: activeTaskForDetail.reminderIntervalMinutes || 10,
+                                                lastRemindedAt: newRecurring ? Date.now() : activeTaskForDetail.lastRemindedAt
+                                            };
+                                            updateTask(updatedTask).then(() => {
+                                                setTasks(prev => prev.map(t => t.id === activeTaskForDetail.id ? updatedTask : t));
+                                                setActiveTaskForDetail(updatedTask);
+                                                if (newRecurring) {
+                                                    playTaskAlarmSound();
+                                                }
+                                            });
+                                        }}
+                                        className={`w-10 h-6 flex items-center rounded-full p-1 duration-200 ease-in-out transition-colors ${activeTaskForDetail.recurringReminder ? 'bg-amber-500 justify-end' : 'bg-gray-300 dark:bg-gray-700 justify-start'}`}
+                                    >
+                                        <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform" />
+                                    </button>
+                                </div>
+
+                                {activeTaskForDetail.recurringReminder && (
+                                    <div className="flex flex-wrap items-center justify-between pt-2 border-t border-amber-200/80 dark:border-amber-900/40 gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[11px] text-gray-700 dark:text-gray-300 font-semibold">بازه هشدار:</span>
+                                            <select
+                                                value={activeTaskForDetail.reminderIntervalMinutes || 10}
+                                                onChange={(e) => {
+                                                    const newInt = Number(e.target.value);
+                                                    const updatedTask = {
+                                                        ...activeTaskForDetail,
+                                                        reminderIntervalMinutes: newInt
+                                                    };
+                                                    updateTask(updatedTask).then(() => {
+                                                        setTasks(prev => prev.map(t => t.id === activeTaskForDetail.id ? updatedTask : t));
+                                                        setActiveTaskForDetail(updatedTask);
+                                                    });
+                                                }}
+                                                className="p-1 px-2 text-xs bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-800/80 rounded-lg text-amber-900 dark:text-amber-200 font-bold focus:outline-none"
+                                            >
+                                                <option value={5}>هر ۵ دقیقه</option>
+                                                <option value={10}>هر ۱۰ دقیقه (پیش‌فرض)</option>
+                                                <option value={15}>هر ۱۵ دقیقه</option>
+                                                <option value={30}>هر ۳۰ دقیقه</option>
+                                                <option value={60}>هر ۱ ساعت</option>
+                                            </select>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => playTaskAlarmSound()}
+                                            className="text-[11px] text-amber-700 dark:text-amber-300 hover:text-amber-900 flex items-center gap-1 font-bold bg-white/90 dark:bg-gray-800 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 hover:shadow-sm transition"
+                                        >
+                                            <Volume2 size={13} />
+                                            <span>🔊 پخش صدای زنگ یادآور</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Assigned users */}
+                            <div className="space-y-2">
+                                <h5 className="text-xs font-bold text-gray-400">مسئولین تسک</h5>
+                                <div className="flex flex-wrap gap-2">
+                                    {(!activeTaskForDetail.assignedTo || activeTaskForDetail.assignedTo.length === 0) ? (
+                                        <span className="text-xs text-gray-400 italic">به شخص خاصی ارجاع داده نشده است (عمومی)</span>
+                                    ) : (
+                                        activeTaskForDetail.assignedTo.map(username => {
+                                            const u = users.find(user => user.username === username);
+                                            return (
+                                                <div key={username} className="flex items-center gap-1.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-3 py-1.5 rounded-full text-xs font-bold border border-blue-100">
+                                                    <div className="w-5 h-5 rounded-full bg-blue-200 dark:bg-blue-800 flex items-center justify-center text-[10px] font-black overflow-hidden">
+                                                        {u?.avatar ? <img src={resolveImageUrl(u.avatar)} className="w-full h-full object-cover"/> : username.charAt(0)}
+                                                    </div>
+                                                    <span>{u?.fullName || username}</span>
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Due Date */}
+                            {activeTaskForDetail.dueDate && (
+                                <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/30 p-3 rounded-xl border border-amber-100">
+                                    <Clock size={16}/>
+                                    <span>مهلت انجام: {formatDate(new Date(activeTaskForDetail.dueDate).getTime())}</span>
+                                </div>
+                            )}
+
+                            {/* Conversation/Replies List */}
+                            <div className="border-t pt-4 space-y-3">
+                                <h5 className="font-bold text-sm text-gray-800 dark:text-white flex items-center gap-2">
+                                    <MessageSquare size={16} className="text-blue-500"/>
+                                    گفتگو و پاسخ‌ها ({activeTaskForDetail.replies?.length || 0})
+                                </h5>
+                                <div className="space-y-2.5 max-h-52 overflow-y-auto pr-1 custom-scrollbar">
+                                    {(!activeTaskForDetail.replies || activeTaskForDetail.replies.length === 0) ? (
+                                        <p className="text-xs text-gray-400 italic text-center py-6">پاسخی برای این تسک ثبت نشده است. بحث خود را آغاز کنید!</p>
+                                    ) : (
+                                        activeTaskForDetail.replies.map(reply => (
+                                            <div key={reply.id} className="p-3 bg-gray-50/75 dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 space-y-1">
+                                                <div className="flex justify-between items-center text-[10px] font-bold text-gray-400">
+                                                    <span>{reply.sender} (@{reply.senderUsername})</span>
+                                                    <span>{formatDate(reply.timestamp)}</span>
+                                                </div>
+                                                <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">{reply.message}</p>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+
+                                {/* Reply Input Area */}
+                                <div className="flex items-end gap-2 pt-2">
+                                    <textarea 
+                                        value={taskReplyText}
+                                        onChange={e => setTaskReplyText(e.target.value)}
+                                        placeholder="پاسخ خود را بنویسید..."
+                                        rows={2}
+                                        className="flex-1 p-2 bg-gray-50 dark:bg-gray-900 border rounded-xl text-xs focus:ring-2 focus:ring-blue-100 outline-none resize-none"
+                                    />
+                                    <button 
+                                        onClick={() => {
+                                            if (!taskReplyText.trim()) return;
+                                            const newReply = {
+                                                id: generateUUID(),
+                                                sender: currentUser.fullName || currentUser.username,
+                                                senderUsername: currentUser.username,
+                                                message: taskReplyText.trim(),
+                                                timestamp: Date.now()
+                                            };
+                                            const updatedTask = {
+                                                ...activeTaskForDetail,
+                                                replies: [...(activeTaskForDetail.replies || []), newReply]
+                                            };
+                                            updateTask(updatedTask).then(() => {
+                                                setTasks(prev => prev.map(t => t.id === activeTaskForDetail.id ? updatedTask : t));
+                                                setActiveTaskForDetail(updatedTask);
+                                                setTaskReplyText('');
+                                            });
+                                        }}
+                                        disabled={!taskReplyText.trim()}
+                                        className="bg-blue-600 disabled:opacity-50 text-white px-4 py-2 h-10 rounded-xl text-xs font-bold hover:bg-blue-700 transition flex items-center justify-center gap-1.5 shrink-0"
+                                    >
+                                        <Send size={14}/> ثبت پاسخ
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Media Attachment & Drawing Modal (WhatsApp Web Style) */}
+            <MediaAttachmentModal 
+                isOpen={!!pendingAttachmentModalFiles && pendingAttachmentModalFiles.length > 0}
+                initialFiles={pendingAttachmentModalFiles || []}
+                targetName={(activeChannel as any)?.name || (activeChannel as any)?.title || 'گفتگو'}
+                replyingTo={replyingTo ? {
+                    id: replyingTo.id,
+                    sender: replyingTo.sender,
+                    message: replyingTo.message || (replyingTo.audioUrl ? 'پیام صوتی' : 'فایل')
+                } : null}
+                onCancelReply={() => setReplyingTo(null)}
+                initialCaption={inputText.trim() ? inputText : undefined}
+                onClose={() => setPendingAttachmentModalFiles(null)}
+                onSend={handleSendFromAttachmentModal}
+            />
+        </div>
+    </div>
+    );
+};
+
+export default ChatRoom;

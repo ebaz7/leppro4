@@ -1,0 +1,19 @@
+node_modules/
+dist/
+database.json
+.env
+*.log
+
+# WhatsApp Session & Puppeteer Browser Data (Must NOT be tracked in Git)
+wauth/
+.puppeteer/
+*.pma
+
+# Backups & Generated Dirs
+backups/
+backup_*/
+daemon/
+temp/
+extracted_excel/
+
+

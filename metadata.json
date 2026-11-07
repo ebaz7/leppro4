@@ -1,0 +1,10 @@
+{
+  "name": "سامانه یکپارچه مالی و بازرگانی دلکام",
+  "description": "سامانه یکپارچه مالی، بازرگانی و کارتابل دستور پرداخت دلکام با گردش کار تایید و گزارش‌گیری هوشمند.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

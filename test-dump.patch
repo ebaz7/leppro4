@@ -1,0 +1,12 @@
+--- components/TradeModule.tsx
++++ components/TradeModule.tsx
+@@ -510,6 +510,9 @@
+ 
+     // Re-run this effect whenever selectedRecord changes so the forms stay in sync
+     useEffect(() => {
++        if (selectedRecord) {
++            console.log("SELECTED_RECORD_DUMP_JSON:", JSON.stringify(selectedRecord));
++        }
+         if (selectedRecord) {
+             setEditingProformaId(null);
+             setEditMetadataForm({

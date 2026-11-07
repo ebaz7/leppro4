@@ -1,0 +1,4240 @@
+import puppeteer from "puppeteer";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { PDFDocument } from "pdf-lib";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Correctly resolve root directory from backend folder
+const ROOT_DIR = path.resolve(__dirname, "..");
+
+let browser = null;
+
+// --- DYNAMIC PERSIAN DIGIT CONVERTER ---
+const toPersianDigits = (str) => {
+  if (str === undefined || str === null) return "";
+  const englishDigits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+  const persianDigits = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
+  let result = String(str);
+  for (let i = 0; i < 10; i++) {
+    result = result.replace(
+      new RegExp(englishDigits[i], "g"),
+      persianDigits[i],
+    );
+  }
+  return result;
+};
+
+// --- URL TO ABSOLUTE PATH / BASE64 CONVERTER ---
+const makeAbsolute = (url) => {
+  if (!url) return "";
+  if (url.startsWith("data:")) return url;
+
+  // Check if it is a local upload (contains '/uploads/')
+  if (url.includes("/uploads/")) {
+    try {
+      const parts = url.split("/uploads/");
+      const fileName = parts[parts.length - 1].split("?")[0]; // strip query strings
+      const fullPath = path.join(process.cwd(), "uploads", fileName);
+
+      if (fs.existsSync(fullPath)) {
+        const ext = path.extname(fullPath).toLowerCase().replace(".", "");
+        const mimeType =
+          ext === "png"
+            ? "image/png"
+            : ext === "gif"
+              ? "image/gif"
+              : ext === "jpg" || ext === "jpeg"
+                ? "image/jpeg"
+                : "image/png";
+        const base64 = fs.readFileSync(fullPath).toString("base64");
+        return `data:${mimeType};base64,${base64}`;
+      } else {
+        console.error(
+          `[Renderer] Local upload file not found on disk: ${fullPath}`,
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[Renderer] Error reading file for PDF base64 conversion:",
+        e.message,
+      );
+    }
+  }
+
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const cleanUrl = url.startsWith("/") ? url : `/${url}`;
+  return `http://127.0.0.1:3000${cleanUrl}`;
+};
+
+// --- FONT LOADER (100% OFFLINE LOCAL SUPPORT FOR ALL PERSIAN FONTS) ---
+const loadFontFileBase64 = (fileName) => {
+  try {
+    const pathsToCheck = [
+      path.join(ROOT_DIR, "public", "fonts", fileName),
+      path.join(ROOT_DIR, "dist", "fonts", fileName),
+      path.join(process.cwd(), "public", "fonts", fileName),
+    ];
+    for (const p of pathsToCheck) {
+      if (fs.existsSync(p)) {
+        return fs.readFileSync(p).toString("base64");
+      }
+    }
+  } catch (e) {
+    console.warn(`[Renderer] Error loading font ${fileName}:`, e.message);
+  }
+  return null;
+};
+
+const buildFontFaceCss = (family, fileName, weight = "normal") => {
+  const b64 = loadFontFileBase64(fileName);
+  if (!b64) return "";
+  return `@font-face { font-family: '${family}'; src: url(data:font/woff2;base64,${b64}) format('woff2'); font-weight: ${weight}; font-style: normal; }\n`;
+};
+
+const fontFaceRule = [
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-Light.woff2", 300),
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-Regular.woff2", 400),
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-Medium.woff2", 500),
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-SemiBold.woff2", 600),
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-Bold.woff2", 700),
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-ExtraBold.woff2", 800),
+  buildFontFaceCss("Vazirmatn", "Vazirmatn-Black.woff2", 900),
+].join("") || "/* No Local Font Found */";
+
+const allPersianFontsRule = [
+  fontFaceRule,
+  buildFontFaceCss("Shabnam", "Shabnam.woff2", "normal"),
+  buildFontFaceCss("Sahel", "Sahel.woff2", "normal"),
+  buildFontFaceCss("Gandom", "Gandom.woff2", "normal"),
+  buildFontFaceCss("Samim", "Samim.woff2", "normal"),
+  buildFontFaceCss("Estedad", "Estedad.woff2", "normal"),
+  buildFontFaceCss("Tanha", "Tanha.woff2", "normal"),
+  buildFontFaceCss("Nahid", "Nahid.woff2", "normal"),
+].join("");
+
+const OFFLINE_TAILWIND_REPORT_CSS = `
+  *, ::before, ::after { box-sizing: border-box; border-width: 0; border-style: solid; border-color: #e5e7eb; }
+  .w-full { width: 100%; }
+  .w-2\\.5 { width: 0.625rem; }
+  .w-1\\/4 { width: 25%; }
+  .h-6 { height: 1.5rem; }
+  .p-0 { padding: 0; }
+  .p-2 { padding: 0.5rem; }
+  .p-2\\.5 { padding: 0.625rem; }
+  .py-0\\.5 { padding-top: 0.125rem; padding-bottom: 0.125rem; }
+  .py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+  .py-1\\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+  .py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+  .px-1\\.5 { padding-left: 0.375rem; padding-right: 0.375rem; }
+  .px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+  .px-2\\.5 { padding-left: 0.625rem; padding-right: 0.625rem; }
+  .px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+  .pr-4 { padding-right: 1rem; }
+  .pb-2 { padding-bottom: 0.5rem; }
+  .pt-1\\.5 { padding-top: 0.375rem; }
+  .mb-0\\.5 { margin-bottom: 0.125rem; }
+  .mb-3 { margin-bottom: 0.75rem; }
+  .mt-0\\.5 { margin-top: 0.125rem; }
+  .mt-2 { margin-top: 0.5rem; }
+  .mt-3 { margin-top: 0.75rem; }
+  .flex { display: flex; }
+  .inline-block { display: inline-block; }
+  .grid { display: grid; }
+  .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .justify-between { justify-content: space-between; }
+  .items-center { align-items: center; }
+  .gap-2 { gap: 0.5rem; }
+  .gap-3 { gap: 0.75rem; }
+  .gap-8 { gap: 2rem; }
+  .space-y-0\\.5 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.125rem; }
+  .border { border-width: 1px; }
+  .border-b { border-bottom-width: 1px; }
+  .border-b-2 { border-bottom-width: 2px; }
+  .border-t { border-top-width: 1px; }
+  .border-t-2 { border-top-width: 2px; }
+  .border-l { border-left-width: 1px; }
+  .border-r-4 { border-right-width: 4px; }
+  .last\\:border-l-0:last-child { border-left-width: 0px; }
+  .border-dashed { border-style: dashed; }
+  .border-slate-100 { border-color: #f1f5f9; }
+  .border-slate-300 { border-color: #cbd5e1; }
+  .border-slate-900 { border-color: #0f172a; }
+  .border-gray-200\\/80 { border-color: rgba(229, 231, 235, 0.8); }
+  .border-gray-200\\/60 { border-color: rgba(229, 231, 235, 0.6); }
+  .border-gray-300 { border-color: #d1d5db; }
+  .border-indigo-600 { border-color: #4f46e5; }
+  .border-indigo-700 { border-color: #4338ca; }
+  .border-emerald-600 { border-color: #059669; }
+  .border-emerald-700 { border-color: #047857; }
+  .rounded { border-radius: 0.25rem; }
+  .rounded-sm { border-radius: 0.125rem; }
+  .rounded-md { border-radius: 0.375rem; }
+  .rounded-lg { border-radius: 0.5rem; }
+  .overflow-hidden { overflow: hidden; }
+  .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+  .bg-white { background-color: #ffffff; }
+  .bg-slate-50 { background-color: #f8fafc; }
+  .bg-slate-50\\/90 { background-color: rgba(248, 250, 252, 0.9); }
+  .bg-slate-100 { background-color: #f1f5f9; }
+  .bg-slate-900 { background-color: #0f172a; }
+  .bg-amber-100\\/90 { background-color: rgba(254, 243, 199, 0.9); }
+  .bg-emerald-100 { background-color: #d1fae5; }
+  .bg-rose-100 { background-color: #ffe4e6; }
+  .text-white { color: #ffffff; }
+  .text-slate-300 { color: #cbd5e1; }
+  .text-slate-400 { color: #94a3b8; }
+  .text-slate-500 { color: #64748b; }
+  .text-slate-700 { color: #334155; }
+  .text-slate-900 { color: #0f172a; }
+  .text-slate-950 { color: #020617; }
+  .text-gray-800 { color: #1f2937; }
+  .text-gray-900 { color: #111827; }
+  .text-amber-300 { color: #fcd34d; }
+  .text-emerald-700 { color: #047857; }
+  .text-emerald-900 { color: #064e3b; }
+  .text-rose-700 { color: #be123c; }
+  .text-rose-900 { color: #881337; }
+  .text-right { text-align: right; }
+  .text-left { text-align: left; }
+  .text-center { text-align: center; }
+  .text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+  .text-base { font-size: 1rem; line-height: 1.5rem; }
+  .text-\\[8px\\] { font-size: 8px; }
+  .text-\\[8\\.5px\\] { font-size: 8.5px; }
+  .text-\\[9px\\] { font-size: 9px; }
+  .text-\\[9\\.5px\\] { font-size: 9.5px; }
+  .text-\\[10px\\] { font-size: 10px; }
+  .text-\\[10\\.5px\\] { font-size: 10.5px; }
+  .font-bold { font-weight: 700; }
+  .font-black { font-weight: 900; }
+  .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .tracking-tight { letter-spacing: -0.025em; }
+  .leading-tight { line-height: 1.25; }
+  .uppercase { text-transform: uppercase; }
+  .border-collapse { border-collapse: collapse; }
+`;
+
+// --- SYSTEM CHROME DETECTION (WINDOWS & LINUX) ---
+const findSystemChrome = () => {
+  const commonPaths = [
+    // Linux / Docker paths
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/snap/bin/chromium",
+    "/usr/local/bin/chrome",
+    "/usr/local/bin/chromium",
+    // Windows paths
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Users\\" +
+      (process.env.USERNAME || "") +
+      "\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Chromium\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Chromium\\Application\\chrome.exe",
+  ];
+
+  // Check environment variable first if user set it
+  if (
+    process.env.PUPPETEER_EXECUTABLE_PATH &&
+    fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)
+  ) {
+    console.log(
+      `[Renderer] Using configured executable: ${process.env.PUPPETEER_EXECUTABLE_PATH}`,
+    );
+    return process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) {
+      console.log(`[Renderer] Found System Chrome: ${p}`);
+      return p;
+    }
+  }
+  return null;
+};
+
+const getBrowser = async () => {
+  // Check if browser process is still alive and connected
+  if (browser && !browser.isConnected()) {
+    console.warn("[Renderer] Browser disconnected, recreating instance...");
+    try {
+      await browser.close();
+    } catch (e) {}
+    browser = null;
+  }
+
+  if (!browser) {
+    try {
+      console.log("[Renderer] Launching Puppeteer...");
+
+      // Build Launch Config
+      const launchConfig = {
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--font-render-hinting=none",
+          "--disable-extensions",
+          "--disable-background-networking",
+          "--disable-default-apps",
+          "--disable-sync",
+          "--hide-scrollbars",
+          "--metrics-recording-only",
+          "--mute-audio",
+          "--no-first-run",
+          "--safebrowsing-disable-auto-update",
+          "--no-zygote",
+          "--disable-features=site-per-process",
+        ],
+        timeout: 60000,
+      };
+
+      // Try to find system chrome if local one might be missing
+      // This is safer for Windows Service or non-standard environments
+      const systemChrome = findSystemChrome();
+      if (systemChrome) {
+        launchConfig.executablePath = systemChrome;
+      } else {
+        console.log(
+          "[Renderer] No System Chrome found, trying default bundled Chromium...",
+        );
+      }
+
+      browser = await puppeteer.launch(launchConfig);
+      console.log("[Renderer] Puppeteer Launched Successfully.");
+    } catch (e) {
+      console.error("⚠️ Puppeteer Launch Failed:", e.message);
+      // Re-throw to let the caller know exactly why it failed
+      throw new Error(
+        `Puppeteer Launch Failed: ${e.message}\nIf running as Service, ensure 'chrome.exe' is installed or 'npm install' was run.`,
+      );
+    }
+  }
+  return browser;
+};
+
+// --- STYLES ---
+const BASE_STYLE = `
+    ${fontFaceRule}
+    * { box-sizing: border-box; }
+    body { 
+        font-family: 'Vazirmatn', 'Tahoma', sans-serif !important; 
+        background: #fff; 
+        padding: 40px; 
+        direction: rtl; 
+        margin: 0;
+    }
+    .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 30px; }
+    .title { font-size: 24px; font-weight: 900; color: #1e3a8a; }
+    .meta { display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px; color: #555; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
+    th { background: #f3f4f6; padding: 12px; border: 1px solid #ddd; text-align: center; font-weight: 900; color: #333; }
+    td { padding: 10px; border: 1px solid #ddd; text-align: center; color: #444; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    .footer { margin-top: 40px; text-align: center; font-size: 10px; color: #888; border-top: 1px solid #eee; padding-top: 10px; }
+    .amount { font-family: monospace; font-weight: bold; font-size: 14px; direction: ltr; }
+    
+    /* VOUCHER / PERMIT STYLE */
+    .voucher-container { border: 2px solid #000; padding: 20px; position: relative; min-height: 500px; }
+    .voucher-header { display: flex; justify-content: space-between; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px; }
+    .voucher-title { font-size: 22px; font-weight: 900; }
+    .voucher-meta div { margin-bottom: 5px; font-weight: bold; }
+    .voucher-row { display: flex; margin-bottom: 10px; border: 1px solid #eee; padding: 10px; border-radius: 5px; background: #fcfcfc; }
+    .voucher-label { width: 120px; font-weight: bold; color: #555; }
+    .voucher-val { flex: 1; font-weight: bold; color: #000; }
+    .voucher-signatures { display: flex; justify-content: space-between; margin-top: 50px; text-align: center; font-size: 12px; font-weight: bold; }
+    .sig-box { width: 100px; height: 60px; border-bottom: 1px solid #000; margin: 0 auto; }
+`;
+
+// --- TEMPLATES ---
+const generateRecordCardHTML = (title, data, type) => {
+  let headerColor = "#1e40af"; // Blue
+  if (type === "EXIT") headerColor = "#c2410c"; // Orange
+  if (type === "BIJAK") headerColor = "#b91c1c"; // Red
+  if (type === "RECEIPT") headerColor = "#15803d"; // Green
+
+  return `
+    <!DOCTYPE html>
+    <html lang="fa" dir="rtl">
+    <head>
+    <meta charset="UTF-8">
+    <style>
+        ${BASE_STYLE}
+        body { padding: 20px; width: 800px; display: block; }
+        .card { background: white; border-radius: 20px; box-shadow: none; border: 1px solid #333; overflow: hidden; }
+        .card-header { background: ${headerColor}; color: white; padding: 25px; text-align: center; }
+        .card-title { font-size: 32px; font-weight: 900; margin: 0; }
+        .row { display: flex; justify-content: space-between; border-bottom: 2px dashed #ccc; padding: 15px 20px; font-size: 20px; }
+        .label { color: #555; font-weight: bold; }
+        .value { color: #000; font-weight: 900; }
+    </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">${title}</div>
+                <div style="margin-top:5px; opacity:0.9; font-size: 16px;">${new Date().toLocaleDateString("fa-IR")}</div>
+            </div>
+            ${data}
+        </div>
+    </body>
+    </html>`;
+};
+
+// --- EXPORTED FUNCTIONS ---
+
+export const generateRecordImage = async (record, type, options = {}) => {
+  try {
+    const { isEdit, isDelete } = options;
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    await page.setViewport({ width: 800, height: 1000, deviceScaleFactor: 2 });
+
+    let htmlData = "";
+    let title = "";
+
+    const renderPlate = (plate) => {
+      if (!plate || plate === "-")
+        return '<div style="font-size: 14px; color: #999;">-</div>';
+
+      // Expected format: 12A34567 where A is persian char
+      const match = plate.match(
+        /^(\d{2})([آابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی])(\d{3})(\d{2})$/,
+      );
+      if (!match)
+        return `<div dir="ltr" style="display: inline-block; font-size: 16px; border: 2px solid #333; padding: 2px 8px; border-radius: 6px; background: white; font-family: monospace;">${plate}</div>`;
+
+      const [_, p1, char, p2, city] = match;
+      return `
+                <div style="display: inline-flex; align-items: center; border: 2px solid #000; border-radius: 4px; overflow: hidden; background: #fff; height: 32px; font-family: 'Vazirmatn', sans-serif; direction: ltr;">
+                    <div style="background: #1e40af; width: 14px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px;">
+                        <div style="width: 8px; height: 3px; background: #166534; margin-bottom: 1px;"></div>
+                        <div style="width: 8px; height: 3px; background: white; margin-bottom: 1px;"></div>
+                        <div style="width: 8px; height: 3px; background: #b91c1c; margin-bottom: 1px;"></div>
+                        <div style="color: white; font-size: 4px; font-weight: bold; margin-top: 2px;">IR</div>
+                        <div style="color: white; font-size: 4px; text-decoration: underline;">IRAN</div>
+                    </div>
+                    <div style="padding: 0 6px; font-size: 20px; font-weight: 900; line-height: 1;">${p1}</div>
+                    <div style="font-size: 18px; font-weight: 900; line-height: 1; padding: 0 4px;">${char}</div>
+                    <div style="padding: 0 6px; font-size: 20px; font-weight: 900; line-height: 1;">${p2}</div>
+                    <div style="border-left: 2px solid #000; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 4px; min-width: 24px;">
+                        <div style="font-size: 8px; font-weight: bold; border-bottom: 1px solid #000; width: 100%; text-align: center; margin-bottom: 2px;">ایران</div>
+                        <div style="font-size: 14px; font-weight: 900; line-height: 1;">${city}</div>
+                    </div>
+                </div>
+            `;
+    };
+
+    if (type === "PAYMENT") {
+      title = "دستور پرداخت وجه";
+      if (isEdit) title += " (ویرایش شده)";
+      if (isDelete) title += " (حذف شده)";
+      const banks =
+        record.paymentDetails && record.paymentDetails.length > 0
+          ? [
+              ...new Set(
+                record.paymentDetails
+                  .map((d) => d.bankName || d.method || "صندوق / نقدی")
+                  .filter(Boolean),
+              ),
+            ].join("، ")
+          : "صندوق / نقدی";
+
+      htmlData = `
+                <div class="row"><span class="label">شماره پیگیری:</span><span class="value">#${record.trackingNumber}</span></div>
+                <div class="row"><span class="label">نام ذینفع:</span><span class="value" style="font-size: 24px;">${record.payee}</span></div>
+                <div class="row"><span class="label">مبلغ پرداختی:</span><span class="value amount" style="color:#1e40af; font-size: 28px;">${parseInt(record.totalAmount).toLocaleString()} ریال</span></div>
+                <div class="row"><span class="label">بانک / منبع پرداخت:</span><span class="value" style="color:#b91c1c">${banks}</span></div>
+                <div class="row"><span class="label">شرکت پرداخت‌کننده:</span><span class="value">${record.payingCompany}</span></div>
+                <div class="row"><span class="label">بابت / شرح:</span><span class="value" style="font-size: 16px; border: 1px solid #eee; padding: 10px; border-radius: 8px; background: #fafafa; display: block; width: 100%; text-align: right; margin-top: 5px;">${record.description}</span></div>
+                <div class="row" style="margin-top: 15px; border-top: 2px solid #eee; padding-top: 10px;"><span class="label">درخواست‌کننده:</span><span class="value">${record.requester}</span></div>
+                <div class="row"><span class="label">وضعیت نهایی:</span><span class="value" style="color: ${record.status.includes("تایید") ? "#15803d" : "#444"}">${record.status}</span></div>
+            `;
+    } else if (type === "DRIVER_PAYMENT") {
+      title = "فرم حواله و واریزی راننده";
+      if (isEdit) title += " (ویرایش شده)";
+      if (isDelete) title += " (حذف شده)";
+
+      const formattedAmount = record.amount ? Number(record.amount).toLocaleString('fa-IR') + ' ریال' : 'مشخص نشده';
+      const plateHtml = renderPlate(record.plateNumber);
+
+      const statusBadge = record.factoryApproved || record.status === 'ARCHIVED'
+        ? '<div style="background:#166534; color:white; padding:4px 12px; border-radius:8px; font-weight:bold; font-size:14px; display:inline-block;">✅ تایید نهایی مدیر کارخانه و بایگانی شده</div>'
+        : (record.supervisorApproved || record.status === 'PENDING_FACTORY'
+          ? '<div style="background:#1e40af; color:white; padding:4px 12px; border-radius:8px; font-weight:bold; font-size:14px; display:inline-block;">👮‍♂️ تایید سرپرست انتظامات (در انتظار مدیر کارخانه)</div>'
+          : '<div style="background:#d97706; color:white; padding:4px 12px; border-radius:8px; font-weight:bold; font-size:14px; display:inline-block;">⏳ در انتظار تایید سرپرست انتظامات</div>');
+
+      htmlData = `
+        <div style="margin-bottom: 12px; text-align: center;">
+          ${statusBadge}
+        </div>
+        <div class="row"><span class="label">نام راننده:</span><span class="value" style="font-size: 20px; font-weight: bold;">${record.driverName || '-'}</span></div>
+        <div class="row"><span class="label">شماره پلاک:</span><span class="value">${plateHtml}</span></div>
+        <div class="row"><span class="label">تلفن تماس:</span><span class="value font-mono" dir="ltr">${record.driverPhone || 'ثبت نشده'}</span></div>
+        <div class="row"><span class="label">مبلغ واریزی / کرایه:</span><span class="value amount" style="color:#1e40af; font-size: 24px; font-weight: 900;">${formattedAmount}</span></div>
+        <div class="row"><span class="label">نوع پرداخت:</span><span class="value">${record.paymentType || 'کارت به کارت'}</span></div>
+        
+        ${record.cardNumber ? `
+        <div class="row" style="background:#f0fdf4; padding:8px; border-radius:8px; border:1px solid #bbf7d0;">
+          <span class="label" style="color:#166534;">شماره کارت بانکی:</span>
+          <span class="value font-mono" dir="ltr" style="font-size: 18px; font-weight: bold; color:#15803d; letter-spacing: 2px;">${record.cardNumber}</span>
+        </div>` : ''}
+
+        ${record.shebaNumber ? `
+        <div class="row" style="background:#f8fafc; padding:8px; border-radius:8px; border:1px solid #e2e8f0;">
+          <span class="label" style="color:#475569;">شماره شبا (IBAN):</span>
+          <span class="value font-mono" dir="ltr" style="font-size: 15px; font-weight: bold; color:#334155; letter-spacing: 1px;">${record.shebaNumber}</span>
+        </div>` : ''}
+
+        ${(record.bankName || record.accountHolder) ? `
+        <div class="row">
+          <span class="label">بانک و صاحب حساب:</span>
+          <span class="value" style="font-weight: bold;">${record.bankName || ''} ${record.accountHolder ? `(صاحب حساب: ${record.accountHolder})` : ''}</span>
+        </div>` : ''}
+
+        <div class="row"><span class="label">نام کالا و تعداد:</span><span class="value">${record.goodsName || '-'} ${record.quantity ? `(تعداد / مقدار: ${record.quantity})` : ''}</span></div>
+        <div class="row"><span class="label">مسیر حمل کالا:</span><span class="value">از <b>${record.origin || 'نامشخص'}</b> به <b>${record.destination || 'نامشخص'}</b></span></div>
+        ${record.permitProvider ? `<div class="row"><span class="label">صاحب کالا / پیمانکار:</span><span class="value">${record.permitProvider}</span></div>` : ''}
+        <div class="row"><span class="label">ثبت‌کننده:</span><span class="value">${record.registrant || 'واحد انتظامات'}</span></div>
+        ${record.description ? `<div class="row"><span class="label">توضیحات:</span><span class="value" style="font-size: 14px; background: #fafafa; padding: 6px 10px; border-radius: 6px; border: 1px solid #eee;">${record.description}</span></div>` : ''}
+        
+        <div style="margin-top: 15px; border-top: 2px solid #eee; padding-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; text-align: center; background: ${record.supervisorApproved ? '#f0fdf4' : '#fafafa'};">
+            <div style="font-size: 11px; font-weight: bold; color: ${record.supervisorApproved ? '#166534' : '#64748b'};">مهر و تایید سرپرست انتظامات</div>
+            <div style="font-size: 13px; font-weight: bold; margin-top: 4px; color: ${record.supervisorApproved ? '#15803d' : '#94a3b8'};">
+              ${record.supervisorApproved ? `✅ تایید شده توسط ${record.supervisorApproverName || 'سرپرست'}` : '⏳ در انتظار تایید'}
+            </div>
+          </div>
+          <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; text-align: center; background: ${record.factoryApproved ? '#f0fdf4' : '#fafafa'};">
+            <div style="font-size: 11px; font-weight: bold; color: ${record.factoryApproved ? '#166534' : '#64748b'};">مهر و تایید مدیریت کارخانه</div>
+            <div style="font-size: 13px; font-weight: bold; margin-top: 4px; color: ${record.factoryApproved ? '#15803d' : '#94a3b8'};">
+              ${record.factoryApproved ? `✅ تایید نهایی توسط ${record.factoryApproverName || 'مدیر کارخانه'}` : '⏳ در انتظار تایید'}
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (type === "EXIT" || type === "CUSTOMER_INVOICE") {
+      const isInvoice = type === "CUSTOMER_INVOICE";
+      const showDelivery =
+        record.items &&
+        record.items.some((i) => i.deliveredCartonCount !== undefined);
+      const itemsToRender =
+        record.items && record.items.length > 0
+          ? record.items
+          : [
+              {
+                goodsName: record.goodsName || "نامشخص",
+                cartonCount: record.cartonCount || 0,
+                weight: record.weight || 0,
+              },
+            ];
+
+      const totalCartons = itemsToRender.reduce(
+        (acc, i) => acc + (Number(i.cartonCount) || 0),
+        0,
+      );
+      const totalWeight = itemsToRender.reduce(
+        (acc, i) => acc + (Number(i.weight) || 0),
+        0,
+      );
+      const totalDelCartons = showDelivery
+        ? itemsToRender.reduce(
+            (acc, i) => acc + (Number(i.deliveredCartonCount ?? 0) || 0),
+            0,
+          )
+        : totalCartons;
+      const totalDelWeight = showDelivery
+        ? itemsToRender.reduce(
+            (acc, i) => acc + (Number(i.deliveredWeight ?? 0) || 0),
+            0,
+          )
+        : totalWeight;
+
+      const itemsHtml = itemsToRender
+        .map(
+          (i, idx) => `
+                <tr class="text-base">
+                    <td class="border-2 border-black p-2">${idx + 1}</td>
+                    <td class="border-2 border-black p-2 font-bold text-center">${i.goodsName}</td>
+                    ${
+                      showDelivery
+                        ? `
+                        <td class="border-2 border-black p-2 font-mono text-gray-400 bg-gray-50">${i.cartonCount}</td>
+                        <td class="border-2 border-black p-2 font-mono font-bold bg-green-50">${i.deliveredCartonCount ?? i.cartonCount}</td>
+                        <td class="border-2 border-black p-2 font-mono text-gray-400 bg-gray-50">${i.weight}</td>
+                        <td class="border-2 border-black p-2 font-mono font-bold bg-green-50">${i.deliveredWeight ?? i.weight}</td>
+                    `
+                        : `
+                        <td class="border-2 border-black p-2 font-mono font-bold">${i.cartonCount}</td>
+                        <td class="border-2 border-black p-2 font-mono font-bold">${i.weight}</td>
+                    `
+                    }
+                </tr>
+            `,
+        )
+        .join("");
+
+      const destsHtml = (
+        record.destinations || [
+          {
+            recipientName: record.recipientName,
+            address: record.destinationAddress,
+            phone: "",
+          },
+        ]
+      )
+        .map(
+          (d) => `
+                <div class="border-b-2 border-gray-200 pb-2 mb-2 last:border-0 last:pb-0">
+                    <div class="flex justify-between mb-1">
+                        <div><span class="font-bold text-gray-500 ml-2">تحویل گیرنده:</span> <span class="font-bold text-lg">${d.recipientName}</span></div>
+                        <div><span class="font-bold text-gray-500 ml-2">شماره تماس:</span> <span class="font-mono font-bold text-lg dir-ltr">${d.phone || "-"}</span></div>
+                    </div>
+                    <div><span class="font-bold text-gray-500 ml-2">آدرس مقصد:</span> <span class="font-bold">${d.address || "-"}</span></div>
+                </div>
+            `,
+        )
+        .join("");
+
+      const formatDateSafe = (dateVal) => {
+        if (!dateVal) return "-";
+        try {
+          const iso = String(dateVal).split("T")[0];
+          const parts = iso.split("-");
+          if (parts.length === 3) {
+            return new Date(
+              parts[0],
+              parts[1] - 1,
+              parts[2],
+              12,
+            ).toLocaleDateString("fa-IR");
+          }
+          return new Date(dateVal).toLocaleDateString("fa-IR");
+        } catch (e) {
+          return "-";
+        }
+      };
+
+      const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+            <style>
+                ${fontFaceRule}
+                body { background: white; padding: 0 !important; font-family: 'Vazirmatn', sans-serif !important; margin: 0; }
+                .flex { display: flex; }
+                .justify-between { justify-content: space-between; }
+                .items-center { align-items: center; }
+                .font-bold { font-weight: bold; }
+                .font-black { font-weight: 900; }
+                .text-gray-500 { color: #6b7280; }
+                .ml-2 { margin-left: 0.5rem; }
+                .text-lg { font-size: 1.125rem; }
+                .text-sm { font-size: 0.875rem; }
+                .font-mono { font-family: monospace; }
+                .dir-ltr { direction: ltr; }
+                .border-b-2 { border-bottom-width: 2px; }
+                .border-gray-200 { border-color: #e5e7eb; }
+                .pb-2 { padding-bottom: 0.5rem; }
+                .mb-2 { margin-bottom: 0.5rem; }
+                .mb-1 { margin-bottom: 0.25rem; }
+                .watermark-badge { position: absolute; top: 40px; left: 40px; font-size: 40px; font-weight: 900; opacity: 0.2; transform: rotate(-15deg); user-select: none; border: 4px solid; padding: 5px 20px; border-radius: 12px; z-index: 50; }
+                .badge-edit { color: #d97706; border-color: #d97706; }
+                .badge-delete { color: #dc2626; border-color: #dc2626; opacity: 0.4; }
+                #capture-wrapper { 
+                    padding: 10mm; 
+                    margin: 0 auto; 
+                    width: 210mm; 
+                    background: white; 
+                    direction: rtl; 
+                    display: flex;
+                    flex-direction: column;
+                    box-sizing: border-box;
+                    color: black;
+                    position: relative;
+                }
+                .stamp { border: 2px solid #1e40af; color: #1e40af; border-radius: 10px; padding: 6px; transform: rotate(-3deg); text-align: center; background: white; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); display: inline-block; }
+                .stamp.black { border-color: black; color: black; }
+                .stamp-title { font-size: 9px; font-weight: bold; border-bottom: 1px solid #1e40af; margin-bottom: 3px; padding-bottom: 1px; }
+                .stamp.black .stamp-title { border-color: black; }
+                .stamp-name { font-size: 12px; font-weight: 900; }
+                table { width: 100%; border-collapse: collapse; border: 2px solid black; margin-top: 10px; text-align: center; }
+                th, td { border: 2px solid black; padding: 6px; }
+                th { background-color: #f3f4f6; }
+                .meta-section { border-bottom: 2px solid black; padding-bottom: 10px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+                .invoice-header { background: #1e3a8a; color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+                .invoice-table th { background: #1e3a8a; color: white; border-color: #1e3a8a; }
+                .invoice-table td { border-color: #e5e7eb; }
+                .invoice-total { background: #eff6ff; font-weight: 900; }
+            </style>
+            </head><body>
+            <div id="capture-wrapper">
+                ${isEdit ? '<div class="watermark-badge badge-edit">ویرایش شده</div>' : ""}
+                ${isDelete ? '<div class="watermark-badge badge-delete">حذف شده</div>' : ""}
+                
+                ${
+                  isInvoice
+                    ? `
+                    <div class="invoice-header">
+                        <div>
+                            <h1 style="font-size: 28px; font-weight: 900; margin: 0;">پیش‌فاکتور فروش کالا</h1>
+                            <p style="font-size: 14px; opacity: 0.8; margin: 0;">سند تایید تحویل کالا و بارنامه پیوست</p>
+                        </div>
+                        <div style="text-align: left;">
+                            <div style="font-size: 20px; font-weight: 900; border: 2px solid white; padding: 5px 15px; border-radius: 8px;">No: ${record.permitNumber}</div>
+                            <div style="font-size: 12px; margin-top: 5px;">تاریخ: ${formatDateSafe(record.date)}</div>
+                        </div>
+                    </div>
+                `
+                    : `
+                    <div class="meta-section" style="border-bottom: none; align-items: start;">
+                        <div style="text-align: right; background: #eee; padding: 10px 20px; border: 2px solid black; border-radius: 8px; width: 180px;">
+                            <div style="font-size: 20px; font-weight: 900;">شماره: ${record.permitNumber}</div>
+                            <div style="font-size: 16px; font-weight: 900; margin-top: 5px;">تاریخ: ${formatDateSafe(record.date)}</div>
+                        </div>
+                        <div style="text-align: center; flex: 1;">
+                        </div>
+                        <div style="text-align: left;">
+                            <h1 style="font-size: 26px; font-weight: 900; margin: 0;">مجوز خروج کالا از کارخانه</h1>
+                            <p style="font-size: 14px; font-weight: bold; color: #4b5563; margin: 0;">سیستم مکانیزه مدیریت بار و خروج</p>
+                        </div>
+                    </div>
+                `
+                }
+
+                <div style="margin-bottom: 20px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px;">
+                        <div style="border: 2px solid #ddd; padding: 10px; border-radius: 8px; background: #fff;">
+                            <div style="color: #6b7280; font-weight: bold; margin-bottom: 5px; font-size: 12px;">${isInvoice ? "خریدار / گیرنده کالا:" : "مقصد / تحویل گیرنده:"}</div>
+                            ${isInvoice ? `<div style="font-size: 18px; font-weight: 900; color: #1e3a8a;">${record.recipientName}</div><div style="font-size: 12px; color: #4b5563; margin-top: 5px;">${record.destinationAddress || "-"}</div>` : destsHtml}
+                        </div>
+                        <div style="border: 2px solid #ddd; padding: 10px; border-radius: 8px; background: #fff;">
+                            <div style="color: #6b7280; font-weight: bold; margin-bottom: 5px; font-size: 12px;">مشخصات راننده:</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                <div><span style="color: #6b7280; margin-left: 2px;">نام:</span> <b style="font-size: 15px;">${record.driverName || "-"}</b></div>
+                                <div><span style="color: #6b7280; margin-left: 2px;">موبایل:</span> <b style="font-size: 15px; font-family: monospace;">${record.driverPhone || "-"}</b></div>
+                                <div style="grid-column: span 2;"><span style="color: #6b7280; margin-left: 2px;">پلاک:</span> ${renderPlate(record.plateNumber)}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="flex: 1;">
+                    <h3 style="margin-bottom: 10px; font-weight: 900; font-size: 20px; text-align: left;">${isInvoice ? "شرح اقلام فاکتور" : "لیست اقلام و کالاها"}</h3>
+                    <table class="${isInvoice ? "invoice-table" : ""}" style="width: 100%; border-collapse: collapse; border: 3px solid black;">
+                        <thead>
+                            <tr style="font-weight: 900; font-size: 13px; background: #f3f4f6;">
+                                <th style="width: 40px; border: 2px solid black;">#</th>
+                                <th style="border: 2px solid black;">شرح کالا</th>
+                                <th style="width: 90px; border: 2px solid black;">تعداد درخواستی</th>
+                                <th style="width: 90px; border: 2px solid black; color: #15803d;">تعداد خروجی</th>
+                                <th style="width: 90px; border: 2px solid black;">وزن درخواستی</th>
+                                <th style="width: 90px; border: 2px solid black; color: #15803d;">وزن خروجی</th>
+                                ${options.forceHidePrices ? "" : '<th style="width: 100px; border: 2px solid black;">فی / قیمت</th>'}
+                            </tr>
+                        </thead>
+                        <tbody style="font-size: 14px;">
+                            ${(
+                              record.items || [
+                                {
+                                  goodsName: record.goodsName,
+                                  cartonCount: record.cartonCount,
+                                  deliveredCartonCount:
+                                    record.deliveredCartonCount,
+                                  weight: record.weight,
+                                  deliveredWeight: record.deliveredWeight,
+                                  price: record.price,
+                                },
+                              ]
+                            )
+                              .map((i, idx) => {
+                                const reqQty = i.cartonCount || 0;
+                                const delQty =
+                                  i.deliveredCartonCount ?? i.cartonCount ?? 0;
+                                const reqWeight = i.weight || 0;
+                                const delWeight =
+                                  i.deliveredWeight ?? i.weight ?? 0;
+                                const price = i.price
+                                  ? Number(i.price).toLocaleString()
+                                  : "-";
+                                return `
+                                <tr style="height: 40px;">
+                                    <td style="border: 2px solid black;">${idx + 1}</td>
+                                    <td style="font-weight: 900; text-align: right; padding-right: 15px; border: 2px solid black;">${i.goodsName}</td>
+                                    <td style="font-weight: bold; border: 2px solid black;">${reqQty}</td>
+                                    <td style="font-weight: bold; border: 2px solid black; color: #15803d; background: #f0fdf4;">${delQty}</td>
+                                    <td style="font-weight: bold; border: 2px solid black;">${reqWeight}</td>
+                                    <td style="font-weight: bold; border: 2px solid black; color: #15803d; background: #f0fdf4;">${delWeight}</td>
+                                    ${options.forceHidePrices ? "" : `<td style="font-family: monospace; border: 2px solid black;">${price}</td>`}
+                                </tr>
+                            `;
+                              })
+                              .join("")}
+                        </tbody>
+                    </table>
+                </div>
+
+                ${
+                  isInvoice
+                    ? ""
+                    : `
+                    <div style="margin-top: 30px; border-top: 3px solid #000; padding-top: 20px; display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px;">
+                        <div style="text-align: center;">
+                            <div class="stamp" style="width: 100%;"><div class="stamp-title">ثبت کننده</div><div class="stamp-name" style="font-size: 11px;">${record.requester || "-"}</div></div>
+                            <div style="font-size: 8px; font-weight: bold; margin-top: 5px;">مدیرفروش / ثبت سفارش</div>
+                        </div>
+                        <div style="text-align: center;">                
+                            ${record.approverCeo ? `<div class="stamp" style="width: 100%;"><div class="stamp-title">مدیرعامل</div><div class="stamp-name" style="font-size: 11px;">${record.approverCeo}</div></div>` : '<div style="height: 50px; border: 1px dashed #ccc; border-radius: 8px;"></div>'}
+                            <div style="font-size: 8px; font-weight: bold; margin-top: 5px;">مدیرعامل / تایید فروش</div>
+                        </div>
+                        <div style="text-align: center;">
+                            ${record.approverFactory ? `<div class="stamp" style="width: 100%;"><div class="stamp-title">مدیر کارخانه</div><div class="stamp-name" style="font-size: 11px;">${record.approverFactory}</div></div>` : '<div style="height: 50px; border: 1px dashed #ccc; border-radius: 8px;"></div>'}
+                            <div style="font-size: 8px; font-weight: bold; margin-top: 5px;">مدیر کارخانه / مجوز ورود و بارگیری</div>
+                        </div>
+                        <div style="text-align: center;">
+                            ${record.approverWarehouse ? `<div class="stamp" style="width: 100%;"><div class="stamp-title">تحویل انبار</div><div class="stamp-name" style="font-size: 11px;">${record.approverWarehouse}</div></div>` : '<div style="height: 50px; border: 1px dashed #ccc; border-radius: 8px;"></div>'}
+                            <div style="font-size: 8px; font-weight: bold; margin-top: 5px;">سرپرست انبار / انجام بارگیری</div>
+                        </div>
+                        <div style="text-align: center;">
+                            ${
+                              record.status ===
+                                "در انتظار تایید نهایی مدیر کارخانه" ||
+                              record.status === "خارج شد" ||
+                              record.status === "خارج شده (بایگانی)"
+                                ? `
+                                <div class="stamp black" style="width: 100%;"><div class="stamp-title">انتظامات</div><div class="stamp-name" style="font-size: 11px;">${record.approverSecurity || "..."}</div></div>
+                            `
+                                : '<div style="height: 50px; border: 1px dashed #ccc; border-radius: 8px;"></div>'
+                            }
+                            <div style="font-size: 8px; font-weight: bold; margin-top: 5px;">سرپرست انتظامات / بازرسی و تایید بارگیری</div>
+                        </div>
+                        <div style="text-align: center;">
+                            ${
+                              record.status === "خارج شد" ||
+                              record.status === "خارج شده (بایگانی)"
+                                ? `
+                                <div class="stamp black" style="width: 100%;"><div class="stamp-title">مدیر کارخانه</div><div class="stamp-name" style="font-size: 11px;">${record.approverFactoryFinal || "..."}</div>${record.exitTime ? `<div style="font-size: 7px; font-weight: bold;">ساعت: ${record.exitTime}</div>` : ""}</div>
+                            `
+                                : '<div style="height: 50px; border: 1px dashed #ccc; border-radius: 8px;"></div>'
+                            }
+                            <div style="font-size: 8px; font-weight: bold; margin-top: 5px;">مدیر کارخانه / تایید نهایی خروج</div>
+                        </div>
+                    </div>
+                `
+                }
+
+                ${
+                  isInvoice
+                    ? `
+                    <div style="margin-top: 40px; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px;">
+                        <div style="background: #f1f5f9; padding: 15px; border-radius: 12px; font-size: 11px;">
+                            <b style="color: #1e3a8a; display: block; margin-bottom: 5px; border-bottom: 1px solid #cbd5e1; padding-bottom: 2px;">توضیحات و شرایط فروش:</b>
+                            ۱. کالا صحیح و سالم و مطابق با سفارش تحویل گردید.<br/>
+                            ۲. هرگونه مغایرت باید در لحظه تحویل به راننده اعلام گردد.<br/>
+                            ۳. امضای این برگ به منزله تایید نهایی و دریافت کالا توسط خریدار است.
+                        </div>
+                        <div style="text-align: center; border-right: 1px solid #eee;">
+                            <div style="font-weight: 900; font-size: 12px; color: #1e3a8a; margin-bottom: 50px;">مهر و امضای فروشنده</div>
+                            <div style="font-size: 9px; color: #94a3b8; border: 2px dashed #e2e8f0; padding: 10px; border-radius: 50%; width: 80px; height: 80px; margin: 0 auto; display: flex; align-items: center; justify-content: center; transform: rotate(-10deg);">SEAL & SIGN</div>
+                        </div>
+                        <div style="text-align: center; border-right: 1px solid #eee;">
+                            <div style="font-weight: 900; font-size: 12px; color: #1e3a8a; margin-bottom: 50px;">امضای تحویل گیرنده</div>
+                            <div style="height: 60px;"></div>
+                        </div>
+                    </div>
+                `
+                    : ""
+                }
+            </div></body></html>`;
+
+      try {
+        await page.setViewport({
+          width: 900,
+          height: 1300,
+          deviceScaleFactor: 2,
+        });
+        await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
+
+        const card = await page.$("#capture-wrapper");
+        if (!card) throw new Error("Element #capture-wrapper not found in EXIT document");
+        const buffer = Buffer.from(await card.screenshot({ type: "png" }));
+        return buffer;
+      } finally {
+        await page.close().catch(() => {});
+      }
+    } else if (type === "BIJAK" || type === "RECEIPT") {
+      const isBijak = type === "BIJAK";
+      const showPrices = options.forceHidePrices !== true;
+
+      const formatDateSafe = (dateVal) => {
+        if (!dateVal) return "-";
+        try {
+          return new Date(dateVal).toLocaleDateString("fa-IR");
+        } catch (e) {
+          return "-";
+        }
+      };
+
+      const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+            <style>
+                ${fontFaceRule}
+                ${OFFLINE_TAILWIND_REPORT_CSS}
+                body { background: white; padding: 0 !important; font-family: 'Vazirmatn', sans-serif !important; margin: 0; }
+                .watermark-badge { position: absolute; top: 40px; left: 40px; font-size: 40px; font-weight: 900; opacity: 0.2; transform: rotate(-15deg); user-select: none; border: 4px solid; padding: 5px 20px; border-radius: 12px; z-index: 50; }
+                .badge-edit { color: #d97706; border-color: #d97706; }
+                .badge-delete { color: #dc2626; border-color: #dc2626; opacity: 0.4; }
+                #capture-wrapper { 
+                    padding: 8mm; 
+                    margin: 0 auto; 
+                    width: 148mm; 
+                    min-height: 209mm;
+                    background: white; 
+                    direction: rtl; 
+                    display: flex;
+                    flex-direction: column;
+                    box-sizing: border-box;
+                    color: black;
+                    position: relative;
+                    border: 1px solid #eee;
+                }
+                .stamp { border: 2px solid #1e40af; color: #1e40af; border-radius: 10px; padding: 4px; transform: rotate(-5deg); text-align: center; background: white; min-width: 80px; display: inline-block; }
+                .stamp.green { border-color: #166534; color: #166534; }
+                .stamp-title { font-size: 8px; font-weight: bold; border-bottom: 1px solid currentColor; margin-bottom: 2px; padding-bottom: 1px; }
+                .stamp-name { font-size: 11px; font-weight: 900; }
+                table { width: 100%; border-collapse: collapse; border: 1.5px solid black; margin-top: 5px; text-align: center; }
+                th, td { border: 1.5px solid black; padding: 4px; }
+                th { background-color: #f3f4f6; font-size: 10px; }
+                td { font-size: 11px; }
+                .meta-section { border-bottom: 2px solid black; padding-bottom: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: start; }
+            </style>
+            </head><body>
+            <div id="capture-wrapper">
+                ${isEdit ? '<div class="watermark-badge badge-edit">ویرایش شده</div>' : ""}
+                ${isDelete ? '<div class="watermark-badge badge-delete">حذف شده</div>' : ""}
+                
+                <div class="meta-section">
+                    <div>
+                        <h1 style="font-size: 18px; font-weight: 900; margin: 0;">${record.company}</h1>
+                        <p style="font-size: 11px; font-weight: bold; color: #4b5563; margin: 0;">${isBijak ? "حواله خروج کالا (بیجک)" : "رسید ورود کالا"}</p>
+                    </div>
+                    <div style="text-align: left;">
+                        <div style="font-size: 14px; font-weight: 900; border: 2px solid black; padding: 4px 10px; border-radius: 4px;">NO: ${record.number || record.proformaNumber}</div>
+                        <div style="font-size: 10px; font-weight: bold; margin-top: 2px;">تاریخ: ${formatDateSafe(record.date)}</div>
+                    </div>
+                </div>
+
+                ${record.isUnionExit && record.unionExitDetails ? `
+                <div style="background-color: #f0fdf4; border: 1.5px solid #16a34a; border-radius: 6px; padding: 8px; margin-bottom: 10px; font-size: 11px;">
+                    <div style="font-weight: 900; color: #166534; font-size: 11px; margin-bottom: 5px; border-bottom: 1px dashed #16a34a; padding-bottom: 3px;">💎 مشخصات حواله خروج اتحادیه:</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <div><span style="color: #4b5563;">نام خریدار:</span> <b>${record.unionExitDetails.buyerName || "-"}</b></div>
+                        <div><span style="color: #4b5563;">کد ملی خریدار:</span> <b>${record.unionExitDetails.nationalCode && record.unionExitDetails.nationalCode !== '0' ? record.unionExitDetails.nationalCode : "-"}</b></div>
+                        <div><span style="color: #4b5563;">شماره همراه خریدار:</span> <b>${record.unionExitDetails.mobile && record.unionExitDetails.mobile !== '0' ? record.unionExitDetails.mobile : "-"}</b></div>
+                        <div><span style="color: #4b5563;">شناسه صنفی:</span> <b>${record.unionExitDetails.guildId && record.unionExitDetails.guildId !== '0' ? record.unionExitDetails.guildId : "-"}</b></div>
+                        <div style="grid-column: span 2;"><span style="color: #4b5563;">آدرس خریدار:</span> <b>${record.unionExitDetails.address && record.unionExitDetails.address !== '0' ? record.unionExitDetails.address : "-"}</b></div>
+                    </div>
+                </div>
+                ` : `
+                <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px; margin-bottom: 10px; font-size: 11px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <div><span style="color: #6b7280;">${isBijak ? "تحویل گیرنده" : "فرستنده"}:</span> <b>${isBijak ? record.recipientName : record.supplierName || record.proformaNumber}</b></div>
+                        <div><span style="color: #6b7280;">مقصد/محل:</span> <b>${record.destination || record.location || "-"}</b></div>
+                        <div><span style="color: #6b7280;">راننده:</span> <b>${record.driverName || "-"}</b></div>
+                        <div><span style="color: #6b7280;">پلاک:</span> ${renderPlate(record.plateNumber)}</div>
+                    </div>
+                </div>
+                `}
+
+                <div style="flex: 1;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 30px;">#</th>
+                                <th>شرح کالا</th>
+                                <th style="width: 60px;">تعداد</th>
+                                <th style="width: 70px;">وزن (KG)</th>
+                                ${showPrices ? '<th style="width: 90px;">فی (ریال)</th>' : ""}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${(record.items || [])
+                              .map(
+                                (item, idx) => `
+                                <tr>
+                                    <td>${idx + 1}</td>
+                                    <td style="text-align: right; font-weight: bold; padding-right: 8px;">${item.itemName}</td>
+                                    <td>${item.quantity}</td>
+                                    <td>${item.weight ? Number(item.weight).toFixed(2) : 0}</td>
+                                    ${showPrices ? `<td style="font-family: monospace;">${item.unitPrice ? parseInt(item.unitPrice).toLocaleString() : "-"}</td>` : ""}
+                                </tr>
+                            `,
+                              )
+                              .join("")}
+                            <tr style="background-color: #f3f4f6; font-weight: bold;">
+                                <td colspan="2" style="text-align: left; padding-left: 10px;">جمع کل:</td>
+                                <td>${(record.items || []).reduce((a, b) => a + (Number(b.quantity) || 0), 0)}</td>
+                                <td>${(record.items || []).reduce((a, b) => a + (Number(b.weight) || 0), 0).toFixed(2)}</td>
+                                ${showPrices ? "<td></td>" : ""}
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    ${
+                      options.stockInfo && options.stockInfo.length > 0
+                        ? `
+                    <div style="margin-top: 10px; font-size: 11px;">
+                        <h4 style="margin: 0 0 5px 0; font-weight: bold; font-size: 11px; color: #4b5563;">📊 مانده موجودی پس از خروج:</h4>
+                        <table style="border: 1px solid #9ca3af; margin-top: 0;">
+                            <thead>
+                                <tr>
+                                    <th style="background-color: #e5e7eb; padding: 2px;">کالا</th>
+                                    <th style="background-color: #e5e7eb; padding: 2px; width: 60px;">مانده (کارتن)</th>
+                                    <th style="background-color: #e5e7eb; padding: 2px; width: 70px;">مانده (وزن)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${options.stockInfo
+                                  .map(
+                                    (s) => `
+                                    <tr>
+                                        <td style="text-align: right; font-weight: bold; padding: 2px 8px; font-size: 10px;">${s.name}</td>
+                                        <td style="padding: 2px; font-size: 10px; font-weight: bold; color: ${s.qty < 0 ? "#dc2626" : "#166534"}">${s.qty.toFixed(2)}</td>
+                                        <td style="padding: 2px; font-size: 10px; color: ${s.weight < 0 ? "#dc2626" : "#166534"}">${s.weight.toFixed(2)}</td>
+                                    </tr>
+                                `,
+                                  )
+                                  .join("")}
+                            </tbody>
+                        </table>
+                    </div>
+                    `
+                        : ""
+                    }
+
+                    ${record.description ? `<div style="margin-top: 10px; font-size: 10px; border: 1px solid #eee; padding: 5px; border-radius: 4px;"><b>توضیحات:</b> ${record.description}</div>` : ""}
+                </div>
+
+                <div style="margin-top: 20px; border-top: 1.5px solid black; padding-top: 10px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center;">
+                    <div>
+                        <div class="stamp"><div class="stamp-title">انباردار (ثبت)</div><div class="stamp-name">${record.createdBy || "کاربر انبار"}</div></div>
+                        <div style="font-size: 9px; font-weight: bold; color: #4b5563; margin-top: 4px;">امضا انباردار</div>
+                    </div>
+                    <div>
+                        ${record.approvedBy ? `<div class="stamp green"><div class="stamp-title">تایید مدیریت</div><div class="stamp-name">${record.approvedBy}</div></div>` : '<div style="height: 40px; border-bottom: 1px dashed #ccc; margin: 0 10px;"></div>'}
+                        <div style="font-size: 9px; font-weight: bold; color: #4b5563; margin-top: 4px;">امضا مدیریت</div>
+                    </div>
+                    <div>
+                        <div style="height: 40px;"></div>
+                        <div style="font-size: 9px; font-weight: bold; color: #4b5563; margin-top: 4px;">امضا تحویل گیرنده</div>
+                    </div>
+                </div>
+            </div></body></html>`;
+
+      await page.setViewport({ width: 600, height: 850, deviceScaleFactor: 2 });
+      await page.setContent(html, { waitUntil: "networkidle0" });
+      const card = await page.$("#capture-wrapper");
+      const buffer = Buffer.from(await card.screenshot({ type: "png" }));
+      await page.close();
+      return buffer;
+    }
+
+    await page.setContent(generateRecordCardHTML(title, htmlData, type), {
+      waitUntil: "networkidle0",
+    });
+    const card = await page.$(".card");
+    const buffer = Buffer.from(await card.screenshot({ type: "png" }));
+    await page.close();
+    return buffer;
+  } catch (e) {
+    console.error("Renderer Image Error:", e.message);
+    throw e;
+  }
+};
+
+export const generatePdfBuffer = async (html, options = {}) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    let finalHtml = html;
+    if (!html.includes("@font-face") && fontFaceRule) {
+      finalHtml = html.replace(
+        "<head>",
+        `<head><style>${fontFaceRule} body { font-family: 'Vazirmatn' !important; }</style>`,
+      );
+    } else if (!html.includes("<head>")) {
+      finalHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${BASE_STYLE}</style></head><body>${html}</body></html>`;
+    }
+
+    await page.setContent(finalHtml, {
+      waitUntil: "networkidle0",
+      timeout: 90000,
+    });
+    const pdfOptions = {
+      format: "A4",
+      printBackground: true,
+      ...options,
+      timeout: 90000,
+    };
+    const pdf = Buffer.from(await page.pdf(pdfOptions));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Renderer PDF Buffer Error:", e.message);
+    throw e;
+  }
+};
+
+// 1. Voucher PDF
+export const generateVoucherPDF = async (order) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    const linesHtml = order.paymentDetails
+      .map(
+        (d, i) =>
+          `<tr><td>${i + 1}</td><td>${d.method}</td><td class="amount">${parseInt(d.amount).toLocaleString()}</td><td>${d.bankName || "-"}</td><td>${d.description || "-"}</td></tr>`,
+      )
+      .join("");
+    const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><style>${BASE_STYLE}</style></head><body>
+            <div class="voucher-container">
+                <div class="voucher-header"><div><div class="voucher-title">${order.payingCompany}</div><div>رسید دستور پرداخت</div></div><div class="voucher-meta"><div>شماره: ${order.trackingNumber}</div><div>تاریخ: ${new Date(order.date).toLocaleDateString("fa-IR")}</div></div></div>
+                <div class="voucher-row"><span class="voucher-label">در وجه:</span><span class="voucher-val">${order.payee}</span></div>
+                <div class="voucher-row"><span class="voucher-label">مبلغ:</span><span class="voucher-val amount">${parseInt(order.totalAmount).toLocaleString()}</span></div>
+                <table><thead><tr><th>#</th><th>روش</th><th>مبلغ</th><th>بانک</th><th>شرح</th></tr></thead><tbody>${linesHtml}</tbody></table>
+            </div></body></html>`;
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = Buffer.from(await page.pdf({
+      format: "A5",
+      landscape: true,
+      printBackground: true,
+    }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Voucher PDF Error:", e.message);
+    throw e;
+  }
+};
+
+// 2. Exit Permit PDF
+export const generateExitPermitPDF = async (permit) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    const itemsHtml = permit.items
+      .map(
+        (i, idx) =>
+          `<tr><td>${idx + 1}</td><td>${i.goodsName}</td><td>${i.cartonCount}</td><td>${i.weight}</td></tr>`,
+      )
+      .join("");
+    const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><style>${BASE_STYLE}</style></head><body>
+            <div class="voucher-container" style="min-height: 800px;">
+                <div class="voucher-header"><div><div class="voucher-title">${permit.company}</div><div>مجوز خروج کالا</div></div><div class="voucher-meta"><div>شماره: ${permit.permitNumber}</div><div>تاریخ: ${new Date(permit.date).toLocaleDateString("fa-IR")}</div></div></div>
+                <div class="voucher-row"><span class="voucher-label">گیرنده:</span><span class="voucher-val">${permit.recipientName}</span></div>
+                <div class="voucher-row"><span class="voucher-label">راننده:</span><span class="voucher-val">${permit.driverName || "-"}</span></div>
+                <table><thead><tr><th>#</th><th>کالا</th><th>تعداد</th><th>وزن</th></tr></thead><tbody>${itemsHtml}</tbody></table>
+                <div class="voucher-signatures" style="margin-top:100px"><div><div class="sig-box"></div><div>فروش</div></div><div><div class="sig-box"></div><div>مدیریت</div></div><div><div class="sig-box"></div><div>انبار</div></div><div><div class="sig-box"></div><div>انتظامات</div></div></div>
+            </div></body></html>`;
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = Buffer.from(await page.pdf({ format: "A4", printBackground: true }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Exit Permit PDF Error:", e.message);
+    throw e;
+  }
+};
+
+// 3. Bijak PDF
+export const generateBijakPDF = async (tx) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    const itemsHtml = tx.items
+      .map(
+        (i, idx) =>
+          `<tr><td>${idx + 1}</td><td>${i.itemName}</td><td>${i.quantity || 0}</td><td>${i.weight || 0}</td></tr>`,
+      )
+      .join("");
+
+    let dateStr = "";
+    try {
+      const dObj = new Date(tx.date);
+      if (!isNaN(dObj.getTime())) {
+        dateStr = dObj.toLocaleDateString("fa-IR");
+      } else {
+        dateStr = tx.date;
+      }
+    } catch (e) {
+      dateStr = tx.date;
+    }
+
+    let customDetailsHtml = "";
+    let titleText = "حواله خروج (بیجک)";
+    if (tx.isUnionExit) {
+      titleText = "حواله خروج اتحادیه";
+      const u = tx.unionExitDetails || {};
+      customDetailsHtml = `
+        <div class="voucher-row-grid">
+          <div class="voucher-row"><span class="voucher-label">نام خریدار:</span><span class="voucher-val">${u.buyerName || tx.recipientName || "-"}</span></div>
+          <div class="voucher-row"><span class="voucher-label">کد ملی:</span><span class="voucher-val" style="font-family: monospace;">${u.nationalCode || "-"}</span></div>
+        </div>
+        <div class="voucher-row-grid">
+          <div class="voucher-row"><span class="voucher-label">تلفن همراه:</span><span class="voucher-val" style="font-family: monospace;">${u.mobile || "-"}</span></div>
+          <div class="voucher-row"><span class="voucher-label">شناسه صنفی:</span><span class="voucher-val" style="font-family: monospace;">${u.guildId || "-"}</span></div>
+        </div>
+        <div class="voucher-row"><span class="voucher-label">آدرس خریدار:</span><span class="voucher-val">${u.address || "-"}</span></div>
+      `;
+    } else {
+      customDetailsHtml = `
+        <div class="voucher-row"><span class="voucher-label">گیرنده:</span><span class="voucher-val">${tx.recipientName}</span></div>
+        <div class="voucher-row"><span class="voucher-label">راننده:</span><span class="voucher-val">${tx.driverName || "-"} (${tx.plateNumber || "-"})</span></div>
+      `;
+    }
+
+    const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+            <style>
+              ${BASE_STYLE}
+              .voucher-row-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 12px;
+              }
+              .voucher-row {
+                margin-bottom: 6px;
+                font-size: 11px;
+              }
+              .voucher-label {
+                font-weight: bold;
+                color: #4b5563;
+                margin-left: 6px;
+              }
+              .voucher-val {
+                color: #111827;
+                font-weight: bold;
+              }
+            </style></head><body>
+            <div class="voucher-container">
+                <div class="voucher-header"><div><div class="voucher-title">${tx.company || "خروج اتحادیه"}</div><div style="font-size: 14px; font-weight: 900; color: #1e3a8a; margin-top: 4px;">${titleText}</div></div><div class="voucher-meta"><div>شماره: ${tx.number}</div><div>تاریخ: ${dateStr}</div></div></div>
+                <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; margin-bottom: 12px; background-color: #f9fafb;">
+                  ${customDetailsHtml}
+                </div>
+                <table><thead><tr><th>#</th><th>کالا</th><th>تعداد</th><th>وزن (کیلوگرم)</th></tr></thead><tbody>${itemsHtml}</tbody></table>
+                <div class="voucher-signatures"><div><div class="sig-box"></div><div>تحویل دهنده (انبار)</div></div><div><div class="sig-box"></div><div>مدیریت / تایید کننده</div></div><div><div class="sig-box"></div><div>خریدار (تحویل گیرنده)</div></div></div>
+            </div></body></html>`;
+
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = Buffer.from(await page.pdf({
+      format: "A5",
+      landscape: false,
+      printBackground: true,
+    }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Bijak PDF Error:", e.message);
+    throw e;
+  }
+};
+
+// 4. Report PDF
+export const generateReportPDF = async (
+  title,
+  columns,
+  rows,
+  landscape = false,
+  customDateLabel = null,
+) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    const isDebtor = title.includes("بدهکار");
+    const isSales = title.includes("فروش") || title.includes("سایان") || title.includes("تحلیلی") || title.includes("مقایسه‌ای") || title.includes("مدیریتی") || title.includes("Executive") || title.includes("Compare") || title.includes("Daily_Sales");
+    const isCompare = title.includes("مقایسه") || title.includes("Compare");
+    let resolvedDateBadge = customDateLabel;
+    if (!resolvedDateBadge) {
+      const parenMatch = String(title || "").match(/\(([^)]*[\d\u06F0-\u06F9\u0660-\u0669]{4}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}[^)]*)\)/);
+      const rangeMatch = String(title || "").match(/(از\s*(?:تاریخ\s*)?[\d\u06F0-\u06F9\u0660-\u0669]{4}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}\s*تا\s*(?:تاریخ\s*)?[\d\u06F0-\u06F9\u0660-\u0669]{4}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2})/);
+      const singleMatch = String(title || "").match(/([\d\u06F0-\u06F9\u0660-\u0669]{4}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}\s*تا\s*[\d\u06F0-\u06F9\u0660-\u0669]{4}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2}[/.-][\d\u06F0-\u06F9\u0660-\u0669]{1,2})/);
+      if (parenMatch) resolvedDateBadge = parenMatch[1].trim();
+      else if (rangeMatch) resolvedDateBadge = rangeMatch[1].trim();
+      else if (singleMatch) resolvedDateBadge = `از ${singleMatch[1].trim()}`;
+      else {
+        // Fallback: check if title has parenthesized text with a date separator
+        const anyParen = String(title || "").match(/\(([^)]+[/.-][^)]+)\)/);
+        if (anyParen) resolvedDateBadge = anyParen[1].trim();
+      }
+    }
+    const isPendingDocs = title.includes("اسناد") || title.includes("چک‌ها");
+    const isDispatch = title.includes("خروج") || title.includes("بیجک");
+
+    const parseFormattedNumber = (str) => {
+      if (!str) return 0;
+      const clean = String(str).trim()
+        .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
+        .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+        .replace(/,/g, '');
+      const filtered = clean.replace(/[^\d.-]/g, '');
+      return parseFloat(filtered) || 0;
+    };
+
+    const pdfFormatNumber = (num) => {
+      return Number(num)
+        .toString()
+        .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    };
+
+    let card1Title = "";
+    let card1Value = "";
+    let card1Sub = "";
+    let card2Title = "";
+    let card2Value = "";
+    let card2Sub = "";
+    let card3Title = "";
+    let card3Value = "";
+    let card3Sub = "";
+    let card4Title = "";
+    let card4Value = "";
+    let card4Sub = "";
+    let subtitleText = "";
+
+    if (isSales) {
+      if (isCompare) {
+        landscape = true; // Always landscape for comparison reports to fit 9 columns on A4
+        subtitleText = "گزارش مدیریتی و تحلیل انحراف عملکرد فروش (مقایسه همزمان وزن و مبلغ) - هیئت مدیره و بازرگانی";
+        
+        let totalNetWgtA = 0;
+        let totalNetAmtA = 0;
+        let totalNetWgtB = 0;
+        let totalNetAmtB = 0;
+
+        // Check if total row already exists
+        const totalRow = rows.find(r => r[0] === 'جمع کل' || String(r[1]).includes('جمع کل'));
+
+        if (totalRow && totalRow.length >= 6) {
+          if (columns.length === 10) {
+            totalNetWgtA = parseFormattedNumber(totalRow[3]);
+            totalNetAmtA = parseFormattedNumber(totalRow[4]);
+            totalNetWgtB = parseFormattedNumber(totalRow[5]);
+            totalNetAmtB = parseFormattedNumber(totalRow[6]);
+          } else {
+            totalNetWgtA = parseFormattedNumber(totalRow[2]);
+            totalNetAmtA = parseFormattedNumber(totalRow[3]);
+            totalNetWgtB = parseFormattedNumber(totalRow[4]);
+            totalNetAmtB = parseFormattedNumber(totalRow[5]);
+          }
+        }
+
+        if (totalNetAmtA === 0 && totalNetAmtB === 0) {
+          rows.forEach((r) => {
+            if (r[0] !== 'جمع کل' && !String(r[1]).includes('جمع کل')) {
+              if (columns.length === 10) {
+                const wgtA = parseFormattedNumber(r[3]);
+                const amtA = parseFormattedNumber(r[4]);
+                const wgtB = parseFormattedNumber(r[5]);
+                const amtB = parseFormattedNumber(r[6]);
+                totalNetWgtA += wgtA;
+                totalNetAmtA += amtA;
+                totalNetWgtB += wgtB;
+                totalNetAmtB += amtB;
+              } else if (columns.length >= 8 && (columns.includes('تغییر وزن %') || columns[2].includes('وزن A'))) {
+                const wgtA = parseFormattedNumber(r[2]);
+                const amtA = parseFormattedNumber(r[3]);
+                const wgtB = parseFormattedNumber(r[4]);
+                const amtB = parseFormattedNumber(r[5]);
+                totalNetWgtA += wgtA;
+                totalNetAmtA += amtA;
+                totalNetWgtB += wgtB;
+                totalNetAmtB += amtB;
+              } else {
+                const wgtA = parseFormattedNumber(r[1]);
+                const feeA = parseFormattedNumber(r[2]);
+                const wgtB = parseFormattedNumber(r[4]);
+                const feeB = parseFormattedNumber(r[5]);
+                totalNetWgtA += wgtA;
+                totalNetAmtA += (wgtA * feeA);
+                totalNetWgtB += wgtB;
+                totalNetAmtB += (wgtB * feeB);
+              }
+            }
+          });
+        }
+
+        const avgFeeA = totalNetWgtA > 0 ? (totalNetAmtA / totalNetWgtA) : 0;
+        const avgFeeB = totalNetWgtB > 0 ? (totalNetAmtB / totalNetWgtB) : 0;
+
+        const amtGrowth = totalNetAmtB ? ((totalNetAmtA - totalNetAmtB) / totalNetAmtB) * 100 : (totalNetAmtA ? 100 : 0);
+        const wgtGrowth = totalNetWgtB ? ((totalNetWgtA - totalNetWgtB) / totalNetWgtB) * 100 : (totalNetWgtA ? 100 : 0);
+        const feeGrowth = avgFeeB ? ((avgFeeA - avgFeeB) / avgFeeB) * 100 : (avgFeeA ? 100 : 0);
+
+        card1Title = "مقایسه مبلغ فروش کل (ریال)";
+        card1Value = `${amtGrowth >= 0 ? '+' : ''}${amtGrowth.toFixed(1)}%`;
+        card1Sub = `A: ${pdfFormatNumber(Math.round(totalNetAmtA))} | B: ${pdfFormatNumber(Math.round(totalNetAmtB))}`;
+
+        card2Title = "مقایسه وزن فروش کل (ک‌گ)";
+        card2Value = `${wgtGrowth >= 0 ? '+' : ''}${wgtGrowth.toFixed(1)}%`;
+        card2Sub = `A: ${totalNetWgtA.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} | B: ${totalNetWgtB.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`;
+
+        card3Title = "مقایسه فی متوسط نهایی";
+        card3Value = `${feeGrowth >= 0 ? '+' : ''}${feeGrowth.toFixed(1)}%`;
+        card3Sub = `A: ${pdfFormatNumber(Math.round(avgFeeA))} | B: ${pdfFormatNumber(Math.round(avgFeeB))}`;
+
+        card4Title = "تحلیل انحراف عملکرد";
+        if (amtGrowth > 0 && wgtGrowth > 0) {
+          card4Value = "رشد متوازن";
+          card4Sub = "افزایش همزمان حجم و درآمد";
+        } else if (amtGrowth > 0 && wgtGrowth <= 0) {
+          card4Value = "رشد مبلغمحور";
+          card4Sub = "افزایش نرخ واحد کالا";
+        } else if (amtGrowth <= 0 && wgtGrowth > 0) {
+          card4Value = "رشد حجمی";
+          card4Sub = "افزایش حجم با قیمت رقابتی";
+        } else {
+          card4Value = "افت عملکرد";
+          card4Sub = "کاهش حجم فروش و درآمد";
+        }
+      } else {
+        subtitleText = "گزارش تحلیلی عملکرد فروش و مرجوعی - بخش بازرگانی و مدیریت فروش";
+
+        let totalNetWgt = 0;
+        let totalNetAmt = 0;
+
+        rows.forEach((r) => {
+          if (r[0] !== 'جمع کل') {
+            if (columns.length === 6 && columns[2].includes('وزن') && columns[3].includes('فروش')) {
+              totalNetWgt += parseFormattedNumber(r[2]);
+              totalNetAmt += parseFormattedNumber(r[3]);
+            } else if (columns.length === 6 && columns[4].includes('خالص')) {
+              const parts = String(r[4]).split('/');
+              if (parts.length === 2) {
+                totalNetWgt += parseFormattedNumber(parts[0]);
+                totalNetAmt += parseFormattedNumber(parts[1]);
+              }
+            }
+          }
+        });
+
+        if (totalNetAmt === 0) {
+          const totalRow = rows.find(r => r[0] === 'جمع کل');
+          if (totalRow) {
+            if (columns.length === 6 && columns[2].includes('وزن') && columns[3].includes('فروش')) {
+              totalNetWgt = parseFormattedNumber(totalRow[2]);
+              totalNetAmt = parseFormattedNumber(totalRow[3]);
+            } else if (columns.length === 6 && columns[4].includes('خالص')) {
+              const parts = String(totalRow[4]).split('/');
+              if (parts.length === 2) {
+                totalNetWgt = parseFormattedNumber(parts[0]);
+                totalNetAmt = parseFormattedNumber(parts[1]);
+              }
+            }
+          }
+        }
+
+        card1Title = "فروش خالص کل";
+        card1Value = `${pdfFormatNumber(Math.round(totalNetAmt))} ریال`;
+
+        card2Title = "وزن خالص کل";
+        card2Value = `${totalNetWgt.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم`;
+
+        card3Title = "فی نهایی میانگین";
+        card3Value = `${pdfFormatNumber(totalNetWgt ? Math.round(totalNetAmt / totalNetWgt) : 0)} ریال/ک‌گ`;
+      }
+    } else if (isPendingDocs) {
+      subtitleText = "گزارش وضعیت اسناد دریافتنی، پرداختنی و چک‌های در جریان وصول - مدیریت خزانه";
+
+      let totalAmt = 0;
+      rows.forEach((r) => {
+        if (r[0] !== 'جمع کل') {
+          const amtIdx = columns.findIndex(c => c.includes('مبلغ'));
+          if (amtIdx !== -1) {
+            totalAmt += parseFormattedNumber(r[amtIdx]);
+          }
+        }
+      });
+
+      card1Title = "مجموع کل مبلغ اسناد";
+      card1Value = `${pdfFormatNumber(totalAmt)} ریال`;
+
+      card2Title = "تعداد اسناد و چک‌ها";
+      card2Value = `${(rows.filter(r => r[0] !== 'جمع کل').length).toLocaleString()} فقره`;
+
+      card3Title = "میانگین مبلغ هر سند";
+      card3Value = `${pdfFormatNumber(rows.length > 1 ? Math.round(totalAmt / (rows.length - 1)) : 0)} ریال`;
+    } else if (isDispatch) {
+      subtitleText = "گزارش خروج کالا و بیجک‌های صادر شده - مدیریت انبار و لجستیک";
+
+      card1Title = "تعداد کل بیجک‌ها";
+      card1Value = `${(rows.filter(r => r[0] !== 'جمع کل').length).toLocaleString()} فقره`;
+
+      card2Title = "نوع گزارش";
+      card2Value = "خروج کالا و بیجک";
+
+      card3Title = "تاریخ گزارش";
+      card3Value = new Date().toLocaleDateString("fa-IR");
+    } else {
+      subtitleText = "گزارش وضعیت تراز تفصیلی مشتریان - بخش حسابداری و مدیریت مالی";
+
+      let totalBalance = 0;
+      rows.forEach((r) => {
+        if (r[2]) {
+          const num = parseFormattedNumber(r[2]);
+          if (r[0] !== "---" && r[1] !== "جمع کل بدهکاران" && r[1] !== "جمع کل بستانکاران" && r[0] !== "جمع کل") {
+            totalBalance += num;
+          }
+        }
+      });
+
+      card1Title = `جمع کل اقلام ${isDebtor ? "بدهکار" : "بستانکار"}`;
+      card1Value = `${pdfFormatNumber(totalBalance)} ریال`;
+
+      card2Title = "تعداد پرونده‌های مفتوح";
+      card2Value = `${rows.filter((r) => r[0] !== "---" && r[0] !== "جمع کل").length.toLocaleString()} رکورد`;
+
+      card3Title = "میانگین تراز هر حساب";
+      card3Value = `${pdfFormatNumber(rows.length > 1 ? Math.round(totalBalance / (rows.length - 1)) : 0)} ریال`;
+    }
+
+    let thead = "<tr>";
+    columns.forEach((c) => {
+      thead += `<th class="py-2 px-2 text-center text-[10.5px] font-black border-b border-gray-300 bg-slate-900 text-white leading-tight">${c}</th>`;
+    });
+    thead += "</tr>";
+
+    let tbody = "";
+    rows.forEach((r, idx) => {
+      const isEven = idx % 2 === 1;
+      const isTotalRow = r[0] === 'جمع کل' || String(r[1]).includes('جمع کل');
+      const rowBgClass = isTotalRow ? "bg-amber-100/90 font-black border-t-2 border-slate-900" : (isEven ? "bg-slate-50/90" : "bg-white");
+
+      tbody += `<tr class="${rowBgClass} border-b border-gray-200/80">`;
+      r.forEach((cell, cellIdx) => {
+        let cellStyleClass = "py-1.5 px-2 text-[10px] text-gray-800 text-center font-bold border-l border-gray-200/60 last:border-l-0";
+        if (isTotalRow) {
+          cellStyleClass = "py-2 px-2 text-[10.5px] text-slate-950 text-center font-black border-l border-gray-300 last:border-l-0";
+        }
+
+        if (cellIdx === 1) {
+          cellStyleClass = `py-1.5 px-2.5 text-[10.5px] ${isTotalRow ? "font-black text-slate-950" : "font-bold text-gray-900"} text-right border-l border-gray-200/60`;
+        }
+
+        const cellStr = String(cell);
+        const isPctCell = cellStr.includes('%') && (cellStr.startsWith('+') || cellStr.startsWith('-') || cellStr.includes('.'));
+        
+        if (isPctCell) {
+          const isPos = cellStr.startsWith('+') || (parseFloat(cellStr) > 0 && !cellStr.startsWith('-'));
+          const isNeg = cellStr.startsWith('-');
+          const bgBadge = isPos ? "bg-emerald-100 text-emerald-900 font-black" : (isNeg ? "bg-rose-100 text-rose-900 font-black" : "bg-slate-100 text-slate-700");
+          tbody += `<td class="py-1 px-1.5 text-center"><span class="inline-block px-1.5 py-0.5 text-[9.5px] rounded-md font-mono ${bgBadge}">${cell}</span></td>`;
+        } else {
+          tbody += `<td class="${cellStyleClass}">${cell}</td>`;
+        }
+      });
+      tbody += "</tr>";
+    });
+
+    const html = `<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        ${fontFaceRule}
+        ${OFFLINE_TAILWIND_REPORT_CSS}
+        @page {
+          size: A4 ${landscape ? 'landscape' : 'portrait'};
+          margin: 6mm 8mm;
+        }
+        body { 
+            font-family: 'Vazirmatn', sans-serif !important; 
+            background: #ffffff; 
+            padding: 0;
+            margin: 0;
+            color: #0f172a;
+            -webkit-print-color-adjust: exact;
+        }
+    </style>
+</head>
+<body class="p-0">
+    <div class="w-full bg-white p-2">
+        
+        <!-- HEADER -->
+        <div class="flex justify-between items-center border-b-2 border-slate-900 pb-2 mb-3">
+            <div class="space-y-0.5">
+                <div class="flex items-center gap-2">
+                    <div class="w-2.5 h-6 bg-slate-900 rounded-sm"></div>
+                    <h1 class="text-lg font-black text-slate-900 tracking-tight">${title}</h1>
+                </div>
+                <p class="text-[10px] text-slate-500 font-bold pr-4">${subtitleText}</p>
+            </div>
+            <div class="text-left space-y-0.5 shrink-0">
+                <div class="inline-block bg-slate-900 text-white px-2.5 py-1 rounded text-[10px] font-black">${resolvedDateBadge ? `بازه گزارش: ${resolvedDateBadge}` : `تاریخ گزارش: ${new Date().toLocaleDateString("fa-IR")}`}</div>
+                <div class="text-[9px] text-slate-400 font-bold">${resolvedDateBadge ? `تاریخ چاپ: ${new Date().toLocaleDateString("fa-IR")} | سایان ERP` : 'گزارش مدیریتی A4 | سایان ERP'}</div>
+            </div>
+        </div>
+
+        <!-- KPI CARDS -->
+        <div class="mb-3">
+            ${isCompare ? `
+            <div class="grid grid-cols-4 gap-2 mb-3">
+                <div class="bg-slate-50 border-r-4 border-slate-900 p-2 rounded-lg shadow-sm text-right">
+                    <div class="text-[9px] font-black text-slate-500 mb-0.5">${card1Title}</div>
+                    <div class="text-base font-black ${card1Value.startsWith('+') ? 'text-emerald-700' : (card1Value.startsWith('-') ? 'text-rose-700' : 'text-slate-900')} font-mono">${card1Value}</div>
+                    <div class="text-[8.5px] text-slate-500 font-mono mt-0.5">${card1Sub}</div>
+                </div>
+
+                <div class="bg-slate-50 border-r-4 border-indigo-700 p-2 rounded-lg shadow-sm text-right">
+                    <div class="text-[9px] font-black text-slate-500 mb-0.5">${card2Title}</div>
+                    <div class="text-base font-black ${card2Value.startsWith('+') ? 'text-emerald-700' : (card2Value.startsWith('-') ? 'text-rose-700' : 'text-slate-900')} font-mono">${card2Value}</div>
+                    <div class="text-[8.5px] text-slate-500 font-mono mt-0.5">${card2Sub}</div>
+                </div>
+
+                <div class="bg-slate-50 border-r-4 border-emerald-700 p-2 rounded-lg shadow-sm text-right">
+                    <div class="text-[9px] font-black text-slate-500 mb-0.5">${card3Title}</div>
+                    <div class="text-base font-black ${card3Value.startsWith('+') ? 'text-emerald-700' : (card3Value.startsWith('-') ? 'text-rose-700' : 'text-slate-900')} font-mono">${card3Value}</div>
+                    <div class="text-[8.5px] text-slate-500 font-mono mt-0.5">${card3Sub}</div>
+                </div>
+
+                <div class="bg-slate-900 text-white p-2 rounded-lg shadow-sm text-right">
+                    <div class="text-[9px] font-black text-slate-300 mb-0.5">${card4Title}</div>
+                    <div class="text-base font-black text-amber-300 font-mono">${card4Value}</div>
+                    <div class="text-[8.5px] text-slate-300 mt-0.5">${card4Sub}</div>
+                </div>
+            </div>
+            ` : `
+            <div class="grid grid-cols-3 gap-3 mb-3">
+                <div class="bg-slate-50 border-r-4 border-emerald-600 p-2.5 rounded-lg shadow-sm">
+                    <div class="text-[9px] font-black text-slate-500 mb-0.5">${card1Title}</div>
+                    <div class="text-lg font-black text-slate-900 font-mono">${card1Value}</div>
+                </div>
+
+                <div class="bg-slate-50 border-r-4 border-slate-900 p-2.5 rounded-lg shadow-sm">
+                    <div class="text-[9px] font-black text-slate-500 mb-0.5">${card2Title}</div>
+                    <div class="text-lg font-black text-slate-900 font-mono">${card2Value}</div>
+                </div>
+
+                <div class="bg-slate-50 border-r-4 border-indigo-600 p-2.5 rounded-lg shadow-sm">
+                    <div class="text-[9px] font-black text-slate-500 mb-0.5">${card3Title}</div>
+                    <div class="text-lg font-black text-slate-900 font-mono">${card3Value}</div>
+                </div>
+            </div>
+            `}
+
+            <!-- TABLE -->
+            <div class="border border-slate-300 rounded-lg overflow-hidden shadow-sm">
+                <table class="w-full text-right border-collapse">
+                    <thead>
+                        ${thead}
+                    </thead>
+                    <tbody>
+                        ${tbody}
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- SIGNATURE & FOOTER -->
+            <div class="mt-3 p-2.5 bg-slate-50 rounded-lg border border-dashed border-slate-300">
+                <div class="flex justify-between items-center text-[8.5px] font-bold text-slate-500 uppercase">
+                    <span>محل مهر و امضای مدیریت ارشد</span>
+                    <span>محل امضای مدیر بازرگانی و فروش</span>
+                    <span>تأییدیه امور مالی</span>
+                </div>
+                <div class="flex justify-between mt-2 gap-8 px-6">
+                    <div class="h-6 w-1/4 border-b border-slate-300"></div>
+                    <div class="h-6 w-1/4 border-b border-slate-300"></div>
+                    <div class="h-6 w-1/4 border-b border-slate-300"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-2 flex justify-between items-center text-[8.5px] text-slate-400 border-t border-slate-100 pt-1.5">
+            <div class="font-bold">گزارش مدیریتی A4 رسمی - صادر شده از سامانه هوشمند سایان ERP</div>
+            <div class="font-mono text-[8px]">Single Page A4 Executive Report</div>
+        </div>
+    </div>
+</body>
+</html>`;
+
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = Buffer.from(await page.pdf({
+      format: "A4",
+      landscape,
+      printBackground: true,
+      margin: { top: "0", right: "0", bottom: "0", left: "0" },
+    }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Report PDF Error:", e.message);
+    throw e;
+  }
+};
+
+export const generateMeetingAnnouncementImage = async (meeting) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+            <style>
+                ${fontFaceRule}
+                ${OFFLINE_TAILWIND_REPORT_CSS}
+                body { background: #f9fafb; padding: 20px !important; font-family: 'Vazirmatn', sans-serif !important; }
+                .card { background: white; border-radius: 24px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); border: 2px solid #e5e7eb; overflow: hidden; width: 600px; }
+                .header { background: #1e3a8a; color: white; padding: 30px; text-align: center; }
+                .content { padding: 30px; }
+                .item { padding: 10px; border-bottom: 1px solid #f3f4f6; font-size: 14px; }
+            </style>
+        </head><body>
+            <div class="card">
+                <div class="header">
+                    <h1 style="font-size: 28px; font-weight: 900; margin: 0;">اعلان برگزاری جلسه تولید</h1>
+                    <div style="font-size: 16px; margin-top: 10px;">شماره: ${meeting.meetingNumber}</div>
+                </div>
+                <div class="content">
+                    <div style="font-size: 18px; font-weight: bold; margin-bottom: 20px;">
+                        جلسه در تاریخ ${meeting.date} ساعت ${meeting.time} در ${meeting.location} برگزار خواهد شد.
+                    </div>
+                    <div style="font-size: 14px; color: #4b5563;">
+                        <p>رئیس: ${meeting.chairman}</p>
+                        <p>دبیر: ${meeting.secretary}</p>
+                    </div>
+                </div>
+            </div></body></html>`;
+
+    await page.setViewport({ width: 640, height: 800, deviceScaleFactor: 2 });
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const card = await page.$(".card");
+    const buffer = Buffer.from(await card.screenshot({ type: "png" }));
+    await page.close();
+    return buffer;
+  } catch (e) {
+    console.error("Generate Announcement Image Error:", e.message);
+    throw e;
+  }
+};
+
+export const generateMeetingMinutesPDF = async (meeting) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    await page.setViewport({ width: 800, height: 1100, deviceScaleFactor: 2 });
+
+    const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+            <style>
+                ${BASE_STYLE}
+                body {
+                    background-color: #f8fafc;
+                    padding: 30px;
+                    font-family: 'Vazirmatn', 'Tahoma', sans-serif !important;
+                }
+                .page-container {
+                    background-color: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 35px;
+                    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+                    position: relative;
+                }
+                .premium-top-bar {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    height: 6px;
+                    background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 50%, #b45309 100%);
+                    border-top-left-radius: 12px;
+                    border-top-right-radius: 12px;
+                }
+                .letterhead {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    border-bottom: 2px solid #e2e8f0;
+                    padding-bottom: 20px;
+                    margin-bottom: 25px;
+                }
+                .letterhead-title-section {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                }
+                .letterhead-title-section .subtitle {
+                    font-size: 10px;
+                    font-weight: 800;
+                    color: #b45309;
+                    text-transform: uppercase;
+                    letter-spacing: 1px;
+                }
+                .letterhead-title-section h1 {
+                    font-size: 24px;
+                    font-weight: 950;
+                    color: #0f172a;
+                    margin: 0;
+                    letter-spacing: -0.5px;
+                }
+                .letterhead-title-section .company {
+                    font-size: 11px;
+                    font-weight: 700;
+                    color: #64748b;
+                }
+                .letterhead-meta {
+                    background-color: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 10px 16px;
+                    font-size: 11px;
+                    color: #475569;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                    min-width: 180px;
+                }
+                .letterhead-meta div {
+                    display: flex;
+                    justify-content: space-between;
+                }
+                .letterhead-meta span.val {
+                    font-weight: 900;
+                    color: #0f172a;
+                    font-family: monospace, sans-serif;
+                }
+                .details-card {
+                    background-color: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 16px 20px;
+                    margin-bottom: 25px;
+                }
+                .details-card-title {
+                    font-size: 11.5px;
+                    font-weight: 800;
+                    color: #1e3a8a;
+                    margin-bottom: 12px;
+                    border-bottom: 1px solid #e2e8f0;
+                    padding-bottom: 6px;
+                    text-transform: uppercase;
+                }
+                .details-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 12px 30px;
+                }
+                .details-item {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 11.5px;
+                    border-bottom: 1px dashed #f1f5f9;
+                    padding-bottom: 4px;
+                }
+                .details-item .label {
+                    color: #64748b;
+                    font-weight: bold;
+                }
+                .details-item .value {
+                    color: #0f172a;
+                    font-weight: bold;
+                }
+                .section-header {
+                    font-size: 13px;
+                    font-weight: 900;
+                    color: #0f172a;
+                    border-right: 4px solid #1e3a8a;
+                    padding-right: 10px;
+                    margin: 25px 0 12px 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+                .attendees-container {
+                    background-color: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 12px;
+                }
+                .attendees-grid {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }
+                .attendee-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    background-color: #f1f5f9;
+                    border: 1px solid #e2e8f0;
+                    padding: 5px 12px;
+                    border-radius: 20px;
+                    font-size: 11px;
+                }
+                .attendee-badge.guest {
+                    background-color: #fffbeb;
+                    border-color: #fde68a;
+                }
+                .dot {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 50%;
+                }
+                .dot.present {
+                    background-color: #10b981;
+                }
+                .dot.guest {
+                    background-color: #f59e0b;
+                }
+                .attendee-badge .name {
+                    font-weight: 800;
+                    color: #1e293b;
+                }
+                .attendee-badge .role {
+                    color: #64748b;
+                    font-size: 10px;
+                    font-weight: bold;
+                }
+                .resolutions-table {
+                    width: 100%;
+                    border-collapse: separate;
+                    border-spacing: 0;
+                    margin-top: 12px;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    border: 1px solid #cbd5e1;
+                }
+                .resolutions-table th {
+                    background-color: #1e293b;
+                    color: #ffffff;
+                    font-weight: 900;
+                    font-size: 11px;
+                    padding: 12px 10px;
+                    border: none;
+                    border-bottom: 2px solid #0f172a;
+                    text-align: center;
+                }
+                .resolutions-table td {
+                    padding: 12px 10px;
+                    border: none;
+                    border-bottom: 1px solid #e2e8f0;
+                    font-size: 11px;
+                    color: #334155;
+                    line-height: 1.6;
+                    text-align: center;
+                }
+                .resolutions-table tr:last-child td {
+                    border-bottom: none;
+                }
+                .resolutions-table tr:nth-child(even) {
+                    background-color: #f8fafc;
+                }
+                .resolutions-table td.desc-col {
+                    text-align: right;
+                    font-weight: 500;
+                    color: #0f172a;
+                    padding-right: 15px;
+                }
+                .resolutions-table td.responsible-col {
+                    font-weight: bold;
+                    color: #1e293b;
+                }
+                .resolutions-table td.duration-col {
+                    font-weight: 800;
+                    color: #b45309;
+                }
+                .resolutions-table td.num-col {
+                    color: #64748b;
+                    font-weight: bold;
+                }
+                .approvals-container {
+                    margin-top: 15px;
+                }
+                .approvals-grid {
+                    display: grid;
+                    grid-template-columns: repeat(3, 1fr);
+                    gap: 15px;
+                }
+                .approval-stamp {
+                    border: 1.5px dashed #059669;
+                    background-color: #f0fdf4;
+                    border-radius: 8px;
+                    padding: 12px;
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    position: relative;
+                    overflow: hidden;
+                }
+                .approval-stamp::before {
+                    content: 'APPROVED';
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%) rotate(-15deg);
+                    font-size: 32px;
+                    font-weight: 900;
+                    color: rgba(5, 150, 105, 0.04);
+                    letter-spacing: 2px;
+                    pointer-events: none;
+                }
+                .stamp-seal-badge {
+                    width: 44px;
+                    height: 44px;
+                    border: 2px double #059669;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                }
+                .seal-badge-inner {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    color: #059669;
+                }
+                .seal-badge-icon {
+                    font-size: 14px;
+                    font-weight: bold;
+                    line-height: 1;
+                }
+                .seal-badge-text {
+                    font-size: 6px;
+                    font-weight: bold;
+                    white-space: nowrap;
+                }
+                .stamp-text-details {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                }
+                .stamp-text-details .u-name {
+                    font-size: 11px;
+                    font-weight: 900;
+                    color: #065f46;
+                }
+                .stamp-text-details .u-role {
+                    font-size: 9.5px;
+                    font-weight: bold;
+                    color: #047857;
+                }
+                .stamp-text-details .u-time {
+                    font-size: 9px;
+                    color: #059669;
+                    font-weight: bold;
+                }
+                .stamp-text-details .u-hash {
+                    font-family: monospace;
+                    font-size: 7px;
+                    color: #10b981;
+                    letter-spacing: 0.5px;
+                }
+                .physical-sigs-grid {
+                    display: grid;
+                    grid-template-columns: repeat(3, 1fr);
+                    gap: 15px;
+                }
+                .physical-sig-box {
+                    border: 1px solid #cbd5e1;
+                    border-radius: 8px;
+                    padding: 12px;
+                    text-align: center;
+                    background-color: #fafafa;
+                }
+                .physical-sig-box .role {
+                    font-size: 10px;
+                    font-weight: bold;
+                    color: #64748b;
+                    margin-bottom: 4px;
+                }
+                .physical-sig-box .name {
+                    font-size: 11px;
+                    font-weight: 900;
+                    color: #0f172a;
+                    border-bottom: 1px dashed #e2e8f0;
+                    padding-bottom: 6px;
+                    margin-bottom: 8px;
+                }
+                .physical-sig-box .space {
+                    font-size: 9px;
+                    color: #94a3b8;
+                    height: 40px;
+                    display: flex;
+                    align-items: flex-end;
+                    justify-content: center;
+                }
+            </style>
+        </head><body>
+            <div class="page-container">
+                <div class="premium-top-bar"></div>
+                
+                <div class="letterhead">
+                    <div class="letterhead-title-section">
+                        <span class="subtitle">سند صورتجلسه رسمی هماهنگی تولید</span>
+                        <h1>صورتجلسه هماهنگی تولید کارخانه</h1>
+                        <span class="company">سیستم جامع سایان ERP • صنایع نساجی سایان</span>
+                    </div>
+                    <div class="letterhead-meta">
+                        <div>
+                            <span>شماره جلسه:</span>
+                            <span class="val">${toPersianDigits(meeting.meetingNumber)}</span>
+                        </div>
+                        <div>
+                            <span>تاریخ تنظیم:</span>
+                            <span class="val">${toPersianDigits(meeting.date)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="details-card">
+                    <div class="details-card-title">مشخصات و زمان‌بندی عمومی جلسه</div>
+                    <div class="details-grid">
+                        <div class="details-item">
+                            <span class="label">زمان برگزاری:</span>
+                            <span class="value">${toPersianDigits(meeting.time)}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="label">محل برگزاری:</span>
+                            <span class="value">${meeting.location}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="label">رئیس جلسه:</span>
+                            <span class="value">${meeting.chairman}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="label">دبیر جلسه:</span>
+                            <span class="value">${meeting.secretary}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-header">
+                    <span>لیست اعضای حاضر و مدعوین جلسه</span>
+                    <span style="font-size: 10px; color: #64748b;">تعداد حاضرین: ${toPersianDigits(meeting.attendees.filter(a => a.isPresent).length + (meeting.guestAttendees || []).length)} نفر</span>
+                </div>
+                <div class="attendees-container">
+                    <div class="attendees-grid">
+                        ${meeting.attendees
+                          .filter((a) => a.isPresent)
+                          .map((a) => `
+                            <div class="attendee-badge">
+                                <span class="dot present"></span>
+                                <span class="name">${a.fullName}</span>
+                                <span class="role">${a.role}</span>
+                            </div>
+                          `)
+                          .join("")}
+                        ${(meeting.guestAttendees || []).map((g) => `
+                            <div class="attendee-badge guest">
+                                <span class="dot guest"></span>
+                                <span class="name">${g}</span>
+                                <span class="role">مدعو</span>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>
+
+                <div class="section-header">
+                    <span>مصوبات، تصمیمات و تکالیف تعیین شده</span>
+                </div>
+                <table class="resolutions-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">ردیف</th>
+                            <th>شرح مصوبه و شرح تکلیف تولیدی</th>
+                            <th style="width: 140px;">مسئول اجرا / واحد متولی</th>
+                            <th style="width: 110px;">زمان / مهلت اجرا</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${meeting.items
+                          .map(
+                            (item, idx) => `
+                            <tr>
+                                <td class="num-col">${toPersianDigits(idx + 1)}</td>
+                                <td class="desc-col">${item.description}</td>
+                                <td class="responsible-col">${item.responsiblePerson}</td>
+                                <td class="duration-col">${toPersianDigits(item.duration)}</td>
+                            </tr>
+                        `,
+                          )
+                          .join("")}
+                    </tbody>
+                </table>
+                        
+                <div class="section-header" style="margin-top: 30px;">
+                    <span>امضاها، تاییدات الکترونیک و اصالت‌سنجی</span>
+                </div>
+                <div class="approvals-container">
+                    ${Object.entries(meeting.approvals || {}).length > 0 ? `
+                        <div class="approvals-grid">
+                            ${Object.entries(meeting.approvals || {})
+                              .map(([username, appInfo]) => {
+                                const attendee = meeting.attendees.find(
+                                  (a) => a.username === username,
+                                );
+                                const name = attendee ? attendee.fullName : username;
+                                const role = attendee ? attendee.role : "عضو جلسه";
+                                const securityHash = `SHA-${Math.abs(username.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)).toString(16).substring(0, 6).toUpperCase()}`;
+                                return `
+                                    <div class="approval-stamp">
+                                        <div class="stamp-seal-badge">
+                                            <div class="seal-badge-inner">
+                                                <span class="seal-badge-icon">✓</span>
+                                                <span class="seal-badge-text">تایید الکترونیک</span>
+                                            </div>
+                                        </div>
+                                        <div class="stamp-text-details">
+                                            <div class="u-name">${name}</div>
+                                            <div class="u-role">${role}</div>
+                                            <div class="u-time">تاریخ: ${toPersianDigits(new Date(appInfo.date).toLocaleDateString("fa-IR"))}</div>
+                                            <div class="u-hash">کد تایید: ${securityHash}</div>
+                                        </div>
+                                    </div>
+                                `;
+                              })
+                              .join("")}
+                        </div>
+                    ` : `
+                        <div class="physical-sigs-grid">
+                            ${meeting.attendees
+                              .filter(a => a.isPresent)
+                              .slice(0, 6)
+                              .map(a => `
+                                <div class="physical-sig-box">
+                                    <div class="role">${a.role}</div>
+                                    <div class="name">${a.fullName}</div>
+                                    <div class="space">محل امضا و تایید</div>
+                                </div>
+                              `).join("")}
+                        </div>
+                    `}
+                </div>
+            </div>
+        </body></html>`;
+
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = Buffer.from(await page.pdf({ format: "A4", printBackground: true }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Meeting PDF Error:", e.message);
+    throw e;
+  }
+};
+
+export const generateSecretariatLetterPDF = async (
+  letter,
+  companyName,
+  companySettings,
+  company,
+  noLetterhead = false,
+) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    const isA5 = letter.paperSize === "A5";
+    const isLandscape = letter.orientation === "landscape";
+    const format = isA5 ? "A5" : "A4";
+    const landscape = isLandscape;
+
+    const pageWidthMm = isA5 ? (landscape ? 210 : 148) : (landscape ? 297 : 210);
+    const pageHeightMm = isA5 ? (landscape ? 148 : 210) : (landscape ? 210 : 297);
+    const viewportWidthPx = Math.round((pageWidthMm / 25.4) * 96);
+    const viewportHeightPx = Math.round((pageHeightMm / 25.4) * 96);
+
+    await page.setViewport({
+      width: viewportWidthPx,
+      height: viewportHeightPx,
+      deviceScaleFactor: 2,
+    });
+
+    const fontFamily = companySettings?.letterheadFontFamily || "Vazirmatn";
+    const metadataTop = companySettings?.metadataTop ?? 25;
+    const metadataLeft = companySettings?.metadataLeft ?? 20;
+    const metadataFontSize = companySettings?.metadataFontSize ?? 11;
+    const metadataOpacity = (companySettings?.metadataOpacity ?? 100) / 100;
+    const metadataFontWeight = companySettings?.metadataFontWeight || "bold";
+    const metadataColor = companySettings?.metadataColor || "#0f172a";
+
+    const stampSize = companySettings?.companyStampSize || 120;
+    const stampOpacity = (companySettings?.companyStampOpacity || 70) / 100;
+
+    const effectivePdfLetterheadUrl =
+      companySettings?.pdfLetterheadUrl || companySettings?.letterheadUrl;
+    const isPdfLetterhead =
+      !noLetterhead &&
+      effectivePdfLetterheadUrl &&
+      effectivePdfLetterheadUrl.toLowerCase().endsWith(".pdf");
+
+    const topMargin = `${companySettings?.marginTop ?? 40}mm`;
+    const bottomMargin = `${companySettings?.marginBottom ?? 25}mm`;
+    const leftMargin = `${companySettings?.marginLeft ?? 20}mm`;
+    const rightMargin = `${companySettings?.marginRight ?? 20}mm`;
+
+    const hasAttach =
+      letter.hasAttachment ||
+      (Array.isArray(letter.attachments) && letter.attachments.length > 0);
+
+    const bgImageHtml =
+      !noLetterhead && !isPdfLetterhead && companySettings?.letterheadUrl
+        ? `<img src="${makeAbsolute(companySettings.letterheadUrl)}" class="letterhead-bg" />`
+        : "";
+
+    const letterheadHtml = `
+      ${bgImageHtml}
+      <div class="lh-left-custom">
+        <div>شماره: <span style="direction: ltr; display: inline-block; unicode-bidi: embed;">${toPersianDigits(letter.letterNumber || "پیش‌نویس")}</span></div>
+        <div>تاریخ: <span style="direction: ltr; display: inline-block; unicode-bidi: embed;">${toPersianDigits(letter.date || "-")}</span></div>
+        <div>پیوست: ${hasAttach ? (letter.attachmentDescription ? toPersianDigits(letter.attachmentDescription) : "دارد") : "ندارد"}</div>
+      </div>
+    `;
+
+    let signaturesHtml = "";
+    const sigPos = letter.signaturePosition || "bottom_left";
+
+    let sigStyle = "text-align: center; margin-right: auto; margin-left: 0;";
+    if (sigPos === "bottom_center")
+      sigStyle = "text-align: center; margin: 0 auto;";
+    if (sigPos === "bottom_right")
+      sigStyle = "text-align: center; margin-left: auto; margin-right: 0;";
+
+    const stampHtml =
+      letter.addCompanyStamp && companySettings?.companyStampUrl
+        ? `<img src="${makeAbsolute(companySettings.companyStampUrl)}" class="company-stamp" />`
+        : "";
+
+    let signersHtml = "";
+    if (letter.signers && letter.signers.length > 0) {
+      signersHtml = `
+        <div style="display: flex; gap: 30px; justify-content: center; flex-wrap: wrap; margin-top: 10px;">
+          ${letter.signers
+            .map((s) => {
+              let signerSigUrl = "";
+              if (
+                s.userId &&
+                letter.approvedBy &&
+                letter.signatureImageUrls
+              ) {
+                const approverIdx = letter.approvedBy.indexOf(s.userId);
+                if (approverIdx !== -1 && letter.signatureImageUrls[approverIdx]) {
+                  signerSigUrl = makeAbsolute(
+                    letter.signatureImageUrls[approverIdx],
+                  );
+                }
+              }
+              return `
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 120px;">
+                  <div style="font-weight: bold; font-size: 13px; color: #1e293b;">${s.name || ""}</div>
+                  <div style="font-weight: bold; font-size: 11px; color: #64748b; margin-top: 2px; margin-bottom: 5px;">${s.title || ""}</div>
+                  ${signerSigUrl ? `<img src="${signerSigUrl}" style="height: 55px; object-fit: contain; mix-blend-mode: multiply; margin-top: 4px;" />` : ""}
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `;
+    }
+
+    let extraSignaturesHtml = "";
+    if (letter.approvedBy && letter.approvedBy.length > 0) {
+      const explicitUserIds = (letter.signers || [])
+        .map((s) => s.userId)
+        .filter(Boolean);
+      const extraSignatures = letter.approvedBy
+        .map((uid, idx) => ({ uid, url: letter.signatureImageUrls?.[idx] }))
+        .filter((item) => item.url && !explicitUserIds.includes(item.uid));
+
+      if (extraSignatures.length > 0) {
+        extraSignaturesHtml = `
+          <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; margin-top: 10px;">
+            ${extraSignatures
+              .map(
+                (item) => `
+                <img src="${makeAbsolute(item.url)}" style="height: 50px; object-fit: contain; mix-blend-mode: multiply;" />
+              `,
+              )
+              .join("")}
+          </div>
+        `;
+      }
+    }
+
+    // 100% National Internet / Offline safe: convert any /uploads/ image src (even with full domain) to disk base64
+    const rawContent = String(letter.content || "");
+    const normalizedContent = rawContent.replace(
+      /(<img\b[^>]*?\bsrc=["'])([^"']*\/uploads\/[^"']+)(["'])/gi,
+      (_, p1, imgUrl, p3) => `${p1}${makeAbsolute(imgUrl)}${p3}`,
+    );
+
+    const hasSignOffInContent =
+      rawContent.includes("تشکر") ||
+      rawContent.includes("احترام") ||
+      rawContent.includes("سپاس") ||
+      rawContent.includes("ارادت") ||
+      rawContent.includes("توفیق") ||
+      rawContent.includes("کمال") ||
+      rawContent.includes("همکاری");
+
+    const effectiveSignOff =
+      typeof letter.signOffText === "string" ? letter.signOffText.trim() : "";
+
+    const hasAnySignersOrStamp =
+      Boolean(signersHtml) ||
+      Boolean(stampHtml) ||
+      Boolean(extraSignaturesHtml) ||
+      (!hasSignOffInContent && Boolean(effectiveSignOff));
+
+    if (hasAnySignersOrStamp) {
+      signaturesHtml = `
+        <div class="signatures" style="${sigStyle}">
+          ${!hasSignOffInContent && effectiveSignOff ? `<div class="sign-off-text" style="white-space: pre-wrap;">${effectiveSignOff}</div>` : ""}
+          ${signersHtml}
+          ${
+            stampHtml || extraSignaturesHtml
+              ? `<div class="stamp-container">${stampHtml}${extraSignaturesHtml}</div>`
+              : ""
+          }
+        </div>
+      `;
+    }
+
+    const html = `<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">
+      <style>
+        ${BASE_STYLE}
+        ${allPersianFontsRule}
+
+        @page {
+          size: ${format} ${landscape ? "landscape" : "portrait"};
+          margin: 0;
+        }
+
+        html, body {
+          margin: 0;
+          padding: 0;
+          width: ${pageWidthMm}mm;
+          min-height: ${pageHeightMm}mm;
+          font-family: '${fontFamily}', 'Vazirmatn', 'Tahoma', 'Arial', sans-serif;
+          direction: rtl;
+          box-sizing: border-box;
+          background: transparent;
+          -webkit-font-smoothing: antialiased;
+        }
+
+        .page-container {
+          position: relative;
+          width: ${pageWidthMm}mm;
+          min-height: ${pageHeightMm}mm;
+          max-height: ${pageHeightMm}mm;
+          box-sizing: border-box;
+          padding-top: ${topMargin};
+          padding-bottom: ${bottomMargin};
+          padding-left: ${leftMargin};
+          padding-right: ${rightMargin};
+          overflow: hidden;
+          page-break-after: avoid;
+          page-break-inside: avoid;
+        }
+
+        .letterhead-bg {
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          width: 100%; height: 100%;
+          object-fit: fill;
+          z-index: -1;
+        }
+
+        .lh-left-custom {
+          position: absolute !important;
+          top: ${metadataTop}mm !important;
+          left: ${metadataLeft}mm !important;
+          font-size: ${metadataFontSize}px !important;
+          color: ${metadataColor} !important;
+          line-height: 1.8 !important;
+          z-index: 100 !important;
+          opacity: ${metadataOpacity} !important;
+          font-weight: ${metadataFontWeight} !important;
+          text-align: right !important;
+          direction: rtl !important;
+          white-space: nowrap !important;
+        }
+
+        .letter-content-wrapper {
+          padding: 0;
+          z-index: 10;
+          position: relative;
+          direction: rtl;
+        }
+
+        .letter-body {
+          position: relative !important;
+          padding: 0 !important;
+          min-height: 185mm;
+          font-size: 14px;
+          line-height: 1.9;
+          text-align: right;
+          white-space: pre-wrap !important;
+          color: #0f172a;
+          direction: rtl;
+          overflow: visible !important;
+        }
+
+        .letter-body p,
+        .letter-body div,
+        .letter-body li,
+        .letter-body span {
+          white-space: pre-wrap !important;
+        }
+
+        .letter-body p {
+          margin-top: 0;
+          margin-bottom: 0.5rem;
+          line-height: 1.9;
+        }
+
+        .letter-body .ql-align-justify,
+        .letter-body p[style*="text-align: justify"],
+        .letter-body div[style*="text-align: justify"] {
+          text-align: justify !important;
+          text-justify: inter-word !important;
+          text-align-last: right !important;
+        }
+
+        .letter-body .ql-align-center,
+        .letter-body p[style*="text-align: center"],
+        .letter-body div[style*="text-align: center"] {
+          text-align: center !important;
+          text-align-last: center !important;
+        }
+
+        .letter-body .ql-align-left,
+        .letter-body p[style*="text-align: left"],
+        .letter-body div[style*="text-align: left"] {
+          text-align: left !important;
+          text-align-last: left !important;
+        }
+
+        .letter-body .ql-align-right,
+        .letter-body p[style*="text-align: right"],
+        .letter-body div[style*="text-align: right"] {
+          text-align: right !important;
+          text-align-last: right !important;
+        }
+
+        .letter-body table {
+          width: 100% !important;
+          border-collapse: collapse !important;
+          margin: 14px 0 !important;
+          direction: rtl !important;
+        }
+
+        .letter-body table td,
+        .letter-body table th {
+          border: 1px solid #cbd5e1 !important;
+          padding: 8px 12px !important;
+          text-align: right !important;
+          vertical-align: top !important;
+        }
+
+        .signatures {
+          width: 260px;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+          margin-top: 15px;
+        }
+        .sign-off-text {
+          font-weight: bold;
+          font-size: 14px;
+          margin-bottom: 12px;
+          color: #0f172a;
+        }
+        .stamp-container {
+          position: relative;
+          min-height: ${stampSize ? Math.min(stampSize, 100) : 80}px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin-top: 8px;
+        }
+        .company-stamp {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          margin: 0;
+          max-width: ${stampSize}px;
+          max-height: ${stampSize}px;
+          opacity: ${stampOpacity};
+          mix-blend-mode: multiply;
+          z-index: 0;
+          pointer-events: none;
+        }
+
+        .footer {
+          position: absolute;
+          bottom: 6mm;
+          left: 20mm;
+          right: 20mm;
+          border-top: 1px solid #cbd5e1;
+          padding-top: 6px;
+          display: flex;
+          justify-content: space-between;
+          font-size: 10px;
+          color: #64748b;
+          page-break-inside: avoid;
+          break-inside: avoid;
+        }
+      </style>
+    </head><body>
+      <div class="page-container">
+        ${letterheadHtml}
+        <div class="letter-content-wrapper">
+          <div class="letter-body ql-editor">${normalizedContent}</div>
+          ${signaturesHtml}
+        </div>
+        ${
+          !noLetterhead && !companySettings?.letterheadUrl && !isPdfLetterhead && !companySettings?.hideAutoFooter && (companySettings?.address || companySettings?.phone)
+            ? `
+        <div class="footer">
+          <span>نشانی: ${companySettings?.address || "ثبت نشده"}</span>
+          <span>تلفن: ${companySettings?.phone || "ثبت نشده"}</span>
+          <span>کدپستی: ${companySettings?.postalCode || "-"}</span>
+        </div>
+        `
+            : ""
+        }
+      </div>
+    </body></html>`;
+
+    // Use domcontentloaded + local image decode check so it never hangs on National Internet (نت ملی)
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
+    await page.evaluate(async () => {
+      const imgs = Array.from(document.querySelectorAll("img"));
+      await Promise.race([
+        Promise.all(
+          imgs.map((img) =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise((res) => {
+                  img.onload = res;
+                  img.onerror = res;
+                }),
+          ),
+        ),
+        new Promise((res) => setTimeout(res, 1500)),
+      ]);
+    });
+    let pdf = await page.pdf({
+      format: format,
+      landscape: landscape,
+      printBackground: true,
+      omitBackground: isPdfLetterhead,
+      margin: { top: "0", bottom: "0", left: "0", right: "0" }, // handled by CSS
+    });
+
+    await page.close();
+
+    if (isPdfLetterhead) {
+      try {
+        const parts = effectivePdfLetterheadUrl.split("/uploads/");
+        const fileName = parts[parts.length - 1].split("?")[0];
+        const fullPath = path.join(process.cwd(), "uploads", fileName);
+
+        if (fs.existsSync(fullPath)) {
+          const letterheadBytes = fs.readFileSync(fullPath);
+          const mainPdfDoc = await PDFDocument.load(pdf);
+          const letterheadDoc = await PDFDocument.load(letterheadBytes, { ignoreEncryption: true });
+
+          const finalPdfDoc = await PDFDocument.create();
+          const letterheadPageCount = letterheadDoc.getPageCount();
+
+          for (let i = 0; i < mainPdfDoc.getPageCount(); i++) {
+            // Copy letterhead page as background (page 0 or corresponding page)
+            const bgPageIndex = Math.min(i, letterheadPageCount - 1);
+            let bgPage;
+            try {
+              const pages = await finalPdfDoc.copyPages(letterheadDoc, [bgPageIndex]);
+              bgPage = pages[0];
+            } catch (err) {
+              console.error("Error during copyPages in PDF merge:", err);
+              throw err;
+            }
+            finalPdfDoc.addPage(bgPage);
+
+            // Embed the rendered text content (rendered with transparent background) on top
+            const [contentPage] = await finalPdfDoc.embedPdf(mainPdfDoc, [i]);
+            const currentPage = finalPdfDoc.getPage(i);
+            const { width, height } = currentPage.getSize();
+
+            currentPage.drawPage(contentPage, {
+              x: 0,
+              y: 0,
+              width: width,
+              height: height,
+            });
+          }
+
+          pdf = Buffer.from(await finalPdfDoc.save());
+        }
+      } catch (mergeErr) {
+        console.error("PDF Merge Error:", mergeErr, mergeErr.stack);
+      }
+    }
+
+    return Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf);
+  } catch (e) {
+    console.error("Generate Letter PDF Error:", e.message);
+    throw e;
+  }
+};
+
+export const generateSecretariatLetterDoc = async (
+  letter,
+  companyName,
+  companySettings,
+  company,
+  noLetterhead = false,
+) => {
+  const attachmentStr = letter.hasAttachment 
+    ? (letter.attachmentDescription ? `دارد (${letter.attachmentDescription})` : (letter.attachments?.length ? `دارد (${letter.attachments.length} برگ)` : "دارد"))
+    : (letter.attachments?.length ? `دارد (${letter.attachments.length} برگ)` : "ندارد");
+
+  // If a custom Word template (.docx) is uploaded, render using Docxtemplater or OpenXML injection
+  if (!noLetterhead && companySettings?.wordLetterheadUrl) {
+    try {
+      const parts = companySettings.wordLetterheadUrl.split("/uploads/");
+      const fileName = parts[parts.length - 1].split("?")[0];
+      const fullPath = path.join(process.cwd(), "uploads", fileName);
+
+      if (fs.existsSync(fullPath)) {
+        const PizZip = (await import("pizzip")).default;
+        const Docxtemplater = (await import("docxtemplater")).default;
+        const contentBytes = fs.readFileSync(fullPath, "binary");
+        const zip = new PizZip(contentBytes);
+        let docXml = zip.file("word/document.xml") ? zip.file("word/document.xml").asText() : "";
+
+        const cleanContent = (letter.content || "")
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/p>/gi, "\n\n")
+          .replace(/<[^>]+>/g, "")
+          .trim();
+
+        // Check if there are content-level tags in the template
+        const hasContentTag = /\{(content|متن|متن_نامه|body|letterContent)\}/i.test(docXml);
+
+        const templateData = {
+          letterNumber: letter.letterNumber || "---",
+          شماره: letter.letterNumber || "---",
+          شماره_نامه: letter.letterNumber || "---",
+          date: letter.date || "---",
+          تاریخ: letter.date || "---",
+          attachments: attachmentStr,
+          پیوست: attachmentStr,
+          وضعیت_پیوست: attachmentStr,
+          section: letter.section === "headquarters" ? "دفتر مرکزی" : "کارخانه",
+          بخش: letter.section === "headquarters" ? "دفتر مرکزی" : "کارخانه",
+          companyName: companyName || "",
+          نام_شرکت: companyName || "",
+          receiver: letter.receiver || "",
+          گیرنده: letter.receiver || "",
+          به: letter.receiver || "",
+          sender: letter.sender || "",
+          فرستنده: letter.sender || "",
+          از: letter.sender || "",
+          subject: letter.subject || "",
+          موضوع: letter.subject || "",
+          content: cleanContent,
+          متن: cleanContent,
+          متن_نامه: cleanContent,
+        };
+
+        if (hasContentTag) {
+          // Standard Docxtemplater flow when template explicitly specifies where content belongs
+          const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            nullGetter: () => "",
+          });
+          doc.render(templateData);
+          return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
+        } else {
+          // The template is a raw letterhead (header/footer with no {content} placeholder)
+          // First, run docxtemplater if any other tags exist (e.g. {date}, {letterNumber})
+          try {
+            const doc = new Docxtemplater(zip, {
+              paragraphLoop: true,
+              linebreaks: true,
+              nullGetter: () => "",
+            });
+            doc.render(templateData);
+            docXml = zip.file("word/document.xml").asText();
+          } catch (tErr) {
+            // Ignore template render errors if tags aren't standard
+          }
+
+          // Build complete Persian formatted letter paragraphs in OpenXML
+          const escapeXml = (unsafe) => {
+            return String(unsafe || "").replace(/[<>&'"]/g, (c) => {
+              switch (c) {
+                case "<": return "&lt;";
+                case ">": return "&gt;";
+                case "&": return "&amp;";
+                case "'": return "&apos;";
+                case '"': return "&quot;";
+                default: return c;
+              }
+            });
+          };
+
+          const createRtlP = (text, isBold = false, fontSize = 26, align = "both", spaceAfter = 160) => {
+            const bold = isBold ? "<w:b/><w:bCs/>" : "";
+            return `<w:p><w:pPr><w:bidi/><w:jc w:val="${align}"/><w:spacing w:line="360" w:lineRule="auto" w:after="${spaceAfter}"/><w:rPr><w:rFonts w:ascii="B Nazanin" w:hAnsi="B Nazanin" w:cs="B Nazanin"/>${bold}<w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/><w:rtl/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="B Nazanin" w:hAnsi="B Nazanin" w:cs="B Nazanin"/>${bold}<w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/><w:rtl/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+          };
+
+          const pList = [];
+
+          // If letterNumber wasn't already in document XML
+          if (!docXml.includes(letter.letterNumber || "NON_EXISTENT_STRING")) {
+            pList.push(createRtlP(`شماره: ${letter.letterNumber || "---"}   |   تاریخ: ${letter.date || "---"}   |   پیوست: ${attachmentStr}`, false, 22, "left", 240));
+          }
+
+          if (letter.receiver) {
+            pList.push(createRtlP(`به: ${letter.receiver}`, true, 26, "right", 100));
+          }
+          if (letter.sender) {
+            pList.push(createRtlP(`از: ${letter.sender}`, false, 24, "right", 140));
+          }
+          if (letter.subject && !letter.hideSubjectInLetter) {
+            pList.push(createRtlP(`موضوع: ${letter.subject}`, true, 26, "right", 200));
+          }
+          if (!letter.hideSalutationInLetter) {
+            pList.push(createRtlP("با سلام و احترام،", true, 26, "right", 200));
+          }
+
+          // Body paragraphs
+          const rawParagraphs = cleanContent.split(/\n+/);
+          for (const rawP of rawParagraphs) {
+            const trimmed = rawP.trim();
+            if (trimmed) {
+              pList.push(createRtlP(trimmed, false, 26, "both", 180));
+            }
+          }
+
+          // Signers block
+          if (letter.signers && letter.signers.length > 0) {
+            if (letter.signOffText && String(letter.signOffText).trim()) {
+              pList.push(createRtlP(String(letter.signOffText).trim(), true, 24, "left", 120));
+            }
+            for (const s of letter.signers) {
+              pList.push(createRtlP(`${s.name || ""}${s.title ? ` (${s.title})` : ""}`, true, 24, "left", 80));
+            }
+          }
+
+          const injectedContent = pList.join("");
+          const sectPrIdx = docXml.lastIndexOf("<w:sectPr");
+          let updatedXml;
+          if (sectPrIdx !== -1) {
+            updatedXml = docXml.substring(0, sectPrIdx) + injectedContent + docXml.substring(sectPrIdx);
+          } else {
+            updatedXml = docXml.replace("</w:body>", injectedContent + "</w:body>");
+          }
+
+          zip.file("word/document.xml", updatedXml);
+          return zip.generate({ type: "nodebuffer", compression: "DEFLATE" });
+        }
+      }
+    } catch (docxErr) {
+      console.error("Word template render error, falling back to html-to-docx:", docxErr);
+    }
+  }
+
+  const isA5 = letter.paperSize === "A5";
+  const isLandscape = letter.orientation === "landscape";
+  const fontFamily = companySettings?.letterheadFontFamily || "Tahoma";
+
+  let letterheadHtml = "";
+  if (!noLetterhead) {
+    let effectiveImgUrl = "";
+    if (
+      companySettings?.letterheadUrl &&
+      !companySettings.letterheadUrl.toLowerCase().endsWith(".pdf")
+    ) {
+      effectiveImgUrl = companySettings.letterheadUrl;
+    } else {
+      const pdfUrl = companySettings?.pdfLetterheadUrl || (companySettings?.letterheadUrl?.toLowerCase().endsWith(".pdf") ? companySettings.letterheadUrl : "");
+      if (pdfUrl) {
+        const parts = pdfUrl.split("/uploads/");
+        const basePdfName = parts[parts.length - 1].split("?")[0];
+        const previewName = `preview_${basePdfName.replace(/\.pdf$/i, "")}.png`;
+        const previewPath = path.join(process.cwd(), "uploads", previewName);
+        if (fs.existsSync(previewPath)) {
+          effectiveImgUrl = `/uploads/${previewName}`;
+        } else {
+          effectiveImgUrl = `/api/secretariat/pdf-preview?url=${encodeURIComponent(pdfUrl)}`;
+        }
+      }
+    }
+
+    if (effectiveImgUrl) {
+      letterheadHtml = `
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <img src="${makeAbsolute(effectiveImgUrl)}" style="width: 100%; object-fit: contain;" />
+                </div>
+                <table style="width: 100%; margin-bottom: 25px; border-bottom: 2px solid #334155; padding-bottom: 10px; font-size: 11pt; font-family: '${fontFamily}', 'Tahoma', sans-serif; direction: rtl;">
+                    <tr>
+                        <td style="text-align: right; width: 50%;"><b>شماره نامه:</b> <span style="direction: ltr; font-weight: bold;">${letter.letterNumber || "---"}</span></td>
+                        <td style="text-align: left; width: 50%;"><b>تاریخ:</b> <span style="direction: ltr; font-weight: bold;">${letter.date || "---"}</span></td>
+                    </tr>
+                    <tr>
+                        <td style="text-align: right;"><b>پیوست:</b> <span style="font-weight: bold;">${attachmentStr}</span></td>
+                        <td style="text-align: left;"><b>بخش:</b> ${letter.section === "headquarters" ? "دفتر مرکزی" : "کارخانه"}</td>
+                    </tr>
+                </table>
+            `;
+    } else {
+      letterheadHtml = `
+                <table style="width: 100%; margin-bottom: 25px; border-bottom: 3px double #0f172a; padding-bottom: 15px; direction: rtl; font-family: '${fontFamily}', 'Tahoma', sans-serif;">
+                    <tr>
+                        <td style="width: 33%; text-align: right; vertical-align: top; font-size: 11pt; line-height: 1.8;">
+                            <div><b>شماره نامه:</b> <span style="direction: ltr; font-weight: bold; color: #0f172a;">${letter.letterNumber || "---"}</span></div>
+                            <div><b>تاریخ:</b> <span style="direction: ltr;">${letter.date || "---"}</span></div>
+                            <div><b>پیوست:</b> <span style="font-weight: bold;">${attachmentStr}</span></div>
+                        </td>
+                        <td style="width: 34%; text-align: center; vertical-align: top;">
+                            <div style="font-size: 11pt; font-weight: bold; margin-bottom: 5px; color: #475569;">باسمه تعالی</div>
+                            <div style="font-size: 15pt; font-weight: bold; color: #1e3a8a;">${companyName || "دبیرخانه اداری"}</div>
+                            <div style="font-size: 10pt; color: #64748b; margin-top: 4px;">بخش: ${letter.section === "headquarters" ? "دفتر مرکزی" : "کارخانه"}</div>
+                        </td>
+                        <td style="width: 33%; text-align: left; vertical-align: top;">
+                            ${
+                              company?.logo || companySettings?.logoUrl
+                                ? `
+                                <img src="${makeAbsolute(company?.logo || companySettings?.logoUrl)}" style="width: 75px; height: 75px; max-width: 100%; object-fit: contain;" />
+                            `
+                                : `<div style="font-size: 10pt; color: #94a3b8; font-weight: bold;">دبیرخانه رسمی</div>`
+                            }
+                        </td>
+                    </tr>
+                </table>
+            `;
+    }
+  } else {
+    // When noLetterhead is true (e.g. printing on pre-printed paper or clean export)
+    // Always include official header metadata block with letterNumber, date, attachments
+    letterheadHtml = `
+      <table style="width: 100%; margin-bottom: 25px; border-bottom: 2px solid #0f172a; padding-bottom: 12px; direction: rtl; font-family: '${fontFamily}', 'Tahoma', sans-serif;">
+          <tr>
+              <td style="width: 50%; text-align: right; vertical-align: middle;">
+                  <div style="font-size: 14pt; font-weight: bold; color: #1e3a8a;">${companyName || "نامه اداری و سازمانی"}</div>
+                  <div style="font-size: 9.5pt; color: #64748b; margin-top: 2px;">دبیرخانه رسمی | بخش: ${letter.section === "headquarters" ? "دفتر مرکزی" : "کارخانه"}</div>
+              </td>
+              <td style="width: 50%; text-align: left; vertical-align: middle; font-size: 10.5pt; line-height: 1.8;">
+                  <div><b>شماره نامه:</b> <span style="direction: ltr; font-weight: bold; color: #0f172a;">${letter.letterNumber || "---"}</span></div>
+                  <div><b>تاریخ:</b> <span style="direction: ltr; font-weight: bold;">${letter.date || "---"}</span></div>
+                  <div><b>پیوست:</b> <span style="font-weight: bold;">${attachmentStr}</span></div>
+              </td>
+          </tr>
+      </table>
+    `;
+  }
+
+  let html = `<!DOCTYPE html>
+    <html lang="fa" dir="rtl">
+    <head>
+    <meta charset="utf-8">
+    <title>${letter.subject || "نامه اداری"}</title>
+    <style>
+        body { font-family: '${fontFamily}', 'Tahoma', sans-serif; direction: rtl; }
+        .letter-meta { width: 100%; margin-bottom: 20px; border: 1px solid #cbd5e1; background-color: #f8fafc; border-radius: 4px; padding: 10px; }
+        .letter-meta td { font-size: 11pt; color: #1e293b; padding: 6px 10px; }
+        .letter-content { font-size: 11.5pt; line-height: 1.8; margin-bottom: 40px; text-align: justify; }
+        .signatures { width: 100%; margin-top: 50px; }
+        .signature-box { text-align: center; font-size: 10.5pt; }
+        .signature-image { max-height: 70px; margin-bottom: 5px; }
+    </style>
+    </head>
+    <body>
+        <div class="Section1">
+            ${letterheadHtml}
+            <table class="letter-meta" style="width: 100%; margin-bottom: 20px; direction: rtl;">
+                <tr>
+                    <td style="text-align: right; width: 60%;"><b>به:</b> ${letter.receiver || "همکاران محترم"}</td>
+                    <td style="text-align: left; width: 40%;"><b>شماره نامه:</b> <span style="direction: ltr; font-weight: bold;">${letter.letterNumber || "---"}</span></td>
+                </tr>
+                <tr>
+                    <td style="text-align: right;"><b>از:</b> ${letter.sender || "دبیرخانه"}</td>
+                    <td style="text-align: left;"><b>تاریخ:</b> <span style="direction: ltr;">${letter.date || "---"}</span></td>
+                </tr>
+                ${letter.subject && !letter.hideSubjectInLetter ? `
+                <tr>
+                    <td colspan="2" style="text-align: right; font-weight: bold; color: #1e3a8a; border-top: 1px dashed #cbd5e1; padding-top: 8px;"><b>موضوع:</b> ${letter.subject}</td>
+                </tr>
+                ` : ""}
+            </table>
+            
+            <div class="letter-content" style="text-align: right;">
+                ${letter.hideSalutationInLetter ? "" : `<p style="font-weight: bold; margin-bottom: 14px;">با سلام و احترام،</p>`}
+                ${letter.content}
+            </div>
+            
+            <div style="margin-top: 40px; text-align: left; width: 100%; direction: rtl;">
+                ${letter.signOffText && String(letter.signOffText).trim() ? `<div style="font-weight: bold; font-size: 11pt; margin-bottom: 8px;">${letter.signOffText}</div>` : ""}
+                ${
+                  letter.signers && letter.signers.length > 0
+                    ? `
+                <table class="signatures" style="width: 100%; margin-top: 15px;">
+                    <tr>
+                    ${letter.signers
+                      .map((s) => {
+                        let sigImg = "";
+                        if (
+                          s.userId &&
+                          letter.approvedBy &&
+                          letter.signatureImageUrls
+                        ) {
+                          const idx = letter.approvedBy.indexOf(s.userId);
+                          if (idx !== -1) {
+                            sigImg = `<br/><img src="${makeAbsolute(letter.signatureImageUrls[idx])}" class="signature-image" style="height: 60px; object-fit: contain; margin-top: 5px;" />`;
+                          }
+                        }
+                        return `<td class="signature-box" style="width: ${100 / letter.signers.length}%; text-align: center;"><b>${s.name}</b><br/><span style="color: #666; font-size: 9pt;">${s.title}</span>${sigImg}</td>`;
+                      })
+                      .join("")}
+                    </tr>
+                </table>
+                `
+                    : `<div style="font-weight: bold; font-size: 11pt; color: #0f172a;">${companyName || companySettings?.companyName || "شرکت تولیدی لپان بافت"}</div>`
+                }
+                
+                ${
+                  letter.addCompanyStamp && companySettings?.companyStampUrl
+                    ? `
+                    <div style="text-align: center; margin-top: 15px;">
+                        <img src="${makeAbsolute(companySettings.companyStampUrl)}" style="max-height: 110px; object-fit: contain;" />
+                    </div>
+                `
+                    : ""
+                }
+            </div>
+            
+            ${
+              !companySettings?.hideAutoFooter ||
+              !companySettings?.letterheadUrl
+                ? `
+            <div style="margin-top: 50px; border-top: 1px solid #ccc; padding-top: 10px; font-size: 8pt; color: #666; text-align: center;">
+                نشانی: ${companySettings?.address || "ثبت نشده"} | تلفن: ${companySettings?.phone || "ثبت نشده"} | کدپستی: ${companySettings?.postalCode || "-"}
+            </div>
+            `
+                : ""
+            }
+        </div>
+    </body>
+    </html>`;
+
+  // html-to-docx conversion
+  const HTMLToDOCX = await import("html-to-docx");
+
+  // clean up specific problem tags
+  html = html.replace(/<p><\/p>/g, "<br/>");
+
+  const docxBuffer = await HTMLToDOCX.default(html, null, {
+    table: { row: { cantSplit: true } },
+    footer: true,
+    pageNumber: true,
+    font: fontFamily || "Tahoma",
+    orientation: isLandscape ? "landscape" : "portrait",
+    margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+  });
+
+  return docxBuffer;
+};
+
+// 5. Production & Waste Report PDF
+export const generateProductionReportPDF = async (
+  title,
+  dateFrom,
+  dateTo,
+  items = [],
+  totals = { qty_61: 0, qty_67: 0, qty_79: 0, qty_73: 0, qty_schweiter: 0, grandTotal: 0 },
+  waste = { waste_61: 0, waste_67: 0, waste_79: 0, waste_73: 0, waste_schweiter: 0, totalWaste: 0, pct_61: 0, pct_67: 0, pct_79: 0, pct_73: 0, pct_schweiter: 0, totalPct: 0, details: '' }
+) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    const rowsHtml = items.map((item, idx) => `
+      <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 9.5pt;">
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.unit || 'کیلوگرم'}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold; color: #1e293b;">${item.name}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.qty_61 > 0 ? item.qty_61.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.qty_67 > 0 ? item.qty_67.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.qty_79 > 0 ? item.qty_79.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.qty_73 > 0 ? item.qty_73.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.qty_schweiter > 0 ? item.qty_schweiter.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+        <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0f172a; background-color: #f1f5f9;">${item.total > 0 ? item.total.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @page { size: A4 landscape; margin: 10mm; }
+            body { font-family: 'Tahoma', 'IRANSans', sans-serif; margin: 0; padding: 10px; color: #0f172a; direction: rtl; }
+            .header-table { width: 100%; margin-bottom: 12px; border-collapse: collapse; }
+            .header-box { border: 1px solid #94a3b8; padding: 6px 12px; border-radius: 4px; font-size: 9pt; background: #f8fafc; }
+            .title { font-size: 15pt; font-weight: 800; text-align: center; color: #1e3a8a; }
+            .report-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 9.5pt; }
+            .report-table th, .report-table td { border: 1px solid #64748b; padding: 6px 8px; text-align: center; }
+            .report-table th { background-color: #e2e8f0; color: #0f172a; font-weight: 800; }
+            .summary-row { background-color: #f1f5f9; font-weight: bold; }
+            .waste-row { background-color: #fef2f2; font-weight: bold; color: #991b1b; }
+            .pct-row { background-color: #fff7ed; font-weight: bold; color: #c2410c; }
+            .waste-notes { margin-top: 15px; border: 1px solid #cbd5e1; padding: 10px; border-radius: 6px; background: #fafafa; font-size: 9.5pt; }
+        </style>
+    </head>
+    <body>
+        <table class="header-table">
+            <tr>
+                <td style="width: 28%;">
+                    <div class="header-box">
+                        <div><strong>از تاریخ:</strong> ${dateFrom}</div>
+                        <div><strong>تا تاریخ:</strong> ${dateTo}</div>
+                    </div>
+                </td>
+                <td style="width: 44%;" class="title">
+                    ${title || 'گزارش آمار کل تولید و ضایعات (سایان ERP)'}
+                </td>
+                <td style="width: 28%; text-align: left;">
+                    <div style="font-size: 8.5pt; color: #64748b;">
+                        تاریخ استعلام: ${dateFrom}
+                    </div>
+                </td>
+            </tr>
+        </table>
+
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th colspan="2" style="background: #cbd5e1;">کالاها</th>
+                    <th colspan="6" style="background: #93c5fd;">عملیات</th>
+                </tr>
+                <tr>
+                    <th style="width: 8%;">واحد</th>
+                    <th style="width: 28%;">کالا</th>
+                    <th style="width: 10%;">61 تولید POY</th>
+                    <th style="width: 10%;">67 تولید DTY</th>
+                    <th style="width: 10%;">79 تولید کش</th>
+                    <th style="width: 11%;">73 تولید اسپاندکس</th>
+                    <th style="width: 11%;">تولید شوایتر</th>
+                    <th style="width: 12%;">جمع</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rowsHtml || '<tr><td colspan="8">هیچ موردی ثبت نشده است.</td></tr>'}
+            </tbody>
+            <tfoot>
+                <tr class="summary-row">
+                    <td colspan="2" style="text-align: right; font-weight: bold; padding-right: 12px; background: #e2e8f0;">جمع تولید</td>
+                    <td>${totals.qty_61 ? totals.qty_61.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+                    <td>${totals.qty_67 ? totals.qty_67.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+                    <td>${totals.qty_79 ? totals.qty_79.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+                    <td>${totals.qty_73 ? totals.qty_73.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+                    <td>${totals.qty_schweiter ? totals.qty_schweiter.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+                    <td style="background: #cbd5e1; font-size: 10.5pt;">${totals.grandTotal ? totals.grandTotal.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '-'}</td>
+                </tr>
+                <tr class="waste-row">
+                    <td colspan="2" style="text-align: right; font-weight: bold; padding-right: 12px;">ضایعات (کیلوگرم)</td>
+                    <td>${waste.waste_61 ? waste.waste_61.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '0'}</td>
+                    <td>${waste.waste_67 ? waste.waste_67.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '0'}</td>
+                    <td>${waste.waste_79 ? waste.waste_79.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '0'}</td>
+                    <td>${waste.waste_73 ? waste.waste_73.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '0'}</td>
+                    <td>${waste.waste_schweiter ? waste.waste_schweiter.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '0'}</td>
+                    <td style="background: #fca5a5;">${waste.totalWaste ? waste.totalWaste.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }) : '0'}</td>
+                </tr>
+                <tr class="pct-row">
+                    <td colspan="2" style="text-align: right; font-weight: bold; padding-right: 12px;">درصد ضایعات</td>
+                    <td>${waste.pct_61 ? waste.pct_61.toFixed(2) : '0.00'}%</td>
+                    <td>${waste.pct_67 ? waste.pct_67.toFixed(2) : '0.00'}%</td>
+                    <td>${waste.pct_79 ? waste.pct_79.toFixed(2) : '0.00'}%</td>
+                    <td>${waste.pct_73 ? waste.pct_73.toFixed(2) : '0.00'}%</td>
+                    <td>${waste.pct_schweiter ? waste.pct_schweiter.toFixed(2) : '0.00'}%</td>
+                    <td style="background: #fdba74;">${waste.totalPct ? waste.totalPct.toFixed(2) : '0.00'}%</td>
+                </tr>
+            </tfoot>
+        </table>
+
+        ${waste.details ? `
+            <div class="waste-notes">
+                <strong>📝 جزئیات و توضیحات ضایعات:</strong>
+                <div style="margin-top: 5px; white-space: pre-wrap; color: #334155;">${waste.details}</div>
+            </div>
+        ` : ''}
+    </body>
+    </html>
+    `;
+
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdf = Buffer.from(await page.pdf({
+      format: 'A4',
+      landscape: true,
+      printBackground: true,
+      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' }
+    }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Production Report PDF Error:", e);
+    throw e;
+  }
+};
+
+// 6. Production Compare Report PDF
+export const generateProductionCompareReportPDF = async (
+  title,
+  dateFromA,
+  dateToA,
+  dateFromB,
+  dateToB,
+  items = [],
+  groupByLabel = ''
+) => {
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+
+    const rowsHtml = items.map((item, idx) => {
+      const diff = (item.totalA || 0) - (item.totalB || 0);
+      const diffPct = item.totalB ? (diff / item.totalB) * 100 : 0;
+      const pctText = item.totalB ? `${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%` : '-';
+      const pctColor = diff > 0 ? '#15803d' : (diff < 0 ? '#b91c1c' : '#475569');
+
+      return `
+        <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 9.5pt;">
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold; color: #1e293b;">${item.name}</td>
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${(item.totalA || 0).toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center;">${(item.totalB || 0).toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${diff >= 0 ? '#15803d' : '#b91c1c'};">${diff.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${pctColor};">${pctText}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const sumA = items.reduce((sum, item) => sum + (item.totalA || 0), 0);
+    const sumB = items.reduce((sum, item) => sum + (item.totalB || 0), 0);
+    const totalDiff = sumA - sumB;
+    const totalDiffPct = sumB ? (totalDiff / sumB) * 100 : 0;
+
+    const columnTitle = groupByLabel || 'نام کالا / گروه کالا';
+
+    const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @page { size: A4 portrait; margin: 10mm; }
+            body { font-family: 'Tahoma', 'IRANSans', sans-serif; margin: 0; padding: 10px; color: #0f172a; direction: rtl; }
+            .header-table { width: 100%; margin-bottom: 15px; border-collapse: collapse; }
+            .header-box { border: 1px solid #e2e8f0; padding: 8px 12px; border-radius: 6px; font-size: 9.5pt; background: #f8fafc; }
+            .title { font-size: 14pt; font-weight: 800; text-align: center; color: #1e3a8a; }
+            .report-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 9.5pt; }
+            .report-table th, .report-table td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: center; }
+            .report-table th { background-color: #f1f5f9; color: #0f172a; font-weight: 800; }
+            .summary-row { background-color: #e2e8f0; font-weight: bold; font-size: 10pt; }
+            .footer { margin-top: 30px; text-align: center; font-size: 8pt; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 10px; }
+        </style>
+    </head>
+    <body>
+        <table class="header-table">
+            <tr>
+                <td style="width: 45%;">
+                    <div class="header-box">
+                        <div><strong>بازه اول (A):</strong> ${dateFromA} تا ${dateToA}</div>
+                        <div><strong>بازه دوم (B):</strong> ${dateFromB} تا ${dateToB}</div>
+                    </div>
+                </td>
+                <td style="width: 55%; text-align: left;" class="title">
+                    ${title || 'گزارش مقایسه‌ای آمار تولید (سایان ERP)'}
+                </td>
+            </tr>
+        </table>
+
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th style="text-align: right;">${columnTitle}</th>
+                    <th>بازه اول (A) (kg)</th>
+                    <th>بازه دوم (B) (kg)</th>
+                    <th>تفاضل (A - B) (kg)</th>
+                    <th>درصد تغییر</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rowsHtml}
+                <tr class="summary-row">
+                    <td style="text-align: right; padding-right: 12px;">جمع کل تولید مقایسه‌ای</td>
+                    <td>${sumA.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+                    <td>${sumB.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+                    <td style="color: ${totalDiff >= 0 ? '#15803d' : '#b91c1c'};">${totalDiff.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+                    <td style="color: ${totalDiff >= 0 ? '#15803d' : '#b91c1c'};">${sumB ? `${totalDiffPct > 0 ? '+' : ''}${totalDiffPct.toFixed(1)}%` : '-'}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="footer">
+            <p>این گزارش به صورت خودکار توسط سیستم مقایسه‌ای آمار تولید سایان ERP تولید شده است.</p>
+        </div>
+    </body>
+    </html>
+    `;
+
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdf = Buffer.from(await page.pdf({
+      format: 'A4',
+      portrait: true,
+      printBackground: true,
+      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' }
+    }));
+    await page.close();
+    return pdf;
+  } catch (e) {
+    console.error("Generate Production Compare Report PDF Error:", e);
+    throw e;
+  }
+};
+
+// 7. Warehouse Overview & Supply Chain Comparative Balance PDF (Page 1: Full Tables + Page 2: Trend / Growth & Deficits)
+export const generateWarehouseOverviewReportPDF = async (reportData = {}) => {
+  let page = null;
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+
+    const {
+      mode = 'both', // 'both' | 'overview_only' | 'variance_only'
+      summary = {},
+      yarnItems = [],
+      rawItems = [],
+      logisticsItems = [],
+      growthItems = [],
+      negativeItems = [],
+      signature = 'انبارداری مرکزی و تامین خارجی'
+    } = reportData;
+
+    const fNum = (n, dec = 0) => {
+      const num = parseFloat(n) || 0;
+      return num.toLocaleString('fa-IR', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    };
+
+    const fTon = (n) => {
+      const num = (parseFloat(n) || 0) / 1000;
+      return num.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+    };
+
+    const reportDate = summary.reportDate || '۱۴۰۵/۰۵/۳۱';
+    const r1Label = summary.report1Label || 'منتهی به سال ۱۴۰۴';
+    const r2Label = summary.report2Label || 'وضعیت فعلی سال ۱۴۰۵';
+
+    // Summary calculations
+    const yLast = summary.lastYearYarnsWeight || 0;
+    const yCurr = summary.currentYarnsWeight || 0;
+    const yDiff = yCurr - yLast;
+    const yPct = yLast ? (yDiff / yLast) * 100 : 0;
+
+    const rLast = summary.lastYearRawWeight || 0;
+    const rCurr = summary.currentRawWeight || 0;
+    const rDiff = rCurr - rLast;
+    const rPct = rLast ? (rDiff / rLast) * 100 : 0;
+
+    const tLast = summary.lastYearTotalWeight || (yLast + rLast);
+    const tCurr = summary.currentTotalWeight || (yCurr + rCurr);
+    const tDiff = tCurr - tLast;
+    const tPct = tLast ? (tDiff / tLast) * 100 : 0;
+
+    // Build Table Rows
+    const buildItemRows = (items, prefix = '') => {
+      if (!items || items.length === 0) {
+        return `<tr><td colspan="6" style="padding: 8px; text-align: center; color: #64748b;">موردی ثبت نشده است</td></tr>`;
+      }
+      return items.map((item, idx) => {
+        const last = parseFloat(item.lastYearWeight) || 0;
+        const curr = parseFloat(item.currentWeight) || 0;
+        const diff = curr - last;
+        const pct = last ? (diff / last) * 100 : 0;
+        const isNeg = diff < 0;
+        const pctColor = isNeg ? '#b91c1c' : (diff > 0 ? '#15803d' : '#475569');
+        const badgeBg = isNeg ? '#fef2f2' : '#f0fdf4';
+        const badgeBorder = isNeg ? '#fecaca' : '#bbf7d0';
+
+        return `
+          <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 8.5pt;">
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #64748b; font-weight: bold;">${idx + 1}</td>
+            <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold; color: #1e293b;">
+              ${item.name || item.groupName || '-'}
+              ${item.code ? `<span style="font-size: 7pt; color: #64748b; margin-right: 4px;">(${item.code})</span>` : ''}
+            </td>
+            <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif;">${fNum(last)}</td>
+            <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #0f172a;">${fNum(curr)}</td>
+            <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: ${pctColor}; direction: ltr;">
+              ${diff >= 0 ? '+' : ''}${fNum(diff)}
+            </td>
+            <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: ${pctColor}; background: ${badgeBg};">
+              ${last ? `${pct >= 0 ? '+' : ''}${fNum(pct, 1)}%` : '-'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    };
+
+    // Logistics Table Rows
+    const buildLogisticsRows = (items) => {
+      if (!items || items.length === 0) return '';
+      return items.map((item, idx) => `
+        <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 8.5pt;">
+          <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #64748b;">${idx + 1}</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold; color: #1e293b;">${item.name || '-'}</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.status || 'در راه / گمرک'}</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0284c7;">${item.containers ? `${item.containers} کانتینر` : '-'}</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center;">${item.currentValue || item.diffValue || '-'}</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #475569;">${item.currency || 'ارزی'}</td>
+        </tr>
+      `).join('');
+    };
+
+    // Deficit / Negative Items Table Rows
+    const buildNegativeRows = (items) => {
+      if (!items || items.length === 0) {
+        return `<tr><td colspan="7" style="padding: 12px; text-align: center; color: #15803d; background-color: #f0fdf4; font-weight: bold;">✅ هیچ کالایی با تراز وزنی منفی یافت نشد. تمامی اقلام در وضعیت رشد یا حفظ موجودی قرار دارند.</td></tr>`;
+      }
+      return items.map((item, idx) => {
+        const last = parseFloat(item.lastYearWeight) || 0;
+        const curr = parseFloat(item.currentWeight) || 0;
+        const diff = parseFloat(item.diffWeight) || (curr - last);
+        const ratio = parseFloat(item.ratio) || (last ? (diff / last) * 100 : 0);
+        const cat = item.categoryLabel || (item.category === 'factory' ? '🧵 تولید کارخانه' : '📦 مواد اولیه / وارداتی');
+
+        return `
+          <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#fff1f2'}; font-size: 8.5pt;">
+            <td style="padding: 5px 6px; border: 1px solid #fecaca; text-align: center; color: #991b1b; font-weight: bold;">${idx + 1}</td>
+            <td style="padding: 5px 8px; border: 1px solid #fecaca; text-align: right; font-weight: bold; color: #991b1b;">
+              ${item.name || '-'}
+              ${item.code ? `<span style="font-size: 7pt; color: #64748b; margin-right: 4px;">(${item.code})</span>` : ''}
+            </td>
+            <td style="padding: 5px 6px; border: 1px solid #fecaca; text-align: center; font-size: 7.5pt; color: #475569;">${cat}</td>
+            <td style="padding: 5px 8px; border: 1px solid #fecaca; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif;">${fNum(last)} kg</td>
+            <td style="padding: 5px 8px; border: 1px solid #fecaca; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #1e293b;">${fNum(curr)} kg</td>
+            <td style="padding: 5px 8px; border: 1px solid #fecaca; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #b91c1c; background: #fee2e2;">
+              ${fNum(diff)} kg <span style="font-size: 7pt; color: #991b1b;">(${fTon(diff)} تن)</span>
+            </td>
+            <td style="padding: 5px 8px; border: 1px solid #fecaca; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #b91c1c; background: #fef2f2;">
+              ${fNum(ratio, 1)}%
+            </td>
+          </tr>
+        `;
+      }).join('');
+    };
+
+    // Growth / Positive Items Table Rows
+    const buildGrowthRows = (items) => {
+      if (!items || items.length === 0) {
+        return `<tr><td colspan="7" style="padding: 10px; text-align: center; color: #64748b;">موردی یافت نشد</td></tr>`;
+      }
+      return items.slice(0, 15).map((item, idx) => {
+        const last = parseFloat(item.lastYearWeight) || 0;
+        const curr = parseFloat(item.currentWeight) || 0;
+        const diff = parseFloat(item.diffWeight) || (curr - last);
+        const ratio = parseFloat(item.ratio) || (last ? (diff / last) * 100 : 0);
+        const cat = item.categoryLabel || (item.category === 'factory' ? '🧵 تولید کارخانه' : '📦 مواد اولیه / وارداتی');
+
+        return `
+          <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f0fdf4'}; font-size: 8.5pt;">
+            <td style="padding: 5px 6px; border: 1px solid #bbf7d0; text-align: center; color: #166534; font-weight: bold;">${idx + 1}</td>
+            <td style="padding: 5px 8px; border: 1px solid #bbf7d0; text-align: right; font-weight: bold; color: #14532d;">
+              ${item.name || '-'}
+              ${item.code ? `<span style="font-size: 7pt; color: #64748b; margin-right: 4px;">(${item.code})</span>` : ''}
+            </td>
+            <td style="padding: 5px 6px; border: 1px solid #bbf7d0; text-align: center; font-size: 7.5pt; color: #475569;">${cat}</td>
+            <td style="padding: 5px 8px; border: 1px solid #bbf7d0; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif;">${fNum(last)} kg</td>
+            <td style="padding: 5px 8px; border: 1px solid #bbf7d0; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #1e293b;">${fNum(curr)} kg</td>
+            <td style="padding: 5px 8px; border: 1px solid #bbf7d0; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #15803d; background: #dcfce7;">
+              +${fNum(diff)} kg <span style="font-size: 7pt; color: #166534;">(+${fTon(diff)} تن)</span>
+            </td>
+            <td style="padding: 5px 8px; border: 1px solid #bbf7d0; text-align: center; font-family: Tahoma, 'IRANSans', sans-serif; font-weight: bold; color: #15803d; background: #f0fdf4;">
+              +${fNum(ratio, 1)}%
+            </td>
+          </tr>
+        `;
+      }).join('');
+    };
+
+    const renderPage1 = mode === 'both' || mode === 'overview_only';
+    const renderPage2 = mode === 'both' || mode === 'variance_only';
+
+    const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @page { size: A4 portrait; margin: 8mm; }
+            body { font-family: 'Vazirmatn', 'Tahoma', 'IRANSans', sans-serif; margin: 0; padding: 0; color: #0f172a; direction: rtl; background: #ffffff; }
+            .page-container { width: 100%; box-sizing: border-box; }
+            .page-break { page-break-before: always; }
+            
+            /* Header */
+            .header-banner { border: 1.5px solid #2563eb; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; background: #f8fafc; }
+            .header-table { width: 100%; border-collapse: collapse; }
+            .header-title { font-size: 13pt; font-weight: 900; color: #1e3a8a; text-align: right; }
+            .header-subtitle { font-size: 8pt; color: #475569; margin-top: 2px; }
+            .header-meta { font-size: 8pt; text-align: left; line-height: 1.6; color: #334155; }
+            .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 7.5pt; font-weight: bold; }
+            .badge-blue { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+            .badge-green { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+            .badge-red { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+
+            /* KPI Cards */
+            .kpi-grid { width: 100%; border-collapse: separate; border-spacing: 6px 0; margin-bottom: 10px; }
+            .kpi-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 8px; background: #f8fafc; text-align: center; }
+            .kpi-title { font-size: 7.5pt; font-weight: bold; color: #475569; margin-bottom: 3px; }
+            .kpi-value { font-size: 10.5pt; font-weight: 900; color: #0f172a; }
+            .kpi-diff { font-size: 7.5pt; font-weight: bold; margin-top: 2px; }
+
+            /* Section Header */
+            .section-head { font-size: 9.5pt; font-weight: 800; color: #1e3a8a; border-right: 4px solid #2563eb; padding-right: 6px; margin: 8px 0 4px 0; display: flex; align-items: center; }
+            
+            /* Tables */
+            .data-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 8.5pt; }
+            .data-table th { background-color: #f1f5f9; color: #0f172a; font-weight: 800; border: 1px solid #cbd5e1; padding: 5px 6px; text-align: center; font-size: 8pt; }
+            .data-table td { border: 1px solid #cbd5e1; padding: 4px 6px; }
+            .data-table .cat-row { background-color: #e2e8f0; font-weight: 800; color: #1e293b; font-size: 8.5pt; }
+            .data-table .total-row { background-color: #1e3a8a; color: #ffffff; font-weight: 900; font-size: 9pt; }
+            .data-table .total-row td { border: 1px solid #1e3a8a; }
+
+            /* Signatures & Footer */
+            .sig-table { width: 100%; margin-top: 15px; border-collapse: collapse; }
+            .sig-box { width: 33.33%; text-align: center; font-size: 8pt; padding: 8px; vertical-align: top; }
+            .sig-title { font-weight: bold; color: #334155; margin-bottom: 30px; }
+            .sig-name { color: #64748b; font-size: 7.5pt; border-top: 1px dashed #cbd5e1; padding-top: 4px; display: inline-block; width: 80%; }
+            .doc-footer { margin-top: 10px; border-top: 1px solid #e2e8f0; padding-top: 4px; text-align: center; font-size: 7pt; color: #94a3b8; }
+        </style>
+    </head>
+    <body>
+
+    ${renderPage1 ? `
+        <!-- PAGE 1: OVERVIEW & SUPPLY CHAIN TABLES -->
+        <div class="page-container">
+            <div class="header-banner">
+                <table class="header-table">
+                    <tr>
+                        <td style="width: 60%; vertical-align: middle;">
+                            <div class="header-title">گزارش مدیریتی و تراز وزنی وضعیت انبارها و زنجیره تامین</div>
+                            <div class="header-subtitle">سامانه یکپارچه مانیتورینگ کارخانجات، واردات و انبارهای سایان ERP</div>
+                        </td>
+                        <td style="width: 40%; vertical-align: middle;" class="header-meta">
+                            <div><strong>📅 تاریخ استعلام:</strong> ${reportDate}</div>
+                            <div><strong>📊 دوره مبنا:</strong> ${r1Label} ⬅️ <strong>دوره جاری:</strong> ${r2Label}</div>
+                            <div><strong>🏷️ نوع سند:</strong> <span class="badge badge-blue">گزارش جامع تراز و انبارداری (صفحه ۱)</span></div>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- KPI Metric Summary -->
+            <table class="kpi-grid">
+                <tr>
+                    <td class="kpi-card" style="width: 25%;">
+                        <div class="kpi-title">🧵 نخ‌های تولیدی کارخانه</div>
+                        <div class="kpi-value">${fNum(yCurr)} kg</div>
+                        <div class="kpi-diff" style="color: ${yDiff >= 0 ? '#15803d' : '#b91c1c'};">
+                            ${yDiff >= 0 ? '+' : ''}${fNum(yDiff)} kg (${yPct >= 0 ? '+' : ''}${fNum(yPct, 1)}%)
+                        </div>
+                    </td>
+                    <td class="kpi-card" style="width: 25%;">
+                        <div class="kpi-title">📦 مواد اولیه، واردات و گمرک</div>
+                        <div class="kpi-value">${fNum(rCurr)} kg</div>
+                        <div class="kpi-diff" style="color: ${rDiff >= 0 ? '#15803d' : '#b91c1c'};">
+                            ${rDiff >= 0 ? '+' : ''}${fNum(rDiff)} kg (${rPct >= 0 ? '+' : ''}${fNum(rPct, 1)}%)
+                        </div>
+                    </td>
+                    <td class="kpi-card" style="width: 25%; background: ${tDiff >= 0 ? '#f0fdf4' : '#fff1f2'}; border-color: ${tDiff >= 0 ? '#bbf7d0' : '#fecaca'};">
+                        <div class="kpi-title">🏢 سرجمع کل موجودی زنجیره</div>
+                        <div class="kpi-value" style="color: ${tDiff >= 0 ? '#166534' : '#991b1b'};">${fNum(tCurr)} kg</div>
+                        <div class="kpi-diff" style="color: ${tDiff >= 0 ? '#15803d' : '#b91c1c'};">
+                            ${tDiff >= 0 ? 'رشد تراز +' : 'کسری تراز '}${fNum(tDiff)} kg (${fTon(tDiff)} تن)
+                        </div>
+                    </td>
+                    <td class="kpi-card" style="width: 25%;">
+                        <div class="kpi-title">🚢 کانتینرها و ارزش دلاری</div>
+                        <div class="kpi-value" style="color: #0284c7;">${summary.containersTotal || '۱۲'} کانتینر</div>
+                        <div class="kpi-diff" style="color: #475569;">${summary.dollarsTotal || '۹۵۰,۰۰۰ $'} ارزش در راه</div>
+                    </td>
+                </tr>
+            </table>
+
+            <!-- Table 1: Factory Yarns -->
+            <div class="section-head">۱. جدول نخ‌های تولیدی کارخانه (تولید داخلی)</div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 30px;">#</th>
+                        <th style="text-align: right;">نام گروه کالا / شرح تولید</th>
+                        <th style="width: 105px;">وزن سال قبل (kg)</th>
+                        <th style="width: 105px;">وزن سال جاری (kg)</th>
+                        <th style="width: 105px;">اختلاف وزنی (kg)</th>
+                        <th style="width: 75px;">درصد تغییر</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${buildItemRows(yarnItems)}
+                    <tr class="cat-row">
+                        <td colspan="2" style="text-align: right; padding-right: 8px;">جمع کل نخ‌های تولیدی کارخانه</td>
+                        <td style="text-align: center;">${fNum(yLast)}</td>
+                        <td style="text-align: center;">${fNum(yCurr)}</td>
+                        <td style="text-align: center; color: ${yDiff >= 0 ? '#15803d' : '#b91c1c'};">${yDiff >= 0 ? '+' : ''}${fNum(yDiff)}</td>
+                        <td style="text-align: center; color: ${yDiff >= 0 ? '#15803d' : '#b91c1c'};">${yLast ? `${yPct >= 0 ? '+' : ''}${fNum(yPct, 1)}%` : '-'}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- Table 2: Raw & Imported Materials -->
+            <div class="section-head">۲. جدول مواد اولیه، اقلام وارداتی و انبار سایان</div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 30px;">#</th>
+                        <th style="text-align: right;">نام گروه کالا / مواد اولیه وارداتی</th>
+                        <th style="width: 105px;">وزن سال قبل (kg)</th>
+                        <th style="width: 105px;">وزن سال جاری (kg)</th>
+                        <th style="width: 105px;">اختلاف وزنی (kg)</th>
+                        <th style="width: 75px;">درصد تغییر</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${buildItemRows(rawItems)}
+                    <tr class="cat-row">
+                        <td colspan="2" style="text-align: right; padding-right: 8px;">جمع کل مواد اولیه و وارداتی</td>
+                        <td style="text-align: center;">${fNum(rLast)}</td>
+                        <td style="text-align: center;">${fNum(rCurr)}</td>
+                        <td style="text-align: center; color: ${rDiff >= 0 ? '#15803d' : '#b91c1c'};">${rDiff >= 0 ? '+' : ''}${fNum(rDiff)}</td>
+                        <td style="text-align: center; color: ${rDiff >= 0 ? '#15803d' : '#b91c1c'};">${rLast ? `${rPct >= 0 ? '+' : ''}${fNum(rPct, 1)}%` : '-'}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- Logistics Table if exists -->
+            ${logisticsItems.length > 0 ? `
+                <div class="section-head">۳. بارهای در راه، گمرک و خریدهای در جریان</div>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 30px;">#</th>
+                            <th style="text-align: right;">شرح محموله / پروفرما</th>
+                            <th style="width: 110px;">وضعیت</th>
+                            <th style="width: 90px;">تعداد کانتینر</th>
+                            <th style="width: 110px;">مقدار / ارزش</th>
+                            <th style="width: 75px;">نوع ارز</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${buildLogisticsRows(logisticsItems)}
+                    </tbody>
+                </table>
+            ` : ''}
+
+            <!-- Grand Total Row -->
+            <table class="data-table" style="margin-top: 4px;">
+                <tbody>
+                    <tr class="total-row">
+                        <td style="text-align: right; padding-right: 10px; width: 45%;">
+                            🏢 سرجمع کل موجودی زنجیره تامین و کارخانجات
+                        </td>
+                        <td style="text-align: center; width: 18%;">${fNum(tLast)} kg (${fTon(tLast)} تن)</td>
+                        <td style="text-align: center; width: 18%;">${fNum(tCurr)} kg (${fTon(tCurr)} تن)</td>
+                        <td style="text-align: center; width: 19%;">
+                            ${tDiff >= 0 ? '+' : ''}${fNum(tDiff)} kg (${tPct >= 0 ? '+' : ''}${fNum(tPct, 1)}%)
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="doc-footer">
+                گزارش رسمی انبارداری و مقایسه زنجیره تامین سایان ERP | تاریخ چاپ و استعلام: ${reportDate} | صفحه ۱ از ${mode === 'both' ? '۲' : '۱'}
+            </div>
+        </div>
+    ` : ''}
+
+    ${renderPage2 ? `
+        <!-- PAGE 2: TREND ANALYSIS, DEFICIT & GROWTH MATRIX -->
+        <div class="page-container ${renderPage1 ? 'page-break' : ''}">
+            <div class="header-banner" style="border-color: #dc2626;">
+                <table class="header-table">
+                    <tr>
+                        <td style="width: 60%; vertical-align: middle;">
+                            <div class="header-title" style="color: #991b1b;">تحلیل روند تغییرات وزنی، اقلام منفی و ماتریس کسری‌ها</div>
+                            <div class="header-subtitle">پایش تخصصی رشد و افت اقلام نسبت به دوره گذشته جهت تصمیم‌گیری مدیریت</div>
+                        </td>
+                        <td style="width: 40%; vertical-align: middle;" class="header-meta">
+                            <div><strong>📅 تاریخ استعلام:</strong> ${reportDate}</div>
+                            <div><strong>⚠️ اقلام دارای کسری:</strong> <span class="badge badge-red">${fNum(negativeItems.length)} قلم کالا</span></div>
+                            <div><strong>📈 اقلام دارای رشد:</strong> <span class="badge badge-green">${fNum(growthItems.length)} قلم کالا</span></div>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Section: Negative Items Alert -->
+            <div class="section-head" style="color: #991b1b; border-color: #dc2626;">
+                🚨 ۱. فهرست کالاهای دارای کسری و افت وزنی نسبت به سال قبل (تراز منفی)
+            </div>
+            <table class="data-table" style="border-color: #fecaca;">
+                <thead>
+                    <tr style="background-color: #fee2e2;">
+                        <th style="width: 30px; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">#</th>
+                        <th style="text-align: right; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">نام کالا / شرح</th>
+                        <th style="width: 85px; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">دسته</th>
+                        <th style="width: 95px; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">سال قبل</th>
+                        <th style="width: 95px; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">سال جاری</th>
+                        <th style="width: 120px; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">میزان افت وزنی</th>
+                        <th style="width: 70px; background-color: #fee2e2; color: #991b1b; border-color: #fecaca;">درصد افت</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${buildNegativeRows(negativeItems)}
+                </tbody>
+            </table>
+
+            <!-- Section: Positive Growth Items -->
+            <div class="section-head" style="color: #166534; border-color: #16a34a; margin-top: 12px;">
+                📈 ۲. فهرست کالاهای دارای بیشترین رشد وزنی و افزایش موجودی (تراز مثبت)
+            </div>
+            <table class="data-table" style="border-color: #bbf7d0;">
+                <thead>
+                    <tr style="background-color: #dcfce7;">
+                        <th style="width: 30px; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">#</th>
+                        <th style="text-align: right; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">نام کالا / شرح</th>
+                        <th style="width: 85px; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">دسته</th>
+                        <th style="width: 95px; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">سال قبل</th>
+                        <th style="width: 95px; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">سال جاری</th>
+                        <th style="width: 120px; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">میزان رشد وزنی</th>
+                        <th style="width: 70px; background-color: #dcfce7; color: #166534; border-color: #bbf7d0;">درصد رشد</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${buildGrowthRows(growthItems)}
+                </tbody>
+            </table>
+
+            <!-- Signatures Section -->
+            <table class="sig-table">
+                <tr>
+                    <td class="sig-box">
+                        <div class="sig-title">تنظیم و استعلام گزارش انبار</div>
+                        <div class="sig-name">${signature}</div>
+                    </td>
+                    <td class="sig-box">
+                        <div class="sig-title">مدیریت بازرگانی و تامین خارجی</div>
+                        <div class="sig-name">سرپرستی تامین و زنجیره کالا</div>
+                    </td>
+                    
+                </tr>
+            </table>
+
+            <div class="doc-footer">
+                گزارش تحلیلی روند رشد و کسری انبار | تاریخ استعلام: ${reportDate} | صفحه ${mode === 'both' ? '۲ از ۲' : '۱ از ۱'}
+            </div>
+        </div>
+    ` : ''}
+
+    </body>
+    </html>
+    `;
+
+    try {
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    } catch (loadErr) {
+      console.warn("[Renderer] setContent domcontentloaded timeout, setting directly:", loadErr.message);
+      await page.setContent(html);
+    }
+    const pdf = Buffer.from(await page.pdf({
+      format: 'A4',
+      portrait: true,
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: '8mm', right: '8mm', bottom: '8mm', left: '8mm' }
+    }));
+    return pdf;
+  } catch (e) {
+    console.error("Generate Warehouse Overview Report PDF Error:", e);
+    throw e;
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch (err) {
+        // ignore close errors
+      }
+    }
+  }
+};
+
+export const generateAiWarehouseAdvisorReportPDF = async (advisorData = {}) => {
+  let page = null;
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+
+    const {
+      healthScore = 85,
+      executiveSummary = [],
+      totalWeightAnalysis = '',
+      logisticsPipelineInsight = '',
+      criticalAlerts = [],
+      procurementActionPlan = [],
+      fullReportMarkdown = '',
+      reportDate = '',
+      report1Label = 'سال قبل',
+      report2Label = 'سال جاری',
+      signature = '',
+    } = advisorData;
+
+    const execSummaryHtml = executiveSummary.map((point, idx) => `
+      <div style="background: #ffffff; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; font-size: 10pt; line-height: 1.5; font-weight: 500; display: flex; align-items: start; gap: 10px; margin-bottom: 8px;">
+        <span style="background: #e0e7ff; color: #4338ca; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 9pt; flex-shrink: 0;">${idx + 1}</span>
+        <span style="color: #334155;">${point}</span>
+      </div>
+    `).join('');
+
+    const alertsHtml = criticalAlerts.map((alert) => {
+      const isCrit = alert.riskLevel === 'CRITICAL';
+      const bg = isCrit ? '#fef2f2' : '#fffbeb';
+      const border = isCrit ? '#fca5a5' : '#fde68a';
+      const badgeBg = isCrit ? '#ef4444' : '#f59e0b';
+      return `
+        <div style="background: ${bg}; border: 1px solid ${border}; padding: 12px; border-radius: 8px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <strong style="font-size: 10.5pt; color: #1e293b;">⚠️ ${alert.itemName}</strong>
+            <span style="background: ${badgeBg}; color: white; font-size: 8pt; padding: 2px 8px; border-radius: 4px; font-weight: bold;">
+              ${isCrit ? 'بحرانی (فوری)' : 'هشدار ریسک'}
+            </span>
+          </div>
+          <p style="font-size: 9.5pt; color: #475569; margin: 0; line-height: 1.5; font-weight: 500;">${alert.reason}</p>
+        </div>
+      `;
+    }).join('');
+
+    const plansHtml = procurementActionPlan.map((plan) => {
+      const isHigh = plan.priority === 'HIGH';
+      const badgeBg = isHigh ? '#fef2f2' : '#eff6ff';
+      const badgeBorder = isHigh ? '#fca5a5' : '#bfdbfe';
+      const badgeText = isHigh ? '#991b1b' : '#1e40af';
+      const priorityLabel = isHigh ? 'اولویت اول' : 'اولویت دوم';
+      return `
+        <tr style="border-bottom: 1px solid #cbd5e1;">
+          <td style="padding: 10px; text-align: center; width: 15%;">
+            <span style="background: ${badgeBg}; border: 1px solid ${badgeBorder}; color: ${badgeText}; font-size: 8pt; padding: 2px 6px; border-radius: 4px; font-weight: bold;">
+              ${priorityLabel}
+            </span>
+          </td>
+          <td style="padding: 10px; text-align: right; font-weight: bold; color: #0f172a; font-size: 9.5pt; width: 45%;">${plan.action}</td>
+          <td style="padding: 10px; text-align: right; color: #334155; font-size: 9pt; width: 40%; font-weight: 500;">${plan.impact}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @page { size: A4; margin: 10mm; }
+            body { font-family: 'Tahoma', sans-serif; margin: 0; padding: 10px; color: #1e293b; background-color: #ffffff; direction: rtl; }
+            .header-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; border-bottom: 3px solid #4f46e5; padding-bottom: 10px; }
+            .title { font-size: 14pt; font-weight: 900; color: #1e1b4b; text-align: right; line-height: 1.4; }
+            .subtitle { font-size: 9.5pt; color: #4338ca; font-weight: bold; margin-top: 4px; }
+            .badge-ai { background: linear-gradient(135deg, #4f46e5, #312e81); color: white; font-size: 9pt; padding: 6px 12px; border-radius: 8px; font-weight: bold; text-align: center; display: inline-block; }
+            .score-container { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 15px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+            .section-title { font-size: 11pt; font-weight: 800; color: #312e81; border-right: 4px solid #4f46e5; padding-right: 10px; margin: 18px 0 10px 0; }
+            .card-grid { display: grid; grid-template-cols: 1fr 1fr; gap: 12px; margin-bottom: 15px; }
+            .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; }
+            .card-title { font-size: 10pt; font-weight: bold; color: #1e1b4b; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+            .card-body { font-size: 9pt; color: #334155; line-height: 1.6; whitespace: pre-line; font-weight: 500; }
+            .plan-table { width: 100%; border-collapse: collapse; margin-top: 5px; margin-bottom: 15px; }
+            .plan-table th { background-color: #f1f5f9; color: #1e293b; font-weight: bold; font-size: 9.5pt; padding: 10px; border-bottom: 2px solid #cbd5e1; }
+            .full-markdown { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 15px; font-size: 9pt; line-height: 1.6; color: #334155; white-space: pre-wrap; font-weight: 500; }
+            .footer-table { width: 100%; border-collapse: collapse; margin-top: 30px; border-top: 1px dashed #cbd5e1; padding-top: 15px; }
+            .sig-title { font-size: 9.5pt; font-weight: bold; color: #1e293b; margin-bottom: 4px; }
+            .sig-name { font-size: 8.5pt; color: #64748b; font-weight: 500; }
+            .doc-footer { text-align: center; font-size: 8pt; color: #94a3b8; margin-top: 15px; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <table class="header-table">
+            <tr>
+                <td style="vertical-align: middle;">
+                    <div class="title">ارزیابی استراتژیک زنجیره تامین و انبارداری کارخانجات</div>
+                    <div class="subtitle">تلفیق هوشمند تراز وزنی، پایپ‌لاین لجستیک و مواد اولیه با هوش مصنوعی</div>
+                </td>
+                <td style="text-align: left; vertical-align: middle; width: 30%;">
+                    <div class="badge-ai">هوش مصنوعی سایان</div>
+                    <div style="font-size: 8.5pt; color: #64748b; margin-top: 6px; font-weight: bold;">
+                        تاریخ استعلام: ${reportDate || '۱۴۰۵/۰۵/۳۱'}
+                    </div>
+                </td>
+            </tr>
+        </table>
+
+        <div class="score-container">
+            <div>
+                <span style="font-size: 10pt; font-weight: bold; color: #475569;">تراز وزنی مبنا:</span>
+                <span style="font-size: 9.5pt; font-weight: bold; color: #0f172a; margin-left: 15px;">${report1Label}</span>
+                <span style="font-size: 10pt; font-weight: bold; color: #475569; margin-right: 15px;">تراز جاری:</span>
+                <span style="font-size: 9.5pt; font-weight: bold; color: #0f172a;">${report2Label}</span>
+            </div>
+            <div style="background: #e0e7ff; border: 1px solid #c7d2fe; color: #3730a3; font-size: 10.5pt; font-weight: 900; padding: 6px 14px; border-radius: 8px;">
+                نمره پایداری زنجیره تامین: ${healthScore} / ۱۰۰
+            </div>
+        </div>
+
+        <div class="section-title">خلاصه مدیریتی و ارزیابی استراتژیک ارشد</div>
+        <div style="margin-bottom: 15px;">
+            ${execSummaryHtml || '<div style="font-size: 9.5pt; color: #64748b;">موردی تولید نشده است. برای تحلیل جدید اقدام کنید.</div>'}
+        </div>
+
+        <div class="card-grid">
+            <div class="card">
+                <div class="card-title">⚖️ تحلیل کلان تراز وزنی انبار</div>
+                <div class="card-body">${totalWeightAnalysis || 'داده‌ای در دسترس نیست.'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">🚢 تحلیل پایپ‌لاین لجستیک و بارهای در راه</div>
+                <div class="card-body">${logisticsPipelineInsight || 'داده‌ای در دسترس نیست.'}</div>
+            </div>
+        </div>
+
+        ${criticalAlerts.length > 0 ? `
+            <div class="section-title">⚠️ هشدارهای بحرانی و اقلام در معرض ریسک اتمام موجودی</div>
+            <div style="margin-bottom: 15px;">
+                ${alertsHtml}
+            </div>
+        ` : ''}
+
+        ${procurementActionPlan.length > 0 ? `
+            <div class="section-title">🛠️ برنامه عملیاتی پیشنهادی تدارکات و لجستیک</div>
+            <table class="plan-table">
+                <thead>
+                    <tr>
+                        <th style="width: 15%;">اولویت</th>
+                        <th style="width: 45%; text-align: right;">اقدام پیشنهادی هوش مصنوعی</th>
+                        <th style="width: 40%; text-align: right;">اثر استراتژیک بر تولید و نقدینگی</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${plansHtml}
+                </tbody>
+            </table>
+        ` : ''}
+
+        <div style="page-break-before: always;"></div>
+
+        <div class="section-title" style="margin-top: 0;">📝 متن کامل گزارش تحلیلی مدیر ارشد زنجیره تامین</div>
+        <div class="full-markdown">
+            ${fullReportMarkdown}
+        </div>
+
+        <table class="footer-table">
+            <tr>
+                <td style="width: 33%; text-align: right;">
+                    <div class="sig-title">تنظیم و ارسال توسط:</div>
+                    <div class="sig-name">${signature}</div>
+                </td>
+                <td style="width: 34%; text-align: center;">
+                    <div class="sig-title">بخش عملیاتی و پشتیبانی لجستیک</div>
+                    <div class="sig-name">سامانه مدیریت زنجیره تامین سایان</div>
+                </td>
+                
+            </tr>
+        </table>
+
+        <div class="doc-footer">
+            مشاور استراتژیک زنجیره تامین هوش مصنوعی سایان | تاریخ استعلام: ${reportDate} | لپان بافت
+        </div>
+    </body>
+    </html>
+    `;
+
+    try {
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    } catch (loadErr) {
+      console.warn("[Renderer] setContent domcontentloaded timeout, setting directly:", loadErr.message);
+      await page.setContent(html);
+    }
+    const pdf = Buffer.from(await page.pdf({
+      format: 'A4',
+      portrait: true,
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: '8mm', right: '8mm', bottom: '8mm', left: '8mm' }
+    }));
+    return pdf;
+  } catch (e) {
+    console.error("Generate AI Advisor Report PDF Error:", e);
+    throw e;
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch (err) {
+        // ignore close errors
+      }
+    }
+  }
+};
+
+/**
+ * Universal Sayan ERP AI Strategic & Engineering Report PDF Generator
+ */
+export const generateSayanAiReportPDF = async (reportData = {}) => {
+  let page = null;
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+
+    const {
+      reportTitle = 'گزارش تحلیلی جامع هوش مصنوعی سایان ERP',
+      sectionTitle = 'گزارشات سایان ERP',
+      healthScore = 85,
+      healthStatusFa = 'عالی و پایدار',
+      dateRange = 'دوره جاری',
+      executiveSummary = [],
+      kpis = [],
+      engineeringAnalysis = '',
+      managerialInsights = '',
+      riskAlerts = [],
+      actionPlan = [],
+      generatedAt = new Date().toISOString(),
+    } = reportData;
+
+    const jalaliDateStr = new Date().toLocaleDateString('fa-IR');
+
+    const scoreColor = healthScore >= 80 ? '#10b981' : (healthScore >= 60 ? '#f59e0b' : '#ef4444');
+    const scoreBg = healthScore >= 80 ? '#ecfdf5' : (healthScore >= 60 ? '#fffbeb' : '#fef2f2');
+
+    const kpisHtml = (kpis || []).map(k => `
+      <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; text-align: center; flex: 1; min-width: 120px;">
+        <div style="font-size: 8.5pt; color: #64748b; font-weight: bold; margin-bottom: 4px;">${k.label || '-'}</div>
+        <div style="font-size: 11.5pt; color: #0f172a; font-weight: 900;">${k.value || '-'}</div>
+        ${k.change ? `<div style="font-size: 8pt; color: ${k.trend === 'UP' ? '#16a34a' : (k.trend === 'DOWN' ? '#dc2626' : '#64748b')}; font-weight: bold; margin-top: 2px;">${k.change}</div>` : ''}
+      </div>
+    `).join('');
+
+    const execHtml = (executiveSummary || []).map((point, idx) => `
+      <div style="background: #ffffff; border: 1px solid #e2e8f0; padding: 8px 12px; border-radius: 6px; font-size: 9.5pt; line-height: 1.5; display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px;">
+        <span style="background: #4f46e5; color: #ffffff; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 8pt; flex-shrink: 0;">${idx + 1}</span>
+        <span style="color: #1e293b; font-weight: 500;">${point}</span>
+      </div>
+    `).join('');
+
+    const alertsHtml = (riskAlerts || []).map((alert) => {
+      const isCrit = alert.level === 'CRITICAL';
+      const isWarn = alert.level === 'WARNING';
+      const bg = isCrit ? '#fef2f2' : (isWarn ? '#fffbeb' : '#f0fdf4');
+      const border = isCrit ? '#fca5a5' : (isWarn ? '#fde68a' : '#bbf7d0');
+      const badgeBg = isCrit ? '#ef4444' : (isWarn ? '#f59e0b' : '#10b981');
+      const badgeText = isCrit ? 'ریسک بحرانی' : (isWarn ? 'هشدار ریسک' : 'اطلاعیه');
+
+      return `
+        <div style="background: ${bg}; border: 1px solid ${border}; padding: 10px; border-radius: 8px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <strong style="font-size: 10pt; color: #1e293b;">⚠️ ${alert.title || 'هشدار شناسایی شده'}</strong>
+            <span style="background: ${badgeBg}; color: white; font-size: 7.5pt; padding: 2px 8px; border-radius: 4px; font-weight: bold;">
+              ${badgeText}
+            </span>
+          </div>
+          <p style="font-size: 9pt; color: #475569; margin: 0 0 4px 0; line-height: 1.4;">${alert.description || ''}</p>
+          ${alert.recommendation ? `<div style="font-size: 8.5pt; color: #0f766e; font-weight: bold; background: rgba(255,255,255,0.7); padding: 4px 8px; border-radius: 4px;">💡 راهکار: ${alert.recommendation}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    const actionPlanHtml = (actionPlan || []).map((item, idx) => {
+      const isHigh = item.priority === 'HIGH';
+      const badgeBg = isHigh ? '#fef2f2' : '#eff6ff';
+      const badgeBorder = isHigh ? '#fca5a5' : '#bfdbfe';
+      const badgeText = isHigh ? '#991b1b' : '#1e40af';
+      const priorityLabel = isHigh ? 'اولویت بالا (فوری)' : (item.priority === 'MEDIUM' ? 'اولویت متوسط' : 'اولویت عادی');
+
+      return `
+        <tr style="border-bottom: 1px solid #e2e8f0; background: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+          <td style="padding: 8px; text-align: center; width: 15%;">
+            <span style="background: ${badgeBg}; border: 1px solid ${badgeBorder}; color: ${badgeText}; font-size: 7.5pt; padding: 2px 6px; border-radius: 4px; font-weight: bold;">
+              ${priorityLabel}
+            </span>
+          </td>
+          <td style="padding: 8px; text-align: right; font-weight: bold; color: #0f172a; font-size: 9pt; width: 40%;">${item.action || '-'}</td>
+          <td style="padding: 8px; text-align: center; color: #334155; font-size: 8.5pt; width: 20%; font-weight: 600;">${item.owner || '-'}</td>
+          <td style="padding: 8px; text-align: right; color: #0f766e; font-size: 8.5pt; width: 25%; font-weight: 500;">${item.expectedImpact || item.timeframe || '-'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="fa">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @page { size: A4; margin: 8mm; }
+            body { font-family: 'Tahoma', 'Segoe UI', sans-serif; margin: 0; padding: 8px; color: #1e293b; background-color: #ffffff; direction: rtl; font-size: 9.5pt; }
+            .header-box { border-bottom: 3px solid #3b82f6; padding-bottom: 10px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+            .title { font-size: 13pt; font-weight: 900; color: #0f172a; line-height: 1.3; }
+            .subtitle { font-size: 9pt; color: #2563eb; font-weight: bold; margin-top: 3px; }
+            .badge-ai { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; font-size: 8.5pt; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
+            .section-title { font-size: 10.5pt; font-weight: 800; color: #1e3a8a; border-right: 4px solid #3b82f6; padding-right: 8px; margin: 14px 0 8px 0; }
+            .text-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 12px; font-size: 9pt; line-height: 1.6; color: #334155; white-space: pre-line; }
+            table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+            th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 8.5pt; text-align: right; color: #1e293b; }
+            td { border: 1px solid #e2e8f0; padding: 6px 8px; font-size: 8.5pt; }
+            .sig-table { width: 100%; margin-top: 20px; border-top: 1px dashed #cbd5e1; padding-top: 10px; }
+            .footer-note { text-align: center; font-size: 8pt; color: #94a3b8; margin-top: 15px; border-top: 1px solid #f1f5f9; padding-top: 6px; }
+        </style>
+    </head>
+    <body>
+        <div class="header-box">
+            <div>
+                <div class="title">${reportTitle}</div>
+                <div class="subtitle">بخش: ${sectionTitle} | بازه زمانی: ${typeof dateRange === 'string' ? dateRange : JSON.stringify(dateRange)}</div>
+            </div>
+            <div style="text-align: left;">
+                <div class="badge-ai">🤖 تحلیل هوش مصنوعی سایان</div>
+                <div style="font-size: 8pt; color: #64748b; margin-top: 4px; font-weight: bold;">تاریخ: ${jalaliDateStr}</div>
+            </div>
+        </div>
+
+        <!-- Health Meter & KPIs -->
+        <div style="background: ${scoreBg}; border: 1px solid ${scoreColor}; border-radius: 10px; padding: 10px 15px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <div style="font-size: 9pt; color: #475569; font-weight: bold;">شاخص سلامت و کارایی این بخش (Health Score):</div>
+                <div style="font-size: 13pt; font-weight: 900; color: ${scoreColor}; margin-top: 2px;">
+                    ${healthScore} از ۱۰۰ (${healthStatusFa})
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                ${kpisHtml}
+            </div>
+        </div>
+
+        <!-- Executive Summary -->
+        ${executiveSummary && executiveSummary.length > 0 ? `
+            <div class="section-title">📌 خلاصه مدیریتی و تصمیم‌گیری ارشد</div>
+            <div style="margin-bottom: 10px;">${execHtml}</div>
+        ` : ''}
+
+        <!-- Engineering Analysis -->
+        ${engineeringAnalysis ? `
+            <div class="section-title">⚙️ تحلیل مهندسی، فنی و فرآیندی</div>
+            <div class="text-box">${engineeringAnalysis}</div>
+        ` : ''}
+
+        <!-- Managerial Insights -->
+        ${managerialInsights ? `
+            <div class="section-title">💼 راهبردهای مدیریتی و مالی هیئت مدیره</div>
+            <div class="text-box" style="background: #f0fdf4; border-color: #bbf7d0; color: #166534;">${managerialInsights}</div>
+        ` : ''}
+
+        <!-- Risk Alerts -->
+        ${riskAlerts && riskAlerts.length > 0 ? `
+            <div class="section-title">⚠️ ریسک‌ها، انحرافات و هشدارهای نیازمند رسیدگی</div>
+            <div style="margin-bottom: 10px;">${alertsHtml}</div>
+        ` : ''}
+
+        <!-- Action Plan -->
+        ${actionPlan && actionPlan.length > 0 ? `
+            <div class="section-title">🎯 برنامه اقدام و ماتریس تصمیم‌گیری اجرایی</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 15%; text-align: center;">اولویت</th>
+                        <th style="width: 40%;">اقدام پیشنهادی</th>
+                        <th style="width: 20%; text-align: center;">واحد مسئول</th>
+                        <th style="width: 25%;">اثر عملیاتی / بازه</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${actionPlanHtml}
+                </tbody>
+            </table>
+        ` : ''}
+
+        <!-- Signature block -->
+        <table class="sig-table">
+            <tr>
+                <td style="width: 50%; border: none; text-align: center; vertical-align: top;">
+                    <div style="font-size: 8.5pt; font-weight: bold; color: #64748b; margin-bottom: 25px;">تحلیل‌گر هوش مصنوعی سازمانی سایان ERP</div>
+                    <div style="font-size: 9pt; font-weight: bold; color: #0f172a;">هسته پردازش هوشمند Gemini</div>
+                </td>
+                
+            </tr>
+        </table>
+
+        <div class="footer-note">
+            گزارش تحلیلی هوش مصنوعی سامانه جامع مالی و صنعتی سایان ERP | لپان بافت | تاریخ صدور: ${jalaliDateStr}
+        </div>
+    </body>
+    </html>
+    `;
+
+    try {
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    } catch (loadErr) {
+      console.warn("[Renderer] setContent domcontentloaded timeout, setting directly:", loadErr.message);
+      await page.setContent(html);
+    }
+    const pdf = Buffer.from(await page.pdf({
+      format: 'A4',
+      portrait: true,
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: '6mm', right: '6mm', bottom: '6mm', left: '6mm' }
+    }));
+    return pdf;
+  } catch (e) {
+    console.error("Generate Sayan AI Report PDF Error:", e);
+    throw e;
+  } finally {
+    if (page) {
+      try {
+        await page.close();
+      } catch (err) {
+        // ignore
+      }
+    }
+  }
+};
+
+export const renderPdfPreviewImage = async (pdfFullPath, previewFullPath) => {
+  const browserInstance = await getBrowser();
+  const page = await browserInstance.newPage();
+  try {
+    await page.setViewport({ width: 1240, height: 1754, deviceScaleFactor: 1 });
+    await page.goto(`file://${pdfFullPath}`, { waitUntil: "networkidle0" });
+    await page.screenshot({ path: previewFullPath, type: "png" });
+  } finally {
+    try {
+      await page.close();
+    } catch (e) {
+      // ignore
+    }
+  }
+};
+
+
+

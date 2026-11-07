@@ -1,0 +1,253 @@
+
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="apple-mobile-web-app-title" content="سامانه مالی" />
+    <link rel="icon" type="image/png" href="/lepan-logo.png" />
+    <link rel="apple-touch-icon" href="/lepan-logo.png" />
+    <link rel="manifest" href="/manifest.json?v=2" />
+    <!-- Standalone Offline Intranet-Safe Font System Fallback -->
+    <style>
+      :root {
+        --system-font-stack: 'Vazirmatn', 'Vazir', 'Sahel', 'Samim', 'Tahoma', 'Arial', system-ui, -apple-system, sans-serif;
+      }
+      body, button, input, select, textarea {
+        font-family: var(--system-font-stack) !important;
+      }
+      @media print {
+        @page { size: auto; margin: 0; }
+        html, body {
+          background: #ffffff !important;
+          color: #000000 !important;
+          font-family: var(--system-font-stack) !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+      }
+    </style>
+    <title>سامانه یکپارچه مالی و بازرگانی دلکام</title>
+    <meta name="description" content="سامانه یکپارچه مالی، بازرگانی و کارتابل دستور پرداخت دلکام با گردش کار تایید و گزارش‌گیری هوشمند." />
+    <meta property="og:title" content="سامانه یکپارچه مالی و بازرگانی دلکام" />
+    <meta property="og:description" content="سامانه یکپارچه مالی، بازرگانی و کارتابل دستور پرداخت دلکام با گردش کار تایید و گزارش‌گیری هوشمند." />
+    <meta property="og:type" content="website" />
+    <script>
+      // Auto-recover from stale chunk errors after server rebuilds (prevents white screen)
+      window.addEventListener('vite:preloadError', function() {
+        if (!sessionStorage.getItem('chunk_reload_attempted')) {
+          sessionStorage.setItem('chunk_reload_attempted', '1');
+          if ('caches' in window) {
+            caches.keys().then(function(names) {
+              return Promise.all(names.map(function(n) { return caches.delete(n); }));
+            }).finally(function() { window.location.reload(); });
+          } else {
+            window.location.reload();
+          }
+        }
+      });
+      window.addEventListener('error', function(e) {
+        var msg = (e && e.message) ? String(e.message) : '';
+        if (
+          msg.indexOf('Failed to fetch dynamically imported module') !== -1 ||
+          msg.indexOf('Importing a module script failed') !== -1 ||
+          msg.indexOf('Expected a JavaScript module script') !== -1
+        ) {
+          if (!sessionStorage.getItem('chunk_reload_attempted')) {
+            sessionStorage.setItem('chunk_reload_attempted', '1');
+            if ('caches' in window) {
+              caches.keys().then(function(names) {
+                return Promise.all(names.map(function(n) { return caches.delete(n); }));
+              }).finally(function() { window.location.reload(); });
+            } else {
+              window.location.reload();
+            }
+          }
+        }
+      }, true);
+    </script>
+    
+    <script>
+      // Comprehensive Polyfills for iOS Safari (iPhone 8, iPhone X, older WebKit)
+      (function() {
+        if (typeof globalThis === 'undefined') {
+          window.globalThis = window;
+        }
+        
+        // Promise.withResolvers polyfill
+        if (typeof Promise.withResolvers !== 'function') {
+          Promise.withResolvers = function() {
+            var resolve, reject;
+            var promise = new Promise(function(res, rej) {
+              resolve = res;
+              reject = rej;
+            });
+            return { promise: promise, resolve: resolve, reject: reject };
+          };
+        }
+
+        // Object.hasOwn polyfill (iOS < 15.4)
+        if (typeof Object.hasOwn !== 'function') {
+          Object.hasOwn = function(object, property) {
+            if (object == null) {
+              throw new TypeError('Cannot convert undefined or null to object');
+            }
+            return Object.prototype.hasOwnProperty.call(object, property);
+          };
+        }
+
+        // Array.prototype.at polyfill (iOS < 15.4)
+        if (!Array.prototype.at) {
+          Array.prototype.at = function(n) {
+            n = Math.trunc(n) || 0;
+            if (n < 0) n += this.length;
+            if (n < 0 || n >= this.length) return undefined;
+            return this[n];
+          };
+        }
+
+        // String.prototype.at polyfill (iOS < 15.4)
+        if (!String.prototype.at) {
+          String.prototype.at = function(n) {
+            n = Math.trunc(n) || 0;
+            if (n < 0) n += this.length;
+            if (n < 0 || n >= this.length) return "";
+            return this[n];
+          };
+        }
+
+        // Array modern immutable methods polyfills
+        if (!Array.prototype.toReversed) {
+          Array.prototype.toReversed = function() {
+            return this.slice().reverse();
+          };
+        }
+        if (!Array.prototype.toSorted) {
+          Array.prototype.toSorted = function(compareFn) {
+            return this.slice().sort(compareFn);
+          };
+        }
+        if (!Array.prototype.toSpliced) {
+          Array.prototype.toSpliced = function(start, deleteCount) {
+            var copy = this.slice();
+            var items = Array.prototype.slice.call(arguments, 2);
+            var args = [start, deleteCount === undefined ? copy.length - start : deleteCount].concat(items);
+            copy.splice.apply(copy, args);
+            return copy;
+          };
+        }
+
+        // crypto.randomUUID polyfill (iOS < 15.4)
+        if (typeof crypto !== 'undefined' && !crypto.randomUUID) {
+          crypto.randomUUID = function() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+              var r = (Math.random() * 16) | 0;
+              var v = c === 'x' ? r : (r & 0x3) | 0x8;
+              return v.toString(16);
+            });
+          };
+        }
+
+        // structuredClone polyfill fallback (iOS < 15.4)
+        if (typeof window.structuredClone !== 'function') {
+          window.structuredClone = function(val) {
+            if (val === undefined) return undefined;
+            try {
+              return JSON.parse(JSON.stringify(val));
+            } catch(e) {
+              return val;
+            }
+          };
+        }
+      })();
+    </script>
+    
+    <script>
+      // Apply cached settings immediately for better PWA feel
+      try {
+        const settings = JSON.parse(localStorage.getItem('app_data_settings') || '{}');
+        if (settings.appName) {
+          document.title = settings.appName;
+          const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+          if (appleTitle) appleTitle.setAttribute('content', settings.appName);
+        }
+        if (settings.pwaIcon) {
+          const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
+          if (appleIcon) appleIcon.setAttribute('href', settings.pwaIcon);
+          
+          let favicon = document.querySelector('link[rel="icon"]');
+          if (!favicon) {
+            favicon = document.createElement('link');
+            favicon.rel = 'icon';
+            document.head.appendChild(favicon);
+          }
+          favicon.setAttribute('href', settings.pwaIcon);
+        }
+      } catch (e) {}
+
+      // Auto-detect & apply Ultra-Performance Mode for weak hardware
+      try {
+        var savedLowSpec = localStorage.getItem('app_low_spec_mode');
+        var isLowSpec = savedLowSpec === 'true';
+        if (savedLowSpec === null) {
+          var cores = navigator.hardwareConcurrency || 4;
+          var mem = navigator.deviceMemory || 4;
+          if (cores <= 4 || mem <= 4) {
+            isLowSpec = true;
+            localStorage.setItem('app_low_spec_mode', 'true');
+          }
+        }
+        if (isLowSpec) {
+          document.documentElement.classList.add('low-spec-mode');
+        }
+      } catch (e) {}
+    </script>
+
+    <!-- Dynamic Page Size Style Placeholder -->
+    <style id="page-size-style"></style>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+    <script>
+      // Clean temporary cache-buster query params (_update or v) from address bar
+      try {
+        if (window.location.search && (window.location.search.indexOf('_update=') !== -1 || window.location.search.indexOf('v=') !== -1)) {
+          var params = new URLSearchParams(window.location.search);
+          params.delete('_update');
+          params.delete('v');
+          var newSearch = params.toString();
+          var cleanPath = window.location.pathname === '/chat' ? '/' : window.location.pathname;
+          var cleanUrl = cleanPath + (newSearch ? '?' + newSearch : '') + (window.location.hash || '');
+          window.history.replaceState(window.history.state, '', cleanUrl);
+        }
+      } catch (e) {}
+
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          // Purge any legacy caches (< v9) that might have cached non-HTML responses
+          if ('caches' in window) {
+            caches.keys().then(names => {
+              names.forEach(name => {
+                if (name.startsWith('finance-app-') && name !== 'finance-app-v9') {
+                  caches.delete(name).catch(() => {});
+                }
+              });
+            }).catch(() => {});
+          }
+
+          navigator.serviceWorker.register('/sw.js?v=9', { updateViaCache: 'none' })
+            .then(reg => {
+              console.log('SW Registered!', reg.scope);
+              try { reg.update(); } catch (e) {}
+            })
+            .catch(err => console.log('SW Registration ignored or failed:', err));
+        });
+      }
+    </script>
+  </body>
+</html>

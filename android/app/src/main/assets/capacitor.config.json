@@ -1,0 +1,21 @@
+{
+	"appId": "com.dikam.paymentorder",
+	"appName": "Dlkam",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true,
+		"allowNavigation": [
+			"*"
+		]
+	},
+	"plugins": {
+		"PushNotifications": {
+			"presentationOptions": [
+				"badge",
+				"sound",
+				"alert"
+			]
+		}
+	}
+}

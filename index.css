@@ -1,0 +1,3396 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --app-bg: #f8fafc; /* Clean modern neutral backdrop */
+    --glass-bg: rgba(255, 255, 255, 0.92); /* Solid legible card background */
+    --glass-bg-hover: rgba(255, 255, 255, 0.98);
+    --glass-border: rgba(203, 213, 225, 0.85); /* Visible sharp card border */
+    --glass-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.04);
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --border-color: rgba(203, 213, 225, 0.85);
+    --gemini-spark: linear-gradient(135deg, #2563eb 0%, #7c3aed 50%, #db2777 100%);
+  }
+  
+  .dark {
+    --app-bg: #0f172a; /* Deep luxury dark slate backdrop */
+    --glass-bg: rgba(30, 41, 59, 0.88); /* Translucent dark slate panel */
+    --glass-bg-hover: rgba(30, 41, 59, 0.95);
+    --glass-border: rgba(255, 255, 255, 0.15);
+    --glass-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --border-color: rgba(255, 255, 255, 0.15);
+    --gemini-spark: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+  }
+
+  /* Enhance dark glassmorphism transparency when rich background is active in dark mode */
+  .dark.has-custom-bg,
+  .dark.has-preset-bg-cosmic-dark,
+  .dark.has-preset-bg-cyan-cosmic,
+  .dark.has-preset-bg-aurora-light {
+    --app-bg: transparent;
+    --glass-bg: rgba(15, 23, 42, 0.86);
+    --glass-bg-hover: rgba(30, 41, 59, 0.94);
+    --glass-border: rgba(255, 255, 255, 0.18);
+    --border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  /* Enhance light glassmorphism with high contrast and sharp legibility */
+  html:not(.dark).has-custom-bg,
+  html:not(.dark).has-preset-bg-aurora-light,
+  html:not(.dark).has-preset-bg-cosmic-dark,
+  html:not(.dark).has-preset-bg-cyan-cosmic {
+    --app-bg: transparent;
+    --glass-bg: rgba(255, 255, 255, 0.88);
+    --glass-bg-hover: rgba(255, 255, 255, 0.96);
+    --glass-border: rgba(203, 213, 225, 0.9);
+    --border-color: rgba(203, 213, 225, 0.9);
+  }
+
+  .theme-light-aurora {
+    --app-bg: transparent; /* Let the soft background show through */
+    --glass-bg: rgba(255, 255, 255, 0.88); /* Crisp high-contrast frosted glass */
+    --glass-bg-hover: rgba(255, 255, 255, 0.96);
+    --glass-border: rgba(203, 213, 225, 0.9); 
+    --glass-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.04);
+    --text-primary: #090d16;
+    --text-secondary: #1e293b;
+    --border-color: rgba(203, 213, 225, 0.9);
+    --gemini-spark: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #3b82f6 100%);
+  }
+
+  /* 2. Bento Grid Theme */
+  .theme-bento {
+    --app-bg: #0b0f19;
+    --glass-bg: #131b2e;
+    --glass-bg-hover: #1c2742;
+    --glass-border: rgba(99, 102, 241, 0.25);
+    --glass-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(99, 102, 241, 0.2);
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --border-color: rgba(99, 102, 241, 0.25);
+    --gemini-spark: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  }
+
+  /* 3. Claymorphism Theme */
+  .theme-claymorphism {
+    --app-bg: #eef2f6;
+    --glass-bg: #eef2f6;
+    --glass-bg-hover: #f5f8fc;
+    --glass-border: #ffffff;
+    --glass-shadow: 8px 8px 16px rgba(163, 177, 198, 0.6), -8px -8px 16px rgba(255, 255, 255, 0.8), inset 2px 2px 4px rgba(255, 255, 255, 0.7);
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --border-color: #d1d5db;
+    --gemini-spark: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+  }
+
+  /* 4. Minimalism Theme */
+  .theme-minimalism {
+    --app-bg: #fafafa;
+    --glass-bg: #ffffff;
+    --glass-bg-hover: #f4f4f5;
+    --glass-border: #e4e4e7;
+    --glass-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    --text-primary: #18181b;
+    --text-secondary: #71717a;
+    --border-color: #e4e4e7;
+    --gemini-spark: linear-gradient(135deg, #18181b 0%, #52525b 100%);
+  }
+
+  /* 5. Maximalism / Neobrutalism Theme */
+  .theme-maximalism {
+    --app-bg: #fef08a;
+    --glass-bg: #ffffff;
+    --glass-bg-hover: #dfff00;
+    --glass-border: #000000;
+    --glass-shadow: 4px 4px 0px #000000;
+    --text-primary: #000000;
+    --text-secondary: #000000;
+    --border-color: #000000;
+    --gemini-spark: linear-gradient(135deg, #ccff00 0%, #ff007f 100%);
+  }
+
+  /* 6. Luxe Gold & Noir Theme (زرد، سفید و مشکی سازمانی) */
+  .theme-gold-noir {
+    --app-bg: #090c10;
+    --glass-bg: rgba(15, 20, 30, 0.94);
+    --glass-bg-hover: rgba(22, 29, 44, 0.98);
+    --glass-border: rgba(251, 191, 36, 0.35);
+    --glass-shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.7), 0 0 20px rgba(251, 191, 36, 0.12);
+    --text-primary: #ffffff;
+    --text-secondary: #fef08a;
+    --border-color: rgba(251, 191, 36, 0.3);
+    --gemini-spark: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
+  }
+}
+
+/* Global Smooth Performance & GPU Compositing Optimization */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.public-bio-scroll-view {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y !important;
+  overscroll-behavior-y: contain !important;
+}
+
+#main-scroll-container {
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: pan-y pinch-zoom !important;
+  overflow-x: hidden !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Eye-Friendly Background Blobs */
+.bg-blobs {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -2;
+  overflow: hidden;
+  background: var(--app-bg);
+  transition: background 0.4s ease-out;
+  contain: strict;
+  transform: translateZ(0);
+}
+
+/* Only force solid background color if we are NOT in aurora theme, NOT using a custom background, and NOT using any beautiful gradient presets */
+html:not(.theme-light-aurora):not(.has-custom-bg):not(.has-preset-bg-cosmic-dark):not(.has-preset-bg-aurora-light):not(.has-preset-bg-cyan-cosmic) .bg-blobs {
+  background: var(--app-bg) !important;
+}
+
+.bg-blobs::after {
+  display: none !important;
+}
+
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(40px);
+  opacity: 0;
+  display: none;
+  transform: translate3d(0, 0, 0);
+  animation: blob-float 28s infinite alternate cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.theme-light-aurora .blob,
+.has-preset-bg-aurora-light .blob,
+.has-custom-bg .blob {
+  display: block;
+  opacity: 0.18 !important;
+  filter: blur(60px) !important;
+}
+
+.blob-1 {
+  width: min(85vw, 850px);
+  height: min(85vw, 850px);
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.35) 0%, rgba(59, 130, 246, 0.2) 50%, transparent 100%);
+  top: -15%;
+  right: -10%;
+}
+
+.blob-2 {
+  width: min(75vw, 750px);
+  height: min(75vw, 750px);
+  background: radial-gradient(circle, rgba(244, 63, 94, 0.3) 0%, rgba(249, 115, 22, 0.2) 50%, transparent 100%);
+  bottom: -10%;
+  left: -10%;
+  animation-delay: -8s;
+  animation-duration: 35s;
+}
+
+.blob-3 {
+  width: min(55vw, 550px);
+  height: min(55vw, 550px);
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.25) 0%, rgba(59, 130, 246, 0.2) 50%, transparent 100%);
+  top: 35%;
+  left: 20%;
+  animation-delay: -4s;
+}
+
+.dark .blob-1 {
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.45) 0%, rgba(37, 99, 235, 0.25) 60%, transparent 100%);
+}
+
+.dark .blob-2 {
+  background: radial-gradient(circle, rgba(219, 39, 119, 0.35) 0%, rgba(249, 115, 22, 0.15) 60%, transparent 100%);
+}
+
+.dark .blob-3 {
+  background: radial-gradient(circle, rgba(13, 148, 136, 0.25) 0%, rgba(37, 99, 235, 0.15) 60%, transparent 100%);
+}
+
+/* Soothing Light Aurora Background Preset */
+.bg-preset-aurora-light {
+  background: 
+    radial-gradient(circle at 15% 15%, rgba(186, 230, 253, 0.4) 0%, transparent 50%),
+    radial-gradient(circle at 85% 20%, rgba(254, 215, 170, 0.35) 0%, transparent 50%),
+    radial-gradient(circle at 50% 85%, rgba(251, 207, 232, 0.35) 0%, transparent 50%),
+    #f1f5f9 !important;
+  background-size: cover !important;
+}
+
+/* Custom Background Presets */
+.bg-preset-cosmic-dark {
+  background: 
+    radial-gradient(circle at 20% 25%, rgba(168, 85, 247, 0.45) 0%, transparent 45%),
+    radial-gradient(circle at 80% 30%, rgba(6, 182, 212, 0.4) 0%, transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(236, 72, 153, 0.35) 0%, transparent 55%),
+    linear-gradient(135deg, #0d0221 0%, #260840 35%, #0a2d4a 70%, #051829 100%) !important;
+  background-size: cover !important;
+  background-attachment: fixed !important;
+}
+
+.bg-preset-cyan-cosmic {
+  background: 
+    radial-gradient(circle at 15% 20%, rgba(20, 184, 166, 0.45) 0%, transparent 50%),
+    radial-gradient(circle at 85% 75%, rgba(59, 130, 246, 0.4) 0%, transparent 50%),
+    linear-gradient(135deg, #04101e 0%, #0c2340 50%, #031322 100%) !important;
+  background-size: cover !important;
+  background-attachment: fixed !important;
+}
+
+.bg-preset-dark-midnight {
+  background: #0f172a !important;
+}
+
+.bg-preset-light-modern {
+  background: #f8fafc !important;
+}
+
+
+
+/* Clear, Defined Card Containers for Light Aurora Theme - High Contrast & Crisp Text Legibility */
+.theme-light-aurora .apple-glass,
+.theme-light-aurora .glass-panel {
+  background: rgba(255, 255, 255, 0.90) !important;
+  backdrop-filter: blur(14px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(150%) !important;
+  border: 1px solid rgba(203, 213, 225, 0.9) !important;
+  box-shadow: 
+    0 10px 25px -5px rgba(15, 23, 42, 0.06),
+    0 4px 6px -2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 1px rgba(255, 255, 255, 0.9) !important;
+}
+
+.theme-light-aurora .apple-glass-hover:hover,
+.theme-light-aurora .glass-panel:hover {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(148, 163, 184, 0.95) !important;
+  box-shadow: 
+    0 14px 32px -4px rgba(15, 23, 42, 0.1),
+    inset 0 1px 2px rgba(255, 255, 255, 0.9) !important;
+}
+
+.theme-light-aurora .glass-header {
+  background: rgba(255, 255, 255, 0.92) !important;
+  backdrop-filter: blur(14px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(150%) !important;
+  border-bottom: 1px solid rgba(203, 213, 225, 0.9) !important;
+  transform: translateZ(0);
+}
+
+.theme-light-aurora input[type="text"], 
+.theme-light-aurora input[type="number"], 
+.theme-light-aurora input[type="password"], 
+.theme-light-aurora input[type="email"], 
+.theme-light-aurora input[type="date"], 
+.theme-light-aurora input[type="search"], 
+.theme-light-aurora select, 
+.theme-light-aurora textarea {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  border: 1.5px solid rgba(203, 213, 225, 0.95) !important;
+  color: #090d16 !important;
+  backdrop-filter: none !important;
+}
+
+.theme-light-aurora input::placeholder,
+.theme-light-aurora textarea::placeholder,
+html.has-custom-bg:not(.dark) input::placeholder,
+html.has-custom-bg:not(.dark) textarea::placeholder {
+  color: #475569 !important;
+  opacity: 1 !important;
+  font-weight: 500 !important;
+}
+
+.theme-light-aurora input:focus, 
+.theme-light-aurora select:focus, 
+.theme-light-aurora textarea:focus {
+  background-color: #ffffff !important;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2) !important;
+}
+
+.theme-light-aurora th {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #090d16 !important;
+  font-weight: 700 !important;
+}
+
+.theme-light-aurora tr:hover {
+  background-color: #f8fafc !important;
+}
+
+/* Crisp, High-Legibility Typography Rules (No Blur, No Eye Strain) */
+.theme-light-aurora .text-zinc-900,
+html.has-custom-bg:not(.dark) .text-zinc-900,
+html.has-preset-bg-aurora-light:not(.dark) .text-zinc-900,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-zinc-900,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-zinc-900,
+.theme-light-aurora .text-slate-900,
+html.has-custom-bg:not(.dark) .text-slate-900,
+html.has-preset-bg-aurora-light:not(.dark) .text-slate-900,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-slate-900,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-slate-900,
+.theme-light-aurora .text-gray-900,
+html.has-custom-bg:not(.dark) .text-gray-900,
+html.has-preset-bg-aurora-light:not(.dark) .text-gray-900,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-gray-900,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-gray-900,
+.theme-light-aurora .text-zinc-800,
+html.has-custom-bg:not(.dark) .text-zinc-800,
+html.has-preset-bg-aurora-light:not(.dark) .text-zinc-800,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-zinc-800,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-zinc-800,
+.theme-light-aurora .text-slate-800,
+html.has-custom-bg:not(.dark) .text-slate-800,
+html.has-preset-bg-aurora-light:not(.dark) .text-slate-800,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-slate-800,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-slate-800,
+.theme-light-aurora .text-gray-800,
+html.has-custom-bg:not(.dark) .text-gray-800,
+html.has-preset-bg-aurora-light:not(.dark) .text-gray-800,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-gray-800,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-gray-800 {
+  color: #090d16 !important;
+  font-weight: 700 !important;
+  text-shadow: none !important;
+}
+
+.theme-light-aurora h1, html.has-custom-bg:not(.dark) h1, html.has-preset-bg-aurora-light:not(.dark) h1, html.has-preset-bg-cosmic-dark:not(.dark) h1, html.has-preset-bg-cyan-cosmic:not(.dark) h1,
+.theme-light-aurora h2, html.has-custom-bg:not(.dark) h2, html.has-preset-bg-aurora-light:not(.dark) h2, html.has-preset-bg-cosmic-dark:not(.dark) h2, html.has-preset-bg-cyan-cosmic:not(.dark) h2,
+.theme-light-aurora h3, html.has-custom-bg:not(.dark) h3, html.has-preset-bg-aurora-light:not(.dark) h3, html.has-preset-bg-cosmic-dark:not(.dark) h3, html.has-preset-bg-cyan-cosmic:not(.dark) h3,
+.theme-light-aurora h4, html.has-custom-bg:not(.dark) h4, html.has-preset-bg-aurora-light:not(.dark) h4, html.has-preset-bg-cosmic-dark:not(.dark) h4, html.has-preset-bg-cyan-cosmic:not(.dark) h4,
+.theme-light-aurora h5, html.has-custom-bg:not(.dark) h5, html.has-preset-bg-aurora-light:not(.dark) h5, html.has-preset-bg-cosmic-dark:not(.dark) h5, html.has-preset-bg-cyan-cosmic:not(.dark) h5,
+.theme-light-aurora h6, html.has-custom-bg:not(.dark) h6, html.has-preset-bg-aurora-light:not(.dark) h6, html.has-preset-bg-cosmic-dark:not(.dark) h6, html.has-preset-bg-cyan-cosmic:not(.dark) h6 {
+  color: #090d16 !important;
+  font-weight: 800 !important;
+  text-shadow: none !important;
+}
+
+.theme-light-aurora .text-zinc-700,
+html.has-custom-bg:not(.dark) .text-zinc-700,
+html.has-preset-bg-aurora-light:not(.dark) .text-zinc-700,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-zinc-700,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-zinc-700,
+.theme-light-aurora .text-slate-700,
+html.has-custom-bg:not(.dark) .text-slate-700,
+html.has-preset-bg-aurora-light:not(.dark) .text-slate-700,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-slate-700,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-slate-700,
+.theme-light-aurora .text-gray-700,
+html.has-custom-bg:not(.dark) .text-gray-700,
+html.has-preset-bg-aurora-light:not(.dark) .text-gray-700,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-gray-700,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-gray-700,
+.theme-light-aurora .text-zinc-600,
+html.has-custom-bg:not(.dark) .text-zinc-600,
+html.has-preset-bg-aurora-light:not(.dark) .text-zinc-600,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-zinc-600,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-zinc-600,
+.theme-light-aurora .text-slate-600,
+html.has-custom-bg:not(.dark) .text-slate-600,
+html.has-preset-bg-aurora-light:not(.dark) .text-slate-600,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-slate-600,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-slate-600,
+.theme-light-aurora .text-gray-600,
+html.has-custom-bg:not(.dark) .text-gray-600,
+html.has-preset-bg-aurora-light:not(.dark) .text-gray-600,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-gray-600,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-gray-600 {
+  color: #1e293b !important;
+  font-weight: 600 !important;
+  text-shadow: none !important;
+}
+
+.theme-light-aurora .text-zinc-500,
+html.has-custom-bg:not(.dark) .text-zinc-500,
+html.has-preset-bg-aurora-light:not(.dark) .text-zinc-500,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-zinc-500,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-zinc-500,
+.theme-light-aurora .text-slate-500,
+html.has-custom-bg:not(.dark) .text-slate-500,
+html.has-preset-bg-aurora-light:not(.dark) .text-slate-500,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-slate-500,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-slate-500,
+.theme-light-aurora .text-gray-500,
+html.has-custom-bg:not(.dark) .text-gray-500,
+html.has-preset-bg-aurora-light:not(.dark) .text-gray-500,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-gray-500,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-gray-500,
+.theme-light-aurora .text-zinc-400,
+html.has-custom-bg:not(.dark) .text-zinc-400,
+html.has-preset-bg-aurora-light:not(.dark) .text-zinc-400,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-zinc-400,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-zinc-400,
+.theme-light-aurora .text-slate-400,
+html.has-custom-bg:not(.dark) .text-slate-400,
+html.has-preset-bg-aurora-light:not(.dark) .text-slate-400,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-slate-400,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-slate-400,
+.theme-light-aurora .text-gray-400,
+html.has-custom-bg:not(.dark) .text-gray-400,
+html.has-preset-bg-aurora-light:not(.dark) .text-gray-400,
+html.has-preset-bg-cosmic-dark:not(.dark) .text-gray-400,
+html.has-preset-bg-cyan-cosmic:not(.dark) .text-gray-400 {
+  color: #334155 !important;
+  font-weight: 550 !important;
+  text-shadow: none !important;
+}
+
+.theme-light-aurora .border-zinc-200,
+html.has-custom-bg .border-zinc-200,
+.theme-light-aurora .border-gray-200,
+html.has-custom-bg .border-gray-200,
+.theme-light-aurora .border-slate-200,
+html.has-custom-bg .border-slate-200,
+.theme-light-aurora .border-zinc-100,
+html.has-custom-bg .border-zinc-100,
+.theme-light-aurora .border-gray-100,
+html.has-custom-bg .border-gray-100,
+.theme-light-aurora .border-slate-100,
+html.has-custom-bg .border-slate-100 {
+  border-color: #cbd5e1 !important;
+}
+
+/* Translucent background containers when any background is active in Light Mode */
+html.has-custom-bg:not(.dark) .bg-white,
+html.has-preset-bg-aurora-light:not(.dark) .bg-white,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-white,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-white,
+.theme-light-aurora .bg-white,
+html.has-custom-bg:not(.dark) .bg-zinc-50,
+html.has-preset-bg-aurora-light:not(.dark) .bg-zinc-50,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-zinc-50,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-zinc-50,
+.theme-light-aurora .bg-zinc-50,
+html.has-custom-bg:not(.dark) .bg-gray-50,
+html.has-preset-bg-aurora-light:not(.dark) .bg-gray-50,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-gray-50,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-gray-50,
+.theme-light-aurora .bg-gray-50,
+html.has-custom-bg:not(.dark) .bg-slate-50,
+html.has-preset-bg-aurora-light:not(.dark) .bg-slate-50,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-slate-50,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-slate-50,
+.theme-light-aurora .bg-slate-50,
+html.has-custom-bg:not(.dark) .bg-zinc-100,
+html.has-preset-bg-aurora-light:not(.dark) .bg-zinc-100,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-zinc-100,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-zinc-100,
+.theme-light-aurora .bg-zinc-100,
+html.has-custom-bg:not(.dark) .bg-gray-100,
+html.has-preset-bg-aurora-light:not(.dark) .bg-gray-100,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-gray-100,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-gray-100,
+.theme-light-aurora .bg-gray-100,
+html.has-custom-bg:not(.dark) .bg-slate-100,
+html.has-preset-bg-aurora-light:not(.dark) .bg-slate-100,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-slate-100,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-slate-100,
+.theme-light-aurora .bg-slate-100,
+html.has-custom-bg:not(.dark) .bg-zinc-50\/50,
+html.has-preset-bg-aurora-light:not(.dark) .bg-zinc-50\/50,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-zinc-50\/50,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-zinc-50\/50,
+.theme-light-aurora .bg-zinc-50\/50,
+html.has-custom-bg:not(.dark) .bg-zinc-100\/50,
+html.has-preset-bg-aurora-light:not(.dark) .bg-zinc-100\/50,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-zinc-100\/50,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-zinc-100\/50,
+.theme-light-aurora .bg-zinc-100\/50,
+html.has-custom-bg:not(.dark) .bg-white\/45,
+html.has-preset-bg-aurora-light:not(.dark) .bg-white\/45,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-white\/45,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-white\/45,
+.theme-light-aurora .bg-white\/45,
+html.has-custom-bg:not(.dark) .bg-white\/70,
+html.has-preset-bg-aurora-light:not(.dark) .bg-white\/70,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-white\/70,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-white\/70,
+.theme-light-aurora .bg-white\/70,
+html.has-custom-bg:not(.dark) .bg-white\/75,
+html.has-preset-bg-aurora-light:not(.dark) .bg-white\/75,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-white\/75,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-white\/75,
+.theme-light-aurora .bg-white\/75,
+html.has-custom-bg:not(.dark) .bg-white\/95,
+html.has-preset-bg-aurora-light:not(.dark) .bg-white\/95,
+html.has-preset-bg-cosmic-dark:not(.dark) .bg-white\/95,
+html.has-preset-bg-cyan-cosmic:not(.dark) .bg-white\/95,
+.theme-light-aurora .bg-white\/95 {
+  background-color: rgba(255, 255, 255, 0.92) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+}
+
+/* Crisp high-performance background containers when any background is active in Dark Mode */
+html.has-custom-bg.dark .bg-white,
+html.has-preset-bg-cosmic-dark.dark .bg-white,
+html.has-preset-bg-cyan-cosmic.dark .bg-white,
+html.has-preset-bg-aurora-light.dark .bg-white,
+html.has-custom-bg.dark .bg-zinc-900,
+html.has-preset-bg-cosmic-dark.dark .bg-zinc-900,
+html.has-preset-bg-cyan-cosmic.dark .bg-zinc-900,
+html.has-preset-bg-aurora-light.dark .bg-zinc-900,
+html.has-custom-bg.dark .bg-gray-900,
+html.has-preset-bg-cosmic-dark.dark .bg-gray-900,
+html.has-preset-bg-cyan-cosmic.dark .bg-gray-900,
+html.has-preset-bg-aurora-light.dark .bg-gray-900,
+html.has-custom-bg.dark .bg-slate-900,
+html.has-preset-bg-cosmic-dark.dark .bg-slate-900,
+html.has-preset-bg-cyan-cosmic.dark .bg-slate-900,
+html.has-preset-bg-aurora-light.dark .bg-slate-900,
+html.has-custom-bg.dark .bg-zinc-950,
+html.has-preset-bg-cosmic-dark.dark .bg-zinc-950,
+html.has-preset-bg-cyan-cosmic.dark .bg-zinc-950,
+html.has-preset-bg-aurora-light.dark .bg-zinc-950,
+html.has-custom-bg.dark .bg-black\/20,
+html.has-preset-bg-cosmic-dark.dark .bg-black\/20,
+html.has-preset-bg-cyan-cosmic.dark .bg-black\/20,
+html.has-preset-bg-aurora-light.dark .bg-black\/20,
+html.has-custom-bg.dark .bg-gray-950,
+html.has-preset-bg-cosmic-dark.dark .bg-gray-950,
+html.has-preset-bg-cyan-cosmic.dark .bg-gray-950,
+html.has-preset-bg-aurora-light.dark .bg-gray-950 {
+  background-color: rgba(15, 23, 42, 0.94) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Dark Mode with Background high contrast text rules */
+html.dark.has-custom-bg .text-zinc-100,
+html.dark.has-preset-bg-cosmic-dark .text-zinc-100,
+html.dark.has-preset-bg-cyan-cosmic .text-zinc-100,
+html.dark.has-custom-bg .text-gray-100,
+html.dark.has-preset-bg-cosmic-dark .text-gray-100,
+html.dark.has-preset-bg-cyan-cosmic .text-gray-100 {
+  color: #f8fafc !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.4) !important;
+}
+
+html.dark.has-custom-bg .text-zinc-400,
+html.dark.has-preset-bg-cosmic-dark .text-zinc-400,
+html.dark.has-preset-bg-cyan-cosmic .text-zinc-400,
+html.dark.has-custom-bg .text-gray-400,
+html.dark.has-preset-bg-cosmic-dark .text-gray-400,
+html.dark.has-preset-bg-cyan-cosmic .text-gray-400 {
+  color: #94a3b8 !important;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.4) !important;
+}
+
+/* Removed heavy global main/aside/header overrides to prevent lag and background wash-out */
+
+/* Premium Apple Glass Layout and Shadows */
+.apple-glass {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(203, 213, 225, 0.85);
+  box-shadow: 
+    0 4px 20px rgba(15, 23, 42, 0.05),
+    0 1px 3px rgba(15, 23, 42, 0.03);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dark .apple-glass {
+  background: rgba(13, 13, 17, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    inset 0 1px 1px rgba(255, 255, 255, 0.08),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+}
+
+.apple-glass-hover:hover {
+  transform: translateY(-2px) scale(1.005);
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.7);
+  box-shadow: 
+    0 24px 48px rgba(0, 0, 0, 0.03),
+    inset 0 1px 2px rgba(255, 255, 255, 0.9);
+}
+
+.dark .apple-glass-hover:hover {
+  background: rgba(20, 20, 26, 0.7);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 
+    0 32px 64px rgba(0, 0, 0, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Premium Apple Shadows */
+.apple-shadow-sm {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.015), 0 1px 2px rgba(0, 0, 0, 0.01);
+}
+.dark .apple-shadow-sm {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.apple-shadow-md {
+  box-shadow: 
+    0 10px 30px rgba(0, 0, 0, 0.03),
+    0 1px 3px rgba(0, 0, 0, 0.02),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.dark .apple-shadow-md {
+  box-shadow: 
+    0 16px 40px rgba(0, 0, 0, 0.35),
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.apple-shadow-lg {
+  box-shadow: 
+    0 24px 60px rgba(0, 0, 0, 0.06),
+    0 4px 12px rgba(0, 0, 0, 0.02),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.dark .apple-shadow-lg {
+  box-shadow: 
+    0 32px 80px rgba(0, 0, 0, 0.45),
+    0 6px 16px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Custom interactive input styling to fit Apple look */
+.apple-input {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 12px !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+.dark .apple-input {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+.apple-input:focus {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15) !important;
+}
+.dark .apple-input:focus {
+  background: rgba(18, 18, 22, 0.8) !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.15) !important;
+}
+
+@keyframes blob-float {
+  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  33% { transform: translate(4%, 2%) scale(1.08) rotate(120deg); }
+  66% { transform: translate(-3%, 5%) scale(0.92) rotate(240deg); }
+  100% { transform: translate(2%, -4%) scale(1.04) rotate(360deg); }
+}
+
+/* Font Face - Full Multi-Weight Vazirmatn & Persian Fonts (100% Local Offline & Intranet Ready) */
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 300;
+  src: local('Vazirmatn Light'), local('Vazirmatn-Light'),
+       url('/fonts/Vazirmatn-Light.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 400;
+  src: local('Vazirmatn Regular'), local('Vazirmatn'), local('Vazirmatn-Regular'),
+       url('/fonts/Vazirmatn-Regular.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 500;
+  src: local('Vazirmatn Medium'), local('Vazirmatn-Medium'),
+       url('/fonts/Vazirmatn-Medium.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 600;
+  src: local('Vazirmatn SemiBold'), local('Vazirmatn-SemiBold'),
+       url('/fonts/Vazirmatn-SemiBold.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 700;
+  src: local('Vazirmatn Bold'), local('Vazirmatn-Bold'),
+       url('/fonts/Vazirmatn-Bold.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 800;
+  src: local('Vazirmatn ExtraBold'), local('Vazirmatn-ExtraBold'),
+       url('/fonts/Vazirmatn-ExtraBold.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 900;
+  src: local('Vazirmatn Black'), local('Vazirmatn-Black'),
+       url('/fonts/Vazirmatn-Black.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Shabnam';
+  src: local('Shabnam'), url('/fonts/Shabnam.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Sahel';
+  src: local('Sahel'), url('/fonts/Sahel.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Gandom';
+  src: local('Gandom'), url('/fonts/Gandom.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Estedad';
+  src: local('Estedad'), url('/fonts/Estedad.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Samim';
+  src: local('Samim'), url('/fonts/Samim.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Tanha';
+  src: local('Tanha'), url('/fonts/Tanha.woff2') format('woff2');
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nahid';
+  src: local('Nahid'), url('/fonts/Nahid.woff2') format('woff2');
+  font-display: swap;
+}
+
+html {
+  height: 100%;
+  height: -webkit-fill-available;
+  height: 100dvh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: pan-y pinch-zoom !important;
+}
+
+body {
+  font-family: 'Vazirmatn', sans-serif;
+  background: var(--app-bg);
+  background-attachment: fixed;
+  color: var(--text-primary);
+  height: 100%;
+  height: -webkit-fill-available;
+  height: 100dvh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  overscroll-behavior-y: auto !important;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Disable text selection highlight for app-like feel */
+  -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+  transition: background 0.3s ease, color 0.3s ease;
+  touch-action: pan-y pinch-zoom !important;
+}
+
+#root {
+  height: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  overscroll-behavior-y: auto !important;
+  touch-action: pan-y pinch-zoom !important;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Glassmorphism Global Restyling for generic util classes */
+.theme-light-aurora .bg-white, 
+.theme-light-aurora .bg-gray-50, 
+.theme-light-aurora .bg-white\/80, 
+.theme-light-aurora .bg-white\/50, 
+.theme-light-aurora .bg-white\/40, 
+.theme-light-aurora .bg-white\/60 {
+  background-color: var(--glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+}
+
+.bg-white:not(body):not(.notification-dropdown-container) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+.dark .text-gray-800, .dark .text-gray-900, .dark .text-gray-700,
+.dark .text-slate-800, .dark .text-slate-900, .dark .text-slate-700,
+.dark .text-zinc-800, .dark .text-zinc-900, .dark .text-zinc-700 {
+  color: #f8fafc !important;
+}
+.dark .text-gray-600, .dark .text-gray-500,
+.dark .text-slate-600, .dark .text-slate-500,
+.dark .text-zinc-600, .dark .text-zinc-500 {
+  color: #cbd5e1 !important;
+}
+.dark .border-gray-200, .dark .border-gray-100, .dark .border-blue-100, .dark .border-slate-200 {
+  border-color: var(--glass-border) !important;
+}
+.dark .bg-gray-100, .dark .bg-blue-50, .dark .bg-indigo-50, .dark .bg-rose-50, .dark .bg-green-50, .dark .bg-yellow-50 {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  color: #f8fafc !important;
+}
+.dark .text-blue-600, .dark .text-indigo-600, .dark .text-blue-800 {
+  color: #60a5fa !important;
+}
+
+/* Luxury Soft Shadows and Squircles overrides for Apple appearance */
+.shadow-sm {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03), 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+}
+.dark .shadow-sm {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.15) !important;
+}
+.shadow-md {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+}
+.dark .shadow-md {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+}
+.shadow-lg, .shadow-xl, .shadow-2xl {
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.03) !important;
+}
+.dark .shadow-lg, .dark .shadow-xl, .dark .shadow-2xl {
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.3) !important;
+}
+
+.rounded-xl {
+  border-radius: 16px !important;
+}
+.rounded-2xl {
+  border-radius: 20px !important;
+}
+.rounded-3xl {
+  border-radius: 28px !important;
+}
+
+/* Translucent Apple Form Controls Overrides */
+input[type="text"], input[type="number"], input[type="password"], input[type="email"], input[type="date"], input[type="search"], select, textarea {
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+  border-radius: 12px !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+.dark input[type="text"], .dark input[type="number"], .dark input[type="password"], .dark input[type="email"], .dark input[type="date"], .dark input[type="search"], .dark select, .dark textarea {
+  background-color: rgba(30, 41, 59, 0.9) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: #f8fafc !important;
+}
+
+input:focus, select:focus, textarea:focus {
+  background-color: #ffffff !important;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18) !important;
+  outline: none !important;
+}
+
+.dark input:focus, .dark select:focus, .dark textarea:focus {
+  background-color: rgba(30, 41, 59, 0.98) !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25) !important;
+}
+
+/* Premium Button Gradients */
+.bg-blue-600, .bg-blue-500 {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+  border-radius: 12px !important;
+  transition: transform 0.2s, box-shadow 0.2s, filter 0.2s !important;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.2) !important;
+}
+.bg-blue-600:hover, .bg-blue-500:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35) !important;
+  filter: brightness(1.05) !important;
+}
+.bg-blue-600:active, .bg-blue-500:active {
+  transform: translateY(1px) !important;
+}
+
+.dark .bg-blue-600, .dark .bg-blue-500 {
+  background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%) !important;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25) !important;
+}
+
+.bg-green-600, .bg-green-500 {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+  border-radius: 12px !important;
+  transition: transform 0.2s, box-shadow 0.2s, filter 0.2s !important;
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.2) !important;
+}
+.bg-green-600:hover, .bg-green-500:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 20px rgba(5, 150, 105, 0.3) !important;
+  filter: brightness(1.05) !important;
+}
+
+.bg-red-600, .bg-red-500 {
+  background: linear-gradient(135deg, #f87171 0%, #dc2626 100%) !important;
+  border-radius: 12px !important;
+  transition: transform 0.2s, box-shadow 0.2s, filter 0.2s !important;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.15) !important;
+}
+.bg-red-600:hover, .bg-red-500:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.25) !important;
+  filter: brightness(1.05) !important;
+}
+
+/* Crisp Dark Mode Backgrounds without laggy blurs */
+.dark .bg-zinc-900, .dark .bg-gray-900, .dark .bg-zinc-950, .dark .bg-black {
+  background-color: #0f172a !important;
+}
+.dark .bg-zinc-800, .dark .bg-gray-800 {
+  background-color: #1e293b !important;
+}
+.dark .bg-zinc-100, .dark .bg-gray-100 {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* Table Upgrades for Premium Apple Feel */
+th {
+  background-color: rgba(0, 0, 0, 0.015) !important;
+  color: var(--text-secondary) !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  font-size: 0.75rem !important;
+  letter-spacing: 0.05em !important;
+  border-bottom-width: 1px !important;
+  border-color: var(--glass-border) !important;
+  padding: 0.875rem 1rem !important;
+}
+
+.dark th {
+  background-color: rgba(255, 255, 255, 0.015) !important;
+}
+
+tr {
+  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+tr:hover {
+  background-color: rgba(0, 0, 0, 0.02) !important;
+}
+
+.dark tr:hover,
+html.dark tr:hover {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Universal Dark Mode Safe Hovers - Prevent White/Bright Hover on Dark Mode */
+.dark [class*="hover:bg-gray-50"]:hover,
+.dark [class*="hover:bg-gray-100"]:hover,
+.dark [class*="hover:bg-slate-50"]:hover,
+.dark [class*="hover:bg-slate-100"]:hover,
+.dark [class*="hover:bg-zinc-50"]:hover,
+.dark [class*="hover:bg-zinc-100"]:hover,
+html.dark [class*="hover:bg-gray-50"]:hover,
+html.dark [class*="hover:bg-gray-100"]:hover,
+html.dark [class*="hover:bg-slate-50"]:hover,
+html.dark [class*="hover:bg-slate-100"]:hover,
+html.dark [class*="hover:bg-zinc-50"]:hover,
+html.dark [class*="hover:bg-zinc-100"]:hover {
+  background-color: rgba(255, 255, 255, 0.07) !important;
+}
+
+td {
+  padding: 0.875rem 1rem !important;
+  border-color: var(--glass-border) !important;
+}
+
+tfoot td,
+tfoot th {
+  color: inherit !important;
+}
+
+.bg-indigo-950 td,
+.bg-slate-900 td,
+.bg-blue-900 td,
+.bg-emerald-900 td,
+.bg-sky-900 td {
+  color: #ffffff !important;
+}
+
+.bg-indigo-950 td.text-emerald-300,
+.bg-slate-900 td.text-emerald-300,
+.bg-blue-900 td.text-emerald-300,
+.bg-emerald-900 td.text-emerald-300,
+.bg-sky-900 td.text-emerald-300 {
+  color: #6ee7b7 !important;
+}
+
+.bg-indigo-950 td.text-amber-300,
+.bg-slate-900 td.text-amber-300,
+.bg-blue-900 td.text-amber-300 {
+  color: #fcd34d !important;
+}
+
+@layer utilities {
+  .will-change-scroll {
+    will-change: transform;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Optimize blur for low-end mobile/Android performance - eliminate heavy GPU shader blurs */
+@media (max-width: 768px) {
+  .glass-panel, .apple-glass, .backdrop-blur-md, .backdrop-blur-lg, .backdrop-blur-xl, .backdrop-blur-2xl, .backdrop-blur-3xl {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .theme-light-aurora .glass-panel,
+  .theme-light-aurora .apple-glass,
+  html:not(.dark) .glass-panel {
+    background: rgba(255, 255, 255, 0.97) !important;
+  }
+  html.dark .glass-panel,
+  html.dark .apple-glass {
+    background: rgba(15, 23, 42, 0.96) !important;
+  }
+}
+
+@layer utilities {
+  .animate-slide-down {
+    animation: slide-down 0.4s cubic-bezier(0, 0, 0.2, 1) forwards;
+  }
+  
+  .page-transition {
+    animation: page-fade-rise 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+@keyframes page-fade-rise {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes bg-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-bg-pan {
+  animation: bg-pan 3s ease infinite;
+}
+
+@keyframes slide-down {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@layer utilities {
+  .glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(8px) saturate(150%);
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    border-radius: 1.25rem;
+    transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+  }
+  .glass-panel:hover {
+    background: var(--glass-bg-hover);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+  .glass-header {
+    background: var(--glass-bg);
+    backdrop-filter: blur(8px) saturate(150%);
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.02);
+  }
+  
+  /* Gemini specific styling elements */
+  .gemini-gradient-text {
+    background: var(--gemini-spark);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    display: inline-block;
+  }
+  
+  .gemini-btn-primary {
+    background: var(--gemini-spark);
+    color: white;
+    font-weight: 700;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 4px 15px rgba(75, 144, 255, 0.3);
+  }
+  .gemini-btn-primary:hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 8px 25px rgba(170, 114, 255, 0.45);
+    filter: brightness(1.05);
+  }
+  .gemini-btn-primary:active {
+    transform: translateY(1px) scale(0.99);
+  }
+  
+  .gemini-border-glow {
+    position: relative;
+  }
+  .gemini-border-glow::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--gemini-spark);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    opacity: 0.4;
+    transition: opacity 0.3s ease;
+  }
+  .gemini-border-glow:hover::before {
+    opacity: 1;
+  }
+  
+  .animate-pulse-subtle {
+    animation: pulse-subtle 3s infinite ease-in-out;
+  }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(0.97); }
+}
+
+/* Safe Area Utilities for Mobile & iOS */
+.safe-pb {
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 12px)) !important;
+}
+.safe-pt {
+  padding-top: max(12px, env(safe-area-inset-top, 12px)) !important;
+}
+.safe-pl {
+  padding-left: max(0px, env(safe-area-inset-left, 0px)) !important;
+}
+.safe-pr {
+  padding-right: max(0px, env(safe-area-inset-right, 0px)) !important;
+}
+
+.print-only-element {
+  display: none !important;
+}
+
+/* PDF Generation & Print Optimization */
+.printable-content {
+  box-sizing: border-box !important;
+  background-color: white !important;
+  color: black !important;
+  direction: rtl !important;
+  font-family: 'Vazirmatn', sans-serif !important;
+  -webkit-print-color-adjust: exact !important; 
+  print-color-adjust: exact !important;
+}
+
+@media print {
+  @page { margin: 0.5cm; }
+  body * {
+    visibility: hidden;
+  }
+  html, html.dark, body, body.dark, #root {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .printable-content, .printable-content *,
+  .printable-area, .printable-area *,
+  .print-render-wrapper, .print-render-wrapper *,
+  .print-only-section, .print-only-section *,
+  #print-content-section, #print-content-section *,
+  #letter-view-paper-section, #letter-view-paper-section *,
+  #print-purchase-request-section, #print-purchase-request-section *,
+  #print-purchase-receipt-standalone, #print-purchase-receipt-standalone *,
+  #print-specific-proforma, #print-specific-proforma *,
+  #cheque-receipt-printable-card, #cheque-receipt-printable-card *,
+  #a5-cheque-receipt-print-area, #a5-cheque-receipt-print-area * {
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  #print-content-section,
+  #letter-view-paper-section {
+    position: relative !important;
+    margin: 0 auto !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    z-index: 99999999 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  .printable-content,
+  .printable-area,
+  .print-render-wrapper,
+  .print-only-section,
+  #print-purchase-request-section,
+  #print-purchase-receipt-standalone,
+  #print-specific-proforma,
+  #cheque-receipt-printable-card,
+  #a5-cheque-receipt-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 10px !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+    z-index: 99999999 !important;
+    background: #ffffff !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  .printable-content tr,
+  .printable-area tr,
+  #cheque-receipt-printable-card tr,
+  #a5-cheque-receipt-print-area tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  .no-print, .hidden-print-export { 
+    display: none !important; 
+  }
+  .print-only-element {
+    display: block !important;
+    position: static !important;
+    visibility: visible !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+  .print-only-element * {
+    visibility: visible !important;
+  }
+  #stock-report-content, #print-voucher-content, #exit-permit-print-content, #bijak-print-content, #meeting-print-area, #print-purchase-request-section {
+      transform: none !important;
+      width: 100% !important;
+      height: auto !important;
+      visibility: visible !important;
+  }
+  #print-purchase-request-section * {
+      visibility: visible !important;
+  }
+  .print-render-wrapper {
+      opacity: 1 !important;
+      position: static !important;
+      height: auto !important;
+      width: 100% !important;
+      overflow: visible !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+      z-index: 9999 !important;
+  }
+}
+
+/* --- CHAT UI FIXES --- */
+.message-content {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: pre-wrap;
+    max-width: 100%;
+}
+@media (min-width: 769px) and (pointer: fine) {
+    .custom-scrollbar::-webkit-scrollbar {
+        width: 8px;
+        height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 10px;
+        border: 2px solid transparent;
+        background-clip: padding-box;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+        background-clip: padding-box;
+    }
+
+    ::-webkit-scrollbar {
+        width: 8px !important;
+        height: 6px !important;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.02) !important;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.15) !important;
+        border-radius: 10px !important;
+        border: 2px solid transparent !important;
+        background-clip: content-box !important;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 0, 0, 0.25) !important;
+        background-clip: content-box !important;
+    }
+
+    .dark ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.1) !important;
+    }
+
+    .dark ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.2) !important;
+    }
+}
+
+/* On Mobile & Touch Devices: Hide chunky desktop scrollbars & horizontal bars completely */
+@media (max-width: 768px), (pointer: coarse) {
+    ::-webkit-scrollbar,
+    *::-webkit-scrollbar,
+    .custom-scrollbar::-webkit-scrollbar,
+    .overflow-y-auto::-webkit-scrollbar,
+    .overflow-x-auto::-webkit-scrollbar {
+        width: 0px !important;
+        height: 0px !important;
+        display: none !important;
+        background: transparent !important;
+    }
+    *,
+    .custom-scrollbar,
+    .overflow-y-auto,
+    .overflow-x-auto {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+    }
+}
+
+/* --- GLASS/AURORA THEME SIDEBAR & MENU COHESION --- */
+.theme-light-aurora aside {
+    border-color: rgba(255, 255, 255, 0.35) !important;
+    background: rgba(255, 255, 255, 0.16) !important;
+}
+
+/* Logo container in sidebar */
+.theme-light-aurora aside .bg-blue-600 {
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.85), rgba(99, 102, 241, 0.85)) !important;
+    border: 1px solid rgba(255, 255, 255, 0.35) !important;
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.35) !important;
+}
+
+/* Sidebar navigation buttons */
+.theme-light-aurora aside nav button {
+    color: #1e293b !important; /* Elegant dark slate for text */
+    font-weight: 800 !important;
+}
+
+/* Sidebar inactive icons: make them more visible with an elegant indigo/slate tint */
+.theme-light-aurora aside nav button svg:not(.text-blue-600) {
+    color: #3b82f6 !important; /* Make icons look gorgeous and pop instead of washed out zinc-400 */
+    stroke-width: 2.2 !important;
+    opacity: 0.85;
+}
+
+/* Sidebar active item text and icon */
+.theme-light-aurora aside nav button .text-blue-600,
+.theme-light-aurora aside nav button svg.text-blue-600,
+.theme-light-aurora aside nav button svg.dark\:text-blue-400 {
+    color: #1d4ed8 !important; /* Premium royal blue active color */
+    stroke-width: 2.8 !important;
+    opacity: 1 !important;
+}
+
+/* Sidebar active tab glass highlight */
+.theme-light-aurora aside nav button [layoutId="activeSidebarTab"],
+.theme-light-aurora aside nav button .bg-blue-50\/70 {
+    background: rgba(255, 255, 255, 0.28) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.5) !important;
+    box-shadow: 
+        0 8px 24px rgba(15, 23, 42, 0.04), 
+        inset 0 1px 1.5px rgba(255, 255, 255, 0.6) !important;
+}
+
+/* Mobile Top Header glass adjustment */
+.theme-light-aurora header {
+    background: rgba(255, 255, 255, 0.16) !important;
+    backdrop-filter: blur(24px) saturate(200%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(200%) !important;
+    border-bottom: 1.5px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.theme-light-aurora header h1 {
+    color: #0f172a !important;
+    font-weight: 900 !important;
+}
+
+/* Mobile top header buttons (Search, Theme switcher, Back button) */
+.theme-light-aurora header button {
+    background-color: rgba(255, 255, 255, 0.2) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.4) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02) !important;
+    color: #1e293b !important;
+}
+
+.theme-light-aurora header button svg {
+    color: #2563eb !important; /* Blue icons on top header buttons for amazing pop! */
+    stroke-width: 2.2 !important;
+}
+
+/* Floating bottom navigation bar matching Apple liquid glass */
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 {
+    background-color: rgba(255, 255, 255, 0.18) !important;
+    backdrop-filter: blur(24px) saturate(220%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(220%) !important;
+    border: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+    box-shadow: 
+        0 12px 32px rgba(15, 23, 42, 0.08),
+        inset 0 1px 2px rgba(255, 255, 255, 0.5) !important;
+}
+
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 button {
+    color: #1e293b !important;
+    font-weight: 800 !important;
+}
+
+/* Floating bottom dock inactive icons */
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 button svg {
+    color: #3b82f6 !important; /* Soft royal blue instead of dull grey */
+    stroke-width: 2.2 !important;
+    opacity: 0.8;
+}
+
+/* Floating bottom dock active item active text & icon */
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 button.text-blue-600 {
+    color: #1d4ed8 !important;
+}
+
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 button.text-blue-600 svg {
+    color: #1d4ed8 !important;
+    stroke-width: 2.8 !important;
+    opacity: 1 !important;
+}
+
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 button .bg-blue-50\/80,
+.theme-light-aurora .fixed.bottom-4.bg-white\/75 button [layoutId="activeBottomTab"] {
+    background-color: rgba(37, 99, 235, 0.12) !important;
+    border: 1px solid rgba(37, 99, 235, 0.25) !important;
+}
+
+/* Mobile slide-up drawer panel under glass theme */
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] {
+    background: rgba(255, 255, 255, 0.25) !important;
+    backdrop-filter: blur(32px) saturate(200%) !important;
+    -webkit-backdrop-filter: blur(32px) saturate(200%) !important;
+    border-top: 1.5px solid rgba(255, 255, 255, 0.45) !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] h4 {
+    color: #334155 !important;
+    font-weight: 900 !important;
+}
+
+/* Mobile slide-up drawer grid buttons - Polished card design with maximum high contrast visibility */
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button {
+    background: rgba(255, 255, 255, 0.88) !important;
+    border: 1.5px solid rgba(226, 232, 240, 0.95) !important;
+    border-radius: 16px !important;
+    color: #0f172a !important;
+    font-weight: 800 !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03) !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button:hover {
+    background: rgba(255, 255, 255, 1) !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button .p-2 {
+    background: #f0f7ff !important; /* Soft high-contrast light blue background for icons */
+    border: 1px solid #bfdbfe !important;
+    border-radius: 10px !important;
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.9) !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button svg {
+    color: #2563eb !important; /* Beautiful active blue */
+    stroke-width: 2.3 !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button span {
+    color: #1e293b !important; /* Solid high-contrast text label */
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    margin-top: 4px !important;
+}
+
+/* Mobile slide-up drawer active item */
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button.text-blue-600 {
+    background: #eff6ff !important;
+    border-color: #3b82f6 !important;
+    color: #1d4ed8 !important;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.08) !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button.text-blue-600 .p-2 {
+    background: #2563eb !important;
+    border-color: #1d4ed8 !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button.text-blue-600 svg {
+    color: #ffffff !important;
+}
+
+.theme-light-aurora .relative.w-full.max-h-\[85vh\] .grid.grid-cols-3 button.text-blue-600 span {
+    color: #1d4ed8 !important;
+}
+
+/* ==========================================================================
+   🚀 HIGH-PERFORMANCE MOBILE OPTIMIZATIONS (Max-Width 1024px)
+   ========================================================================== */
+@media (max-width: 1024px) {
+  /* Disable massive floating blob animations to save CPU rendering threads on mobile, but keep them visible as beautiful static backdrops */
+  .blob {
+    animation: none !important;
+    will-change: auto !important;
+  }
+  
+  /* Disable heavy backdrop-filter on mobile/tablet to prevent GPU hang on weak Android phones */
+  .theme-light-aurora main,
+  .theme-light-aurora aside,
+  .theme-light-aurora header,
+  .theme-light-aurora .glass-panel,
+  .theme-light-aurora .apple-glass,
+  .theme-light-aurora .glass-header,
+  html.has-custom-bg main,
+  html.has-custom-bg aside,
+  html.has-custom-bg header,
+  html.has-custom-bg .glass-panel,
+  html.has-preset-bg-aurora-light main,
+  html.has-preset-bg-aurora-light aside,
+  html.has-preset-bg-aurora-light header,
+  html.has-preset-bg-aurora-light .glass-panel,
+  html.has-preset-bg-cosmic-dark main,
+  html.has-preset-bg-cosmic-dark aside,
+  html.has-preset-bg-cosmic-dark header,
+  html.has-preset-bg-cosmic-dark .glass-panel,
+  html.has-preset-bg-cyan-cosmic main,
+  html.has-preset-bg-cyan-cosmic aside,
+  html.has-preset-bg-cyan-cosmic header,
+  html.has-preset-bg-cyan-cosmic .glass-panel {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  
+  /* Make all text inputs opaque and highly responsive on mobile keyboard focus */
+  .theme-light-aurora input[type="text"], 
+  .theme-light-aurora input[type="number"], 
+  .theme-light-aurora input[type="password"], 
+  .theme-light-aurora input[type="email"], 
+  .theme-light-aurora input[type="date"], 
+  .theme-light-aurora input[type="search"], 
+  .theme-light-aurora select, 
+  .theme-light-aurora textarea {
+    background-color: rgba(255, 255, 255, 0.98) !important;
+    border-color: rgba(203, 213, 225, 1) !important;
+  }
+}
+
+/* Premium Glassmorphic Sidebar and Main Containers under Rich Backgrounds */
+html.has-custom-bg aside,
+html.has-preset-bg-aurora-light aside,
+html.has-preset-bg-cosmic-dark aside,
+html.has-preset-bg-cyan-cosmic aside,
+html.theme-light-aurora aside {
+  background: rgba(255, 255, 255, 0.22) !important;
+  backdrop-filter: blur(8px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(8px) saturate(150%) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+  transform: translateZ(0);
+}
+
+html.has-custom-bg.dark aside,
+html.has-preset-bg-cosmic-dark.dark aside,
+html.has-preset-bg-cyan-cosmic.dark aside,
+html.has-preset-bg-aurora-light.dark aside {
+  background: rgba(15, 23, 42, 0.4) !important;
+  backdrop-filter: blur(8px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(8px) saturate(150%) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  transform: translateZ(0);
+}
+
+/* Ensure that regular table body cells in report panels have pristine text clarity and weight */
+html.has-custom-bg tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+html.has-preset-bg-cosmic-dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+html.has-preset-bg-cyan-cosmic tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+html.has-preset-bg-aurora-light tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+.theme-light-aurora tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]) {
+  color: #1e293b;
+  font-weight: 550;
+}
+
+html.has-custom-bg.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+html.has-preset-bg-cosmic-dark.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+html.has-preset-bg-cyan-cosmic.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
+html.has-preset-bg-aurora-light.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]) {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+/* 🌟 UNIVERSAL HIGH LEGIBILITY FOR ALL TABLE SUMMARY / FOOTER ROWS (سطرهای جمع جداول) */
+tfoot tr,
+tfoot td,
+tfoot th,
+tfoot td *,
+tr.bg-slate-900 td,
+tr.bg-slate-950 td,
+tr.bg-indigo-900 td,
+tr.bg-indigo-950 td,
+tr.bg-sky-900 td,
+tr.bg-sky-950 td,
+tr.bg-blue-900 td,
+tr.bg-blue-950 td,
+tr.bg-emerald-900 td,
+tr.bg-emerald-950 td,
+tr[class*="bg-slate-900"] td,
+tr[class*="bg-slate-950"] td,
+tr[class*="bg-indigo-900"] td,
+tr[class*="bg-indigo-950"] td,
+tr[class*="bg-sky-900"] td,
+tr[class*="bg-blue-900"] td,
+tr[class*="bg-emerald-900"] td {
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  opacity: 1 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* Accent highlight colors in summary footers */
+tfoot .text-emerald-300,
+tfoot [class*="text-emerald-300"],
+tfoot [class*="text-emerald-400"],
+tr[class*="bg-"] td[class*="text-emerald-300"],
+tr[class*="bg-"] td[class*="text-emerald-400"] {
+  color: #6ee7b7 !important;
+  font-weight: 900 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+tfoot .text-amber-300,
+tfoot [class*="text-amber-300"],
+tfoot [class*="text-amber-400"],
+tr[class*="bg-"] td[class*="text-amber-300"],
+tr[class*="bg-"] td[class*="text-amber-400"] {
+  color: #fcd34d !important;
+  font-weight: 900 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+tfoot .text-sky-300,
+tfoot [class*="text-sky-300"],
+tr[class*="bg-"] td[class*="text-sky-300"] {
+  color: #7dd3fc !important;
+  font-weight: 900 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* 
+   ==========================================================================
+   📋 HIGH LEGIBILITY FOR PRINT TEMPLATES & MODAL SHEETS (Opaque, crisp contrast)
+   ========================================================================== 
+*/
+html .printable-content,
+html .printable-content .bg-white,
+html [id*="print-content"],
+html [id*="print-content"] .bg-white,
+html [id*="-print-"],
+html [id*="-print-"] .bg-white,
+html [id*="print-area"],
+html [id*="print-area"] .bg-white,
+html [id*="print-section"],
+html [id*="print-section"] .bg-white {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: #cbd5e1 !important;
+  opacity: 1 !important;
+}
+
+/* Force dark, crisp text on solid white templates even in dark mode / glass theme */
+html .printable-content text,
+html .printable-content p,
+html .printable-content h1,
+html .printable-content h2,
+html .printable-content h3,
+html .printable-content h4,
+html .printable-content h5,
+html .printable-content h6,
+html .printable-content span:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html .printable-content div:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html .printable-content td:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html .printable-content th,
+html .printable-content tr,
+html .printable-content table,
+html [id*="print-content"] p,
+html [id*="print-content"] h1,
+html [id*="print-content"] h2,
+html [id*="print-content"] h3,
+html [id*="print-content"] h4,
+html [id*="print-content"] h5,
+html [id*="print-content"] h6,
+html [id*="print-content"] span:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-content"] div:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-content"] td:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-content"] th,
+html [id*="print-area"] p,
+html [id*="print-area"] h1,
+html [id*="print-area"] h2,
+html [id*="print-area"] h3,
+html [id*="print-area"] h4,
+html [id*="print-area"] h5,
+html [id*="print-area"] h6,
+html [id*="print-area"] span:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-area"] div:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-area"] td:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-area"] th,
+html [id*="print-section"] p,
+html [id*="print-section"] h1,
+html [id*="print-section"] h2,
+html [id*="print-section"] h3,
+html [id*="print-section"] h4,
+html [id*="print-section"] h5,
+html [id*="print-section"] h6,
+html [id*="print-section"] span:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-section"] div:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-section"] td:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html [id*="print-section"] th {
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+/* Style table borders inside printable templates explicitly */
+html .printable-content th,
+html .printable-content td,
+html [id*="print-content"] th,
+html [id*="print-content"] td,
+html [id*="print-area"] th,
+html [id*="print-area"] td,
+html [id*="print-section"] th,
+html [id*="print-section"] td {
+  border-color: #94a3b8 !important; /* more visible, high-contrast border */
+}
+
+/* Fix background for table headers inside print areas */
+html .printable-content th,
+html [id*="print-content"] th,
+html [id*="print-area"] th,
+html [id*="print-section"] th {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+/* ==========================================================================
+   THEME MORPHING UI OVERRIDES FOR ALL 6 UI STYLES
+   ========================================================================== */
+
+/* 1. Glassmorphism (Default) */
+html.theme-light-aurora body {
+  background-color: transparent !important;
+}
+
+/* 2. Bento Grid UI Style */
+html.theme-bento body {
+  background-color: #0b0f19 !important;
+  color: #f8fafc !important;
+}
+html.theme-bento .glass-panel,
+html.theme-bento aside,
+html.theme-bento header,
+html.theme-bento .bg-white,
+html.theme-bento .bg-gray-50,
+html.theme-bento .bg-zinc-50,
+html.theme-bento .bg-slate-50,
+html.theme-bento .bg-slate-900,
+html.theme-bento .bg-zinc-900 {
+  background-color: #131b2e !important;
+  border-color: rgba(99, 102, 241, 0.25) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(99, 102, 241, 0.15) !important;
+  border-radius: 20px !important;
+  color: #f8fafc !important;
+}
+html.theme-bento .text-zinc-900,
+html.theme-bento .text-slate-900,
+html.theme-bento .text-gray-900,
+html.theme-bento .text-black,
+html.theme-bento .text-zinc-800,
+html.theme-bento .text-slate-800,
+html.theme-bento .text-gray-800,
+html.theme-bento .text-zinc-700,
+html.theme-bento .text-slate-700,
+html.theme-bento .text-gray-700 {
+  color: #f8fafc !important;
+}
+html.theme-bento .text-zinc-600,
+html.theme-bento .text-slate-600,
+html.theme-bento .text-gray-600,
+html.theme-bento .text-zinc-500,
+html.theme-bento .text-slate-500,
+html.theme-bento .text-gray-500 {
+  color: #a5b4fc !important;
+}
+html.theme-bento input,
+html.theme-bento select,
+html.theme-bento textarea {
+  background-color: #1c2742 !important;
+  border-color: rgba(99, 102, 241, 0.35) !important;
+  color: #ffffff !important;
+  border-radius: 12px !important;
+}
+html.theme-bento th {
+  background-color: #1a233d !important;
+  color: #a5b4fc !important;
+}
+html.theme-bento td {
+  border-color: rgba(99, 102, 241, 0.15) !important;
+}
+
+/* 3. Claymorphism (3D Puffy Clay Style) */
+html.theme-claymorphism body {
+  background-color: #eef2f6 !important;
+  color: #1e293b !important;
+}
+html.theme-claymorphism .glass-panel,
+html.theme-claymorphism aside,
+html.theme-claymorphism header,
+html.theme-claymorphism .bg-white {
+  background-color: #eef2f6 !important;
+  border: 2px solid #ffffff !important;
+  border-radius: 24px !important;
+  box-shadow: 8px 8px 18px rgba(163, 177, 198, 0.55), -8px -8px 18px rgba(255, 255, 255, 0.85), inset 2px 2px 4px rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: none !important;
+  color: #1e293b !important;
+}
+html.theme-claymorphism button:not(.no-clay) {
+  border-radius: 18px !important;
+  box-shadow: 5px 5px 12px rgba(163, 177, 198, 0.5), -5px -5px 12px rgba(255, 255, 255, 0.85) !important;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+html.theme-claymorphism button:not(.no-clay):active {
+  box-shadow: inset 3px 3px 6px rgba(163, 177, 198, 0.5), inset -3px -3px 6px rgba(255, 255, 255, 0.85) !important;
+}
+html.theme-claymorphism input,
+html.theme-claymorphism select,
+html.theme-claymorphism textarea {
+  background-color: #eef2f6 !important;
+  border-radius: 16px !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.9) !important;
+  box-shadow: inset 4px 4px 8px rgba(163, 177, 198, 0.45), inset -4px -4px 8px rgba(255, 255, 255, 0.85) !important;
+  color: #1e293b !important;
+}
+
+/* 4. Skeuomorphism (Realistic Tactile Beveled Style) */
+html.theme-skeuomorphism body {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+html.theme-skeuomorphism .glass-panel,
+html.theme-skeuomorphism aside,
+html.theme-skeuomorphism header,
+html.theme-skeuomorphism .bg-white {
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%) !important;
+  border: 1px solid #cbd5e1 !important;
+  border-top-color: #ffffff !important;
+  border-bottom-color: #a1a1aa !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 6px 16px rgba(15, 23, 42, 0.08) !important;
+  border-radius: 16px !important;
+  color: #0f172a !important;
+}
+html.theme-skeuomorphism button {
+  background: linear-gradient(180deg, #ffffff 0%, #d4d4d8 100%) !important;
+  border: 1px solid #a1a1aa !important;
+  border-top-color: #ffffff !important;
+  box-shadow: inset 0 1px 0 #ffffff, 0 3px 6px rgba(0, 0, 0, 0.1) !important;
+  color: #0f172a !important;
+  font-weight: 800 !important;
+  border-radius: 12px !important;
+  transition: all 0.15s ease !important;
+}
+html.theme-skeuomorphism button:active {
+  background: linear-gradient(180deg, #cbd5e1 0%, #e2e8f0 100%) !important;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.18) !important;
+}
+html.theme-skeuomorphism input,
+html.theme-skeuomorphism select,
+html.theme-skeuomorphism textarea {
+  background: linear-gradient(180deg, #e2e8f0 0%, #f1f5f9 100%) !important;
+  border: 1.5px solid #a1a1aa !important;
+  border-bottom-color: #e2e8f0 !important;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.12) !important;
+  border-radius: 10px !important;
+  color: #0f172a !important;
+}
+
+/* 5. Minimalism (Clean Flat Style) */
+html.theme-minimalism body {
+  background-color: #fafafa !important;
+  color: #18181b !important;
+}
+html.theme-minimalism .glass-panel,
+html.theme-minimalism aside,
+html.theme-minimalism header,
+html.theme-minimalism .bg-white {
+  background-color: #ffffff !important;
+  border: 1px solid #e4e4e7 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  border-radius: 12px !important;
+  backdrop-filter: none !important;
+  color: #18181b !important;
+}
+html.theme-minimalism button {
+  box-shadow: none !important;
+  border-radius: 10px !important;
+}
+html.theme-minimalism input,
+html.theme-minimalism select,
+html.theme-minimalism textarea {
+  background-color: #ffffff !important;
+  border: 1px solid #d4d4d8 !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  color: #18181b !important;
+}
+
+/* 6. Maximalism / Neobrutalism (Pop-Art Vibrant Style) */
+html.theme-maximalism body {
+  background-color: #fef08a !important;
+  color: #000000 !important;
+}
+html.theme-maximalism .glass-panel,
+html.theme-maximalism aside,
+html.theme-maximalism header,
+html.theme-maximalism .bg-white,
+html.theme-maximalism .bg-slate-900 {
+  background-color: #ffffff !important;
+  border: 2.5px solid #000000 !important;
+  box-shadow: 4px 4px 0px #000000 !important;
+  border-radius: 14px !important;
+  backdrop-filter: none !important;
+  color: #000000 !important;
+}
+html.theme-maximalism button:not(.no-brutal) {
+  border: 2px solid #000000 !important;
+  box-shadow: 3px 3px 0px #000000 !important;
+  font-weight: 800 !important;
+  border-radius: 12px !important;
+  transition: transform 0.1s ease, box-shadow 0.1s ease !important;
+}
+html.theme-maximalism button:not(.no-brutal):active {
+  transform: translate(2px, 2px) !important;
+  box-shadow: 1px 1px 0px #000000 !important;
+}
+html.theme-maximalism input,
+html.theme-maximalism select,
+html.theme-maximalism textarea {
+  border: 2px solid #000000 !important;
+  box-shadow: 2.5px 2.5px 0px #000000 !important;
+  border-radius: 10px !important;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  font-weight: 700 !important;
+}
+
+/* ---------------------------------------------------- */
+/* PROFESSIONAL DARK MODE OVERRIDES FOR ALL THEMES     */
+/* ---------------------------------------------------- */
+
+/* 1. Bento Theme Dark Overrides */
+html.dark.theme-bento body {
+  background-color: #070a12 !important;
+  color: #f8fafc !important;
+}
+html.dark.theme-bento .glass-panel,
+html.dark.theme-bento aside,
+html.dark.theme-bento header,
+html.dark.theme-bento .bg-white {
+  background-color: #0f172a !important;
+  border-color: rgba(99, 102, 241, 0.35) !important;
+  color: #f8fafc !important;
+}
+html.dark.theme-bento .text-zinc-900,
+html.dark.theme-bento .text-slate-900,
+html.dark.theme-bento .text-gray-900,
+html.dark.theme-bento .text-black,
+html.dark.theme-bento .text-zinc-800,
+html.dark.theme-bento .text-slate-800,
+html.dark.theme-bento .text-gray-800,
+html.dark.theme-bento .text-zinc-700,
+html.dark.theme-bento .text-slate-700,
+html.dark.theme-bento .text-gray-700 {
+  color: #f8fafc !important;
+}
+html.dark.theme-bento .text-zinc-600,
+html.dark.theme-bento .text-slate-600,
+html.dark.theme-bento .text-gray-600,
+html.dark.theme-bento .text-zinc-500,
+html.dark.theme-bento .text-slate-500,
+html.dark.theme-bento .text-gray-500 {
+  color: #94a3b8 !important;
+}
+
+/* 2. Claymorphism Dark Overrides */
+html.dark.theme-claymorphism body {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+html.dark.theme-claymorphism .glass-panel,
+html.dark.theme-claymorphism aside,
+html.dark.theme-claymorphism header,
+html.dark.theme-claymorphism .bg-white {
+  background-color: #1e293b !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 8px 8px 18px rgba(0, 0, 0, 0.6), -4px -4px 12px rgba(51, 65, 85, 0.4), inset 1px 1px 2px rgba(255, 255, 255, 0.1) !important;
+  color: #f8fafc !important;
+}
+html.dark.theme-claymorphism button:not(.no-clay) {
+  background-color: #334155 !important;
+  color: #f8fafc !important;
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.5), -2px -2px 8px rgba(255, 255, 255, 0.08) !important;
+}
+html.dark.theme-claymorphism button:not(.no-clay):active {
+  box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.6), inset -2px -2px 4px rgba(255, 255, 255, 0.1) !important;
+}
+html.dark.theme-claymorphism input,
+html.dark.theme-claymorphism select,
+html.dark.theme-claymorphism textarea {
+  background-color: #0f172a !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: inset 3px 3px 6px rgba(0, 0, 0, 0.6) !important;
+  color: #f8fafc !important;
+}
+html.dark.theme-claymorphism .text-zinc-900,
+html.dark.theme-claymorphism .text-slate-900,
+html.dark.theme-claymorphism .text-gray-900,
+html.dark.theme-claymorphism .text-black,
+html.dark.theme-claymorphism .text-zinc-800,
+html.dark.theme-claymorphism .text-slate-800,
+html.dark.theme-claymorphism .text-gray-800,
+html.dark.theme-claymorphism .text-zinc-700,
+html.dark.theme-claymorphism .text-slate-700,
+html.dark.theme-claymorphism .text-gray-700 {
+  color: #f8fafc !important;
+}
+html.dark.theme-claymorphism .text-zinc-600,
+html.dark.theme-claymorphism .text-slate-600,
+html.dark.theme-claymorphism .text-gray-600,
+html.dark.theme-claymorphism .text-zinc-500,
+html.dark.theme-claymorphism .text-slate-500,
+html.dark.theme-claymorphism .text-gray-500 {
+  color: #cbd5e1 !important;
+}
+
+/* 3. Skeuomorphism Dark Overrides */
+html.dark.theme-skeuomorphism body {
+  background-color: #121215 !important;
+  color: #f4f4f5 !important;
+}
+html.dark.theme-skeuomorphism .glass-panel,
+html.dark.theme-skeuomorphism aside,
+html.dark.theme-skeuomorphism header,
+html.dark.theme-skeuomorphism .bg-white {
+  background: linear-gradient(180deg, #27272a 0%, #18181b 100%) !important;
+  border: 1px solid #3f3f46 !important;
+  border-top-color: #52525b !important;
+  border-bottom-color: #09090b !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 8px 18px rgba(0, 0, 0, 0.6) !important;
+  color: #f4f4f5 !important;
+}
+html.dark.theme-skeuomorphism button {
+  background: linear-gradient(180deg, #3f3f46 0%, #27272a 100%) !important;
+  border: 1px solid #52525b !important;
+  border-top-color: #71717a !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 3px 6px rgba(0, 0, 0, 0.4) !important;
+  color: #ffffff !important;
+}
+html.dark.theme-skeuomorphism button:active {
+  background: linear-gradient(180deg, #18181b 0%, #27272a 100%) !important;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6) !important;
+}
+html.dark.theme-skeuomorphism input,
+html.dark.theme-skeuomorphism select,
+html.dark.theme-skeuomorphism textarea {
+  background: linear-gradient(180deg, #18181b 0%, #27272a 100%) !important;
+  border: 1.5px solid #3f3f46 !important;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.5) !important;
+  color: #f4f4f5 !important;
+}
+html.dark.theme-skeuomorphism .text-zinc-900,
+html.dark.theme-skeuomorphism .text-slate-900,
+html.dark.theme-skeuomorphism .text-gray-900,
+html.dark.theme-skeuomorphism .text-black,
+html.dark.theme-skeuomorphism .text-zinc-800,
+html.dark.theme-skeuomorphism .text-slate-800,
+html.dark.theme-skeuomorphism .text-gray-800,
+html.dark.theme-skeuomorphism .text-zinc-700,
+html.dark.theme-skeuomorphism .text-slate-700,
+html.dark.theme-skeuomorphism .text-gray-700 {
+  color: #f4f4f5 !important;
+}
+html.dark.theme-skeuomorphism .text-zinc-600,
+html.dark.theme-skeuomorphism .text-slate-600,
+html.dark.theme-skeuomorphism .text-gray-600,
+html.dark.theme-skeuomorphism .text-zinc-500,
+html.dark.theme-skeuomorphism .text-slate-500,
+html.dark.theme-skeuomorphism .text-gray-500 {
+  color: #a1a1aa !important;
+}
+
+/* 4. Minimalism Dark Overrides */
+html.dark.theme-minimalism body {
+  background-color: #09090b !important;
+  color: #f4f4f5 !important;
+}
+html.dark.theme-minimalism .glass-panel,
+html.dark.theme-minimalism aside,
+html.dark.theme-minimalism header,
+html.dark.theme-minimalism .bg-white {
+  background-color: #18181b !important;
+  border: 1px solid #27272a !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+  color: #f4f4f5 !important;
+}
+html.dark.theme-minimalism input,
+html.dark.theme-minimalism select,
+html.dark.theme-minimalism textarea {
+  background-color: #09090b !important;
+  border: 1px solid #27272a !important;
+  color: #f4f4f5 !important;
+}
+html.dark.theme-minimalism .text-zinc-900,
+html.dark.theme-minimalism .text-slate-900,
+html.dark.theme-minimalism .text-gray-900,
+html.dark.theme-minimalism .text-black,
+html.dark.theme-minimalism .text-zinc-800,
+html.dark.theme-minimalism .text-slate-800,
+html.dark.theme-minimalism .text-gray-800,
+html.dark.theme-minimalism .text-zinc-700,
+html.dark.theme-minimalism .text-slate-700,
+html.dark.theme-minimalism .text-gray-700 {
+  color: #f4f4f5 !important;
+}
+html.dark.theme-minimalism .text-zinc-600,
+html.dark.theme-minimalism .text-slate-600,
+html.dark.theme-minimalism .text-gray-600,
+html.dark.theme-minimalism .text-zinc-500,
+html.dark.theme-minimalism .text-slate-500,
+html.dark.theme-minimalism .text-gray-500 {
+  color: #a1a1aa !important;
+}
+
+/* 5. Maximalism / Neobrutalism Dark Overrides */
+html.dark.theme-maximalism body {
+  background-color: #180828 !important;
+  color: #ffffff !important;
+}
+html.dark.theme-maximalism .glass-panel,
+html.dark.theme-maximalism aside,
+html.dark.theme-maximalism header,
+html.dark.theme-maximalism .bg-white,
+html.dark.theme-maximalism .bg-slate-900 {
+  background-color: #2e1065 !important;
+  border: 2.5px solid #a855f7 !important;
+  box-shadow: 4px 4px 0px #a855f7 !important;
+  color: #ffffff !important;
+}
+html.dark.theme-maximalism button:not(.no-brutal) {
+  border: 2px solid #c084fc !important;
+  box-shadow: 3px 3px 0px #c084fc !important;
+  background-color: #3b0764 !important;
+  color: #ffffff !important;
+}
+html.dark.theme-maximalism button:not(.no-brutal):active {
+  transform: translate(2px, 2px) !important;
+  box-shadow: 1px 1px 0px #c084fc !important;
+}
+html.dark.theme-maximalism input,
+html.dark.theme-maximalism select,
+html.dark.theme-maximalism textarea {
+  border: 2px solid #a855f7 !important;
+  box-shadow: 2.5px 2.5px 0px #a855f7 !important;
+  background-color: #180828 !important;
+  color: #ffffff !important;
+}
+html.dark.theme-maximalism .text-zinc-900,
+html.dark.theme-maximalism .text-slate-900,
+html.dark.theme-maximalism .text-gray-900,
+html.dark.theme-maximalism .text-black,
+html.dark.theme-maximalism .text-zinc-800,
+html.dark.theme-maximalism .text-slate-800,
+html.dark.theme-maximalism .text-gray-800,
+html.dark.theme-maximalism .text-zinc-700,
+html.dark.theme-maximalism .text-slate-700,
+html.dark.theme-maximalism .text-gray-700 {
+  color: #ffffff !important;
+}
+html.dark.theme-maximalism .text-zinc-600,
+html.dark.theme-maximalism .text-slate-600,
+html.dark.theme-maximalism .text-gray-600,
+html.dark.theme-maximalism .text-zinc-500,
+html.dark.theme-maximalism .text-slate-500,
+html.dark.theme-maximalism .text-gray-500 {
+  color: #e9d5ff !important;
+}
+
+/* ==========================================================================
+   6. Luxe Gold & Noir Theme (شیشه دودی عمیق و طلایی - دقیقاً هماهنگ با لاگین)
+   ========================================================================== */
+html.theme-gold-noir,
+html.theme-gold-noir body,
+html.dark.theme-gold-noir,
+html.dark.theme-gold-noir body {
+  background-color: #06090e !important;
+  background-image: radial-gradient(circle at 50% 0%, rgba(251, 191, 36, 0.09) 0%, transparent 70%), radial-gradient(circle at 10% 90%, rgba(217, 119, 6, 0.05) 0%, transparent 60%) !important;
+  color: #ffffff !important;
+}
+
+html.theme-gold-noir #root,
+html.dark.theme-gold-noir #root,
+html.theme-gold-noir #main-scroll-container,
+html.dark.theme-gold-noir #main-scroll-container,
+html.theme-gold-noir main,
+html.dark.theme-gold-noir main {
+  background-color: transparent !important;
+  color: #ffffff !important;
+}
+
+/* Glass Panels, Cards & Containers */
+html.theme-gold-noir .glass-panel,
+html.theme-gold-noir aside,
+html.theme-gold-noir header,
+html.theme-gold-noir .apple-glass,
+html.theme-gold-noir .bg-white,
+html.theme-gold-noir .bg-gray-50,
+html.theme-gold-noir .bg-gray-100,
+html.theme-gold-noir .bg-gray-200,
+html.theme-gold-noir .bg-slate-50,
+html.theme-gold-noir .bg-slate-100,
+html.theme-gold-noir .bg-slate-200,
+html.theme-gold-noir .bg-slate-300,
+html.theme-gold-noir .bg-slate-800,
+html.theme-gold-noir .bg-slate-900,
+html.theme-gold-noir .bg-zinc-50,
+html.theme-gold-noir .bg-zinc-100,
+html.theme-gold-noir .bg-zinc-200,
+html.theme-gold-noir .bg-zinc-800,
+html.theme-gold-noir .bg-zinc-900,
+html.theme-gold-noir .bg-zinc-950,
+html.theme-gold-noir .bg-red-50,
+html.theme-gold-noir .bg-blue-50,
+html.theme-gold-noir .bg-amber-50,
+html.dark.theme-gold-noir .glass-panel,
+html.dark.theme-gold-noir aside,
+html.dark.theme-gold-noir header,
+html.dark.theme-gold-noir .apple-glass,
+html.dark.theme-gold-noir .bg-white,
+html.dark.theme-gold-noir .bg-gray-50,
+html.dark.theme-gold-noir .bg-gray-100,
+html.dark.theme-gold-noir .bg-slate-50,
+html.dark.theme-gold-noir .bg-slate-100,
+html.dark.theme-gold-noir .bg-slate-800,
+html.dark.theme-gold-noir .bg-slate-900,
+html.dark.theme-gold-noir .bg-zinc-800,
+html.dark.theme-gold-noir .bg-zinc-900,
+html.dark.theme-gold-noir .bg-zinc-950 {
+  background: rgba(12, 17, 28, 0.92) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  border: 1px solid rgba(251, 191, 36, 0.32) !important;
+  box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.88), 0 0 22px rgba(251, 191, 36, 0.12), inset 0 1px 1px rgba(254, 240, 138, 0.2) !important;
+  color: #ffffff !important;
+}
+
+/* Card Hover States */
+html.theme-gold-noir .glass-panel:hover,
+html.theme-gold-noir .apple-glass-hover:hover,
+html.dark.theme-gold-noir .glass-panel:hover,
+html.dark.theme-gold-noir .apple-glass-hover:hover {
+  background: rgba(18, 25, 40, 0.96) !important;
+  border-color: rgba(251, 191, 36, 0.65) !important;
+  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.95), 0 0 32px rgba(251, 191, 36, 0.28) !important;
+}
+
+/* Header & Sticky Navigation Bars */
+html.theme-gold-noir header,
+html.theme-gold-noir .glass-header,
+html.dark.theme-gold-noir header,
+html.dark.theme-gold-noir .glass-header {
+  background: rgba(8, 12, 20, 0.95) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.35) !important;
+}
+
+/* Sidebar Navigation Drawer */
+html.theme-gold-noir aside,
+html.dark.theme-gold-noir aside {
+  background: rgba(8, 12, 20, 0.94) !important;
+  border: 1px solid rgba(251, 191, 36, 0.35) !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9), 0 0 25px rgba(251, 191, 36, 0.15) !important;
+}
+
+/* Inputs, Selects & Textareas */
+html.theme-gold-noir input,
+html.theme-gold-noir select,
+html.theme-gold-noir textarea,
+html.dark.theme-gold-noir input,
+html.dark.theme-gold-noir select,
+html.dark.theme-gold-noir textarea {
+  background-color: rgba(6, 9, 15, 0.92) !important;
+  border: 1px solid rgba(251, 191, 36, 0.35) !important;
+  color: #ffffff !important;
+  backdrop-filter: blur(12px) !important;
+}
+
+html.theme-gold-noir input::placeholder,
+html.theme-gold-noir select::placeholder,
+html.theme-gold-noir textarea::placeholder,
+html.dark.theme-gold-noir input::placeholder,
+html.dark.theme-gold-noir select::placeholder,
+html.dark.theme-gold-noir textarea::placeholder {
+  color: rgba(251, 191, 36, 0.5) !important;
+}
+
+html.theme-gold-noir input:focus,
+html.theme-gold-noir select:focus,
+html.theme-gold-noir textarea:focus,
+html.dark.theme-gold-noir input:focus,
+html.dark.theme-gold-noir select:focus,
+html.dark.theme-gold-noir textarea:focus {
+  background-color: rgba(10, 15, 25, 0.98) !important;
+  border-color: #fbbf24 !important;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.35) !important;
+}
+
+/* Typography & Text Overrides */
+html.theme-gold-noir .text-zinc-900,
+html.theme-gold-noir .text-slate-900,
+html.theme-gold-noir .text-gray-900,
+html.theme-gold-noir .text-black,
+html.theme-gold-noir .text-zinc-800,
+html.theme-gold-noir .text-slate-800,
+html.theme-gold-noir .text-gray-800,
+html.theme-gold-noir .text-zinc-700,
+html.theme-gold-noir .text-slate-700,
+html.theme-gold-noir .text-gray-700,
+html.dark.theme-gold-noir .text-zinc-900,
+html.dark.theme-gold-noir .text-slate-900,
+html.dark.theme-gold-noir .text-gray-900,
+html.dark.theme-gold-noir .text-black,
+html.dark.theme-gold-noir .text-zinc-800,
+html.dark.theme-gold-noir .text-slate-800,
+html.dark.theme-gold-noir .text-gray-800,
+html.dark.theme-gold-noir .text-zinc-700,
+html.dark.theme-gold-noir .text-slate-700,
+html.dark.theme-gold-noir .text-gray-700 {
+  color: #ffffff !important;
+}
+
+html.theme-gold-noir .text-zinc-600,
+html.theme-gold-noir .text-slate-600,
+html.theme-gold-noir .text-gray-600,
+html.theme-gold-noir .text-zinc-500,
+html.theme-gold-noir .text-slate-500,
+html.theme-gold-noir .text-gray-500,
+html.theme-gold-noir .text-zinc-400,
+html.theme-gold-noir .text-slate-400,
+html.theme-gold-noir .text-gray-400,
+html.dark.theme-gold-noir .text-zinc-600,
+html.dark.theme-gold-noir .text-slate-600,
+html.dark.theme-gold-noir .text-gray-600,
+html.dark.theme-gold-noir .text-zinc-500,
+html.dark.theme-gold-noir .text-slate-500,
+html.dark.theme-gold-noir .text-gray-500,
+html.dark.theme-gold-noir .text-zinc-400,
+html.dark.theme-gold-noir .text-slate-400,
+html.dark.theme-gold-noir .text-gray-400 {
+  color: #fef08a !important;
+}
+
+/* Primary Action Buttons & Accents */
+html.theme-gold-noir .bg-blue-600,
+html.theme-gold-noir .bg-blue-500,
+html.theme-gold-noir .bg-indigo-600,
+html.theme-gold-noir .bg-amber-500,
+html.dark.theme-gold-noir .bg-blue-600,
+html.dark.theme-gold-noir .bg-blue-500,
+html.dark.theme-gold-noir .bg-indigo-600,
+html.dark.theme-gold-noir .bg-amber-500 {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%) !important;
+  color: #06090e !important;
+  font-weight: 800 !important;
+  border: 1px solid rgba(254, 240, 138, 0.5) !important;
+  box-shadow: 0 0 20px rgba(251, 191, 36, 0.35) !important;
+}
+
+/* Table Overrides */
+html.theme-gold-noir th,
+html.dark.theme-gold-noir th {
+  background-color: rgba(15, 21, 34, 0.95) !important;
+  border-color: rgba(251, 191, 36, 0.35) !important;
+  color: #fbbf24 !important;
+}
+
+html.theme-gold-noir tr:hover,
+html.dark.theme-gold-noir tr:hover {
+  background-color: rgba(251, 191, 36, 0.15) !important;
+}
+
+html.theme-gold-noir td,
+html.dark.theme-gold-noir td {
+  border-color: rgba(251, 191, 36, 0.2) !important;
+  color: #ffffff !important;
+}
+
+/* Border Overrides */
+html.theme-gold-noir .border-zinc-200,
+html.theme-gold-noir .border-gray-200,
+html.theme-gold-noir .border-slate-200,
+html.theme-gold-noir .border-zinc-100,
+html.theme-gold-noir .border-gray-100,
+html.theme-gold-noir .border-slate-100,
+html.dark.theme-gold-noir .border-zinc-800,
+html.dark.theme-gold-noir .border-gray-800,
+html.dark.theme-gold-noir .border-slate-800 {
+  border-color: rgba(251, 191, 36, 0.28) !important;
+}
+
+/* ==========================================================================
+   Graphics & Scrolling Optimization (Mobile & Desktop)
+   ========================================================================== */
+html[data-gpu-active="true"] * {
+  /* Prevent layout reflow jitter */
+  box-sizing: border-box;
+}
+
+/* Zero-delay tap highlight removal on mobile browsers */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Momentum scrolling optimization - ensure mouse wheel and touch scroll freely anywhere in middle of screen */
+.overflow-y-auto,
+.custom-scrollbar {
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y pinch-zoom !important;
+  pointer-events: auto !important;
+}
+
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-x: auto;
+  touch-action: pan-x pan-y pinch-zoom !important;
+  pointer-events: auto !important;
+}
+
+#main-scroll-container:not(.split-view-no-scroll) {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y pinch-zoom !important;
+  pointer-events: auto !important;
+}
+
+#main-scroll-container.split-view-no-scroll {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  height: 100% !important;
+  max-height: 100% !important;
+}
+
+[data-split-pane-scroll] {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior-y: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y pinch-zoom !important;
+  pointer-events: auto !important;
+}
+
+[data-split-pane-scroll="chat"] {
+  overflow: hidden !important;
+}
+
+/* Unrestricted smooth touch scrolling for Trade Dossiers on Android and mobile */
+.trade-dossier-view,
+.trade-dossier-content {
+  touch-action: pan-y pinch-zoom !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: auto !important;
+}
+
+.trade-dossier-view * {
+  touch-action: manipulation;
+}
+
+@media (max-width: 767px) {
+  .trade-dossier-view,
+  .trade-dossier-content {
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+  }
+}
+
+/* Ensure root and app container allow scroll propagation */
+html, body, #root {
+  min-height: 100%;
+  width: 100%;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.public-bio-scroll-view {
+  min-height: 100vh;
+  height: auto !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y pinch-zoom !important;
+  overscroll-behavior-y: auto !important;
+}
+
+/* Ensure mouse wheel and touch pan events propagate to scroll containers when swiping over middle of screen, cards, or buttons */
+body * {
+  pointer-events: auto;
+}
+
+/* Fast hardware-accelerated transitions */
+.animate-fast {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* ========================================================================= */
+/* REACT MULTI DATE PICKER (PERSIAN CALENDAR) HIGH Z-INDEX & OPAQUE POPOVER */
+/* ========================================================================= */
+.rmdp-container {
+  position: relative !important;
+  z-index: 60 !important;
+}
+
+.rmdp-container:focus-within,
+.rmdp-container:hover {
+  z-index: 999999 !important;
+}
+
+.rmdp-wrapper {
+  background-color: #ffffff !important;
+  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.4), 0 10px 20px -5px rgba(15, 23, 42, 0.2), 0 0 0 1px rgba(148, 163, 184, 0.35) !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 1rem !important;
+  z-index: 999999 !important;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.dark .rmdp-wrapper {
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(51, 65, 85, 0.6) !important;
+}
+
+.rmdp-calendar {
+  background-color: #ffffff !important;
+  border-radius: 1rem !important;
+  padding: 10px !important;
+}
+
+.dark .rmdp-calendar {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+.rmdp-header-values {
+  font-weight: 800 !important;
+  font-size: 13px !important;
+  color: #0f172a !important;
+}
+
+.dark .rmdp-header-values {
+  color: #f8fafc !important;
+}
+
+.rmdp-week-day {
+  color: #64748b !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+}
+
+.dark .rmdp-week-day {
+  color: #94a3b8 !important;
+}
+
+.rmdp-day {
+  font-weight: 600 !important;
+  color: #1e293b !important;
+}
+
+.dark .rmdp-day {
+  color: #e2e8f0 !important;
+}
+
+.rmdp-day.rmdp-selected span:not(.highlight) {
+  background-color: #2563eb !important;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.4) !important;
+  color: #ffffff !important;
+}
+
+.rmdp-day:not(.rmdp-disabled):not(.rmdp-day-hidden) span:hover {
+  background-color: #eff6ff !important;
+  color: #1d4ed8 !important;
+}
+
+.dark .rmdp-day:not(.rmdp-disabled):not(.rmdp-day-hidden) span:hover {
+  background-color: #1e293b !important;
+  color: #60a5fa !important;
+}
+
+.rmdp-day.rmdp-today span {
+  background-color: #f1f5f9 !important;
+  border: 1.5px solid #3b82f6 !important;
+  color: #1e3a8a !important;
+  font-weight: 800 !important;
+}
+
+.dark .rmdp-day.rmdp-today span {
+  background-color: #1e293b !important;
+  border: 1.5px solid #60a5fa !important;
+  color: #93c5fd !important;
+}
+
+.rmdp-arrow {
+  border-color: #475569 !important;
+}
+
+.dark .rmdp-arrow {
+  border-color: #cbd5e1 !important;
+}
+
+.rmdp-ep-arrow {
+  display: none !important;
+}
+
+.rmdp-popup {
+  z-index: 99999 !important;
+  position: absolute !important;
+}
+
+/* ==========================================================================
+   ⚡ ULTRA-PERFORMANCE / LOW-SPEC MODE FOR WEAK HARDWARE
+   Completely removes GPU shaders, backdrop-filters, animations & heavy shadows
+   ========================================================================== */
+html.low-spec-mode * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  text-shadow: none !important;
+}
+
+html.low-spec-mode .glass-panel,
+html.low-spec-mode .glass-header,
+html.low-spec-mode header,
+html.low-spec-mode aside,
+html.low-spec-mode .apple-glass,
+html.low-spec-mode .fixed.bottom-4.bg-white\/75 {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+}
+
+html.low-spec-mode .bg-blobs,
+html.low-spec-mode .blob,
+html.low-spec-mode .bg-blobs::after {
+  display: none !important;
+  animation: none !important;
+}
+
+html.low-spec-mode .glass-panel {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+}
+
+html.low-spec-mode.dark .glass-panel {
+  background-color: #0f172a !important;
+  border: 1px solid #334155 !important;
+}
+
+html.low-spec-mode aside {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.low-spec-mode.dark aside {
+  background: #0f172a !important;
+  border-color: #1e293b !important;
+}
+
+html.low-spec-mode header {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.low-spec-mode.dark header {
+  background: #0f172a !important;
+  border-color: #1e293b !important;
+}
+
+html.low-spec-mode main {
+  background: #f8fafc !important;
+}
+
+html.low-spec-mode.dark main {
+  background: #0b0f19 !important;
+}
+
+/* Eliminate transition lag on weak CPUs */
+html.low-spec-mode * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  will-change: auto !important;
+}
+
+/* Fast scrolling optimizations */
+html.low-spec-mode table,
+html.low-spec-mode tbody,
+html.low-spec-mode tr {
+  contain: none !important;
+  content-visibility: visible !important;
+}
+
+/* --- GPU & COMPOSITE HARDWARE ACCELERATION ---
+   Note: Never apply transform: translateZ(0) to main or .glass-panel as it traps position:fixed modals and exhausts Android GPU memory */
+.gpu-accelerated {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Hide all AI buttons and widgets when user or admin disables AI features */
+html.ai-features-disabled .ai-feature-btn,
+html.ai-features-disabled button[title*="هوش مصنوعی"] {
+  display: none !important;
+}
+
+/* --- QUILL TOOLBAR & SECRETARIAT EDITOR ENHANCEMENTS --- */
+#letter-custom-quill-toolbar {
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+  font-family: inherit;
+}
+
+#letter-custom-quill-toolbar .ql-formats {
+  margin-right: 0 !important;
+  margin-left: 8px !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Fix Quill button icons color & contrast in both Light & Dark modes */
+#letter-custom-quill-toolbar .ql-stroke {
+  stroke: #334155 !important;
+}
+
+.dark #letter-custom-quill-toolbar .ql-stroke {
+  stroke: #cbd5e1 !important;
+}
+
+#letter-custom-quill-toolbar .ql-fill {
+  fill: #334155 !important;
+}
+
+.dark #letter-custom-quill-toolbar .ql-fill {
+  fill: #cbd5e1 !important;
+}
+
+#letter-custom-quill-toolbar .ql-picker {
+  color: #334155 !important;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker {
+  color: #cbd5e1 !important;
+}
+
+#letter-custom-quill-toolbar .ql-picker-label {
+  border-radius: 6px;
+  padding: 2px 6px !important;
+  border: 1px solid #e2e8f0;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker-label {
+  border-color: #334155;
+  background-color: #1e293b;
+}
+
+#letter-custom-quill-toolbar .ql-picker-options {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15) !important;
+  padding: 4px !important;
+  z-index: 100 !important;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker-options {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f1f5f9 !important;
+}
+
+#letter-custom-quill-toolbar button {
+  width: 28px !important;
+  height: 28px !important;
+  padding: 4px !important;
+  border-radius: 6px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.15s ease-in-out;
+}
+
+#letter-custom-quill-toolbar button:hover {
+  background-color: #e2e8f0 !important;
+}
+
+.dark #letter-custom-quill-toolbar button:hover {
+  background-color: #334155 !important;
+}
+
+#letter-custom-quill-toolbar button.ql-active {
+  background-color: #ede9fe !important;
+}
+
+#letter-custom-quill-toolbar button.ql-active .ql-stroke {
+  stroke: #7c3aed !important;
+}
+
+#letter-custom-quill-toolbar button.ql-active .ql-fill {
+  fill: #7c3aed !important;
+}
+
+.dark #letter-custom-quill-toolbar button.ql-active {
+  background-color: #581c87 !important;
+}
+
+.dark #letter-custom-quill-toolbar button.ql-active .ql-stroke {
+  stroke: #c084fc !important;
+}
+
+.dark #letter-custom-quill-toolbar button.ql-active .ql-fill {
+  fill: #c084fc !important;
+}
+
+/* Quill Editor Inner Typography & Resizable Images */
+.google-docs-paper .ql-editor {
+  min-height: 220mm;
+  font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 2 !important;
+  font-size: 14px;
+}
+
+.google-docs-paper .ql-editor img {
+  cursor: pointer;
+  transition: outline 0.15s ease-in-out;
+  border-radius: 6px;
+  margin: 12px auto;
+}
+
+.google-docs-paper .ql-editor img:hover {
+  outline: 2px dashed #9333ea;
+}
+
+.google-docs-paper .ql-editor table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  border: 1px solid #cbd5e1;
+}
+
+.google-docs-paper .ql-editor table td,
+.google-docs-paper .ql-editor table th {
+  border: 1px solid #cbd5e1;
+  padding: 8px 12px;
+  text-align: right;
+}
+
+.google-docs-paper .ql-editor table th {
+  background-color: #f1f5f9;
+  font-weight: bold;
+}
+
+.dark .google-docs-paper .ql-editor table,
+.dark .google-docs-paper .ql-editor table td,
+.dark .google-docs-paper .ql-editor table th {
+  border-color: #475569;
+}
+
+.dark .google-docs-paper .ql-editor table th {
+  background-color: #1e293b;
+}
+
+
+/* ==========================================================================
+   MICROSOFT WORD & GOOGLE DOCS STYLE QUILL TOOLBAR & EDITOR
+   Ensures 100% visible, high-contrast buttons, dropdowns, and image handles
+   ========================================================================== */
+#letter-custom-quill-toolbar {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px 8px 0 0;
+  background-color: #f8fafc;
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.dark #letter-custom-quill-toolbar {
+  border-color: #334155;
+  background-color: #0f172a;
+}
+
+#letter-custom-quill-toolbar .ql-formats {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0 !important;
+  margin-left: 6px !important;
+  gap: 2px;
+}
+
+#letter-custom-quill-toolbar button {
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #334155 !important;
+  border: 1px solid transparent;
+  transition: all 0.15s ease-in-out;
+}
+
+.dark #letter-custom-quill-toolbar button {
+  color: #e2e8f0 !important;
+}
+
+#letter-custom-quill-toolbar button:hover {
+  background-color: #e2e8f0;
+  border-color: #cbd5e1;
+  color: #1e293b !important;
+}
+
+.dark #letter-custom-quill-toolbar button:hover {
+  background-color: #334155;
+  border-color: #475569;
+  color: #ffffff !important;
+}
+
+#letter-custom-quill-toolbar button.ql-active,
+#letter-custom-quill-toolbar .ql-picker-label.ql-active {
+  background-color: #ede9fe !important;
+  border-color: #a78bfa !important;
+  color: #6d28d9 !important;
+}
+
+.dark #letter-custom-quill-toolbar button.ql-active,
+.dark #letter-custom-quill-toolbar .ql-picker-label.ql-active {
+  background-color: #4c1d95 !important;
+  border-color: #7c3aed !important;
+  color: #ede9fe !important;
+}
+
+#letter-custom-quill-toolbar .ql-stroke {
+  stroke: #334155 !important;
+  stroke-width: 2 !important;
+}
+
+.dark #letter-custom-quill-toolbar .ql-stroke {
+  stroke: #e2e8f0 !important;
+}
+
+#letter-custom-quill-toolbar button:hover .ql-stroke,
+#letter-custom-quill-toolbar button.ql-active .ql-stroke {
+  stroke: #6d28d9 !important;
+}
+
+.dark #letter-custom-quill-toolbar button:hover .ql-stroke,
+.dark #letter-custom-quill-toolbar button.ql-active .ql-stroke {
+  stroke: #a78bfa !important;
+}
+
+#letter-custom-quill-toolbar .ql-fill {
+  fill: #334155 !important;
+}
+
+.dark #letter-custom-quill-toolbar .ql-fill {
+  fill: #e2e8f0 !important;
+}
+
+#letter-custom-quill-toolbar button:hover .ql-fill,
+#letter-custom-quill-toolbar button.ql-active .ql-fill {
+  fill: #6d28d9 !important;
+}
+
+.dark #letter-custom-quill-toolbar button:hover .ql-fill,
+.dark #letter-custom-quill-toolbar button.ql-active .ql-fill {
+  fill: #a78bfa !important;
+}
+
+/* Dropdown Pickers (Font, Size, Align, Header) */
+#letter-custom-quill-toolbar .ql-picker {
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background-color: #ffffff;
+  color: #1e293b;
+  margin: 0 2px;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker {
+  border-color: #475569;
+  background-color: #1e293b;
+  color: #f1f5f9;
+}
+
+#letter-custom-quill-toolbar .ql-picker-label {
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  border: none !important;
+  border-radius: 6px;
+  color: inherit !important;
+}
+
+#letter-custom-quill-toolbar .ql-picker-label svg {
+  right: auto !important;
+  left: 4px !important;
+}
+
+#letter-custom-quill-toolbar .ql-picker-options {
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+  padding: 4px !important;
+  z-index: 100 !important;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker-options {
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+}
+
+#letter-custom-quill-toolbar .ql-picker-item {
+  padding: 4px 8px !important;
+  border-radius: 4px;
+  color: #334155 !important;
+  font-size: 12px !important;
+  text-align: right !important;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker-item {
+  color: #e2e8f0 !important;
+}
+
+#letter-custom-quill-toolbar .ql-picker-item:hover,
+#letter-custom-quill-toolbar .ql-picker-item.ql-selected {
+  background-color: #ede9fe !important;
+  color: #6d28d9 !important;
+  font-weight: 700;
+}
+
+.dark #letter-custom-quill-toolbar .ql-picker-item:hover,
+.dark #letter-custom-quill-toolbar .ql-picker-item.ql-selected {
+  background-color: #4c1d95 !important;
+  color: #ede9fe !important;
+}
+
+/* Quill Editor Canvas */
+.ql-container.ql-snow {
+  border: none !important;
+  font-family: inherit !important;
+}
+
+.ql-clipboard,
+.ql-clipboard * {
+  white-space: pre-wrap !important;
+}
+
+.ql-editor {
+  min-height: 480px;
+  font-size: 14px;
+  line-height: 1.9;
+  padding: 16px 20px;
+  direction: rtl;
+  text-align: right;
+  white-space: pre-wrap !important;
+  font-family: 'Vazirmatn', 'Sahel', 'Samim', Tahoma, sans-serif;
+}
+
+.ql-editor p,
+.ql-editor div,
+.ql-editor li,
+.ql-editor span {
+  white-space: pre-wrap !important;
+}
+
+.ql-editor p {
+  margin-bottom: 0.5rem;
+}
+
+/* Unified Secretariat A4/A5 Paper Canvas (Editor, Preview, View, Print) */
+.secretariat-a4-paper .ql-container.ql-snow {
+  border: none !important;
+  position: relative !important;
+  overflow: visible !important;
+}
+
+.secretariat-a4-paper .ql-editor {
+  padding: 0 !important;
+  position: relative !important;
+  min-height: 185mm;
+  overflow: visible !important;
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+/* Explicit Quill Alignment & Full Justification Rules */
+.ql-editor .ql-align-justify,
+.ql-editor p[style*="text-align: justify"],
+.ql-editor div[style*="text-align: justify"],
+.ql-editor li[style*="text-align: justify"] {
+  text-align: justify !important;
+  text-justify: inter-word !important;
+  text-align-last: right !important;
+}
+
+.ql-editor .ql-align-center,
+.ql-editor p[style*="text-align: center"],
+.ql-editor div[style*="text-align: center"],
+.ql-editor li[style*="text-align: center"] {
+  text-align: center !important;
+  text-align-last: center !important;
+}
+
+.ql-editor .ql-align-left,
+.ql-editor p[style*="text-align: left"],
+.ql-editor div[style*="text-align: left"],
+.ql-editor li[style*="text-align: left"] {
+  text-align: left !important;
+  text-align-last: left !important;
+}
+
+.ql-editor .ql-align-right,
+.ql-editor p[style*="text-align: right"],
+.ql-editor div[style*="text-align: right"],
+.ql-editor li[style*="text-align: right"] {
+  text-align: right !important;
+  text-align-last: right !important;
+}
+
+/* Persian & Word-like Font Definitions with full cascade */
+.ql-font-Vazirmatn, [style*="font-family: Vazirmatn"], [style*="font-family: 'Vazirmatn'"] { font-family: 'Vazirmatn', Tahoma, sans-serif !important; }
+.ql-font-Sahel, [style*="font-family: Sahel"], [style*="font-family: 'Sahel'"] { font-family: 'Sahel', Tahoma, sans-serif !important; }
+.ql-font-Samim, [style*="font-family: Samim"], [style*="font-family: 'Samim'"] { font-family: 'Samim', Tahoma, sans-serif !important; }
+.ql-font-Tanha, [style*="font-family: Tanha"], [style*="font-family: 'Tanha'"] { font-family: 'Tanha', Tahoma, sans-serif !important; }
+.ql-font-Nahid, [style*="font-family: Nahid"], [style*="font-family: 'Nahid'"] { font-family: 'Nahid', Tahoma, sans-serif !important; }
+.ql-font-Lalezar, [style*="font-family: Lalezar"], [style*="font-family: 'Lalezar'"] { font-family: 'Lalezar', cursive, sans-serif !important; }
+.ql-font-NotoNaskh, [style*="font-family: 'Noto Naskh Arabic'"], [style*="font-family: Noto Naskh Arabic"] { font-family: 'Noto Naskh Arabic', 'B Nazanin', Tahoma, serif !important; }
+.ql-font-NotoSans, [style*="font-family: 'Noto Sans Arabic'"], [style*="font-family: Noto Sans Arabic"] { font-family: 'Noto Sans Arabic', Tahoma, sans-serif !important; }
+.ql-font-Amiri, [style*="font-family: Amiri"], [style*="font-family: 'Amiri'"] { font-family: 'Amiri', 'B Nazanin', serif !important; }
+.ql-font-Markazi, [style*="font-family: 'Markazi Text'"], [style*="font-family: Markazi Text"] { font-family: 'Markazi Text', 'B Nazanin', serif !important; }
+.ql-font-Scheherazade, [style*="font-family: 'Scheherazade New'"], [style*="font-family: Scheherazade New"] { font-family: 'Scheherazade New', serif !important; }
+.ql-font-Cairo, [style*="font-family: Cairo"], [style*="font-family: 'Cairo'"] { font-family: 'Cairo', Tahoma, sans-serif !important; }
+.ql-font-BNazanin, [style*="font-family: 'B Nazanin'"], [style*="font-family: B Nazanin"] { font-family: 'B Nazanin', 'Nazanin', 'Noto Naskh Arabic', Tahoma, serif !important; }
+.ql-font-BTitr, [style*="font-family: 'B Titr'"], [style*="font-family: B Titr"] { font-family: 'B Titr', 'Titr', 'Lalezar', Tahoma, sans-serif !important; font-weight: bold !important; }
+.ql-font-BYekan, [style*="font-family: 'B Yekan'"], [style*="font-family: B Yekan"] { font-family: 'B Yekan', 'Yekan', 'Sahel', Tahoma, sans-serif !important; }
+.ql-font-BMitra, [style*="font-family: 'B Mitra'"], [style*="font-family: B Mitra"] { font-family: 'B Mitra', 'Mitra', Tahoma, sans-serif !important; }
+.ql-font-IranNastaliq, [style*="font-family: IranNastaliq"], [style*="font-family: 'IranNastaliq'"] { font-family: 'IranNastaliq', 'Scheherazade New', serif !important; }
+.ql-font-Tahoma, [style*="font-family: Tahoma"], [style*="font-family: 'Tahoma'"] { font-family: Tahoma, Arial, sans-serif !important; }
+.ql-font-Arial, [style*="font-family: Arial"], [style*="font-family: 'Arial'"] { font-family: Arial, Helvetica, sans-serif !important; }
+.ql-font-TimesNewRoman, [style*="font-family: 'Times New Roman'"], [style*="font-family: Times New Roman"] { font-family: 'Times New Roman', Times, serif !important; }
+.ql-font-CourierNew, [style*="font-family: 'Courier New'"], [style*="font-family: Courier New"] { font-family: 'Courier New', Courier, monospace !important; }
+
+/* Font Picker Styling in Quill Ribbon */
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Vazirmatn"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Vazirmatn"]::before { content: "وزیر متن (استاندارد)"; font-family: 'Vazirmatn', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Sahel"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Sahel"]::before { content: "ساحل (نرم و اداری)"; font-family: 'Sahel', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Samim"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Samim"]::before { content: "صمیم (ساده و خوانا)"; font-family: 'Samim', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Tanha"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Tanha"]::before { content: "تنها (مستحکم)"; font-family: 'Tanha', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Nahid"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Nahid"]::before { content: "ناهید (گرد و رسمی)"; font-family: 'Nahid', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Lalezar"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Lalezar"]::before { content: "لاله‌زار (تیتر و اعلان)"; font-family: 'Lalezar', cursive; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Noto Naskh Arabic"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Noto Naskh Arabic"]::before { content: "نسخ رسمی (مشابه نازنین)"; font-family: 'Noto Naskh Arabic', serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Noto Sans Arabic"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Noto Sans Arabic"]::before { content: "سنز رسمی (مدرن سازمانی)"; font-family: 'Noto Sans Arabic', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Amiri"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Amiri"]::before { content: "امیری (کلاسیک و قرآنی)"; font-family: 'Amiri', serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Markazi Text"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Markazi Text"]::before { content: "مرکزی (اداری و کتابی)"; font-family: 'Markazi Text', serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Scheherazade New"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Scheherazade New"]::before { content: "شهرزاد (نسخ و نستعلیق)"; font-family: 'Scheherazade New', serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Cairo"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Cairo"]::before { content: "قاهره (هندسی و شیک)"; font-family: 'Cairo', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="B Nazanin"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="B Nazanin"]::before { content: "بی‌نازنین (B Nazanin)"; font-family: 'B Nazanin', 'Noto Naskh Arabic', serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="B Titr"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="B Titr"]::before { content: "بی‌تیتر (B Titr)"; font-family: 'B Titr', 'Lalezar', sans-serif; font-weight: bold; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="B Yekan"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="B Yekan"]::before { content: "بی‌یکان (B Yekan)"; font-family: 'B Yekan', sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Tahoma"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Tahoma"]::before { content: "Tahoma (ویندوز)"; font-family: Tahoma, sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Arial"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Arial"]::before { content: "Arial"; font-family: Arial, sans-serif; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="Times New Roman"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="Times New Roman"]::before { content: "Times New Roman"; font-family: 'Times New Roman', serif; }
+
+/* Word-Style Table Styling in Quill Editor */
+.ql-editor table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  margin: 14px 0 !important;
+  direction: rtl !important;
+}
+
+.ql-editor table td,
+.ql-editor table th {
+  border: 1px solid #cbd5e1 !important;
+  padding: 8px 12px !important;
+  min-width: 48px !important;
+  text-align: right !important;
+  vertical-align: top !important;
+}
+
+.ql-editor table th {
+  background-color: #f1f5f9 !important;
+  font-weight: bold !important;
+  color: #1e293b !important;
+}
+
+.dark .ql-editor table td,
+.dark .ql-editor table th {
+  border-color: #334155 !important;
+}
+
+.dark .ql-editor table th {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+

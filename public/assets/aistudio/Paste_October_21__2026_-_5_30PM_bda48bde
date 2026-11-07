@@ -1,0 +1,586 @@
+   Compiling toml_write v0.1.2
+   Compiling dunce v1.0.5
+   Compiling bytemuck v1.25.2
+   Compiling glob v0.3.4
+   Compiling winnow v0.5.40
+   Compiling tauri-utils v1.6.2
+   Compiling want v0.3.2
+   Compiling socket2 v0.5.10
+   Compiling windows-sys v0.48.0
+   Compiling miniz_oxide v0.9.1
+   Compiling toml_edit v0.22.27
+   Compiling toml_edit v0.19.15
+   Compiling futures-channel v0.3.34
+   Compiling native-tls v0.2.18
+   Compiling mime v0.3.17
+   Compiling bitflags v2.13.2
+   Compiling rustls v0.21.12
+   Compiling raw-window-handle v0.5.2
+   Compiling tokio-util v0.7.20
+   Compiling flate2 v1.1.10
+memory allocation of 2359312 bytes failed
+memory allocation of 2097152 bytes failed
+memory allocation of 262144 bytes failed
+memory allocation of 51936 bytes failed
+memory allocation of 46848 bytes failed
+stack backtrace:
+stack backtrace:
+stack backtrace:
+stack backtrace:
+stack backtrace:
+rustc-LLVM ERROR: out of memory
+   0:     0x7ffab967f329 - <unknown>
+memory allocation of 114688 bytes failed
+   0:     0x7ffab967f329 - <unknown>
+   0:     0x7ffab967f329 - <unknown>
+Allocation failed
+stack backtrace:
+   0:     0x7ffab967f329 - <unknown>
+memory allocation of 184336 bytes failed
+stack backtrace:
+   1:     0x7ffab96a8b0e - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   0:     0x7ffab967f329 - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+memory allocation of 397328 bytes failed
+stack backtrace:
+   8:     0x7ffabd644a98 - <unknown>
+   9:     0x7ffabd64203e - <unknown>
+  10:     0x7ffaba16f8e9 - <unknown>
+rustc-LLVM ERROR: out of memory
+Allocation failed
+memory allocation of 16384 bytes failed
+stack backtrace:
+  11:     0x7ffaba1b2fcd - <unknown>
+  12:     0x7ffaba2a1732 - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   0:     0x7ffab967f329 - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   0:     0x7ffab967f329 - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+error: only metadata stub found for `rlib` dependency `core` please provide path to the corresponding .rmeta file with full metadata
+ --> C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\indexmap-1.9.3\src\equivalent.rs:1:5
+  |
+1 | use core::borrow::Borrow;
+  |     ^^^^
+
+   3:     0x7ffab9670a8c - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   0:     0x7ffab967f329 - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   0:     0x7ffab967f329 - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   1:     0x7ffab96a8b0e - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   2:     0x7ffab968f3c4 - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   3:     0x7ffab9670a8c - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   4:     0x7ffab96546fc - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   5:     0x7ffab9650c0f - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   9:     0x7ffabd64203e - <unknown>
+   9:     0x7ffabd644ab5 - <unknown>
+  10:     0x7ffab9449b12 - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   6:     0x7ffab9670b2b - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   9:     0x7ffabd644ab5 - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+   9:     0x7ffabd644ab5 - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   9:     0x7ffabd644ab5 - <unknown>
+   7:     0x7ffab9655528 - <unknown>
+  10:     0x7ffaba593ba4 - <unknown>
+   9:     0x7ffab9695905 - <unknown>
+   8:     0x7ffabd644a98 - <unknown>
+   9:     0x7ffabd644ab5 - <unknown>
+  10:     0x7ffaba593ba4 - <unknown>
+   9:     0x7ffabd644ab5 - <unknown>
+  11:     0x7ffaba4c0fff - <unknown>
+  11:     0x7ffaba4c0fff - <unknown>
+  10:     0x7ffaba8dc7d2 - <unknown>
+  11:     0x7ffaba8d5697 - <unknown>
+  10:     0x7ffab8d746dd - <unknown>
+  11:     0x7ffab9ffac84 - <unknown>
+  12:     0x7ffab9f77e9d - <unknown>
+  13:     0x7ffab9ff206a - <unknown>
+  14:     0x7ffab9febcbe - <unknown>
+  15:     0x7ffabaca009b - <unknown>
+  13:     0x7ffab982fb76 - <unknown>
+  14:     0x7ffaba2a1cfa - <unknown>
+  11:     0x7ffabaf5746f - <unknown>
+  10:     0x7ffabb175543 - <unknown>
+  10:     0x7ffab9cba805 - <unknown>
+  12:     0x7ffabb018cf9 - <unknown>
+  11:     0x7ffab9ccb617 - <unknown>
+  10:     0x7ffabb175543 - <unknown>
+  12:     0x7ffaba9e0694 - <unknown>
+  12:     0x7ffaba470e38 - <unknown>
+  12:     0x7ffaba470e38 - <unknown>
+  15:     0x7ffaba1c3f4b - <unknown>
+  16:     0x7ffaba2a1e76 - <unknown>
+  17:     0x7ffab9830d65 - <unknown>
+  13:     0x7ffaba29e0b0 - <unknown>
+  14:     0x7ffaba1c3f4b - <unknown>
+  15:     0x7ffaba29e116 - <unknown>
+  16:     0x7ffaba4d2466 - <unknown>
+  17:     0x7ffaba2a91c0 - <unknown>
+  13:     0x7ffaba29e0b0 - <unknown>
+  14:     0x7ffaba1c3f4b - <unknown>
+  15:     0x7ffaba29e116 - <unknown>
+  16:     0x7ffabb0711da - <unknown>
+  12:     0x7ffab9c8b8dd - <unknown>
+  13:     0x7ffab9ccb39f - <unknown>
+  14:     0x7ffab9ccb5ad - <unknown>
+  15:     0x7ffab9c8b8dd - <unknown>
+  11:     0x7ffabb170fbf - <unknown>
+  11:     0x7ffabb08376f - <unknown>
+  12:     0x7ffabab7c031 - <unknown>
+  16:     0x7ffabaca67b9 - <unknown>
+  16:     0x7ffab9ccb39f - <unknown>
+  17:     0x7ffab9cfd51d - <unknown>
+  12:     0x7ffababf6564 - <unknown>
+  18:     0x7ffaba1a8561 - <unknown>
+  13:     0x7ffaba29c5b9 - <unknown>
+  14:     0x7ffaba226ac0 - <unknown>
+  15:     0x7ffaba29c617 - <unknown>
+  16:     0x7ffabafac736 - <unknown>
+  19:     0x7ffaba2a9211 - <unknown>
+  20:     0x7ffaba40e2d8 - <unknown>
+  21:     0x7ffab91c47d2 - <unknown>
+  22:     0x7ffaba4c0fff - <unknown>
+  23:     0x7ffaba470e38 - <unknown>
+  24:     0x7ffaba29e0b0 - <unknown>
+  25:     0x7ffaba1c3f4b - <unknown>
+  26:     0x7ffaba29e116 - <unknown>
+  27:     0x7ffaba4d2466 - <unknown>
+  28:     0x7ffaba2a91c0 - <unknown>
+  29:     0x7ffaba1a8561 - <unknown>
+  30:     0x7ffaba2a9211 - <unknown>
+  31:     0x7ffaba059fa9 - <unknown>
+  13:     0x7ffaba29de31 - <unknown>
+  18:     0x7ffaba2b44b9 - <unknown>
+  19:     0x7ffaba182e2d - <unknown>
+  14:     0x7ffaba19863a - <unknown>
+  20:     0x7ffaba2b4517 - <unknown>
+  21:     0x7ffab9cff287 - <unknown>
+  15:     0x7ffaba29dea6 - <unknown>
+  22:     0x7ffaba29906b - <unknown>
+  16:     0x7ffabb0d867c - <unknown>
+  23:     0x7ffaba186a4f - <unknown>
+  24:     0x7ffaba2990a9 - <unknown>
+  25:     0x7ffab9ce3982 - <unknown>
+rustc-LLVM ERROR: out of memory
+Allocation failed
+  32:     0x7ffab9085284 - <unknown>
+  17:     0x7ffab9c097ab - <unknown>
+  13:     0x7ffabab51866 - <unknown>
+  14:     0x7ffabab4facb - <unknown>
+  18:     0x7ffaba2adefa - <unknown>
+  19:     0x7ffaba1c3f4b - <unknown>
+  20:     0x7ffaba2ae086 - <unknown>
+  21:     0x7ffabb042cfb - <unknown>
+  22:     0x7ffab98553a2 - <unknown>
+  23:     0x7ffaba2a9083 - <unknown>
+  24:     0x7ffaba1f40f5 - <unknown>
+  25:     0x7ffaba2a90d7 - <unknown>
+  26:     0x7ffabb02bd88 - <unknown>
+  27:     0x7ffab9c49e14 - <unknown>
+  28:     0x7ffaba2a4153 - <unknown>
+  29:     0x7ffaba241325 - <unknown>
+  30:     0x7ffaba2a41a7 - <unknown>
+  31:     0x7ffab9c3e48c - <unknown>
+  32:     0x7ffab9c43a87 - <unknown>
+  33:     0x7ffab9c43a87 - <unknown>
+  34:     0x7ffab9c43a87 - <unknown>
+  35:     0x7ffab9c43a87 - <unknown>
+  36:     0x7ffab9c43a87 - <unknown>
+  37:     0x7ffab9c43a87 - <unknown>
+  38:     0x7ffab9c43a87 - <unknown>
+  39:     0x7ffab9c43a87 - <unknown>
+  40:     0x7ffab8e1ca70 - <unknown>
+  41:     0x7ffab9c2bf6e - <unknown>
+  42:     0x7ffab909a977 - <unknown>
+  43:     0x7ffab8f90e1a - <unknown>
+  44:     0x7ffab909a9c3 - <unknown>
+  45:     0x7ffaba3ed007 - <unknown>
+  46:     0x7ffab90962bd - <unknown>
+  47:     0x7ffab8f7be1e - <unknown>
+  48:     0x7ffab90962eb - <unknown>
+  49:     0x7ffababb4539 - <unknown>
+  33:     0x7ffab8f9bdc6 - <unknown>
+  34:     0x7ffab9085403 - <unknown>
+  35:     0x7ffababae172 - <unknown>
+  15:     0x7ffab9e61457 - <unknown>
+  16:     0x7ffab9dbde70 - <unknown>
+  18:     0x7ffab9c2c791 - <unknown>
+  19:     0x7ffab909a977 - <unknown>
+  20:     0x7ffab8f90e1a - <unknown>
+  21:     0x7ffab909a9c3 - <unknown>
+  22:     0x7ffaba3ed007 - <unknown>
+  23:     0x7ffab90962bd - <unknown>
+  24:     0x7ffab8f7be1e - <unknown>
+  25:     0x7ffab90962eb - <unknown>
+  26:     0x7ffababb4539 - <unknown>
+  17:     0x7ffab9dd8c4f - <unknown>
+  27:     0x7ffab933be03 - <unknown>
+  50:     0x7ffab933be03 - <unknown>
+  36:     0x7ffab933be03 - <unknown>
+  18:     0x7ffab9d5e2fa - <unknown>
+error: could not compile `indexmap` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+  19:     0x7ffaba29db4b - <unknown>
+  20:     0x7ffaba191f12 - <unknown>
+  21:     0x7ffaba29db9b - <unknown>
+  22:     0x7ffab96d3975 - <unknown>
+  23:     0x7ffab909d5da - <unknown>
+  28:     0x7ffab9358c6b - <unknown>
+  24:     0x7ffab8f8b959 - <unknown>
+  51:     0x7ffab9358c6b - <unknown>
+  37:     0x7ffab9358c6b - <unknown>
+  25:     0x7ffab909d616 - <unknown>
+  52:     0x7ffab93540ab - <unknown>
+  29:     0x7ffab93540ab - <unknown>
+  26:     0x7ffab5dd0088 - <unknown>
+  53:     0x7ffab5dfe61d - <unknown>
+  30:     0x7ffab5dfe61d - <unknown>
+  38:     0x7ffab93540ab - <unknown>
+  27:     0x7ffab5dc9865 - <unknown>
+  54:     0x7ffab5dd00e7 - <unknown>
+  31:     0x7ffab5dd00e7 - <unknown>
+  28:     0x7ffab5dd4a27 - <unknown>
+  55:     0x7ffab5dc9865 - <unknown>
+  39:     0x7ffab5dfe61d - <unknown>
+  32:     0x7ffab5dc9865 - <unknown>
+  29:     0x7ffab967be53 - <unknown>
+  56:     0x7ffab5dd4a27 - <unknown>
+  33:     0x7ffab5dd4a27 - <unknown>
+  40:     0x7ffab5dd00e7 - <unknown>
+  30:     0x7ffb52a37374 - BaseThreadInitThunk
+  57:     0x7ffab967be53 - <unknown>
+  34:     0x7ffab967be53 - <unknown>
+  41:     0x7ffab5dc9865 - <unknown>
+  31:     0x7ffb5409cc91 - RtlUserThreadStart
+  42:     0x7ffab5dd4a27 - <unknown>
+  58:     0x7ffb52a37374 - <unknown>
+  35:     0x7ffb52a37374 - BaseThreadInitThunk
+  43:     0x7ffab967be53 - <unknown>
+  36:     0x7ffb5409cc91 - RtlUserThreadStart
+  59:     0x7ffb5409cc91 - <unknown>
+  44:     0x7ffb52a37374 - <unknown>
+  45:     0x7ffb5409cc91 - <unknown>
+memory allocation of 138412048 bytes failed
+stack backtrace:
+error: could not compile `toml_edit` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name toml_edit --edition=2021 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_edit-0.19.15\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debug-assertions=off --cfg "feature=\"default\"" --cfg "feature=\"serde\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"default\", \"perf\", \"serde\", \"unbounded\"))" -C metadata=f3ef3537051404ee -C extra-filename=-b45b0092188cbcc4 --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern indexmap=D:\PaymentSystem\src-tauri\target\release\deps\libindexmap-7f8775ecfe06a112.rmeta --extern serde=D:\PaymentSystem\src-tauri\target\release\deps\libserde-5169750a28bb33eb.rmeta --extern serde_spanned=D:\PaymentSystem\src-tauri\target\release\deps\libserde_spanned-6a5336864325b73c.rmeta --extern toml_datetime=D:\PaymentSystem\src-tauri\target\release\deps\libtoml_datetime-13d91114fdcee855.rmeta --extern winnow=D:\PaymentSystem\src-tauri\target\release\deps\libwinnow-c959f81b3c64db08.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `toml_edit` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name toml_edit --edition=2021 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\toml_edit-0.22.27\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debug-assertions=off --cfg "feature=\"display\"" --cfg "feature=\"parse\"" --cfg "feature=\"serde\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"default\", \"display\", \"parse\", \"perf\", \"serde\", \"unbounded\", \"unstable-debug\"))" -C metadata=6c6d1e6ae8f6a236 -C extra-filename=-b5bf7a19d3ae78ca --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern indexmap=D:\PaymentSystem\src-tauri\target\release\deps\libindexmap-7f8775ecfe06a112.rmeta --extern serde=D:\PaymentSystem\src-tauri\target\release\deps\libserde-5169750a28bb33eb.rmeta --extern serde_spanned=D:\PaymentSystem\src-tauri\target\release\deps\libserde_spanned-6a5336864325b73c.rmeta --extern toml_datetime=D:\PaymentSystem\src-tauri\target\release\deps\libtoml_datetime-13d91114fdcee855.rmeta --extern toml_write=D:\PaymentSystem\src-tauri\target\release\deps\libtoml_write-ddb3920456af80f5.rmeta --extern winnow=D:\PaymentSystem\src-tauri\target\release\deps\libwinnow-f6f9225872ae78a7.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `flate2` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name flate2 --edition=2018 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\flate2-1.1.10\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --cfg "feature=\"any_impl\"" --cfg "feature=\"default\"" --cfg "feature=\"miniz_oxide\"" --cfg "feature=\"runtime_detection\"" --cfg "feature=\"rust_backend\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"any_c_zlib\", \"any_impl\", \"any_zlib\", \"cloudflare_zlib\", \"default\", \"document-features\", \"libz-ng-sys\", \"libz-sys\", \"miniz-sys\", \"miniz_oxide\", \"runtime_detection\", \"rust_backend\", \"zlib\", \"zlib-default\", \"zlib-ng\", \"zlib-ng-compat\", \"zlib-rs\"))" -C metadata=162869869e31d827 -C extra-filename=-23a37be59a9a3b08 --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern crc32fast=D:\PaymentSystem\src-tauri\target\release\deps\libcrc32fast-d272ed746e5585b9.rmeta --extern miniz_oxide=D:\PaymentSystem\src-tauri\target\release\deps\libminiz_oxide-be3a20e0323d20ad.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `zerocopy` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name zerocopy --edition=2021 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\zerocopy-0.8.63\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --cfg "feature=\"simd\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"__internal_use_only_features_that_work_on_stable\", \"alloc\", \"derive\", \"float-nightly\", \"simd\", \"simd-nightly\", \"std\", \"zerocopy-derive\"))" -C metadata=87865dbffd4f69a7 -C extra-filename=-5e0aeda76e91832e --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --cap-lints allow --check-cfg cfg(no_zerocopy_simd_x86_avx12_1_89_0) --check-cfg "cfg(rust, values(\"1.89.0\"))" --check-cfg cfg(no_zerocopy_core_error_1_81_0) --check-cfg "cfg(rust, values(\"1.81.0\"))" --check-cfg cfg(no_zerocopy_slice_ptr_len_1_79_0) --check-cfg "cfg(rust, values(\"1.79.0\"))" --check-cfg cfg(no_zerocopy_diagnostic_on_unimplemented_1_78_0) --check-cfg "cfg(rust, values(\"1.78.0\"))" --check-cfg cfg(no_zerocopy_generic_bounds_in_const_fn_1_61_0) --check-cfg "cfg(rust, values(\"1.61.0\"))" --check-cfg cfg(no_zerocopy_target_has_atomics_1_60_0) --check-cfg "cfg(rust, values(\"1.60.0\"))" --check-cfg cfg(no_zerocopy_aarch64_simd_1_59_0) --check-cfg "cfg(rust, values(\"1.59.0\"))" --check-cfg cfg(no_zerocopy_aarch64_simd_be_1_87_0) --check-cfg "cfg(rust, values(\"1.87.0\"))" --check-cfg cfg(no_zerocopy_panic_in_const_and_vec_try_reserve_1_57_0) --check-cfg "cfg(rust, values(\"1.57.0\"))" --check-cfg cfg(doc_cfg) --check-cfg cfg(kani) --check-cfg cfg(kani_slow) --check-cfg cfg(__ZEROCOPY_INTERNAL_USE_ONLY_NIGHTLY_FEATURES_IN_TESTS) --check-cfg "cfg(__ZEROCOPY_INTERNAL_USE_ONLY_TOOLCHAIN, values(\"msrv\", \"stable\", \"nightly\"))" --check-cfg cfg(__ZEROCOPY_INTERNAL_USE_ONLY_DEV_MODE) --check-cfg cfg(coverage_nightly) --check-cfg cfg(zerocopy_inline_always) --check-cfg cfg(zerocopy_unstable_ptr) --check-cfg cfg(zerocopy_unstable_linux) --check-cfg cfg(no_fp_fmt_parse)` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `miniz_oxide` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name miniz_oxide --edition=2021 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\miniz_oxide-0.9.1\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --cfg "feature=\"default\"" --cfg "feature=\"simd\"" --cfg "feature=\"simd-adler32\"" --cfg "feature=\"with-alloc\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"alloc\", \"block-boundary\", \"core\", \"default\", \"rustc-dep-of-std\", \"serde\", \"simd\", \"simd-adler32\", \"std\", \"with-alloc\"))" -C metadata=fdbe345ed17ddf4d -C extra-filename=-be3a20e0323d20ad --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern adler2=D:\PaymentSystem\src-tauri\target\release\deps\libadler2-8b3bdc9c24d339fb.rmeta --extern simd_adler32=D:\PaymentSystem\src-tauri\target\release\deps\libsimd_adler32-fce718ee4dad3137.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `url` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name url --edition=2018 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --cfg "feature=\"default\"" --cfg "feature=\"serde\"" --cfg "feature=\"std\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"debugger_visualizer\", \"default\", \"expose_internals\", \"serde\", \"std\"))" -C metadata=161d16965b79fa18 -C extra-filename=-96b358651b095cf7 --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern form_urlencoded=D:\PaymentSystem\src-tauri\target\release\deps\libform_urlencoded-5d4c5af0df882802.rmeta --extern idna=D:\PaymentSystem\src-tauri\target\release\deps\libidna-14252089b1a9cfd4.rmeta --extern percent_encoding=D:\PaymentSystem\src-tauri\target\release\deps\libpercent_encoding-4bc790809af4959c.rmeta --extern serde=D:\PaymentSystem\src-tauri\target\release\deps\libserde-12a897bf202c744a.rmeta --extern serde_derive=D:\PaymentSystem\src-tauri\target\release\deps\serde_derive-28f958d9b5b2dd4c.dll --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `tokio-util` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name tokio_util --edition=2021 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-util-0.7.20\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --cfg "feature=\"codec\"" --cfg "feature=\"default\"" --cfg "feature=\"io\"" --cfg "feature=\"libc\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"__docs_rs\", \"codec\", \"compat\", \"default\", \"full\", \"futures-io\", \"futures-util\", \"hashbrown\", \"io\", \"io-util\", \"join-map\", \"libc\", \"net\", \"rt\", \"slab\", \"time\", \"tracing\"))" -C metadata=775cff40b8b7a83f -C extra-filename=-c8594d6a0caddf5f --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern bytes=D:\PaymentSystem\src-tauri\target\release\deps\libbytes-b17a70b9a6b20235.rmeta --extern futures_core=D:\PaymentSystem\src-tauri\target\release\deps\libfutures_core-a905d515f8f3d0d3.rmeta --extern futures_sink=D:\PaymentSystem\src-tauri\target\release\deps\libfutures_sink-a0858e53825d0fdc.rmeta --extern pin_project_lite=D:\PaymentSystem\src-tauri\target\release\deps\libpin_project_lite-1ddcf580f420dafe.rmeta --extern tokio=D:\PaymentSystem\src-tauri\target\release\deps\libtokio-2ca220f30af60b81.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+  26:     0x7ffaba47e7c5 - rustc_mir_transform[e7f99641d50613a]::mir_built
+  17:     0x7ffaba3af229 - <rustc_lint[ff356eb9a90f9e38]::BuiltinCombinedLateLintModPass as rustc_lint[ff356eb9a90f9e38]::passes::LateLintPass>::check_stmt
+  17:     0x7ffaba40b7c5 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashTNtNtCs3f3hDOfqjQb_10rustc_span6def_id5DefIdINtNtCscT1b6K0r0iv_13rustc_type_ir6binder6BinderNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty7context6Ty
+   0:     0x7ffab967f329 - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ffab967f329 - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ffab967f329 - std::sys::backtrace::_print_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:74
+   3:     0x7ffab967f329 - std::sys::backtrace::impl$0::print::impl$0::fmt
+  17:     0x7ffab93b6ab5 - <rustc_expand[81dc94b2a5444950]::expand::MacroExpander>::expand_crate
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:44
+  13:     0x7ffab9a087be - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+  18:     0x7ffaba3407ea - <hashbrown[c929f6a4fe2db0c0]::raw::RawTable<usize>>::reserve_rehash::<indexmap[bfb06a004bcd082]::inner::get_hash<rustc_span[25c551d9978e7411]::def_id::DefId, rustc_lint[ff356eb9a90f9e38]::impl_trait_overcaptures::ParamKind>::{closure#0}>
+  14:     0x7ffab99e016e - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+   4:     0x7ffab96a8b0e - core::fmt::write
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\fmt\mod.rs:0
+  27:     0x7ffaba2b406b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  19:     0x7ffaba32428a - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  18:     0x7ffab91c47d2 - <rustc_mir_transform[e7f99641d50613a]::inline::Inline as rustc_mir_transform[e7f99641d50613a]::pass_manager::MirPass>::run_pass
+  18:     0x7ffab96cee9c - rustc_interface[a5e57aae1aef5838]::passes::emit_delayed_lints
+  20:     0x7ffaba32445d - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  15:     0x7ffab9937c15 - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+   5:     0x7ffab968f3c4 - core::io::write::default_write_fmt
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\io\write.rs:402
+   6:     0x7ffab968f3c4 - core::io::write::Write::write_fmt<std::sys::stdio::windows::Stderr>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\core\src\io\write.rs:335
+  28:     0x7ffaba191f12 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  19:     0x7ffaba4c0fff - <rustc_mir_transform[e7f99641d50613a]::inline::ForceInline>::should_run_pass_for_callee
+  21:     0x7ffaba34081e - <hashbrown[c929f6a4fe2db0c0]::raw::RawTable<usize>>::reserve_rehash::<indexmap[bfb06a004bcd082]::inner::get_hash<rustc_span[25c551d9978e7411]::def_id::DefId, rustc_lint[ff356eb9a90f9e38]::impl_trait_overcaptures::ParamKind>::{closure#0}>
+  16:     0x7ffab993b71f - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+  29:     0x7ffaba2b40b7 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+   7:     0x7ffab9670a8c - std::sys::backtrace::BacktraceLock::print
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:47
+   8:     0x7ffab9670a8c - std::alloc::default_alloc_error_hook
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\alloc.rs:409
+  22:     0x7ffaba32428a - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  17:     0x7ffab99bf80d - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+  30:     0x7ffaba471f7c - rustc_mir_transform[e7f99641d50613a]::mir_const_qualif
+  20:     0x7ffaba470e38 - rustc_mir_transform[e7f99641d50613a]::optimized_mir
+  19:     0x7ffab5e0b35b - rustc_interface[a5e57aae1aef5838]::passes::resolver_for_lowering_raw
+   9:     0x7ffab96546fc - std::alloc::rust_oom::closure$0
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\alloc.rs:440
+  21:     0x7ffaba29e0b0 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  18:     0x7ffab99c480a - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+  31:     0x7ffaba2a30f0 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  10:     0x7ffab9650c0f - std::sys::backtrace::__rust_end_short_backtrace<std::alloc::rust_oom::closure_env$0,never$>
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\backtrace.rs:182
+  20:     0x7ffab90979e7 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  11:     0x7ffab9670b2b - std::alloc::rust_oom
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\alloc.rs:436
+  22:     0x7ffaba1c3f4b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  23:     0x7ffaba32445d - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  12:     0x7ffab9655528 - std::alloc::_::__rust_alloc_error_handler
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\alloc.rs:435
+  32:     0x7ffaba1c1fa6 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  19:     0x7ffab993e175 - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+  21:     0x7ffab8f90e1a - <rustc_privacy[561f016935af4e24]::DefIdsToImplsCollector as rustc_privacy[561f016935af4e24]::DefIdVisitor>::visit_def_id
+  24:     0x7ffaba32431b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  33:     0x7ffaba2a3141 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  20:     0x7ffab99c238d - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+  23:     0x7ffaba29e116 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  22:     0x7ffab9097a33 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  13:     0x7ffabd644a98 - alloc::alloc::handle_alloc_error::rt_error
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\alloc\src\alloc.rs:643
+  25:     0x7ffaba34081e - <hashbrown[c929f6a4fe2db0c0]::raw::RawTable<usize>>::reserve_rehash::<indexmap[bfb06a004bcd082]::inner::get_hash<rustc_span[25c551d9978e7411]::def_id::DefId, rustc_lint[ff356eb9a90f9e38]::impl_trait_overcaptures::ParamKind>::{closure#0}>
+  14:     0x7ffabd644a98 - alloc::alloc::handle_alloc_error
+  21:     0x7ffab993b6eb - rustc_hir_typeck[5875e754adf784ab]::used_trait_imports
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\alloc\src\alloc.rs:649
+  24:     0x7ffababaedfa - <rustc_metadata[1376de8c7d86ffb5]::creader::CStore>::from_tcx
+  22:     0x7ffab9a948dc - rustc_hir_typeck[5875e754adf784ab]::intrinsicck::check_transmutes
+  34:     0x7ffaba3ffa6e - rustc_data_structures[80f7f66707b396b0]::outline::<<rustc_middle[818746f2d4ce2202]::mir::statement::StmtDebugInfos>::as_mut_slice::{closure#0}, &mut [rustc_middle[818746f2d4ce2202]::mir::statement::StmtDebugInfo]>
+  26:     0x7ffaba32428a - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  15:     0x7ffab9695905 - hashbrown::raw::Fallibility::alloc_err
+                               at /rust/deps\hashbrown-0.17.1/src\raw.rs:45
+  23:     0x7ffab949ef78 - <rustc_middle[818746f2d4ce2202]::ty::context::TyCtxt>::resolver_for_lowering
+  25:     0x7ffab933be03 - RINvNtNtNtCs7uUmbfRqPp3_4core5slice4sort6stable14driftsort_mainTNtNtCsduv4FwI1N8k_9rustc_abi6layout10VariantIdxNtNtCsb7tyIB4Yro4_12rustc_middle2ty10VariantDefENCINvMNtCsg1aDjJ6Ud3l_5alloc5sliceSBZ_11sort_by_keyB10_NCNvMss_NtNtCs1FBHSBgDhSP_14rustc_metadata
+  23:     0x7ffab98e6583 - <hashbrown[c929f6a4fe2db0c0]::raw::RawTable<usize>>::reserve_rehash::<indexmap[bfb06a004bcd082]::inner::get_hash<(rustc_middle[818746f2d4ce2202]::ty::predicate::Predicate, rustc_middle[818746f2d4ce2202]::traits::ObligationCause), ()>::{closure#0}>
+  35:     0x7ffaba4408a9 - core[57570d04ba8eb63f]::slice::sort::stable::quicksort::quicksort::<rustc_mir_transform[e7f99641d50613a]::jump_threading::EdgeEffect, <rustc_mir_transform[e7f99641d50613a]::jump_threading::EdgeEffect as core[57570d04ba8eb63f]::cmp::PartialOrd>::lt>
+  26:     0x7ffab9358c6b - rustc_metadata[1376de8c7d86ffb5]::rmeta::encoder::encode_metadata
+  27:     0x7ffaba3bc917 - <rustc_lint[ff356eb9a90f9e38]::BuiltinCombinedLateLintModPass as rustc_lint[ff356eb9a90f9e38]::passes::LateLintPass>::check_ty
+  16:     0x7ffab9f0d825 - RINvMs6_NtCsapu66lozk7m_9hashbrown3rawINtB6_8RawTableTNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdNtNtCs7MaZfLa4zSp_9rustc_hir3def10PartialResEE14reserve_rehashNCINvNtB8_3map11make_hasherBQ_B1x_NtCs3dJzF6GcvRl_10rustc_hash13FxBuildHasherE0ECsgDf5bDza4HX_13r
+  24:     0x7ffab9908b70 - rustc_hir_typeck[5875e754adf784ab]::typeck_root
+  27:     0x7ffab93540ab - rustc_metadata[1376de8c7d86ffb5]::fs::encode_and_write_metadata
+  28:     0x7ffab5dfe61d - <rustc_interface[a5e57aae1aef5838]::queries::Linker>::codegen_and_build_linker
+  36:     0x7ffaba5301c7 - <rustc_mir_transform[e7f99641d50613a]::promote_consts::PromoteTemps as rustc_mir_transform[e7f99641d50613a]::pass_manager::MirPass>::run_pass
+  24:     0x7ffab5dcfff6 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  29:     0x7ffab5dd00e7 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  25:     0x7ffaba29c86b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  28:     0x7ffaba3c3d61 - <rustc_lint[ff356eb9a90f9e38]::builtin::ExplicitOutlivesRequirements as rustc_lint[ff356eb9a90f9e38]::passes::LateLintPass>::check_item
+  30:     0x7ffab5dc9865 - RINvNtNtCscx1ptWZUqVR_3std3sys9backtrace28___rust_begin_short_backtraceNCNCINvNtCsef3SRYXKT9I_15rustc_interface4util26run_in_thread_with_globalsNCINvB1e_31run_in_thread_pool_with_globalsNCINvNtB1g_9interface12run_compileruNCNvCspy2N7xwqd2_17rustc_driver_im
+  25:     0x7ffab5dc9865 - RINvNtNtCscx1ptWZUqVR_3std3sys9backtrace28___rust_begin_short_backtraceNCNCINvNtCsef3SRYXKT9I_15rustc_interface4util26run_in_thread_with_globalsNCINvB1e_31run_in_thread_pool_with_globalsNCINvNtB1g_9interface12run_compileruNCNvCspy2N7xwqd2_17rustc_driver_im
+  31:     0x7ffab5dd4a27 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  26:     0x7ffab5dd4a27 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  37:     0x7ffaba46773a - rustc_mir_transform[e7f99641d50613a]::mir_promoted
+  29:     0x7ffaba347bbb - rustc_lint[ff356eb9a90f9e38]::lint_mod
+  17:     0x7ffab9fbf214 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  26:     0x7ffaba191f12 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  30:     0x7ffab909da8a - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  32:     0x7ffab967be53 - std::sys::thread::windows::impl$0::new::thread_start
+  27:     0x7ffab967be53 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+  31:     0x7ffab8fd52cf - <rustc_privacy[561f016935af4e24]::DefIdsToImplsCollector as rustc_privacy[561f016935af4e24]::DefIdVisitor>::visit_def_id
+  18:     0x7ffab9fa2389 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  27:     0x7ffaba29c8b7 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  38:     0x7ffaba29dc59 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  28:     0x7ffb52a37374 - BaseThreadInitThunk
+  33:     0x7ffb52a37374 - BaseThreadInitThunk
+  32:     0x7ffab909dac9 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  19:     0x7ffab9fa26be - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  29:     0x7ffb5409cc91 - RtlUserThreadStart
+  39:     0x7ffaba183132 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  28:     0x7ffab9af799d - rustc_hir_analysis[653a49a64b15ea57]::check_crate
+  34:     0x7ffb5409cc91 - RtlUserThreadStart
+  20:     0x7ffab9fa45b5 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  33:     0x7ffab90d7e3e - RINvNtNtNtNtCs7uUmbfRqPp3_4core5slice4sort6stable9quicksort9quicksortTRNtNtCs3f3hDOfqjQb_10rustc_span6symbol6SymbolRNtNtB1b_13span_encoding4SpanENCINvMNtCsg1aDjJ6Ud3l_5alloc5sliceSB15_11sort_by_keyB1P_NCNvXNtCslUt8NQvzo58_10rustc_lint16non_ascii_identsNtB3
+  40:     0x7ffaba29dcbb - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  29:     0x7ffab96d36d4 - rustc_interface[a5e57aae1aef5838]::passes::analysis
+  21:     0x7ffab9fa45b5 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  34:     0x7ffab90ea5a2 - rustc_lint[ff356eb9a90f9e38]::late::check_crate
+  35:     0x7ffab5df6c1f - <jiff[ab497618438a1dcb]::fmt::strtime::Display as core[57570d04ba8eb63f]::fmt::Display>::fmt
+  30:     0x7ffab909d5da - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  41:     0x7ffab9d5e1bb - rustc_borrowck[268c191f86bddf57]::mir_borrowck
+  22:     0x7ffab9fa26be - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  31:     0x7ffab8f8b959 - <rustc_privacy[561f016935af4e24]::DefIdsToImplsCollector as rustc_privacy[561f016935af4e24]::DefIdVisitor>::visit_def_id
+  42:     0x7ffaba29db4b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  36:     0x7ffab964960a - rustc_data_structures[80f7f66707b396b0]::sync::parallel::par_fns
+  23:     0x7ffab9fb319c - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  37:     0x7ffab5df8829 - <jiff[ab497618438a1dcb]::fmt::strtime::Display as core[57570d04ba8eb63f]::fmt::Display>::fmt
+  32:     0x7ffab909d616 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  43:     0x7ffaba191f12 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  33:     0x7ffab5dd0088 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  34:     0x7ffab5dc9865 - RINvNtNtCscx1ptWZUqVR_3std3sys9backtrace28___rust_begin_short_backtraceNCNCINvNtCsef3SRYXKT9I_15rustc_interface4util26run_in_thread_with_globalsNCINvB1e_31run_in_thread_pool_with_globalsNCINvNtB1g_9interface12run_compileruNCNvCspy2N7xwqd2_17rustc_driver_im
+  35:     0x7ffab5dd4a27 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  24:     0x7ffaba007255 - <rustc_resolve[c1bbfcf52c53f6f7]::late::LateResolutionVisitor as rustc_ast[257ab1d45d3cbf71]::visit::Visitor>::visit_fn
+  38:     0x7ffab964960a - rustc_data_structures[80f7f66707b396b0]::sync::parallel::par_fns
+  44:     0x7ffaba29db9b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  25:     0x7ffab9f240b8 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  36:     0x7ffab967be53 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+  39:     0x7ffab96d498e - rustc_interface[a5e57aae1aef5838]::passes::analysis
+  45:     0x7ffaba47b664 - rustc_mir_transform[e7f99641d50613a]::mir_drops_elaborated_and_const_checked
+  37:     0x7ffb52a37374 - BaseThreadInitThunk
+  26:     0x7ffab9f1a04b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  38:     0x7ffb5409cc91 - RtlUserThreadStart
+  40:     0x7ffab909d5da - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  27:     0x7ffab9f2a278 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  46:     0x7ffaba2afe3b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  28:     0x7ffab9f1a04b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  41:     0x7ffab8f8b959 - <rustc_privacy[561f016935af4e24]::DefIdsToImplsCollector as rustc_privacy[561f016935af4e24]::DefIdVisitor>::visit_def_id
+  47:     0x7ffaba191f12 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  29:     0x7ffab9f2a278 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  42:     0x7ffab909d616 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  43:     0x7ffab5dd0088 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  48:     0x7ffaba2afe8b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  44:     0x7ffab5dc9865 - RINvNtNtCscx1ptWZUqVR_3std3sys9backtrace28___rust_begin_short_backtraceNCNCINvNtCsef3SRYXKT9I_15rustc_interface4util26run_in_thread_with_globalsNCINvB1e_31run_in_thread_pool_with_globalsNCINvNtB1g_9interface12run_compileruNCNvCspy2N7xwqd2_17rustc_driver_im
+  30:     0x7ffab9f1a04b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  45:     0x7ffab5dd4a27 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  49:     0x7ffaba460349 - rustc_mir_transform[e7f99641d50613a]::mir_for_ctfe
+  31:     0x7ffab9f2a278 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  46:     0x7ffab967be53 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+  32:     0x7ffab9f1a04b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  50:     0x7ffaba29dbc0 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  47:     0x7ffb52a37374 - BaseThreadInitThunk
+  48:     0x7ffb5409cc91 - RtlUserThreadStart
+  33:     0x7ffab9f2a278 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  51:     0x7ffaba1c3f4b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  34:     0x7ffab9f1a04b - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  52:     0x7ffaba29dc26 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  35:     0x7ffab9f4fd26 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTablejE14reserve_rehashNCINvNtCs11LSGQ6PEpa_8indexmap5inner8get_hashNtNtCs3f3hDOfqjQb_10rustc_span6symbol5IdentINtNtCs7MaZfLa4zSp_9rustc_hir3def3ResNtNtCs3dv51njRPdl_9rustc_ast7node_id6NodeIdEE0ECsgDf5bDza4HX
+  53:     0x7ffaba822bd5 - <alloc[ba94fcdaf7c4b245]::raw_vec::RawVec<rustc_const_eval[f760d73a7b433ad7]::interpret::stack::Frame>>::grow_one
+  36:     0x7ffab8eff161 - <rustc_resolve[c1bbfcf52c53f6f7]::Resolver>::resolve_crate
+  54:     0x7ffaba672200 - <hashbrown[c929f6a4fe2db0c0]::raw::RawTable<usize>>::reserve_rehash::<indexmap[bfb06a004bcd082]::inner::get_hash<rustc_middle[818746f2d4ce2202]::mir::interpret::AllocId, (rustc_abi[9d262e68e8a652c2]::Size, rustc_abi[9d262e68e8a652c2]::Align)>::{closure#0}>
+  37:     0x7ffab96cf384 - rustc_interface[a5e57aae1aef5838]::passes::emit_delayed_lints
+  38:     0x7ffab5e0b35b - rustc_interface[a5e57aae1aef5838]::passes::resolver_for_lowering_raw
+  55:     0x7ffaba88a440 - rustc_const_eval[f760d73a7b433ad7]::const_eval::eval_queries::eval_to_allocation_raw_provider
+  39:     0x7ffab90979e7 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  40:     0x7ffab8f90e1a - <rustc_privacy[561f016935af4e24]::DefIdsToImplsCollector as rustc_privacy[561f016935af4e24]::DefIdVisitor>::visit_def_id
+  56:     0x7ffaba2a9327 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+error: could not compile `selectors` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name selectors --edition=2015 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\selectors-0.22.0\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"bench\"))" -C metadata=641edd3a2c70e725 -C extra-filename=-9e0ff9faa7f199a8 --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern bitflags=D:\PaymentSystem\src-tauri\target\release\deps\libbitflags-3d343a45c3cccfec.rmeta --extern cssparser=D:\PaymentSystem\src-tauri\target\release\deps\libcssparser-e068e5f361905f8a.rmeta --extern derive_more=D:\PaymentSystem\src-tauri\target\release\deps\derive_more-09dabee480e28c7a.dll --extern fxhash=D:\PaymentSystem\src-tauri\target\release\deps\libfxhash-65baa285a097931c.rmeta --extern log=D:\PaymentSystem\src-tauri\target\release\deps\liblog-00d059cff2b12e6f.rmeta --extern matches=D:\PaymentSystem\src-tauri\target\release\deps\libmatches-1a12c54a4496c54d.rmeta --extern phf=D:\PaymentSystem\src-tauri\target\release\deps\libphf-86868e46f451f587.rmeta --extern precomputed_hash=D:\PaymentSystem\src-tauri\target\release\deps\libprecomputed_hash-73f4be0bbcf23e7e.rmeta --extern servo_arc=D:\PaymentSystem\src-tauri\target\release\deps\libservo_arc-fc702a216176ff6a.rmeta --extern smallvec=D:\PaymentSystem\src-tauri\target\release\deps\libsmallvec-b55f3027c5ed7288.rmeta --extern thin_slice=D:\PaymentSystem\src-tauri\target\release\deps\libthin_slice-dddc73ea156d5b8b.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+  57:     0x7ffaba1eb899 - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  41:     0x7ffab9097a33 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  58:     0x7ffaba2a937b - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  42:     0x7ffab949ef78 - <rustc_middle[818746f2d4ce2202]::ty::context::TyCtxt>::resolver_for_lowering
+  43:     0x7ffab5dcfff6 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  44:     0x7ffab5dc9865 - RINvNtNtCscx1ptWZUqVR_3std3sys9backtrace28___rust_begin_short_backtraceNCNCINvNtCsef3SRYXKT9I_15rustc_interface4util26run_in_thread_with_globalsNCINvB1e_31run_in_thread_pool_with_globalsNCINvNtB1g_9interface12run_compileruNCNvCspy2N7xwqd2_17rustc_driver_im
+  59:     0x7ffaba88b1e6 - rustc_const_eval[f760d73a7b433ad7]::const_eval::eval_queries::eval_to_const_value_raw_provider
+  45:     0x7ffab5dd4a27 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  46:     0x7ffab967be53 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+  47:     0x7ffb52a37374 - BaseThreadInitThunk
+  48:     0x7ffb5409cc91 - RtlUserThreadStart
+  60:     0x7ffaba2aa263 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  61:     0x7ffaba1eb74a - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+  62:     0x7ffaba2aa2b7 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  63:     0x7ffaba88cef8 - rustc_const_eval[f760d73a7b433ad7]::const_eval::eval_queries::eval_to_const_value_raw_provider
+  64:     0x7ffaba2aa263 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+  65:     0x7ffaba1eb74a - RINvMs6_NtCshgN1VCuxY86_9hashbrown3rawINtB6_8RawTableTTNtNtNtCsb7tyIB4Yro4_12rustc_middle2ty8instance8InstanceNtNtBX_4mono14CollectionModeETINtNtNtBX_5query5erase10ErasedDataAhj20_ENtNtNtBX_9dep_graph5graph12DepNodeIndexEEE14reserve_rehashNCNvMs1_NtCsb4uNT
+error: could not compile `html5ever` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name html5ever --edition=2018 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\html5ever-0.26.0\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values())" -C metadata=96746b6c2696d802 -C extra-filename=-6a66ba8d1231fa30 --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern log=D:\PaymentSystem\src-tauri\target\release\deps\liblog-00d059cff2b12e6f.rmeta --extern mac=D:\PaymentSystem\src-tauri\target\release\deps\libmac-cfd7ccde054c5747.rmeta --extern markup5ever=D:\PaymentSystem\src-tauri\target\release\deps\libmarkup5ever-b7ebd01478aa086f.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+  66:     0x7ffaba2aa2b7 - rustc_query_impl[e9507846abed3558]::dep_kind_vtables::make_dep_kind_vtables
+error: could not compile `winapi` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name winapi --edition=2015 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-0.3.9\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debug-assertions=off --cfg "feature=\"knownfolders\"" --cfg "feature=\"objbase\"" --cfg "feature=\"shlobj\"" --cfg "feature=\"winbase\"" --cfg "feature=\"winerror\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"accctrl\", \"aclapi\", \"activation\", \"adhoc\", \"appmgmt\", \"audioclient\", \"audiosessiontypes\", \"avrt\", \"basetsd\", \"bcrypt\", \"bits\", \"bits10_1\", \"bits1_5\", \"bits2_0\", \"bits2_5\", \"bits3_0\", \"bits4_0\", \"bits5_0\", \"bitscfg\", \"bitsmsg\", \"bluetoothapis\", \"bluetoothleapis\", \"bthdef\", \"bthioctl\", \"bthledef\", \"bthsdpdef\", \"bugcodes\", \"cderr\", \"cfg\", \"cfgmgr32\", \"cguid\", \"combaseapi\", \"coml2api\", \"commapi\", \"commctrl\", \"commdlg\", \"commoncontrols\", \"consoleapi\", \"corecrt\", \"corsym\", \"d2d1\", \"d2d1_1\", \"d2d1_2\", \"d2d1_3\", \"d2d1effectauthor\", \"d2d1effects\", \"d2d1effects_1\", \"d2d1effects_2\", \"d2d1svg\", \"d2dbasetypes\", \"d3d\", \"d3d10\", \"d3d10_1\", \"d3d10_1shader\", \"d3d10effect\", \"d3d10misc\", \"d3d10sdklayers\", \"d3d10shader\", \"d3d11\", \"d3d11_1\", \"d3d11_2\", \"d3d11_3\", \"d3d11_4\", \"d3d11on12\", \"d3d11sdklayers\", \"d3d11shader\", \"d3d11tokenizedprogramformat\", \"d3d12\", \"d3d12sdklayers\", \"d3d12shader\", \"d3d9\", \"d3d9caps\", \"d3d9types\", \"d3dcommon\", \"d3dcompiler\", \"d3dcsx\", \"d3dkmdt\", \"d3dkmthk\", \"d3dukmdt\", \"d3dx10core\", \"d3dx10math\", \"d3dx10mesh\", \"datetimeapi\", \"davclnt\", \"dbghelp\", \"dbt\", \"dcommon\", \"dcomp\", \"dcompanimation\", \"dcomptypes\", \"dde\", \"ddraw\", \"ddrawi\", \"ddrawint\", \"debug\", \"debugapi\", \"devguid\", \"devicetopology\", \"devpkey\", \"devpropdef\", \"dinput\", \"dinputd\", \"dispex\", \"dmksctl\", \"dmusicc\", \"docobj\", \"documenttarget\", \"dot1x\", \"dpa_dsa\", \"dpapi\", \"dsgetdc\", \"dsound\", \"dsrole\", \"dvp\", \"dwmapi\", \"dwrite\", \"dwrite_1\", \"dwrite_2\", \"dwrite_3\", \"dxdiag\", \"dxfile\", \"dxgi\", \"dxgi1_2\", \"dxgi1_3\", \"dxgi1_4\", \"dxgi1_5\", \"dxgi1_6\", \"dxgidebug\", \"dxgiformat\", \"dxgitype\", \"dxva2api\", \"dxvahd\", \"eaptypes\", \"enclaveapi\", \"endpointvolume\", \"errhandlingapi\", \"everything\", \"evntcons\", \"evntprov\", \"evntrace\", \"excpt\", \"exdisp\", \"fibersapi\", \"fileapi\", \"functiondiscoverykeys_devpkey\", \"gl-gl\", \"guiddef\", \"handleapi\", \"heapapi\", \"hidclass\", \"hidpi\", \"hidsdi\", \"hidusage\", \"highlevelmonitorconfigurationapi\", \"hstring\", \"http\", \"ifdef\", \"ifmib\", \"imm\", \"impl-debug\", \"impl-default\", \"in6addr\", \"inaddr\", \"inspectable\", \"interlockedapi\", \"intsafe\", \"ioapiset\", \"ipexport\", \"iphlpapi\", \"ipifcons\", \"ipmib\", \"iprtrmib\", \"iptypes\", \"jobapi\", \"jobapi2\", \"knownfolders\", \"ks\", \"ksmedia\", \"ktmtypes\", \"ktmw32\", \"l2cmn\", \"libloaderapi\", \"limits\", \"lmaccess\", \"lmalert\", \"lmapibuf\", \"lmat\", \"lmcons\", \"lmdfs\", \"lmerrlog\", \"lmjoin\", \"lmmsg\", \"lmremutl\", \"lmrepl\", \"lmserver\", \"lmshare\", \"lmstats\", \"lmsvc\", \"lmuse\", \"lmwksta\", \"lowlevelmonitorconfigurationapi\", \"lsalookup\", \"memoryapi\", \"minschannel\", \"minwinbase\", \"minwindef\", \"mmdeviceapi\", \"mmeapi\", \"mmreg\", \"mmsystem\", \"mprapidef\", \"msaatext\", \"mscat\", \"mschapp\", \"mssip\", \"mstcpip\", \"mswsock\", \"mswsockdef\", \"namedpipeapi\", \"namespaceapi\", \"nb30\", \"ncrypt\", \"netioapi\", \"nldef\", \"ntddndis\", \"ntddscsi\", \"ntddser\", \"ntdef\", \"ntlsa\", \"ntsecapi\", \"ntstatus\", \"oaidl\", \"objbase\", \"objidl\", \"objidlbase\", \"ocidl\", \"ole2\", \"oleauto\", \"olectl\", \"oleidl\", \"opmapi\", \"pdh\", \"perflib\", \"physicalmonitorenumerationapi\", \"playsoundapi\", \"portabledevice\", \"portabledeviceapi\", \"portabledevicetypes\", \"powerbase\", \"powersetting\", \"powrprof\", \"processenv\", \"processsnapshot\", \"processthreadsapi\", \"processtopologyapi\", \"profileapi\", \"propidl\", \"propkey\", \"propkeydef\", \"propsys\", \"prsht\", \"psapi\", \"qos\", \"realtimeapiset\", \"reason\", \"restartmanager\", \"restrictederrorinfo\", \"rmxfguid\", \"roapi\", \"robuffer\", \"roerrorapi\", \"rpc\", \"rpcdce\", \"rpcndr\", \"rtinfo\", \"sapi\", \"sapi51\", \"sapi53\", \"sapiddk\", \"sapiddk51\", \"schannel\", \"sddl\", \"securityappcontainer\", \"securitybaseapi\", \"servprov\", \"setupapi\", \"shellapi\", \"shellscalingapi\", \"shlobj\", \"shobjidl\", \"shobjidl_core\", \"shtypes\", \"softpub\", \"spapidef\", \"spellcheck\", \"sporder\", \"sql\", \"sqlext\", \"sqltypes\", \"sqlucode\", \"sspi\", \"std\", \"stralign\", \"stringapiset\", \"strmif\", \"subauth\", \"synchapi\", \"sysinfoapi\", \"systemtopologyapi\", \"taskschd\", \"tcpestats\", \"tcpmib\", \"textstor\", \"threadpoolapiset\", \"threadpoollegacyapiset\", \"timeapi\", \"timezoneapi\", \"tlhelp32\", \"transportsettingcommon\", \"tvout\", \"udpmib\", \"unknwnbase\", \"urlhist\", \"urlmon\", \"usb\", \"usbioctl\", \"usbiodef\", \"usbscan\", \"usbspec\", \"userenv\", \"usp10\", \"utilapiset\", \"uxtheme\", \"vadefs\", \"vcruntime\", \"vsbackup\", \"vss\", \"vsserror\", \"vswriter\", \"wbemads\", \"wbemcli\", \"wbemdisp\", \"wbemprov\", \"wbemtran\", \"wct\", \"werapi\", \"winbase\", \"wincodec\", \"wincodecsdk\", \"wincon\", \"wincontypes\", \"wincred\", \"wincrypt\", \"windef\", \"windot11\", \"windowsceip\", \"windowsx\", \"winefs\", \"winerror\", \"winevt\", \"wingdi\", \"winhttp\", \"wininet\", \"winineti\", \"winioctl\", \"winnetwk\", \"winnls\", \"winnt\", \"winreg\", \"winsafer\", \"winscard\", \"winsmcrd\", \"winsock2\", \"winspool\", \"winstring\", \"winsvc\", \"wintrust\", \"winusb\", \"winusbio\", \"winuser\", \"winver\", \"wlanapi\", \"wlanihv\", \"wlanihvtypes\", \"wlantypes\", \"wlclient\", \"wmistr\", \"wnnc\", \"wow64apiset\", \"wpdmtpextensions\", \"ws2bth\", \"ws2def\", \"ws2ipdef\", \"ws2spi\", \"ws2tcpip\", \"wtsapi32\", \"wtypes\", \"wtypesbase\", \"xinput\"))" -C metadata=3c1982deea176175 -C extra-filename=-8237a9c750259e2d --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --cap-lints allow -l dylib=advapi32 -l dylib=cfgmgr32 -l dylib=gdi32 -l dylib=kernel32 -l dylib=msimg32 -l dylib=ole32 -l dylib=opengl32 -l dylib=shell32 -l dylib=user32 -l dylib=winspool --cfg "feature=\"rpcndr\"" --cfg "feature=\"excpt\"" --cfg "feature=\"vcruntime\"" --cfg "feature=\"propidl\"" --cfg "feature=\"oaidl\"" --cfg "feature=\"rpcdce\"" --cfg "feature=\"wingdi\"" --cfg "feature=\"shtypes\"" --cfg "feature=\"minwinbase\"" --cfg "feature=\"processthreadsapi\"" --cfg "feature=\"libloaderapi\"" --cfg "feature=\"combaseapi\"" --cfg "feature=\"windef\"" --cfg "feature=\"objidlbase\"" --cfg "feature=\"minwindef\"" --cfg "feature=\"rpc\"" --cfg "feature=\"ntstatus\"" --cfg "feature=\"winnt\"" --cfg "feature=\"ntdef\"" --cfg "feature=\"reason\"" --cfg "feature=\"winreg\"" --cfg "feature=\"devpropdef\"" --cfg "feature=\"cfgmgr32\"" --cfg "feature=\"ktmtypes\"" --cfg "feature=\"objidl\"" --cfg "feature=\"fileapi\"" --cfg "feature=\"vadefs\"" --cfg "feature=\"cfg\"" --cfg "feature=\"unknwnbase\"" --cfg "feature=\"basetsd\"" --cfg "feature=\"wtypesbase\"" --cfg "feature=\"guiddef\"" --cfg "feature=\"wtypes\""` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+  67:     0x7ffab9af7d1f - rustc_hir_analysis[653a49a64b15ea57]::check_crate
+  68:     0x7ffab96d36d4 - rustc_interface[a5e57aae1aef5838]::passes::analysis
+  69:     0x7ffab909d5da - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  70:     0x7ffab8f8b959 - <rustc_privacy[561f016935af4e24]::DefIdsToImplsCollector as rustc_privacy[561f016935af4e24]::DefIdVisitor>::visit_def_id
+  71:     0x7ffab909d616 - rustc_query_impl[e9507846abed3558]::self_profile::alloc_self_profile_query_strings
+  72:     0x7ffab5dd0088 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  73:     0x7ffab5dc9865 - RINvNtNtCscx1ptWZUqVR_3std3sys9backtrace28___rust_begin_short_backtraceNCNCINvNtCsef3SRYXKT9I_15rustc_interface4util26run_in_thread_with_globalsNCINvB1e_31run_in_thread_pool_with_globalsNCINvNtB1g_9interface12run_compileruNCNvCspy2N7xwqd2_17rustc_driver_im
+  74:     0x7ffab5dd4a27 - std[91f9a918aea500fd]::sys::backtrace::__rust_begin_short_backtrace::<std[91f9a918aea500fd]::thread::lifecycle::spawn_unchecked<ctrlc[3ee5f72686084f73]::set_handler_inner<rustc_driver_impl[4ccbe58f01cd902]::install_ctrlc_handler::{closure#0}>::{closure#0}, ()>::{closure#1}::{closure#0}::{closure#0}, ()>
+  75:     0x7ffab967be53 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library\std\src\sys\thread\windows.rs:58
+  76:     0x7ffb52a37374 - BaseThreadInitThunk
+error: could not compile `cfb` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name cfb --edition=2018 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cfb-0.7.3\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values())" -C metadata=808b26085b24be1e -C extra-filename=-f0b213aaaf802281 --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern byteorder=D:\PaymentSystem\src-tauri\target\release\deps\libbyteorder-04d45885d4693ea2.rmeta --extern fnv=D:\PaymentSystem\src-tauri\target\release\deps\libfnv-225fd0439d41d1c8.rmeta --extern uuid=D:\PaymentSystem\src-tauri\target\release\deps\libuuid-c598242b328c80be.rmeta --cap-lints allow` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+  77:     0x7ffb5409cc91 - RtlUserThreadStart
+error: could not compile `windows` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name windows --edition=2018 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.39.0\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C opt-level=2 -C panic=abort -C embed-bitcode=no -C codegen-units=16 --cfg "feature=\"Win32\"" --cfg "feature=\"Win32_Devices\"" --cfg "feature=\"Win32_Devices_HumanInterfaceDevice\"" --cfg "feature=\"Win32_Foundation\"" --cfg "feature=\"Win32_Globalization\"" --cfg "feature=\"Win32_Graphics\"" --cfg "feature=\"Win32_Graphics_Dwm\"" --cfg "feature=\"Win32_Graphics_Gdi\"" --cfg "feature=\"Win32_System\"" --cfg "feature=\"Win32_System_Com\"" --cfg "feature=\"Win32_System_Com_StructuredStorage\"" --cfg "feature=\"Win32_System_DataExchange\"" --cfg "feature=\"Win32_System_Diagnostics\"" --cfg "feature=\"Win32_System_Diagnostics_Debug\"" --cfg "feature=\"Win32_System_LibraryLoader\"" --cfg "feature=\"Win32_System_Memory\"" --cfg "feature=\"Win32_System_Ole\"" --cfg "feature=\"Win32_System_SystemInformation\"" --cfg "feature=\"Win32_System_SystemServices\"" --cfg "feature=\"Win32_System_Threading\"" --cfg "feature=\"Win32_System_WinRT\"" --cfg "feature=\"Win32_System_WindowsProgramming\"" --cfg "feature=\"Win32_UI\"" --cfg "feature=\"Win32_UI_Accessibility\"" --cfg "feature=\"Win32_UI_Controls\"" --cfg "feature=\"Win32_UI_HiDpi\"" --cfg "feature=\"Win32_UI_Input\"" --cfg "feature=\"Win32_UI_Input_Ime\"" --cfg "feature=\"Win32_UI_Input_KeyboardAndMouse\"" --cfg "feature=\"Win32_UI_Input_Pointer\"" --cfg "feature=\"Win32_UI_Input_Touch\"" --cfg "feature=\"Win32_UI_Shell\"" --cfg "feature=\"Win32_UI_TextServices\"" --cfg "feature=\"Win32_UI_WindowsAndMessaging\"" --cfg "feature=\"default\"" --cfg "feature=\"implement\"" --cfg "feature=\"windows-implement\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"AI\", \"AI_MachineLearning\", \"AI_MachineLearning_Preview\", \"ApplicationModel\", \"ApplicationModel_Activation\", \"ApplicationModel_AppExtensions\", \"ApplicationModel_AppService\", \"ApplicationModel_Appointments\", \"ApplicationModel_Appointments_AppointmentsProvider\", \"ApplicationModel_Appointments_DataProvider\", \"ApplicationModel_Background\", \"ApplicationModel_Calls\", \"ApplicationModel_Calls_Background\", \"ApplicationModel_Calls_Provider\", \"ApplicationModel_Chat\", \"ApplicationModel_CommunicationBlocking\", \"ApplicationModel_Contacts\", \"ApplicationModel_Contacts_DataProvider\", \"ApplicationModel_Contacts_Provider\", \"ApplicationModel_ConversationalAgent\", \"ApplicationModel_Core\", \"ApplicationModel_DataTransfer\", \"ApplicationModel_DataTransfer_DragDrop\", \"ApplicationModel_DataTransfer_DragDrop_Core\", \"ApplicationModel_DataTransfer_ShareTarget\", \"ApplicationModel_Email\", \"ApplicationModel_Email_DataProvider\", \"ApplicationModel_ExtendedExecution\", \"ApplicationModel_ExtendedExecution_Foreground\", \"ApplicationModel_Holographic\", \"ApplicationModel_LockScreen\", \"ApplicationModel_Payments\", \"ApplicationModel_Payments_Provider\", \"ApplicationModel_Preview\", \"ApplicationModel_Preview_Holographic\", \"ApplicationModel_Preview_InkWorkspace\", \"ApplicationModel_Preview_Notes\", \"ApplicationModel_Resources\", \"ApplicationModel_Resources_Core\", \"ApplicationModel_Resources_Management\", \"ApplicationModel_Search\", \"ApplicationModel_Search_Core\", \"ApplicationModel_SocialInfo\", \"ApplicationModel_SocialInfo_Provider\", \"ApplicationModel_Store\", \"ApplicationModel_Store_LicenseManagement\", \"ApplicationModel_Store_Preview\", \"ApplicationModel_Store_Preview_InstallControl\", \"ApplicationModel_UserActivities\", \"ApplicationModel_UserActivities_Core\", \"ApplicationModel_UserDataAccounts\", \"ApplicationModel_UserDataAccounts_Provider\", \"ApplicationModel_UserDataAccounts_SystemAccess\", \"ApplicationModel_UserDataTasks\", \"ApplicationModel_UserDataTasks_DataProvider\", \"ApplicationModel_VoiceCommands\", \"ApplicationModel_Wallet\", \"ApplicationModel_Wallet_System\", \"Data\", \"Data_Html\", \"Data_Json\", \"Data_Pdf\", \"Data_Text\", \"Data_Xml\", \"Data_Xml_Dom\", \"Data_Xml_Xsl\", \"Devices\", \"Devices_Adc\", \"Devices_Adc_Provider\", \"Devices_AllJoyn\", \"Devices_Background\", \"Devices_Bluetooth\", \"Devices_Bluetooth_Advertisement\", \"Devices_Bluetooth_Background\", \"Devices_Bluetooth_GenericAttributeProfile\", \"Devices_Bluetooth_Rfcomm\", \"Devices_Custom\", \"Devices_Display\", \"Devices_Display_Core\", \"Devices_Enumeration\", \"Devices_Enumeration_Pnp\", \"Devices_Geolocation\", \"Devices_Geolocation_Geofencing\", \"Devices_Gpio\", \"Devices_Gpio_Provider\", \"Devices_Haptics\", \"Devices_HumanInterfaceDevice\", \"Devices_I2c\", \"Devices_I2c_Provider\", \"Devices_Input\", \"Devices_Input_Preview\", \"Devices_Lights\", \"Devices_Lights_Effects\", \"Devices_Midi\", \"Devices_Perception\", \"Devices_Perception_Provider\", \"Devices_PointOfService\", \"Devices_PointOfService_Provider\", \"Devices_Portable\", \"Devices_Power\", \"Devices_Printers\", \"Devices_Printers_Extensions\", \"Devices_Pwm\", \"Devices_Pwm_Provider\", \"Devices_Radios\", \"Devices_Scanners\", \"Devices_Sensors\", \"Devices_Sensors_Custom\", \"Devices_SerialCommunication\", \"Devices_SmartCards\", \"Devices_Sms\", \"Devices_Spi\", \"Devices_Spi_Provider\", \"Devices_Usb\", \"Devices_WiFi\", \"Devices_WiFiDirect\", \"Devices_WiFiDirect_Services\", \"Embedded\", \"Embedded_DeviceLockdown\", \"Foundation\", \"Foundation_Collections\", \"Foundation_Diagnostics\", \"Foundation_Metadata\", \"Foundation_Numerics\", \"Gaming\", \"Gaming_Input\", \"Gaming_Input_Custom\", \"Gaming_Input_ForceFeedback\", \"Gaming_Input_Preview\", \"Gaming_Preview\", \"Gaming_Preview_GamesEnumeration\", \"Gaming_UI\", \"Gaming_XboxLive\", \"Gaming_XboxLive_Storage\", \"Globalization\", \"Globalization_Collation\", \"Globalization_DateTimeFormatting\", \"Globalization_Fonts\", \"Globalization_NumberFormatting\", \"Globalization_PhoneNumberFormatting\", \"Graphics\", \"Graphics_Capture\", \"Graphics_DirectX\", \"Graphics_DirectX_Direct3D11\", \"Graphics_Display\", \"Graphics_Display_Core\", \"Graphics_Effects\", \"Graphics_Holographic\", \"Graphics_Imaging\", \"Graphics_Printing\", \"Graphics_Printing3D\", \"Graphics_Printing_OptionDetails\", \"Graphics_Printing_PrintSupport\", \"Graphics_Printing_PrintTicket\", \"Graphics_Printing_Workflow\", \"Management\", \"Management_Core\", \"Management_Deployment\", \"Management_Deployment_Preview\", \"Management_Policies\", \"Management_Update\", \"Management_Workplace\", \"Media\", \"Media_AppBroadcasting\", \"Media_AppRecording\", \"Media_Audio\", \"Media_Capture\", \"Media_Capture_Core\", \"Media_Capture_Frames\", \"Media_Casting\", \"Media_ClosedCaptioning\", \"Media_ContentRestrictions\", \"Media_Control\", \"Media_Core\", \"Media_Core_Preview\", \"Media_Devices\", \"Media_Devices_Core\", \"Media_DialProtocol\", \"Media_Editing\", \"Media_Effects\", \"Media_FaceAnalysis\", \"Media_Import\", \"Media_MediaProperties\", \"Media_Miracast\", \"Media_Ocr\", \"Media_PlayTo\", \"Media_Playback\", \"Media_Playlists\", \"Media_Protection\", \"Media_Protection_PlayReady\", \"Media_Render\", \"Media_SpeechRecognition\", \"Media_SpeechSynthesis\", \"Media_Streaming\", \"Media_Streaming_Adaptive\", \"Media_Transcoding\", \"Networking\", \"Networking_BackgroundTransfer\", \"Networking_Connectivity\", \"Networking_NetworkOperators\", \"Networking_Proximity\", \"Networking_PushNotifications\", \"Networking_ServiceDiscovery\", \"Networking_ServiceDiscovery_Dnssd\", \"Networking_Sockets\", \"Networking_Vpn\", \"Networking_XboxLive\", \"Perception\", \"Perception_Automation\", \"Perception_Automation_Core\", \"Perception_People\", \"Perception_Spatial\", \"Perception_Spatial_Preview\", \"Perception_Spatial_Surfaces\", \"Phone\", \"Phone_ApplicationModel\", \"Phone_Devices\", \"Phone_Devices_Notification\", \"Phone_Devices_Power\", \"Phone_Management\", \"Phone_Management_Deployment\", \"Phone_Media\", \"Phone_Media_Devices\", \"Phone_Notification\", \"Phone_Notification_Management\", \"Phone_PersonalInformation\", \"Phone_PersonalInformation_Provisioning\", \"Phone_Speech\", \"Phone_Speech_Recognition\", \"Phone_StartScreen\", \"Phone_System\", \"Phone_System_Power\", \"Phone_System_Profile\", \"Phone_System_UserProfile\", \"Phone_System_UserProfile_GameServices\", \"Phone_System_UserProfile_GameServices_Core\", \"Phone_UI\", \"Phone_UI_Input\", \"Security\", \"Security_Authentication\", \"Security_Authentication_Identity\", \"Security_Authentication_Identity_Core\", \"Security_Authentication_Identity_Provider\", \"Security_Authentication_OnlineId\", \"Security_Authentication_Web\", \"Security_Authentication_Web_Core\", \"Security_Authentication_Web_Provider\", \"Security_Authorization\", \"Security_Authorization_AppCapabilityAccess\", \"Security_Credentials\", \"Security_Credentials_UI\", \"Security_Cryptography\", \"Security_Cryptography_Certificates\", \"Security_Cryptography_Core\", \"Security_Cryptography_DataProtection\", \"Security_DataProtection\", \"Security_EnterpriseData\", \"Security_ExchangeActiveSyncProvisioning\", \"Security_Isolation\", \"Services\", \"Services_Cortana\", \"Services_Maps\", \"Services_Maps_Guidance\", \"Services_Maps_LocalSearch\", \"Services_Maps_OfflineMaps\", \"Services_Store\", \"Services_TargetedContent\", \"Storage\", \"Storage_AccessCache\", \"Storage_BulkAccess\", \"Storage_Compression\", \"Storage_FileProperties\", \"Storage_Pickers\", \"Storage_Pickers_Provider\", \"Storage_Provider\", \"Storage_Search\", \"Storage_Streams\", \"System\", \"System_Diagnostics\", \"System_Diagnostics_DevicePortal\", \"System_Diagnostics_Telemetry\", \"System_Diagnostics_TraceReporting\", \"System_Display\", \"System_Implementation\", \"System_Implementation_FileExplorer\", \"System_Inventory\", \"System_Power\", \"System_Power_Diagnostics\", \"System_Preview\", \"System_Profile\", \"System_Profile_SystemManufacturers\", \"System_RemoteDesktop\", \"System_RemoteDesktop_Input\", \"System_RemoteSystems\", \"System_Threading\", \"System_Threading_Core\", \"System_Update\", \"System_UserProfile\", \"UI\", \"UI_Accessibility\", \"UI_ApplicationSettings\", \"UI_Composition\", \"UI_Composition_Core\", \"UI_Composition_Desktop\", \"UI_Composition_Diagnostics\", \"UI_Composition_Effects\", \"UI_Composition_Interactions\", \"UI_Composition_Scenes\", \"UI_Core\", \"UI_Core_AnimationMetrics\", \"UI_Core_Preview\", \"UI_Input\", \"UI_Input_Core\", \"UI_Input_Inking\", \"UI_Input_Inking_Analysis\", \"UI_Input_Inking_Core\", \"UI_Input_Inking_Preview\", \"UI_Input_Preview\", \"UI_Input_Preview_Injection\", \"UI_Input_Spatial\", \"UI_Notifications\", \"UI_Notifications_Management\", \"UI_Popups\", \"UI_Shell\", \"UI_StartScreen\", \"UI_Text\", \"UI_Text_Core\", \"UI_UIAutomation\", \"UI_UIAutomation_Core\", \"UI_ViewManagement\", \"UI_ViewManagement_Core\", \"UI_WebUI\", \"UI_WebUI_Core\", \"UI_WindowManagement\", \"UI_WindowManagement_Preview\", \"Web\", \"Web_AtomPub\", \"Web_Http\", \"Web_Http_Diagnostics\", \"Web_Http_Filters\", \"Web_Http_Headers\", \"Web_Syndication\", \"Web_UI\", \"Web_UI_Interop\", \"Win32\", \"Win32_AI\", \"Win32_AI_MachineLearning\", \"Win32_AI_MachineLearning_DirectML\", \"Win32_AI_MachineLearning_WinML\", \"Win32_Data\", \"Win32_Data_HtmlHelp\", \"Win32_Data_RightsManagement\", \"Win32_Data_Xml\", \"Win32_Data_Xml_MsXml\", \"Win32_Data_Xml_XmlLite\", \"Win32_Devices\", \"Win32_Devices_AllJoyn\", \"Win32_Devices_BiometricFramework\", \"Win32_Devices_Bluetooth\", \"Win32_Devices_Communication\", \"Win32_Devices_DeviceAccess\", \"Win32_Devices_DeviceAndDriverInstallation\", \"Win32_Devices_DeviceQuery\", \"Win32_Devices_Display\", \"Win32_Devices_Enumeration\", \"Win32_Devices_Enumeration_Pnp\", \"Win32_Devices_Fax\", \"Win32_Devices_FunctionDiscovery\", \"Win32_Devices_Geolocation\", \"Win32_Devices_HumanInterfaceDevice\", \"Win32_Devices_ImageAcquisition\", \"Win32_Devices_PortableDevices\", \"Win32_Devices_Properties\", \"Win32_Devices_Pwm\", \"Win32_Devices_Sensors\", \"Win32_Devices_SerialCommunication\", \"Win32_Devices_Tapi\", \"Win32_Devices_Usb\", \"Win32_Devices_WebServicesOnDevices\", \"Win32_Foundation\", \"Win32_Gaming\", \"Win32_Globalization\", \"Win32_Graphics\", \"Win32_Graphics_CompositionSwapchain\", \"Win32_Graphics_DXCore\", \"Win32_Graphics_Direct2D\", \"Win32_Graphics_Direct2D_Common\", \"Win32_Graphics_Direct3D\", \"Win32_Graphics_Direct3D10\", \"Win32_Graphics_Direct3D11\", \"Win32_Graphics_Direct3D11on12\", \"Win32_Graphics_Direct3D12\", \"Win32_Graphics_Direct3D9\", \"Win32_Graphics_Direct3D9on12\", \"Win32_Graphics_Direct3D_Dxc\", \"Win32_Graphics_Direct3D_Fxc\", \"Win32_Graphics_DirectComposition\", \"Win32_Graphics_DirectDraw\", \"Win32_Graphics_DirectManipulation\", \"Win32_Graphics_DirectWrite\", \"Win32_Graphics_Dwm\", \"Win32_Graphics_Dxgi\", \"Win32_Graphics_Dxgi_Common\", \"Win32_Graphics_Gdi\", \"Win32_Graphics_Hlsl\", \"Win32_Graphics_Imaging\", \"Win32_Graphics_Imaging_D2D\", \"Win32_Graphics_OpenGL\", \"Win32_Graphics_Printing\", \"Win32_Graphics_Printing_PrintTicket\", \"Win32_Management\", \"Win32_Management_MobileDeviceManagementRegistration\", \"Win32_Media\", \"Win32_Media_Audio\", \"Win32_Media_Audio_Apo\", \"Win32_Media_Audio_DirectMusic\", \"Win32_Media_Audio_DirectSound\", \"Win32_Media_Audio_Endpoints\", \"Win32_Media_Audio_XAudio2\", \"Win32_Media_DeviceManager\", \"Win32_Media_DirectShow\", \"Win32_Media_DirectShow_Xml\", \"Win32_Media_DxMediaObjects\", \"Win32_Media_KernelStreaming\", \"Win32_Media_LibrarySharingServices\", \"Win32_Media_MediaFoundation\", \"Win32_Media_MediaPlayer\", \"Win32_Media_Multimedia\", \"Win32_Media_PictureAcquisition\", \"Win32_Media_Speech\", \"Win32_Media_Streaming\", \"Win32_Media_WindowsMediaFormat\", \"Win32_NetworkManagement\", \"Win32_NetworkManagement_Dhcp\", \"Win32_NetworkManagement_Dns\", \"Win32_NetworkManagement_InternetConnectionWizard\", \"Win32_NetworkManagement_IpHelper\", \"Win32_NetworkManagement_MobileBroadband\", \"Win32_NetworkManagement_Multicast\", \"Win32_NetworkManagement_Ndis\", \"Win32_NetworkManagement_NetBios\", \"Win32_NetworkManagement_NetManagement\", \"Win32_NetworkManagement_NetShell\", \"Win32_NetworkManagement_NetworkDiagnosticsFramework\", \"Win32_NetworkManagement_NetworkPolicyServer\", \"Win32_NetworkManagement_P2P\", \"Win32_NetworkManagement_QoS\", \"Win32_NetworkManagement_Rras\", \"Win32_NetworkManagement_Snmp\", \"Win32_NetworkManagement_WNet\", \"Win32_NetworkManagement_WebDav\", \"Win32_NetworkManagement_WiFi\", \"Win32_NetworkManagement_WindowsConnectNow\", \"Win32_NetworkManagement_WindowsConnectionManager\", \"Win32_NetworkManagement_WindowsFilteringPlatform\", \"Win32_NetworkManagement_WindowsFirewall\", \"Win32_NetworkManagement_WindowsNetworkVirtualization\", \"Win32_Networking\", \"Win32_Networking_ActiveDirectory\", \"Win32_Networking_BackgroundIntelligentTransferService\", \"Win32_Networking_Clustering\", \"Win32_Networking_HttpServer\", \"Win32_Networking_Ldap\", \"Win32_Networking_NetworkListManager\", \"Win32_Networking_RemoteDifferentialCompression\", \"Win32_Networking_WebSocket\", \"Win32_Networking_WinHttp\", \"Win32_Networking_WinInet\", \"Win32_Networking_WinSock\", \"Win32_Networking_WindowsWebServices\", \"Win32_Security\", \"Win32_Security_AppLocker\", \"Win32_Security_Authentication\", \"Win32_Security_Authentication_Identity\", \"Win32_Security_Authentication_Identity_Provider\", \"Win32_Security_Authorization\", \"Win32_Security_Authorization_UI\", \"Win32_Security_ConfigurationSnapin\", \"Win32_Security_Credentials\", \"Win32_Security_Cryptography\", \"Win32_Security_Cryptography_Catalog\", \"Win32_Security_Cryptography_Certificates\", \"Win32_Security_Cryptography_Sip\", \"Win32_Security_Cryptography_UI\", \"Win32_Security_DiagnosticDataQuery\", \"Win32_Security_DirectoryServices\", \"Win32_Security_EnterpriseData\", \"Win32_Security_ExtensibleAuthenticationProtocol\", \"Win32_Security_Isolation\", \"Win32_Security_LicenseProtection\", \"Win32_Security_NetworkAccessProtection\", \"Win32_Security_Tpm\", \"Win32_Security_WinTrust\", \"Win32_Security_WinWlx\", \"Win32_Storage\", \"Win32_Storage_Cabinets\", \"Win32_Storage_CloudFilters\", \"Win32_Storage_Compression\", \"Win32_Storage_DataDeduplication\", \"Win32_Storage_DistributedFileSystem\", \"Win32_Storage_EnhancedStorage\", \"Win32_Storage_FileHistory\", \"Win32_Storage_FileServerResourceManager\", \"Win32_Storage_FileSystem\", \"Win32_Storage_Imapi\", \"Win32_Storage_IndexServer\", \"Win32_Storage_InstallableFileSystems\", \"Win32_Storage_IscsiDisc\", \"Win32_Storage_Jet\", \"Win32_Storage_OfflineFiles\", \"Win32_Storage_OperationRecorder\", \"Win32_Storage_Packaging\", \"Win32_Storage_Packaging_Appx\", \"Win32_Storage_Packaging_Opc\", \"Win32_Storage_ProjectedFileSystem\", \"Win32_Storage_StructuredStorage\", \"Win32_Storage_Vhd\", \"Win32_Storage_VirtualDiskService\", \"Win32_Storage_Vss\", \"Win32_Storage_Xps\", \"Win32_Storage_Xps_Printing\", \"Win32_System\", \"Win32_System_AddressBook\", \"Win32_System_Antimalware\", \"Win32_System_ApplicationInstallationAndServicing\", \"Win32_System_ApplicationVerifier\", \"Win32_System_AssessmentTool\", \"Win32_System_Com\", \"Win32_System_Com_CallObj\", \"Win32_System_Com_ChannelCredentials\", \"Win32_System_Com_Events\", \"Win32_System_Com_Marshal\", \"Win32_System_Com_StructuredStorage\", \"Win32_System_Com_UI\", \"Win32_System_Com_Urlmon\", \"Win32_System_ComponentServices\", \"Win32_System_Console\", \"Win32_System_Contacts\", \"Win32_System_CorrelationVector\", \"Win32_System_DataExchange\", \"Win32_System_DeploymentServices\", \"Win32_System_DesktopSharing\", \"Win32_System_DeveloperLicensing\", \"Win32_System_Diagnostics\", \"Win32_System_Diagnostics_Ceip\", \"Win32_System_Diagnostics_Debug\", \"Win32_System_Diagnostics_Debug_WebApp\", \"Win32_System_Diagnostics_Etw\", \"Win32_System_Diagnostics_ProcessSnapshotting\", \"Win32_System_Diagnostics_ToolHelp\", \"Win32_System_DistributedTransactionCoordinator\", \"Win32_System_Environment\", \"Win32_System_ErrorReporting\", \"Win32_System_EventCollector\", \"Win32_System_EventLog\", \"Win32_System_EventNotificationService\", \"Win32_System_GroupPolicy\", \"Win32_System_HostCompute\", \"Win32_System_HostComputeNetwork\", \"Win32_System_HostComputeSystem\", \"Win32_System_Hypervisor\", \"Win32_System_IO\", \"Win32_System_Iis\", \"Win32_System_Ioctl\", \"Win32_System_JobObjects\", \"Win32_System_Js\", \"Win32_System_Kernel\", \"Win32_System_LibraryLoader\", \"Win32_System_Mailslots\", \"Win32_System_Mapi\", \"Win32_System_Memory\", \"Win32_System_Memory_NonVolatile\", \"Win32_System_MessageQueuing\", \"Win32_System_MixedReality\", \"Win32_System_Mmc\", \"Win32_System_Ole\", \"Win32_System_ParentalControls\", \"Win32_System_PasswordManagement\", \"Win32_System_Performance\", \"Win32_System_Performance_HardwareCounterProfiling\", \"Win32_System_Pipes\", \"Win32_System_Power\", \"Win32_System_ProcessStatus\", \"Win32_System_RealTimeCommunications\", \"Win32_System_Recovery\", \"Win32_System_Registry\", \"Win32_System_RemoteAssistance\", \"Win32_System_RemoteDesktop\", \"Win32_System_RemoteManagement\", \"Win32_System_RestartManager\", \"Win32_System_Restore\", \"Win32_System_Rpc\", \"Win32_System_Search\", \"Win32_System_Search_Common\", \"Win32_System_SecurityCenter\", \"Win32_System_ServerBackup\", \"Win32_System_Services\", \"Win32_System_SettingsManagementInfrastructure\", \"Win32_System_SetupAndMigration\", \"Win32_System_Shutdown\", \"Win32_System_SideShow\", \"Win32_System_StationsAndDesktops\", \"Win32_System_SubsystemForLinux\", \"Win32_System_SystemInformation\", \"Win32_System_SystemServices\", \"Win32_System_TaskScheduler\", \"Win32_System_Threading\", \"Win32_System_Time\", \"Win32_System_TpmBaseServices\", \"Win32_System_TransactionServer\", \"Win32_System_UpdateAgent\", \"Win32_System_UpdateAssessment\", \"Win32_System_UserAccessLogging\", \"Win32_System_VirtualDosMachines\", \"Win32_System_WinRT\", \"Win32_System_WinRT_AllJoyn\", \"Win32_System_WinRT_Composition\", \"Win32_System_WinRT_CoreInputView\", \"Win32_System_WinRT_Direct3D11\", \"Win32_System_WinRT_Display\", \"Win32_System_WinRT_Graphics\", \"Win32_System_WinRT_Graphics_Capture\", \"Win32_System_WinRT_Graphics_Direct2D\", \"Win32_System_WinRT_Graphics_Imaging\", \"Win32_System_WinRT_Holographic\", \"Win32_System_WinRT_Isolation\", \"Win32_System_WinRT_ML\", \"Win32_System_WinRT_Media\", \"Win32_System_WinRT_Pdf\", \"Win32_System_WinRT_Printing\", \"Win32_System_WinRT_Shell\", \"Win32_System_WinRT_Storage\", \"Win32_System_WinRT_Xaml\", \"Win32_System_WindowsProgramming\", \"Win32_System_WindowsSync\", \"Win32_System_Wmi\", \"Win32_UI\", \"Win32_UI_Accessibility\", \"Win32_UI_Animation\", \"Win32_UI_ColorSystem\", \"Win32_UI_Controls\", \"Win32_UI_Controls_Dialogs\", \"Win32_UI_Controls_RichEdit\", \"Win32_UI_HiDpi\", \"Win32_UI_Input\", \"Win32_UI_Input_Ime\", \"Win32_UI_Input_Ink\", \"Win32_UI_Input_KeyboardAndMouse\", \"Win32_UI_Input_Pointer\", \"Win32_UI_Input_Radial\", \"Win32_UI_Input_Touch\", \"Win32_UI_Input_XboxController\", \"Win32_UI_InteractionContext\", \"Win32_UI_LegacyWindowsEnvironmentFeatures\", \"Win32_UI_Magnification\", \"Win32_UI_Notifications\", \"Win32_UI_Ribbon\", \"Win32_UI_Shell\", \"Win32_UI_Shell_Common\", \"Win32_UI_Shell_PropertiesSystem\", \"Win32_UI_TabletPC\", \"Win32_UI_TextServices\", \"Win32_UI_WindowsAndMessaging\", \"Win32_UI_Wpf\", \"Win32_UI_Xaml\", \"Win32_UI_Xaml_Diagnostics\", \"Win32_Web\", \"Win32_Web_MsHtml\", \"default\", \"deprecated\", \"implement\", \"interface\", \"windows-implement\", \"windows-interface\"))" -C metadata=26750ab1d8499464 -C extra-filename=-97b29330c829339d --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern windows_implement=D:\PaymentSystem\src-tauri\target\release\deps\windows_implement-e074039102661cb4.dll --extern windows_x86_64_msvc=D:\PaymentSystem\src-tauri\target\release\deps\libwindows_x86_64_msvc-e2bfef0f67821303.rmeta --cap-lints allow -L native=C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows_x86_64_msvc-0.39.0\lib` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+error: could not compile `windows-sys` (lib)
+
+Caused by:
+  process didn't exit successfully: `C:\Users\Factorythird\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate-name windows_sys --edition=2018 C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.48.0\src\lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --diagnostic-width=119 --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debug-assertions=off --cfg "feature=\"Win32\"" --cfg "feature=\"Win32_Foundation\"" --cfg "feature=\"Win32_Security\"" --cfg "feature=\"Win32_Storage\"" --cfg "feature=\"Win32_Storage_FileSystem\"" --cfg "feature=\"Win32_System\"" --cfg "feature=\"Win32_System_Diagnostics\"" --cfg "feature=\"Win32_System_Diagnostics_Debug\"" --cfg "feature=\"Win32_System_Registry\"" --cfg "feature=\"Win32_System_Time\"" --cfg "feature=\"default\"" --check-cfg cfg(docsrs,test) --check-cfg "cfg(feature, values(\"Wdk\", \"Wdk_System\", \"Wdk_System_OfflineRegistry\", \"Win32\", \"Win32_Data\", \"Win32_Data_HtmlHelp\", \"Win32_Data_RightsManagement\", \"Win32_Data_Xml\", \"Win32_Data_Xml_MsXml\", \"Win32_Data_Xml_XmlLite\", \"Win32_Devices\", \"Win32_Devices_AllJoyn\", \"Win32_Devices_BiometricFramework\", \"Win32_Devices_Bluetooth\", \"Win32_Devices_Communication\", \"Win32_Devices_DeviceAccess\", \"Win32_Devices_DeviceAndDriverInstallation\", \"Win32_Devices_DeviceQuery\", \"Win32_Devices_Display\", \"Win32_Devices_Enumeration\", \"Win32_Devices_Enumeration_Pnp\", \"Win32_Devices_Fax\", \"Win32_Devices_FunctionDiscovery\", \"Win32_Devices_Geolocation\", \"Win32_Devices_HumanInterfaceDevice\", \"Win32_Devices_ImageAcquisition\", \"Win32_Devices_PortableDevices\", \"Win32_Devices_Properties\", \"Win32_Devices_Pwm\", \"Win32_Devices_Sensors\", \"Win32_Devices_SerialCommunication\", \"Win32_Devices_Tapi\", \"Win32_Devices_Usb\", \"Win32_Devices_WebServicesOnDevices\", \"Win32_Foundation\", \"Win32_Gaming\", \"Win32_Globalization\", \"Win32_Graphics\", \"Win32_Graphics_Dwm\", \"Win32_Graphics_Gdi\", \"Win32_Graphics_Hlsl\", \"Win32_Graphics_OpenGL\", \"Win32_Graphics_Printing\", \"Win32_Graphics_Printing_PrintTicket\", \"Win32_Management\", \"Win32_Management_MobileDeviceManagementRegistration\", \"Win32_Media\", \"Win32_Media_Audio\", \"Win32_Media_Audio_Apo\", \"Win32_Media_Audio_DirectMusic\", \"Win32_Media_Audio_Endpoints\", \"Win32_Media_Audio_XAudio2\", \"Win32_Media_DeviceManager\", \"Win32_Media_DxMediaObjects\", \"Win32_Media_KernelStreaming\", \"Win32_Media_LibrarySharingServices\", \"Win32_Media_MediaPlayer\", \"Win32_Media_Multimedia\", \"Win32_Media_Speech\", \"Win32_Media_Streaming\", \"Win32_Media_WindowsMediaFormat\", \"Win32_NetworkManagement\", \"Win32_NetworkManagement_Dhcp\", \"Win32_NetworkManagement_Dns\", \"Win32_NetworkManagement_InternetConnectionWizard\", \"Win32_NetworkManagement_IpHelper\", \"Win32_NetworkManagement_MobileBroadband\", \"Win32_NetworkManagement_Multicast\", \"Win32_NetworkManagement_Ndis\", \"Win32_NetworkManagement_NetBios\", \"Win32_NetworkManagement_NetManagement\", \"Win32_NetworkManagement_NetShell\", \"Win32_NetworkManagement_NetworkDiagnosticsFramework\", \"Win32_NetworkManagement_NetworkPolicyServer\", \"Win32_NetworkManagement_P2P\", \"Win32_NetworkManagement_QoS\", \"Win32_NetworkManagement_Rras\", \"Win32_NetworkManagement_Snmp\", \"Win32_NetworkManagement_WNet\", \"Win32_NetworkManagement_WebDav\", \"Win32_NetworkManagement_WiFi\", \"Win32_NetworkManagement_WindowsConnectNow\", \"Win32_NetworkManagement_WindowsConnectionManager\", \"Win32_NetworkManagement_WindowsFilteringPlatform\", \"Win32_NetworkManagement_WindowsFirewall\", \"Win32_NetworkManagement_WindowsNetworkVirtualization\", \"Win32_Networking\", \"Win32_Networking_ActiveDirectory\", \"Win32_Networking_BackgroundIntelligentTransferService\", \"Win32_Networking_Clustering\", \"Win32_Networking_HttpServer\", \"Win32_Networking_Ldap\", \"Win32_Networking_NetworkListManager\", \"Win32_Networking_RemoteDifferentialCompression\", \"Win32_Networking_WebSocket\", \"Win32_Networking_WinHttp\", \"Win32_Networking_WinInet\", \"Win32_Networking_WinSock\", \"Win32_Networking_WindowsWebServices\", \"Win32_Security\", \"Win32_Security_AppLocker\", \"Win32_Security_Authentication\", \"Win32_Security_Authentication_Identity\", \"Win32_Security_Authentication_Identity_Provider\", \"Win32_Security_Authorization\", \"Win32_Security_Authorization_UI\", \"Win32_Security_ConfigurationSnapin\", \"Win32_Security_Credentials\", \"Win32_Security_Cryptography\", \"Win32_Security_Cryptography_Catalog\", \"Win32_Security_Cryptography_Certificates\", \"Win32_Security_Cryptography_Sip\", \"Win32_Security_Cryptography_UI\", \"Win32_Security_DiagnosticDataQuery\", \"Win32_Security_DirectoryServices\", \"Win32_Security_EnterpriseData\", \"Win32_Security_ExtensibleAuthenticationProtocol\", \"Win32_Security_Isolation\", \"Win32_Security_LicenseProtection\", \"Win32_Security_NetworkAccessProtection\", \"Win32_Security_Tpm\", \"Win32_Security_WinTrust\", \"Win32_Security_WinWlx\", \"Win32_Storage\", \"Win32_Storage_Cabinets\", \"Win32_Storage_CloudFilters\", \"Win32_Storage_Compression\", \"Win32_Storage_DataDeduplication\", \"Win32_Storage_DistributedFileSystem\", \"Win32_Storage_EnhancedStorage\", \"Win32_Storage_FileHistory\", \"Win32_Storage_FileServerResourceManager\", \"Win32_Storage_FileSystem\", \"Win32_Storage_Imapi\", \"Win32_Storage_IndexServer\", \"Win32_Storage_InstallableFileSystems\", \"Win32_Storage_IscsiDisc\", \"Win32_Storage_Jet\", \"Win32_Storage_OfflineFiles\", \"Win32_Storage_OperationRecorder\", \"Win32_Storage_Packaging\", \"Win32_Storage_Packaging_Appx\", \"Win32_Storage_Packaging_Opc\", \"Win32_Storage_ProjectedFileSystem\", \"Win32_Storage_StructuredStorage\", \"Win32_Storage_Vhd\", \"Win32_Storage_VirtualDiskService\", \"Win32_Storage_Vss\", \"Win32_Storage_Xps\", \"Win32_Storage_Xps_Printing\", \"Win32_System\", \"Win32_System_AddressBook\", \"Win32_System_Antimalware\", \"Win32_System_ApplicationInstallationAndServicing\", \"Win32_System_ApplicationVerifier\", \"Win32_System_AssessmentTool\", \"Win32_System_ClrHosting\", \"Win32_System_Com\", \"Win32_System_Com_CallObj\", \"Win32_System_Com_ChannelCredentials\", \"Win32_System_Com_Events\", \"Win32_System_Com_Marshal\", \"Win32_System_Com_StructuredStorage\", \"Win32_System_Com_UI\", \"Win32_System_Com_Urlmon\", \"Win32_System_ComponentServices\", \"Win32_System_Console\", \"Win32_System_Contacts\", \"Win32_System_CorrelationVector\", \"Win32_System_DataExchange\", \"Win32_System_DeploymentServices\", \"Win32_System_DesktopSharing\", \"Win32_System_DeveloperLicensing\", \"Win32_System_Diagnostics\", \"Win32_System_Diagnostics_Ceip\", \"Win32_System_Diagnostics_ClrProfiling\", \"Win32_System_Diagnostics_Debug\", \"Win32_System_Diagnostics_Debug_ActiveScript\", \"Win32_System_Diagnostics_Debug_Extensions\", \"Win32_System_Diagnostics_Etw\", \"Win32_System_Diagnostics_ProcessSnapshotting\", \"Win32_System_Diagnostics_ToolHelp\", \"Win32_System_DistributedTransactionCoordinator\", \"Win32_System_Environment\", \"Win32_System_ErrorReporting\", \"Win32_System_EventCollector\", \"Win32_System_EventLog\", \"Win32_System_EventNotificationService\", \"Win32_System_GroupPolicy\", \"Win32_System_HostCompute\", \"Win32_System_HostComputeNetwork\", \"Win32_System_HostComputeSystem\", \"Win32_System_Hypervisor\", \"Win32_System_IO\", \"Win32_System_Iis\", \"Win32_System_Ioctl\", \"Win32_System_JobObjects\", \"Win32_System_Js\", \"Win32_System_Kernel\", \"Win32_System_LibraryLoader\", \"Win32_System_Mailslots\", \"Win32_System_Mapi\", \"Win32_System_Memory\", \"Win32_System_Memory_NonVolatile\", \"Win32_System_MessageQueuing\", \"Win32_System_MixedReality\", \"Win32_System_Mmc\", \"Win32_System_Ole\", \"Win32_System_ParentalControls\", \"Win32_System_PasswordManagement\", \"Win32_System_Performance\", \"Win32_System_Performance_HardwareCounterProfiling\", \"Win32_System_Pipes\", \"Win32_System_Power\", \"Win32_System_ProcessStatus\", \"Win32_System_RealTimeCommunications\", \"Win32_System_Recovery\", \"Win32_System_Registry\", \"Win32_System_RemoteAssistance\", \"Win32_System_RemoteDesktop\", \"Win32_System_RemoteManagement\", \"Win32_System_RestartManager\", \"Win32_System_Restore\", \"Win32_System_Rpc\", \"Win32_System_Search\", \"Win32_System_Search_Common\", \"Win32_System_SecurityCenter\", \"Win32_System_ServerBackup\", \"Win32_System_Services\", \"Win32_System_SettingsManagementInfrastructure\", \"Win32_System_SetupAndMigration\", \"Win32_System_Shutdown\", \"Win32_System_StationsAndDesktops\", \"Win32_System_SubsystemForLinux\", \"Win32_System_SystemInformation\", \"Win32_System_SystemServices\", \"Win32_System_TaskScheduler\", \"Win32_System_Threading\", \"Win32_System_Time\", \"Win32_System_TpmBaseServices\", \"Win32_System_UpdateAgent\", \"Win32_System_UpdateAssessment\", \"Win32_System_UserAccessLogging\", \"Win32_System_VirtualDosMachines\", \"Win32_System_WindowsProgramming\", \"Win32_System_WindowsSync\", \"Win32_System_Wmi\", \"Win32_UI\", \"Win32_UI_Accessibility\", \"Win32_UI_Animation\", \"Win32_UI_ColorSystem\", \"Win32_UI_Controls\", \"Win32_UI_Controls_Dialogs\", \"Win32_UI_Controls_RichEdit\", \"Win32_UI_HiDpi\", \"Win32_UI_Input\", \"Win32_UI_Input_Ime\", \"Win32_UI_Input_Ink\", \"Win32_UI_Input_KeyboardAndMouse\", \"Win32_UI_Input_Pointer\", \"Win32_UI_Input_Radial\", \"Win32_UI_Input_Touch\", \"Win32_UI_Input_XboxController\", \"Win32_UI_InteractionContext\", \"Win32_UI_LegacyWindowsEnvironmentFeatures\", \"Win32_UI_Magnification\", \"Win32_UI_Notifications\", \"Win32_UI_Ribbon\", \"Win32_UI_Shell\", \"Win32_UI_Shell_Common\", \"Win32_UI_Shell_PropertiesSystem\", \"Win32_UI_TabletPC\", \"Win32_UI_TextServices\", \"Win32_UI_WindowsAndMessaging\", \"Win32_UI_Wpf\", \"Win32_Web\", \"Win32_Web_InternetExplorer\", \"default\"))" -C metadata=99796a31e5eefb93 -C extra-filename=-050092d749d0c23f --out-dir D:\PaymentSystem\src-tauri\target\release\deps -C strip=symbols -L dependency=D:\PaymentSystem\src-tauri\target\release\deps --extern windows_targets=D:\PaymentSystem\src-tauri\target\release\deps\libwindows_targets-2922418bae309637.rmeta --cap-lints allow -L native=C:\Users\Factorythird\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows_x86_64_msvc-0.48.5\lib` (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+       Error failed to build app: failed to build app
+
+D:\PaymentSystem>

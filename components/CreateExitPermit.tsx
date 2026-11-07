@@ -1,0 +1,715 @@
+
+import React, { useState, useEffect } from 'react';
+import { ExitPermit, ExitPermitStatus, User, ExitPermitItem, ExitPermitDestination, UserRole, SalesContact, SystemSettings } from '../types';
+import { saveExitPermit, getSettings, uploadFileChunked } from '../services/storageService';
+import { generateUUID, getCurrentShamsiDate, jalaliToGregorian } from '../constants';
+import { apiCall } from '../services/apiService';
+import { getUsers } from '../services/authService';
+import { Save, Loader2, Truck, Package, MapPin, Hash, Plus, Trash2, Building2, User as UserIcon, Calendar, CheckSquare, ArrowLeft, GitMerge, Users, X, Paperclip, Search, Database, Download, Eye } from 'lucide-react';
+import PrintExitPermit from './PrintExitPermit';
+import html2canvas from 'html2canvas';
+import { searchSayanPersons, SayanPersonResult } from '../services/sayanExitService';
+import { FileViewerModal } from './FileViewerModal';
+import { findDriverByName, saveDriverToMemory } from '../services/driverMemoryService';
+
+const CreateExitPermit: React.FC<{ onSuccess: () => void, currentUser: User }> = ({ onSuccess, currentUser }) => {
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [permitNumber, setPermitNumber] = useState('');
+    const [selectedCompany, setSelectedCompany] = useState('');
+    const [availableCompanies, setAvailableCompanies] = useState<string[]>([]);
+    
+    const currentShamsi = getCurrentShamsiDate();
+    const [shamsiDate, setShamsiDate] = useState({ year: currentShamsi.year, month: currentShamsi.month, day: currentShamsi.day });
+
+    const [items, setItems] = useState<ExitPermitItem[]>([{ id: generateUUID(), goodsName: '', cartonCount: 0, weight: 0, price: 0 }]);
+    const [destinations, setDestinations] = useState<ExitPermitDestination[]>([{ id: generateUUID(), recipientName: '', address: '', phone: '' }]);
+    const [driverInfo, setDriverInfo] = useState({ plateNumber: '', driverName: '', driverPhone: '', description: '' });
+    const [price, setPrice] = useState(0);
+    const [savedContacts, setSavedContacts] = useState<SalesContact[]>([]);
+    const [botSubscribers, setBotSubscribers] = useState<any[]>([]);
+    const [contactSuggestions, setContactSuggestions] = useState<any[]>([]);
+    
+    // Auto-Send Hook
+    const [tempPermit, setTempPermit] = useState<ExitPermit | null>(null);
+    const [existingPermits, setExistingPermits] = useState<ExitPermit[]>([]);
+    const [settings, setSettings] = useState<SystemSettings | null>(null);
+
+    const [showMergeModal, setShowMergeModal] = useState(false);
+    const [searchTermLead, setSearchTermLead] = useState('');
+    const [attachments, setAttachments] = useState<{ fileName: string; data: string }[]>([]);
+    const [uploadingFiles, setUploadingFiles] = useState(false);
+    const [previewFile, setPreviewFile] = useState<{ url: string; fileName: string } | null>(null);
+    const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files || []);
+        if (files.length === 0) return;
+        setUploadingFiles(true);
+        for (const file of files) {
+            if (file.size > 150 * 1024 * 1024) {
+                alert(`حجم فایل ${file.name} بیشتر از ۱۵۰ مگابایت است.`);
+                continue;
+            }
+            try {
+                const res = await uploadFileChunked(file, () => {});
+                setAttachments(prev => [...prev, { fileName: res.fileName, data: res.url }]);
+            } catch (err) {
+                console.error(err);
+                alert(`خطا در آپلود فایل ${file.name}`);
+            }
+        }
+        setUploadingFiles(false);
+        e.target.value = '';
+    };
+
+    const removeAttachment = (index: number) => {
+        setAttachments(prev => prev.filter((_, i) => i !== index));
+    };
+
+    useEffect(() => {
+        getSettings().then(s => {
+            setSettings(s);
+            const names = s.companies?.map(c => c.name) || s.companyNames || [];
+            setAvailableCompanies(names);
+            setSavedContacts(s.salesContacts || []);
+            if (s.defaultCompany) {
+                setSelectedCompany(s.defaultCompany);
+                fetchNextNumber(s.defaultCompany);
+            }
+        });
+        // Fetch existing permits for duplicate checking (Background)
+        apiCall<ExitPermit[]>('/exit-permits').then(res => {
+            if (Array.isArray(res)) setExistingPermits(res);
+        }).catch(console.error);
+
+        apiCall<any[]>('/bot-subscribers').then(res => {
+            if (Array.isArray(res)) setBotSubscribers(res);
+        }).catch(console.error);
+    }, []);
+
+    const handleMergeLead = async (lead: any) => {
+        if (!settings) return;
+        
+        const newContact: SalesContact = {
+            id: generateUUID(),
+            name: lead.fullName || 'بدون نام',
+            mobile: lead.mobile || '',
+            telegramId: lead.telegramChatId || lead.chatId,
+            baleId: lead.baleChatId || lead.chatId,
+            sendBirthdayGreeting: false
+        };
+
+        const updatedContacts = [...(settings.salesContacts || []), newContact];
+        const updatedSettings = { ...settings, salesContacts: updatedContacts };
+        
+        try {
+            await apiCall('/settings', 'POST', updatedSettings);
+            setSettings(updatedSettings);
+            setSavedContacts(updatedContacts);
+            alert('مخاطب با موفقیت به لیست مشتریان اضافه شد.');
+        } catch (e) {
+            alert('خطا در ذخیره مخاطب');
+        }
+    };
+
+    const [sayanSearching, setSayanSearching] = useState(false);
+
+    const handleRecipientChange = async (val: string) => {
+        const d = [...destinations];
+        const prevAutoContact = (d[0] as any)._autoSelectedName;
+        d[0].recipientName = val;
+
+        const normVal = val.replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/[آأإ]/g, 'ا').replace(/[\u200B-\u200D\uFEFF\u200C]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        const exactContact = savedContacts.find(c => {
+            const normC = (c.name || '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/[آأإ]/g, 'ا').replace(/[\u200B-\u200D\uFEFF\u200C]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+            return normC && normC === normVal;
+        });
+
+        if (exactContact) {
+            d[0].phone = exactContact.mobile || '';
+            if (exactContact.sayanPersonCode) (d[0] as any).sayanPersonCode = exactContact.sayanPersonCode;
+            if (exactContact.sayanTafsiliCode) (d[0] as any).sayanTafsiliCode = exactContact.sayanTafsiliCode;
+            if (exactContact.sayanPersonName) (d[0] as any).sayanPersonName = exactContact.sayanPersonName;
+            (d[0] as any)._autoSelectedName = exactContact.name;
+        } else if (prevAutoContact && prevAutoContact !== val) {
+            // Clear previous contact's phone and Sayan codes so they never stay attached to a different buyer
+            d[0].phone = '';
+            delete (d[0] as any).sayanPersonCode;
+            delete (d[0] as any).sayanTafsiliCode;
+            delete (d[0] as any).sayanPersonName;
+            delete (d[0] as any)._autoSelectedName;
+        }
+
+        setDestinations(d);
+
+        if (val.trim().length > 1) {
+            const contacts = savedContacts.filter(c => c.name.includes(val) || (c.mobile && c.mobile.includes(val)));
+            const leads = botSubscribers.filter(l => (l.fullName && l.fullName.includes(val)) || (l.mobile && l.mobile.includes(val)));
+            
+            // Deduplicate and prioritize contacts over leads if mobile matches
+            const merged: any[] = [...contacts];
+            leads.forEach(l => {
+                const mobile = l.mobile?.replace(/^0/, '') || '';
+                const exists = merged.some(m => m.mobile?.replace(/^0/, '') === mobile);
+                if (!exists) {
+                    merged.push({
+                        id: l.id,
+                        name: l.fullName || 'بدون نام',
+                        mobile: l.mobile || '',
+                        telegramId: l.telegramChatId || l.chatId,
+                        baleId: l.baleChatId || l.chatId,
+                        isLead: true
+                    });
+                }
+            });
+
+            // If Sayan Online is enabled or available, query Sayan ERP persons
+            setContactSuggestions(merged);
+
+            if (settings?.sayanOnlineExitPermitsEnabled) {
+                setSayanSearching(true);
+                try {
+                    const sayanPersons = await searchSayanPersons(val);
+                    if (sayanPersons && sayanPersons.length > 0) {
+                        const sayanItems = sayanPersons.map(sp => ({
+                            id: `sayan-${sp.personCode || sp.id}`,
+                            name: sp.name,
+                            mobile: sp.mobile || '',
+                            address: sp.address || '',
+                            personCode: sp.personCode,
+                            tafsiliCode: sp.tafsiliCode || sp.accountingCode,
+                            isSayan: true
+                        }));
+
+                        // Merge Sayan persons to the top
+                        setContactSuggestions([...sayanItems, ...merged]);
+                    }
+                } catch (err) {
+                    console.warn('Sayan live search error:', err);
+                } finally {
+                    setSayanSearching(false);
+                }
+            }
+        } else {
+            setContactSuggestions([]);
+        }
+    };
+
+    const selectContact = (contact: any) => {
+        const d = [...destinations];
+        d[0].recipientName = contact.name;
+        d[0].phone = contact.mobile || '';
+        if (contact.address) d[0].address = contact.address;
+        if (contact.sayanPersonCode || contact.personCode) {
+            (d[0] as any).sayanPersonCode = contact.sayanPersonCode || contact.personCode;
+        } else {
+            delete (d[0] as any).sayanPersonCode;
+        }
+        if (contact.sayanTafsiliCode || contact.tafsiliCode || contact.accountCode) {
+            (d[0] as any).sayanTafsiliCode = contact.sayanTafsiliCode || contact.tafsiliCode || contact.accountCode;
+        } else {
+            delete (d[0] as any).sayanTafsiliCode;
+        }
+        if (contact.sayanPersonName || contact.name) {
+            (d[0] as any).sayanPersonName = contact.sayanPersonName || contact.name;
+        }
+        (d[0] as any)._autoSelectedName = contact.name;
+        setDestinations(d);
+        setContactSuggestions([]);
+    };
+
+    const fetchNextNumber = (company?: string) => {
+        if (!company) return;
+        // Ensure API call is correct
+        apiCall<{ nextNumber: number }>(`/next-exit-permit-number?company=${encodeURIComponent(company)}&t=${Date.now()}`)
+            .then(res => {
+                if (res && res.nextNumber) setPermitNumber(res.nextNumber.toString());
+                else setPermitNumber('1001');
+            })
+            .catch((e) => {
+                console.error("Fetch Number Error", e);
+                setPermitNumber('1001');
+            });
+    };
+
+    const handleCompanyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const val = e.target.value;
+        setSelectedCompany(val);
+        fetchNextNumber(val);
+    };
+
+    const handleNumberBlur = () => {
+        if (!permitNumber && selectedCompany) {
+            fetchNextNumber(selectedCompany);
+        } else if (permitNumber && selectedCompany) {
+            // Check for duplicate locally first for instant feedback
+            const isDuplicate = existingPermits.some(p => 
+                p.company === selectedCompany && 
+                p.permitNumber === parseInt(permitNumber)
+            );
+            if (isDuplicate) {
+                // Automatically fetch next available number (gap)
+                alert(`⚠️ شماره ${permitNumber} قبلاً ثبت شده است. سیستم به طور خودکار اولین شماره خالی (Gap) را جایگزین می‌کند.`);
+                fetchNextNumber(selectedCompany);
+            }
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (isSubmitting) return;
+        if (!selectedCompany) return alert('لطفا شرکت صادرکننده را انتخاب کنید');
+        if (!permitNumber) return alert('شماره حواله الزامی است');
+        if (items.some(i => !i.goodsName)) return alert('نام کالا الزامی است');
+        /* START EDIT: MANDATORY PRICE FOR SALES MANAGER/ADMIN */
+        if (items.some(i => !i.price || i.price <= 0)) {
+            return alert('وارد کردن فی (قیمت واحد) برای تمامی اقلام الزامی است.');
+        }
+        /* END EDIT */
+        if (destinations.some(d => !d.recipientName)) return alert('نام گیرنده الزامی است');
+
+        setIsSubmitting(true);
+        
+        try {
+            let isoDate;
+            try {
+                const date = jalaliToGregorian(shamsiDate.year, shamsiDate.month, shamsiDate.day);
+                const y = date.getFullYear();
+                const m = String(date.getMonth() + 1).padStart(2, '0');
+                const d = String(date.getDate()).padStart(2, '0');
+                isoDate = `${y}-${m}-${d}`;
+            } catch (err) { 
+                const d = new Date();
+                isoDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            }
+
+            const newPermit: ExitPermit = {
+                id: generateUUID(),
+                permitNumber: parseInt(permitNumber.replace(/[^0-9]/g, '')) || 0,
+                company: selectedCompany,
+                date: isoDate,
+                requester: currentUser.fullName,
+                items: items,
+                destinations: destinations,
+                goodsName: items.map(i => i.goodsName).join('، '),
+                recipientName: destinations.map(d => d.recipientName).join('، '),
+                cartonCount: items.reduce((acc, i) => acc + (Number(i.cartonCount) || 0), 0),
+                weight: items.reduce((acc, i) => acc + (Number(i.weight) || 0), 0),
+                plateNumber: driverInfo.plateNumber,
+                driverName: driverInfo.driverName,
+                driverPhone: driverInfo.driverPhone,
+                description: driverInfo.description,
+                attachments: attachments,
+                price: items.reduce((acc, i) => acc + (Number(i.price) || 0), 0), // Kept for backwards compatibility or total
+                status: ExitPermitStatus.PENDING_CEO,
+                sayanPersonCode: destinations[0]?.sayanPersonCode,
+                sayanTafsiliCode: destinations[0]?.sayanTafsiliCode,
+                createdAt: Date.now()
+            };
+
+            // Call API (Server automatically triggers bot notifications based on settings & ticks)
+            await saveExitPermit(newPermit);
+
+            if (driverInfo.driverName || driverInfo.plateNumber || driverInfo.driverPhone) {
+                saveDriverToMemory({
+                    driverName: driverInfo.driverName,
+                    plateNumber: driverInfo.plateNumber,
+                    driverPhone: driverInfo.driverPhone
+                });
+            }
+            
+            setIsSubmitting(false);
+            onSuccess();
+
+        } catch (e: any) {
+            console.error("Submit Error:", e);
+            alert(`خطا در ثبت حواله: ${e.message || 'Server Error'}`);
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="glass-panel rounded-2xl shadow-lg border border-gray-200/50 dark:border-white/10 overflow-hidden animate-fade-in relative max-w-4xl mx-auto my-6">
+            
+            {/* Hidden Print Element for Auto-Send */}
+            {tempPermit && (
+                <div className="hidden-print-export" style={{ position: 'absolute', top: '-9999px', left: '-9999px', width: '800px', zIndex: -1 }}>
+                    <div id={`print-permit-create-noprice-${tempPermit.id}`}>
+                        <PrintExitPermit permit={tempPermit} onClose={()=>{}} embed showPrice={false} mode="EXIT" />
+                    </div>
+                    <div id={`print-permit-create-price-${tempPermit.id}`}>
+                        <PrintExitPermit permit={tempPermit} onClose={()=>{}} embed showPrice={true} mode="PROFORMA" />
+                    </div>
+                </div>
+            )}
+
+            {/* Header */}
+            <div className="bg-gradient-to-r from-slate-900 via-teal-950 to-slate-900 p-6 text-white flex justify-between items-center border-b border-teal-500/20">
+                <div className="flex items-center gap-3">
+                    <div className="bg-teal-600/30 border border-teal-400/30 p-2.5 rounded-2xl text-teal-300">
+                        <Truck size={26} />
+                    </div>
+                    <div>
+                        <h2 className="text-xl md:text-2xl font-black tracking-tight">صدور حواله خروج بار کارخانه</h2>
+                        <p className="text-xs text-teal-200/80 mt-0.5 font-medium">فرم رسمی درخواست خروج کالا و محصول، تفکیک مقاصد و اتصال به سامانه سایان</p>
+                    </div>
+                </div>
+                <div className="hidden md:flex items-center gap-2 text-teal-200 text-xs font-black bg-white/10 px-3.5 py-1.5 rounded-xl border border-white/10">
+                    <span>مرحله ۱: ثبت فروش</span>
+                </div>
+            </div>
+
+            <form onSubmit={handleSubmit} className="p-6 md:p-8 space-y-8">
+                
+                {/* 1. General Info */}
+                <div className="bg-gray-50 dark:bg-gray-900/40 text-gray-800 dark:text-gray-200 p-5 rounded-2xl border border-gray-200 relative">
+                    <div className="absolute -top-3 right-4 glass-panel px-3 py-1 text-sm font-bold text-gray-500 border rounded-lg shadow-sm flex items-center gap-2">
+                        <Hash size={16}/> اطلاعات پایه
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-2">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1.5">شرکت صادرکننده</label>
+                            <select className="w-full border rounded-xl p-3 text-sm glass-panel focus:ring-2 focus:ring-teal-500 outline-none" value={selectedCompany} onChange={handleCompanyChange}>
+                                <option value="">-- انتخاب کنید --</option>
+                                {availableCompanies.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1.5">شماره حواله</label>
+                            <input type="number" className="w-full border rounded-xl p-3 text-sm font-bold text-center dir-ltr focus:ring-2 focus:ring-teal-500 outline-none" value={permitNumber} onChange={e => setPermitNumber(e.target.value)} onBlur={handleNumberBlur} placeholder="0000" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1.5">تاریخ صدور</label>
+                            <div className="flex gap-1 dir-ltr">
+                                <input className="w-full border rounded-xl p-3 text-center text-sm font-bold outline-none focus:ring-2 focus:ring-teal-500" placeholder="روز" value={shamsiDate.day} onChange={e => setShamsiDate({...shamsiDate, day: +e.target.value})} />
+                                <input className="w-full border rounded-xl p-3 text-center text-sm font-bold outline-none focus:ring-2 focus:ring-teal-500" placeholder="ماه" value={shamsiDate.month} onChange={e => setShamsiDate({...shamsiDate, month: +e.target.value})} />
+                                <input className="w-full border rounded-xl p-3 text-center text-sm font-bold outline-none focus:ring-2 focus:ring-teal-500" placeholder="سال" value={shamsiDate.year} onChange={e => setShamsiDate({...shamsiDate, year: +e.target.value})} />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 2. Items */}
+                <div className="bg-teal-50/50 p-5 rounded-2xl border border-teal-100 relative">
+                     <div className="absolute -top-3 right-4 glass-panel px-3 py-1 text-sm font-bold text-teal-700 border border-teal-200 rounded-lg shadow-sm flex items-center gap-2">
+                        <Package size={16}/> لیست اقلام و کالاها
+                    </div>
+                    <div className="mt-2 space-y-3">
+                        {items.map((item, idx) => (
+                            <div key={item.id} className="flex flex-col md:flex-row gap-3 items-end glass-panel p-3 rounded-xl border border-gray-200 shadow-sm flex-wrap">
+                                <div className="flex-1 w-full min-w-[200px]">
+                                    <label className="text-[10px] font-bold text-gray-500 block mb-1">نام کالا / محصول</label>
+                                    <input className="w-full border-b border-gray-300 p-2 text-sm font-bold focus:border-teal-500 outline-none" placeholder="مثال: میلگرد 14..." value={item.goodsName} onChange={e => { const n = [...items]; n[idx].goodsName = e.target.value; setItems(n); }} />
+                                </div>
+                                <div className="w-full md:w-28">
+                                    <label className="text-[10px] font-bold text-gray-500 block mb-1 text-center">تعداد (کارتن)</label>
+                                    <input type="number" className="w-full border rounded-lg p-2 text-center font-bold bg-gray-50 focus:glass-panel transition-colors outline-none" value={item.cartonCount === 0 ? '' : item.cartonCount} onFocus={e => e.target.select()} onChange={e => { const n = [...items]; n[idx].cartonCount = e.target.value === '' ? 0 : +e.target.value; setItems(n); }} />
+                                </div>
+                                <div className="w-full md:w-36">
+                                    <label className="text-[10px] font-bold text-gray-500 block mb-1 text-center">وزن تقریبی (KG)</label>
+                                    <input type="number" step="0.001" className="w-full border rounded-lg p-2 text-center font-bold bg-gray-50 focus:glass-panel transition-colors outline-none" value={item.weight === 0 ? '' : item.weight} onFocus={e => e.target.select()} onChange={e => { const n = [...items]; n[idx].weight = e.target.value === '' ? 0 : +e.target.value; setItems(n); }} />
+                                </div>
+                                {(currentUser.role === UserRole.ADMIN || currentUser.role === UserRole.CEO || currentUser.role === UserRole.SALES_MANAGER) && (
+                                    <div className="w-full md:w-32">
+                                        <label className="text-[10px] font-bold text-gray-500 block mb-1 text-center">فی / قیمت واحد</label>
+                                        <input type="number" className="w-full border rounded-lg p-2 text-center font-bold bg-blue-50 text-blue-700 focus:glass-panel transition-colors outline-none" placeholder="مبلغ" value={item.price || ''} onFocus={e => e.target.select()} onChange={e => { const n = [...items]; n[idx].price = e.target.value === '' ? 0 : +e.target.value; setItems(n); }} />
+                                    </div>
+                                )}
+                                {items.length > 1 && (
+                                    <button type="button" onClick={() => setItems(items.filter((_, i) => i !== idx))} className="bg-red-100 text-red-500 p-2.5 rounded-lg hover:bg-red-200 transition-colors">
+                                        <Trash2 size={18}/>
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                        <button type="button" onClick={() => setItems([...items, { id: generateUUID(), goodsName: '', cartonCount: 0, weight: 0 }])} className="text-teal-600 text-sm font-bold flex items-center gap-1 hover:bg-teal-50 px-3 py-1.5 rounded-lg transition-colors">
+                            <Plus size={16}/> افزودن ردیف کالا
+                        </button>
+                    </div>
+                </div>
+
+                {/* 3. Destination & Driver */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 relative">
+                        <div className="absolute -top-3 right-4 glass-panel px-3 py-1 text-sm font-bold text-gray-500 border rounded-lg shadow-sm flex items-center gap-2">
+                            <MapPin size={16}/> گیرنده و مقصد
+                        </div>
+                        <div className="space-y-3 mt-2">
+                            <div className="relative">
+                                <div className="flex justify-between items-center mb-1">
+                                    <label className="text-xs font-bold block">نام گیرنده / مشتری</label>
+                                    <button 
+                                        type="button" 
+                                        onClick={() => setShowMergeModal(true)}
+                                        className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-lg flex items-center gap-1 hover:bg-blue-100 transition-colors"
+                                    >
+                                        <GitMerge size={12}/> ادغام لیدها و مخاطبین
+                                    </button>
+                                </div>
+                                <div className="relative">
+                                    <input 
+                                        className="w-full border rounded-xl p-2 text-sm glass-panel pl-8" 
+                                        placeholder="شخص یا شرکت..." 
+                                        value={destinations[0].recipientName} 
+                                        onChange={e => handleRecipientChange(e.target.value)} 
+                                    />
+                                    {sayanSearching && (
+                                        <div className="absolute left-2.5 top-2.5 text-indigo-500 animate-spin">
+                                            <Loader2 size={16} />
+                                        </div>
+                                    )}
+                                </div>
+                                {destinations[0].sayanPersonCode && (
+                                    <div className="flex items-center gap-1.5 text-[11px] text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg font-mono">
+                                        <Database size={13} className="text-indigo-600 shrink-0" />
+                                        <span>متصل به سایان: کد {destinations[0].sayanPersonCode}</span>
+                                        {destinations[0].sayanTafsiliCode && <span>| تفصیلی: {destinations[0].sayanTafsiliCode}</span>}
+                                    </div>
+                                )}
+                                {contactSuggestions.length > 0 && (
+                                    <div className="absolute top-full left-0 right-0 z-[100] bg-white dark:bg-gray-800 border rounded-xl shadow-xl mt-1 max-h-64 overflow-y-auto">
+                                        {contactSuggestions.map(con => (
+                                            <button 
+                                                key={con.id} 
+                                                type="button"
+                                                onClick={() => selectContact(con)}
+                                                className={`w-full text-right p-3 hover:bg-gray-50 border-b last:border-0 flex justify-between items-center transition-colors ${
+                                                    con.isSayan ? 'bg-indigo-50/30 hover:bg-indigo-50/70' : ''
+                                                }`}
+                                            >
+                                                <div className="space-y-0.5">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-sm text-gray-900">{con.name}</span>
+                                                        {(con.isSayan || con.sayanPersonCode || con.sayanTafsiliCode) && (
+                                                            <span className="text-[9px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded font-mono">
+                                                                سایان ERP
+                                                            </span>
+                                                        )}
+                                                        {con.isLead && !con.isSayan && (
+                                                            <span className="text-[8px] bg-blue-50 text-blue-500 px-1 rounded">ربات</span>
+                                                        )}
+                                                    </div>
+                                                    {(con.isSayan || con.sayanPersonCode || con.sayanTafsiliCode) && (
+                                                        <div className="text-[10px] text-indigo-600 font-mono">
+                                                            کد شخص: {con.personCode || con.sayanPersonCode} {(con.tafsiliCode || con.sayanTafsiliCode || con.accountCode) ? `| تفصیلی: ${con.tafsiliCode || con.sayanTafsiliCode || con.accountCode}` : ''}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-gray-400 font-mono">{con.mobile}</span>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <div><label className="text-xs font-bold block mb-1">شماره تماس</label><input className="w-full border rounded-xl p-2 text-sm glass-panel dir-ltr text-right" placeholder="0912..." value={destinations[0].phone} onChange={e => { const d = [...destinations]; d[0].phone = e.target.value; setDestinations(d); }} /></div>
+                            <div><label className="text-xs font-bold block mb-1">آدرس تخلیه</label><textarea className="w-full border rounded-xl p-2 text-sm glass-panel h-20 resize-none" placeholder="آدرس دقیق..." value={destinations[0].address} onChange={e => { const d = [...destinations]; d[0].address = e.target.value; setDestinations(d); }} /></div>
+                        </div>
+                    </div>
+
+                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 relative">
+                         <div className="absolute -top-3 right-4 glass-panel px-3 py-1 text-sm font-bold text-gray-500 border rounded-lg shadow-sm flex items-center gap-2">
+                            <Truck size={16}/> حمل و نقل و مالی (بخش مدیریت)
+                        </div>
+                        <div className="space-y-3 mt-2">
+                            <div>
+                                <label className="text-xs font-bold block mb-1">نام راننده</label>
+                                <input 
+                                    className="w-full border rounded-xl p-2 text-sm glass-panel" 
+                                    value={driverInfo.driverName} 
+                                    onChange={e => {
+                                        const name = e.target.value;
+                                        const match = findDriverByName(name.trim());
+                                        setDriverInfo(prev => ({
+                                            ...prev,
+                                            driverName: name,
+                                            plateNumber: match?.plateNumber || prev.plateNumber,
+                                            driverPhone: match?.driverPhone || prev.driverPhone
+                                        }));
+                                    }} 
+                                    placeholder="مثلاً: احمد حسینی"
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div><label className="text-xs font-bold block mb-1">پلاک خودرو</label><input className="w-full border rounded-xl p-2 text-sm glass-panel dir-ltr text-center font-mono font-bold tracking-widest" placeholder="12 A 345 67" value={driverInfo.plateNumber} onChange={e => setDriverInfo({...driverInfo, plateNumber: e.target.value})} /></div>
+                                <div><label className="text-xs font-bold block mb-1">شماره تماس راننده</label><input className="w-full border rounded-xl p-2 text-sm glass-panel dir-ltr font-mono text-center" placeholder="09..." value={driverInfo.driverPhone} onChange={e => setDriverInfo({...driverInfo, driverPhone: e.target.value})} /></div>
+                            </div>
+                            <div><label className="text-xs font-bold block mb-1">توضیحات تکمیلی</label><textarea className="w-full border rounded-xl p-2 text-sm glass-panel h-20 resize-none" placeholder="توضیحات..." value={driverInfo.description} onChange={e => setDriverInfo({...driverInfo, description: e.target.value})} /></div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Attachments & Documents Section */}
+                <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-200/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
+                            <Paperclip size={18} className="text-emerald-600"/>
+                            <span>ضمیمه تصاویر و مدارک (فاکتور، پیش‌فاکتور، قبض باسکول، عکس بار)</span>
+                        </div>
+                        <input 
+                            type="file" 
+                            multiple 
+                            accept="image/*,.pdf,.doc,.docx" 
+                            className="hidden" 
+                            ref={fileInputRef} 
+                            onChange={handleFileUpload} 
+                        />
+                        <button 
+                            type="button" 
+                            onClick={() => fileInputRef.current?.click()} 
+                            disabled={uploadingFiles}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                        >
+                            {uploadingFiles ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16}/>}
+                            <span>{uploadingFiles ? 'در حال آپلود...' : 'افزودن فایل / تصویر'}</span>
+                        </button>
+                    </div>
+
+                    {attachments.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 pt-2">
+                            {attachments.map((att, idx) => {
+                                const isImg = att.data?.startsWith('data:image/') || /\.(jpg|jpeg|png|webp|gif)$/i.test(att.fileName);
+                                return (
+                                    <div key={idx} className="flex items-center justify-between bg-white dark:bg-gray-800 p-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800/40 text-xs shadow-sm hover:border-emerald-400 transition-colors">
+                                        <div 
+                                            onClick={() => setPreviewFile({ url: att.data, fileName: att.fileName })}
+                                            className="flex items-center gap-2 truncate flex-1 cursor-pointer"
+                                            title="کلیک برای پیش‌نمایش"
+                                        >
+                                            {isImg ? (
+                                                <img src={att.data} alt="" className="w-8 h-8 rounded object-cover border border-emerald-100" />
+                                            ) : (
+                                                <div className="w-8 h-8 rounded bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                                                    <Paperclip size={16} />
+                                                </div>
+                                            )}
+                                            <div className="flex flex-col truncate">
+                                                <span className="truncate font-mono text-[11px]" dir="ltr">{att.fileName}</span>
+                                                <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-0.5">
+                                                    <Eye size={10} /> مشاهده بدون دانلود
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 mr-1 shrink-0">
+                                            <a 
+                                                href={att.data} 
+                                                download={att.fileName} 
+                                                target="_blank" 
+                                                rel="noreferrer"
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="text-gray-500 hover:text-emerald-700 p-1.5 bg-gray-50 hover:bg-emerald-50 rounded-lg transition-colors"
+                                                title="دانلود فایل"
+                                            >
+                                                <Download size={14} />
+                                            </a>
+                                            <button 
+                                                type="button" 
+                                                onClick={(e) => { e.stopPropagation(); removeAttachment(idx); }} 
+                                                className="text-red-500 hover:text-red-700 p-1.5 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                                                title="حذف فایل"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <p className="text-[11px] text-gray-500 italic">هیچ فایلی ضمیمه نشده است (اختیاری)</p>
+                    )}
+                </div>
+
+                {/* Footer Action */}
+                <div className="pt-4 border-t border-gray-100 flex justify-end">
+                    <button type="submit" disabled={isSubmitting || !selectedCompany} className="bg-gradient-to-r from-teal-600 to-teal-700 text-white px-8 py-4 rounded-xl font-bold shadow-lg shadow-teal-200 hover:shadow-teal-300 transform hover:-translate-y-1 transition-all flex items-center gap-3 disabled:opacity-70 disabled:transform-none">
+                        {isSubmitting ? <Loader2 className="animate-spin" size={24}/> : <CheckSquare size={24}/>}
+                        <span>ثبت نهایی و ارسال به کارتابل مدیرعامل</span>
+                    </button>
+                </div>
+
+                {/* Lead Merge Modal */}
+                {showMergeModal && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-2 md:p-4 pt-12 md:pt-4 overflow-hidden animate-fade-in">
+                        <div className="glass-panel w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-3rem)] md:max-h-[85dvh] shadow-2xl animate-fade-in border border-white/20">
+                            <div className="bg-teal-900 p-4 text-white flex justify-between items-center">
+                                <div className="flex items-center gap-2">
+                                    <Users size={20}/>
+                                    <span className="font-bold text-sm">مدیریت لیدهای ربات (تبدیل به مخاطب)</span>
+                                </div>
+                                <button type="button" onClick={() => setShowMergeModal(false)}><X/></button>
+                            </div>
+                            
+                            <div className="p-4 bg-teal-50/30 border-b">
+                                <div className="relative">
+                                    <input 
+                                        className="w-full border rounded-xl p-3 pr-10 text-sm glass-panel" 
+                                        placeholder="جستجوی لید بر اساس نام یا شماره..." 
+                                        value={searchTermLead}
+                                        onChange={e => setSearchTermLead(e.target.value)}
+                                        autoFocus
+                                    />
+                                    <Users className="absolute right-3 top-3 text-gray-400" size={18}/>
+                                </div>
+                                <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
+                                    💡 لیدهایی که در اینجا می‌بینید، افرادی هستند که با ربات تعامل داشته‌اند. با زدن دکمه "ادغام"، آن‌ها به لیست مخاطبین اصلی شما اضافه می‌شوند.
+                                </p>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                                {botSubscribers
+                                    .filter(l => (l.fullName || 'بدون نام').includes(searchTermLead) || (l.mobile || '').includes(searchTermLead))
+                                    .map(lead => {
+                                        const isAlreadyMerged = savedContacts.some(sc => sc.mobile?.replace(/^0/, '') === lead.mobile?.replace(/^0/, ''));
+                                        return (
+                                            <div key={lead.id} className={`flex items-center justify-between p-3 rounded-xl border ${isAlreadyMerged ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-teal-100'}`}>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold uppercase text-xs">
+                                                        {(lead.fullName || '؟').charAt(0)}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-bold text-sm text-gray-800">{lead.fullName || 'بدون نام'}</div>
+                                                        <div className="text-xs text-gray-500 font-mono">{lead.mobile || 'فاقد شماره'}</div>
+                                                    </div>
+                                                </div>
+                                                {isAlreadyMerged ? (
+                                                    <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">قبلاً ادغام شده</span>
+                                                ) : (
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => handleMergeLead(lead)}
+                                                        className="bg-teal-600 text-white text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-teal-700 transition-shadow shadow-sm active:scale-95"
+                                                    >
+                                                        <GitMerge size={12}/> ادغام با مخاطبین
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })
+                                }
+                                {botSubscribers.length === 0 && (
+                                    <div className="text-center py-10 text-gray-400 italic text-sm">هیچ لیدی یافت نشد</div>
+                                )}
+                            </div>
+                            
+                            <div className="p-4 border-t bg-gray-50 flex justify-end">
+                                <button type="button" onClick={() => setShowMergeModal(false)} className="px-5 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">بستن</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </form>
+            {previewFile && (
+                <FileViewerModal
+                    isOpen={!!previewFile}
+                    onClose={() => setPreviewFile(null)}
+                    fileUrl={previewFile.url}
+                    fileName={previewFile.fileName}
+                />
+            )}
+        </div>
+    );
+};
+
+export default CreateExitPermit;

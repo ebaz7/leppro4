@@ -1,0 +1,14 @@
+export const HARDCODED_TABLES = [
+  'ACT_TBL_001',
+  'ACT_TBL_002',
+  'ACT_TBL_003',
+  'ACT_TBL_007',
+  'ACT_TBL_011',
+  'BUR_TBL_008',
+  'BUR_TBL_015',
+  'STR_TBL_001',
+  'STR_TBL_010',
+  'STR_TBL_011',
+  'IND_TBL_001',
+  'IND_TBL_022'
+];
