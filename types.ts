@@ -552,6 +552,9 @@ export interface SystemSettings {
   desktopUpdateChannel?: 'stable' | 'beta';
   desktopDirectDownloadUrl?: string;
   androidDirectDownloadUrl?: string;
+  webVersion?: string;
+  electronLatestVersion?: string;
+  tauriLatestVersion?: string;
   desktopLatestVersion?: string;
   androidLatestVersion?: string;
   desktopReleaseNotes?: string;

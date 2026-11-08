@@ -6,9 +6,14 @@ import toast from 'react-hot-toast';
 
 export interface AppVersionInfo {
   version: string;
+  webVersion?: string | null;
+  electronLatestVersion?: string | null;
+  tauriLatestVersion?: string | null;
   desktopLatestVersion?: string | null;
   androidLatestVersion?: string | null;
   hasDesktopInstaller?: boolean;
+  hasElectronInstaller?: boolean;
+  hasTauriInstaller?: boolean;
   hasAndroidInstaller?: boolean;
   desktopFileName?: string | null;
   desktopFileSize?: number;
@@ -23,11 +28,12 @@ export interface AppVersionInfo {
   forceUpdate?: boolean;
   updateIntervalMinutes?: number;
   autoCheck?: boolean;
+  targetPlatform?: string;
 }
 
 // Current client build embedded in the bundle
 export const CURRENT_CLIENT_BUILD: AppVersionInfo = {
-  version: '1.0.29',
+  version: '1.0.30',
   buildNumber: '10029',
   title: 'نسخه جاری',
   releaseNotes: 'نسخه پایدار سامانه مالی و بازرگانی'
@@ -247,9 +253,12 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
 
     // --- 2. WINDOWS DESKTOP (Electron or Tauri) CHECK (Strictly file-based & segregated) ---
     if (isDesktop) {
-      const actualDesktopVer = data.desktopLatestVersion || '';
+      const isElectron = runtime === 'electron';
+      const actualDesktopVer = (isElectron ? data.electronLatestVersion : data.tauriLatestVersion) || data.desktopLatestVersion || '';
+      const hasSpecificInstaller = isElectron ? data.hasElectronInstaller : data.hasTauriInstaller;
+
       // If server does not have an actual compiled installer file on disk for THIS runtime, NEVER claim update
-      if (!actualDesktopVer || data.hasDesktopInstaller === false) {
+      if (!actualDesktopVer || hasSpecificInstaller === false || data.hasDesktopInstaller === false) {
         return { hasUpdate: false, serverInfo: data };
       }
 
@@ -273,7 +282,7 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
 
     // --- 3. WEB BROWSER CHECK ---
     data.downloadUrl = '';
-    const serverVer = data.version || data.buildNumber;
+    const serverVer = data.webVersion || data.version || data.buildNumber;
     const serverBuild = data.buildNumber || serverVer;
     const serverTimestamp = Number(data.timestamp) || 0;
     const currentServerSig = `${serverVer}_${serverBuild}_${serverTimestamp}`;

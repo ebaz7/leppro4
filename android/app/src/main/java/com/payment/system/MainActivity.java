@@ -1,10 +1,17 @@
 package com.payment.system;
 
+import android.Manifest;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -16,28 +23,40 @@ import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
 import android.webkit.WebView;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
 import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
 import androidx.work.NetworkType;
+import androidx.work.OneTimeWorkRequest;
 import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";
     private static final String PREFS_NAME = "CapacitorStorage";
     private static final String APP_FILES_FOLDER = "DlkamFiles";
+    private static final int REQ_POST_NOTIFICATIONS = 1091;
+    private ScheduledExecutorService nativePollExecutor;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
         Log.d(TAG, "Initializing MainActivity...");
+
+        // Ensure Android 8+ notification channels and Android 13+ runtime permission are initialized immediately
+        ensureNotificationChannels(this);
+        requestPostNotificationsPermissionIfNeeded();
 
         // Save server URL in native SharedPreferences on start so SyncWorker has immediate access to it
         saveWebServerUrlToSharedPreferences();
@@ -90,8 +109,128 @@ public class MainActivity extends BridgeActivity {
             Log.e(TAG, "Failed to register DlkamAndroid JavascriptInterface", e);
         }
 
-        // Enqueue the WorkManager background synchronization task
+        // Enqueue the WorkManager background synchronization task + live background executor
         setupScheduler();
+        startFastNativeNotificationPoller();
+    }
+
+    @Override
+    public void onDestroy() {
+        if (nativePollExecutor != null && !nativePollExecutor.isShutdown()) {
+            nativePollExecutor.shutdownNow();
+        }
+        super.onDestroy();
+    }
+
+    private void requestPostNotificationsPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            try {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(
+                            this,
+                            new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                            REQ_POST_NOTIFICATIONS
+                    );
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Could not request POST_NOTIFICATIONS permission", e);
+            }
+        }
+    }
+
+    public static void ensureNotificationChannels(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm == null) return;
+
+                NotificationChannel pvChannel = nm.getNotificationChannel("chat_pv_channel");
+                if (pvChannel == null) {
+                    pvChannel = new NotificationChannel(
+                            "chat_pv_channel",
+                            "پیام‌های شخصی و گفتگو (PV)",
+                            NotificationManager.IMPORTANCE_HIGH
+                    );
+                    pvChannel.setDescription("اعلان فوری پیام‌های خصوصی و گفتگوهای سازمانی دلکام");
+                    pvChannel.enableVibration(true);
+                    pvChannel.enableLights(true);
+                    pvChannel.setVibrationPattern(new long[]{0, 250, 150, 250});
+                    nm.createNotificationChannel(pvChannel);
+                }
+
+                NotificationChannel defaultChannel = nm.getNotificationChannel("fcm_default_channel");
+                if (defaultChannel == null) {
+                    defaultChannel = new NotificationChannel(
+                            "fcm_default_channel",
+                            "اعلان‌های سیستم خروج و پرداخت دلکام",
+                            NotificationManager.IMPORTANCE_HIGH
+                    );
+                    defaultChannel.setDescription("کانال اصلی اعلان‌های دستور پرداخت، کارتابل و برگه خروج");
+                    defaultChannel.enableVibration(true);
+                    defaultChannel.enableLights(true);
+                    defaultChannel.setVibrationPattern(new long[]{0, 250, 150, 250});
+                    nm.createNotificationChannel(defaultChannel);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to create notification channels", e);
+            }
+        }
+    }
+
+    public static void dispatchDlkamNotification(Context context, String notifId, String title, String body, String channelId, String targetUrl) {
+        try {
+            ensureNotificationChannels(context);
+            NotificationManager notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager == null) return;
+
+            String resolvedChannel = (channelId != null && !channelId.trim().isEmpty())
+                    ? channelId.trim()
+                    : "fcm_default_channel";
+
+            String safeId = (notifId != null && !notifId.trim().isEmpty())
+                    ? notifId.trim()
+                    : ("dlkam_" + System.currentTimeMillis());
+
+            Intent intent = new Intent(context, MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            if (targetUrl != null && !targetUrl.isEmpty()) {
+                intent.putExtra("targetUrl", targetUrl);
+            }
+            intent.putExtra("notificationId", safeId);
+
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            PendingIntent pendingIntent = PendingIntent.getActivity(context, safeId.hashCode(), intent, flags);
+
+            Bitmap largeLogo = null;
+            try {
+                largeLogo = BitmapFactory.decodeResource(context.getResources(), R.mipmap.ic_launcher);
+            } catch (Exception ignored) {}
+
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(context, resolvedChannel)
+                    .setSmallIcon(R.drawable.ic_stat_dlkam)
+                    .setColor(0xFF2563EB)
+                    .setContentTitle(title != null && !title.isEmpty() ? title : "سامانه دلکام")
+                    .setContentText(body != null ? body : "")
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(body != null ? body : ""))
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setDefaults(NotificationCompat.DEFAULT_ALL)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setContentIntent(pendingIntent);
+
+            if (largeLogo != null) {
+                builder.setLargeIcon(largeLogo);
+            }
+
+            notificationManager.notify(safeId.hashCode(), builder.build());
+        } catch (Exception e) {
+            Log.e(TAG, "dispatchDlkamNotification error", e);
+        }
     }
 
     private File getDedicatedAppFolder() {
@@ -137,6 +276,28 @@ public class MainActivity extends BridgeActivity {
 
         public DlkamAndroidBridge(Context context) {
             this.context = context;
+        }
+
+        @JavascriptInterface
+        public boolean showNativeNotification(String title, String body, String notifId, String channelId, String targetUrl) {
+            try {
+                dispatchDlkamNotification(context, notifId, title, body, channelId, targetUrl);
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "showNativeNotification bridge error", e);
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean requestNotificationPermissionNative() {
+            try {
+                requestPostNotificationsPermissionIfNeeded();
+                ensureNotificationChannels(context);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
         }
 
         @JavascriptInterface
@@ -361,7 +522,6 @@ public class MainActivity extends BridgeActivity {
     private void saveWebServerUrlToSharedPreferences() {
         try {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            // Save the production server URL as default so that it is persists immediately
             String existingUrl = prefs.getString("server_url", "");
             if (existingUrl == null || existingUrl.isEmpty()) {
                 prefs.edit().putString("server_url", "https://dlkam.ir").apply();
@@ -372,15 +532,31 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private void startFastNativeNotificationPoller() {
+        try {
+            if (nativePollExecutor != null && !nativePollExecutor.isShutdown()) {
+                return;
+            }
+            nativePollExecutor = Executors.newSingleThreadScheduledExecutor();
+            nativePollExecutor.scheduleWithFixedDelay(() -> {
+                try {
+                    SyncWorker.pollAndDispatchNotifications(getApplicationContext());
+                } catch (Exception e) {
+                    Log.w(TAG, "Native fast poll iteration error", e);
+                }
+            }, 8, 12, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start native notification poller", e);
+        }
+    }
+
     private void setupScheduler() {
         Log.i(TAG, "Scheduling WorkManager Background Sync Task...");
         try {
-            // Setup WorkManager Constraints
             Constraints constraints = new Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build();
 
-            // Setup Periodic Work Request (Minimum interval is 15 minutes by Android specification)
             PeriodicWorkRequest syncRequest = new PeriodicWorkRequest.Builder(
                     SyncWorker.class,
                     15, TimeUnit.MINUTES
@@ -388,12 +564,17 @@ public class MainActivity extends BridgeActivity {
             .setConstraints(constraints)
             .build();
 
-            // Enqueue unique periodic work to avoid duplicate schedulers on restart
             WorkManager.getInstance(this).enqueueUniquePeriodicWork(
                     "BackgroundDataSync",
                     ExistingPeriodicWorkPolicy.KEEP,
                     syncRequest
             );
+
+            // Also run an immediate one-time sync on startup
+            OneTimeWorkRequest immediateSync = new OneTimeWorkRequest.Builder(SyncWorker.class)
+                    .setConstraints(constraints)
+                    .build();
+            WorkManager.getInstance(this).enqueue(immediateSync);
             
             Log.i(TAG, "WorkManager Background Sync Task successfully registered.");
         } catch (Exception e) {

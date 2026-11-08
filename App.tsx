@@ -1203,10 +1203,18 @@ function App() {
 
   const addAppNotification = (title: string, message: string, url?: string) => { 
       if (isPublicBioView) return;
-      // Only for local non-db alerts (like cheque alerts), though they will be 
-      // overwritten if setNotifications is called. The toast is more important.
+      const newNotif: AppNotification = {
+          id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          title,
+          message,
+          timestamp: Date.now(),
+          read: false,
+          url
+      };
+      setNotifications(prev => [newNotif, ...prev]);
+      notificationsRef.current = [newNotif, ...notificationsRef.current];
       showToast(title, message);
-      sendNotification(title, message, url ? { url } : null);
+      sendNotification(title, message, { id: newNotif.id, url });
   };
 
   const removeNotification = (id: string) => { 
@@ -1455,8 +1463,8 @@ function App() {
             const unnotifiedUnread = mappedNotifs.filter(n => {
                 const isUnread = !n.read;
                 const isNotShown = !hasNotificationBeenShown(n.id);
-                // Alert ONLY if it is a dynamically received completely new notification during active polling session
-                const isDynamicNew = !isFirstLoad.current && prevIds.length > 0 && !prevIds.includes(n.id);
+                // Alert if it is a dynamically received new notification (even if previous list was empty!)
+                const isDynamicNew = !isFirstLoad.current && !prevIds.includes(n.id);
                 
                 return isUnread && isNotShown && isDynamicNew;
             });
@@ -1498,8 +1506,16 @@ function App() {
                 unnotifiedUnread.forEach(n => markNotificationAsShown(n.id));
             }
             
-            notificationsRef.current = mappedNotifs;
-            setNotifications(mappedNotifs);
+            // Preserve any local test notifications created in the last 60 seconds so polling doesn't wipe them immediately
+            const recentLocals = notificationsRef.current.filter(
+                n => n.id.startsWith('local_') && !n.read && (Date.now() - Number(n.timestamp || 0) < 60000)
+            );
+            const mergedNotifs = [
+                ...recentLocals,
+                ...mappedNotifs.filter(m => !recentLocals.some(l => l.id === m.id))
+            ];
+            notificationsRef.current = mergedNotifs;
+            setNotifications(mergedNotifs);
         }
 
         if (safeMessages && safeMessages.length > 0) {
@@ -1512,11 +1528,11 @@ function App() {
             });
 
             // 2. Alert for incoming chat messages across ALL tabs (Dashboard, Warehouse, Secretariat, etc.)
-            if (!isFirstLoad.current && lastChatMsgIdRef.current) {
+            if (!isFirstLoad.current) {
                 const newUnreadChatMessages = safeMessages.filter(m => {
                     if (m.senderUsername?.toLowerCase() === currentU) return false;
                     if (m.readBy?.some((u: string) => u.toLowerCase() === currentU)) return false;
-                    if (hasNotificationBeenShown(m.id)) return false;
+                    if (hasNotificationBeenShown(m.id) || hasNotificationBeenShown(`chat_pv_${m.id}`)) return false;
                     
                     // Validate intended audience
                     const isDirectPV = m.recipient && m.recipient.toLowerCase() === currentU;
@@ -1536,6 +1552,7 @@ function App() {
                 if (newUnreadChatMessages.length > 0) {
                     const latestChat = newUnreadChatMessages[newUnreadChatMessages.length - 1];
                     markNotificationAsShown(latestChat.id);
+                    markNotificationAsShown(`chat_pv_${latestChat.id}`);
                     const title = latestChat.sender ? `پیام از ${latestChat.sender}` : 'پیام جدید در گفتگو';
                     const body = latestChat.message || (latestChat.audioUrl ? '🎤 پیام صوتی' : '📎 فایل ضمیمه');
                     const targetUrl = latestChat.groupId ? `/chat?group=${latestChat.groupId}` : `/chat?pv=${latestChat.senderUsername}`;
@@ -1544,7 +1561,7 @@ function App() {
                     setToast({ show: true, title, message: body });
                     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
                     toastTimeoutRef.current = setTimeout(() => setToast(null), 4000);
-                    sendNotification(title, body, { id: latestChat.id, url: targetUrl, tab: 'chat' });
+                    sendNotification(title, body, { id: `chat_pv_${latestChat.id}`, url: targetUrl, tab: 'chat', type: 'chat_pv' });
                 }
             }
 
@@ -1849,7 +1866,7 @@ function App() {
       };
   }, [currentUser]);
 
-  // Real-time Chat message injection and Windows Action Center navigation listeners
+  // Real-time Chat message injection, SSE notification injection, and Windows Action Center navigation listeners
   useEffect(() => {
       const handleRealtimeChat = (e: any) => {
           const msg = e.detail;
@@ -1859,7 +1876,30 @@ function App() {
               return [...prev, msg];
           });
       };
+
+      const handleRealtimeNotification = (e: any) => {
+          const data = e.detail;
+          if (!data || !data.title) return;
+          const notifId = data.id || `rt_${Date.now()}`;
+          const newItem: AppNotification = {
+              id: notifId,
+              title: data.title,
+              message: data.body || data.message || '',
+              timestamp: data.createdAt || Date.now(),
+              read: false,
+              url: data.url
+          };
+          setNotifications(prev => {
+              if (prev.some(n => n.id === notifId)) return prev;
+              const next = [newItem, ...prev];
+              notificationsRef.current = next;
+              return next;
+          });
+          showToast(newItem.title, newItem.message);
+      };
+
       window.addEventListener('CHAT_MESSAGE_REALTIME', handleRealtimeChat);
+      window.addEventListener('REALTIME_NOTIFICATION_RECEIVED', handleRealtimeNotification);
 
       // Windows Action Center navigation from electron main process
       const electronAPI = (window as any).electronAPI;
@@ -1886,6 +1926,7 @@ function App() {
 
       return () => {
           window.removeEventListener('CHAT_MESSAGE_REALTIME', handleRealtimeChat);
+          window.removeEventListener('REALTIME_NOTIFICATION_RECEIVED', handleRealtimeNotification);
           if (cleanupElectronNav) cleanupElectronNav();
       };
   }, []);

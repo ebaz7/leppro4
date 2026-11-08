@@ -603,7 +603,45 @@ async function generateAllIcons() {
         .toFile(path.join(dPath, 'splash.png'));
     }
 
-    console.log(`   ✅ تمام آیکون‌های اندروید در مسیر android/app/src/main/res/mipmap-* با پس‌زمینه (${colorValue}) ساخته شدند.`);
+    // ----------------------------------------------------------------------
+    // Generate Android Status Bar Notification Icons (ic_stat_dlkam, ic_stat_name, ic_notification)
+    // Android 5.0+ requires smallIcon to be a white silhouette on a 100% transparent background.
+    // ----------------------------------------------------------------------
+    const notifSilhouette512 = await createNotificationSilhouetteBuffer(master1024Buffer, bgInfo);
+    const notifDensitySpecs = [
+      { folder: 'drawable', size: 96 },
+      { folder: 'drawable-mdpi', size: 24 },
+      { folder: 'drawable-hdpi', size: 36 },
+      { folder: 'drawable-xhdpi', size: 48 },
+      { folder: 'drawable-xxhdpi', size: 72 },
+      { folder: 'drawable-xxxhdpi', size: 96 }
+    ];
+
+    for (const spec of notifDensitySpecs) {
+      const targetDir = path.join(ANDROID_RES_DIR, spec.folder);
+      if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+      const resizedSilhouette = await sharp(notifSilhouette512)
+        .resize(spec.size, spec.size, {
+          fit: 'contain',
+          background: { r: 0, g: 0, b: 0, alpha: 0 }
+        })
+        .png()
+        .toBuffer();
+
+      for (const iconFileName of ['ic_stat_dlkam.png', 'ic_stat_name.png', 'ic_notification.png']) {
+        fs.writeFileSync(path.join(targetDir, iconFileName), resizedSilhouette);
+      }
+    }
+
+    // Also place full-color ic_launcher.png in res/drawable/ so Capacitor largeIcon / drawable lookups succeed
+    const mainDrawableDir = path.join(ANDROID_RES_DIR, 'drawable');
+    await sharp(master1024Buffer)
+      .resize(192, 192, { fit: 'contain', background: bgInfo.rgba })
+      .png()
+      .toFile(path.join(mainDrawableDir, 'ic_launcher.png'));
+
+    console.log(`   ✅ تمام آیکون‌های اندروید در مسیر android/app/src/main/res/mipmap-* و آیکون نوتیفیکیشن دلکام (ic_stat_dlkam) ساخته شدند.`);
   } else {
     console.warn('   ⚠️ پوشه android/app/src/main/res یافت نشد؛ فایل‌های آماده در assets/ ذخیره شدند.');
   }
@@ -612,8 +650,96 @@ async function generateAllIcons() {
   console.log('🎉 عملیات ساخت آیکون‌ها با موفقیت کامل شد! مسیرهای خروجی:');
   console.log('   1) وب و PWA:      public/app-icon.png , public/pwa-512x512.png , public/favicon.ico');
   console.log('   2) دسکتاپ تائوری: src-tauri/icons/icon.ico , src-tauri/icons/icon.png , 32x32, 128x128');
-  console.log('   3) اندروید:       android/app/src/main/res/mipmap-mdpi ... mipmap-xxxhdpi');
+  console.log('   3) اندروید:       android/app/src/main/res/mipmap-* + drawable/ic_stat_dlkam.png');
   console.log('==============================================================');
+}
+
+/**
+ * Extracts the foreground logo shape from master1024Buffer and creates a crisp
+ * white-on-transparent silhouette (512x512) suitable for Android status bar smallIcon.
+ */
+async function createNotificationSilhouetteBuffer(master1024Buffer, bgInfo) {
+  const workSize = 512;
+  const { data, info } = await sharp(master1024Buffer)
+    .resize(workSize, workSize, { fit: 'contain', background: bgInfo.rgba })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  const out = Buffer.alloc(w * h * 4, 0);
+
+  const bgR = bgInfo.rgba.r || 255;
+  const bgG = bgInfo.rgba.g || 255;
+  const bgB = bgInfo.rgba.b || 255;
+
+  let minX = w, minY = h, maxX = 0, maxY = 0;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const a = data[idx + 3];
+
+      let maskAlpha = 0;
+      if (!bgInfo.hasBackground) {
+        maskAlpha = a;
+      } else {
+        const dr = r - bgR;
+        const dg = g - bgG;
+        const db = b - bgB;
+        const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+        if (dist > 22 && a > 20) {
+          const factor = Math.min(1, (dist - 22) / 75);
+          maskAlpha = Math.round(factor * a);
+        }
+      }
+
+      if (maskAlpha > 15) {
+        out[idx] = 255;     // White R
+        out[idx + 1] = 255; // White G
+        out[idx + 2] = 255; // White B
+        out[idx + 3] = maskAlpha;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  let silhouetteSharp = sharp(out, { raw: { width: w, height: h, channels: 4 } });
+
+  // Crop to the bounding box of the 'd' logo and center it with ~10% margin so it fills the status bar icon nicely
+  if (maxX > minX && maxY > minY) {
+    const cropW = Math.max(1, maxX - minX + 1);
+    const cropH = Math.max(1, maxY - minY + 1);
+    const croppedBuffer = await silhouetteSharp
+      .extract({ left: minX, top: minY, width: cropW, height: cropH })
+      .resize(Math.round(workSize * 0.84), Math.round(workSize * 0.84), {
+        fit: 'contain',
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      })
+      .png()
+      .toBuffer();
+
+    return await sharp({
+      create: {
+        width: workSize,
+        height: workSize,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      }
+    })
+      .composite([{ input: croppedBuffer, gravity: 'center' }])
+      .png()
+      .toBuffer();
+  }
+
+  return await silhouetteSharp.png().toBuffer();
 }
 
 if (require.main === module) {
@@ -623,4 +749,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { generateAllIcons, detectIconBackground, purgeTauriIconBuildCache, refreshWindowsIconCache };
+module.exports = { generateAllIcons, detectIconBackground, createNotificationSilhouetteBuffer, purgeTauriIconBuildCache, refreshWindowsIconCache };

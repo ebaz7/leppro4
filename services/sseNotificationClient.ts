@@ -9,12 +9,13 @@
  */
 
 import { sendNotification, hasNotificationBeenShown, markNotificationAsShown } from './notificationService';
-import { apiCall } from './apiService';
+import { apiCall, getEffectiveApiUrl } from './apiService';
 import { User } from '../types';
 
 let eventSourceInstance: EventSource | null = null;
 let reconnectTimer: any = null;
 let keepAliveWatchdog: any = null;
+let queueDrainTimer: any = null;
 let currentConnectedUser: string | null = null;
 let activeUserRef: User | null = null;
 let reconnectAttempts = 0;
@@ -45,6 +46,7 @@ function registerWakeListeners() {
 
 const MAX_RECONNECT_DELAY = 15000;
 const KEEPALIVE_TIMEOUT_MS = 45000;
+const QUEUE_DRAIN_INTERVAL_MS = 10000;
 
 function resetWatchdog(currentUser: User) {
     if (keepAliveWatchdog) clearTimeout(keepAliveWatchdog);
@@ -52,6 +54,19 @@ function resetWatchdog(currentUser: User) {
         console.warn('[SSE] Keepalive timeout exceeded. Forcing reconnection...');
         reconnectSSE(currentUser);
     }, KEEPALIVE_TIMEOUT_MS);
+}
+
+function startQueueDrainHeartbeat(username: string) {
+    if (queueDrainTimer) clearInterval(queueDrainTimer);
+    queueDrainTimer = setInterval(() => {
+        if (activeUserRef && activeUserRef.username === username) {
+            drainOfflineQueue(username);
+        }
+    }, QUEUE_DRAIN_INTERVAL_MS);
+}
+
+export function resolveSSEStreamUrl(username: string): string {
+    return getEffectiveApiUrl(`/api/notifications/stream?username=${encodeURIComponent(username)}`);
 }
 
 export function initSSENotificationClient(currentUser: User | null | undefined) {
@@ -69,6 +84,8 @@ export function initSSENotificationClient(currentUser: User | null | undefined) 
     disconnectSSENotificationClient();
     activeUserRef = currentUser;
     currentConnectedUser = currentUser.username;
+    startQueueDrainHeartbeat(currentUser.username);
+    drainOfflineQueue(currentUser.username);
     connectSSE(currentUser);
 }
 
@@ -78,11 +95,11 @@ function connectSSE(currentUser: User) {
     }
 
     const username = currentUser.username;
-    // Derive base URL (relative for web, or absolute for Android/Desktop if configured)
-    const streamUrl = `/api/notifications/stream?username=${encodeURIComponent(username)}`;
+    // Resolve full server URL on Android Capacitor (https://localhost) and Desktop clients
+    const streamUrl = resolveSSEStreamUrl(username);
 
     try {
-        console.log(`[SSE] Connecting real-time notification stream for '${username}'...`);
+        console.log(`[SSE] Connecting real-time notification stream for '${username}' at ${streamUrl}...`);
         eventSourceInstance = new EventSource(streamUrl);
 
         eventSourceInstance.onopen = () => {
@@ -241,6 +258,11 @@ async function drainOfflineQueue(username: string) {
                         tab: (item.type?.includes('chat') || item.url?.includes('chat')) ? 'chat' : undefined,
                         priority: item.priority
                     });
+                    if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('REALTIME_NOTIFICATION_RECEIVED', { detail: item }));
+                    }
+                }
+                if (item.id) {
                     apiCall('/notifications/ack', 'POST', { id: item.id, username }).catch(() => {});
                 }
             }
@@ -251,6 +273,10 @@ async function drainOfflineQueue(username: string) {
 }
 
 export function disconnectSSENotificationClient() {
+    if (queueDrainTimer) {
+        clearInterval(queueDrainTimer);
+        queueDrainTimer = null;
+    }
     if (keepAliveWatchdog) {
         clearTimeout(keepAliveWatchdog);
         keepAliveWatchdog = null;

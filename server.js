@@ -341,25 +341,48 @@ function extractVersionFromFileName(fileName) {
     return match ? match[1] : null;
 }
 
-function readBuildConfigVersion(platformType) {
+function readBuildConfigVersion(platformType, runtime = null) {
     try {
-        if (platformType === 'android') {
+        const isAndroid = platformType === 'android' || runtime === 'android';
+        const isTauri = runtime === 'tauri';
+        const isElectron = runtime === 'electron';
+
+        if (isAndroid) {
             const gradlePath = path.join(ROOT_DIR, 'android', 'app', 'build.gradle');
             if (fs.existsSync(gradlePath)) {
                 const content = fs.readFileSync(gradlePath, 'utf8');
                 const m = content.match(/versionName\s+["'](\d+\.\d+\.\d+)["']/);
                 if (m && m[1]) return m[1];
             }
-        } else {
+        } else if (isTauri) {
+            const tauriConfPath = path.join(ROOT_DIR, 'src-tauri', 'tauri.conf.json');
+            if (fs.existsSync(tauriConfPath)) {
+                const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+                if (conf?.package?.version) return String(conf.package.version).trim();
+            }
+            const cargoTomlPath = path.join(ROOT_DIR, 'src-tauri', 'Cargo.toml');
+            if (fs.existsSync(cargoTomlPath)) {
+                const m = fs.readFileSync(cargoTomlPath, 'utf8').match(/^version\s*=\s*"([^"]+)"/m);
+                if (m && m[1]) return m[1].trim();
+            }
+        } else if (isElectron) {
             const pkgPath = path.join(ROOT_DIR, 'package.json');
             if (fs.existsSync(pkgPath)) {
                 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
                 if (pkg?.version) return String(pkg.version).trim();
             }
-            const tauriConfPath = path.join(ROOT_DIR, 'src-tauri', 'tauri.conf.json');
-            if (fs.existsSync(tauriConfPath)) {
-                const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
-                if (conf?.package?.version) return String(conf.package.version).trim();
+        } else {
+            // Web / fallback: read release-version.json webVersion or package.json
+            const relPath = path.join(ROOT_DIR, 'release-version.json');
+            if (fs.existsSync(relPath)) {
+                const rel = JSON.parse(fs.readFileSync(relPath, 'utf8'));
+                if (rel.webVersion) return String(rel.webVersion).trim();
+                if (rel.version) return String(rel.version).trim();
+            }
+            const pkgPath = path.join(ROOT_DIR, 'package.json');
+            if (fs.existsSync(pkgPath)) {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                if (pkg?.version) return String(pkg.version).trim();
             }
         }
     } catch (_) {}
@@ -479,7 +502,7 @@ function findNewestInstallerFile(platformType, preferredExt = null, runtime = nu
 
         if (unversionedNewer.length > 0) {
             const chosenUnver = unversionedNewer[0];
-            const fallbackVer = readBuildConfigVersion(platformType);
+            const fallbackVer = readBuildConfigVersion(platformType, runtime);
             if (fallbackVer && compareInstallerSemVer(fallbackVer, maxVersion) > 0) {
                 chosenUnver.version = fallbackVer;
                 return chosenUnver;
@@ -506,7 +529,7 @@ function findNewestInstallerFile(platformType, preferredExt = null, runtime = nu
         return b.mtimeMs - a.mtimeMs;
     });
     const chosen = candidates[0];
-    chosen.version = readBuildConfigVersion(platformType) || '1.0.0';
+    chosen.version = readBuildConfigVersion(platformType, runtime) || '1.0.0';
     return chosen;
 }
 
@@ -8465,30 +8488,41 @@ const getSyncedVersionSettings = (db) => {
     if (!db.settings) db.settings = {};
     try {
         const relPath = path.join(__dirname, 'release-version.json');
+        let relData = {};
         if (fs.existsSync(relPath)) {
-            const relData = JSON.parse(fs.readFileSync(relPath, 'utf8'));
+            relData = JSON.parse(fs.readFileSync(relPath, 'utf8'));
             const relTimestamp = Number(relData.timestamp) || 0;
             const dbTimestamp = Number(db.settings.systemUpdatePublishedAt) || 0;
-            if (relData.version && relTimestamp >= dbTimestamp) {
-                db.settings.systemVersion = relData.version;
-                db.settings.systemBuildNumber = relData.buildNumber || `b_${relTimestamp}`;
+            if (relTimestamp >= dbTimestamp) {
+                db.settings.webVersion = relData.webVersion || relData.version || '1.0.29';
+                db.settings.systemVersion = db.settings.webVersion;
+                db.settings.systemBuildNumber = relData.webBuildNumber || relData.buildNumber || `b_${relTimestamp}`;
                 db.settings.systemUpdatePublishedAt = relTimestamp;
             }
         }
-        // Strictly determine desktop (.exe/.msi) and Android (.apk) versions from the ACTUAL newest installer files on disk!
+
+        // Strictly determine desktop (.exe/.msi) and Android (.apk) versions independently from actual installer files on disk!
         if (typeof findNewestInstallerFile === 'function') {
-            const bestDesktop = findNewestInstallerFile('desktop', 'exe');
-            if (bestDesktop && bestDesktop.version) {
-                db.settings.desktopLatestVersion = bestDesktop.version;
-                db.settings.hasDesktopInstaller = true;
-                db.settings.desktopInstallerFileName = bestDesktop.fileName;
-                db.settings.desktopInstallerExt = bestDesktop.ext || 'exe';
-                db.settings.desktopInstallerSize = bestDesktop.size || 0;
-                if (compareInstallerSemVer(bestDesktop.version, db.settings.systemVersion || '1.0.0') > 0) {
-                    db.settings.systemVersion = bestDesktop.version;
-                }
+            const bestElectron = findNewestInstallerFile('desktop', 'exe', 'electron');
+            if (bestElectron && bestElectron.version) {
+                db.settings.electronLatestVersion = bestElectron.version;
+                db.settings.hasElectronInstaller = true;
+                db.settings.electronInstallerFileName = bestElectron.fileName;
+                db.settings.electronInstallerSize = bestElectron.size || 0;
             } else {
-                db.settings.hasDesktopInstaller = false;
+                db.settings.electronLatestVersion = relData.electronVersion || relData.electronLatestVersion || null;
+                db.settings.hasElectronInstaller = Boolean(db.settings.electronLatestVersion && bestElectron);
+            }
+
+            const bestTauri = findNewestInstallerFile('desktop', 'exe', 'tauri');
+            if (bestTauri && bestTauri.version) {
+                db.settings.tauriLatestVersion = bestTauri.version;
+                db.settings.hasTauriInstaller = true;
+                db.settings.tauriInstallerFileName = bestTauri.fileName;
+                db.settings.tauriInstallerSize = bestTauri.size || 0;
+            } else {
+                db.settings.tauriLatestVersion = relData.tauriVersion || relData.tauriLatestVersion || null;
+                db.settings.hasTauriInstaller = Boolean(db.settings.tauriLatestVersion && bestTauri);
             }
 
             const bestAndroid = findNewestInstallerFile('android');
@@ -8497,42 +8531,54 @@ const getSyncedVersionSettings = (db) => {
                 db.settings.hasAndroidInstaller = true;
                 db.settings.androidInstallerFileName = bestAndroid.fileName;
                 db.settings.androidInstallerSize = bestAndroid.size || 0;
-                if (compareInstallerSemVer(bestAndroid.version, db.settings.systemVersion || '1.0.0') > 0) {
-                    db.settings.systemVersion = bestAndroid.version;
-                }
             } else {
-                db.settings.hasAndroidInstaller = false;
+                db.settings.androidLatestVersion = relData.androidVersion || relData.androidLatestVersion || null;
+                db.settings.hasAndroidInstaller = Boolean(db.settings.androidLatestVersion && bestAndroid);
             }
+
+            // Legacy desktopLatestVersion fallback based on available desktop installer
+            db.settings.desktopLatestVersion = db.settings.electronLatestVersion || db.settings.tauriLatestVersion || null;
+            db.settings.hasDesktopInstaller = Boolean(db.settings.hasElectronInstaller || db.settings.hasTauriInstaller);
         }
     } catch (_) {}
     return db.settings;
 };
 
-// --- DESKTOP CLIENT (TAURI) AUTO-UPDATER & CONFIG ENDPOINTS ---
+// --- DESKTOP CLIENT (TAURI & ELECTRON) AUTO-UPDATER & CONFIG ENDPOINTS ---
 app.get('/api/desktop/updater.json', (req, res) => {
     const db = getDb();
     const settings = getSyncedVersionSettings(db);
-    const bestDesktop = findNewestInstallerFile('desktop', 'exe');
+    const runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || 'tauri').toLowerCase();
+    const isElectron = runtime === 'electron';
+    const bestDesktop = findNewestInstallerFile('desktop', 'exe', runtime);
     const bestAndroid = findNewestInstallerFile('android');
 
-    const desktopVersion = bestDesktop?.version || settings.desktopLatestVersion || '1.0.0';
-    const androidVersion = bestAndroid?.version || settings.androidLatestVersion || '1.0.0';
+    const hasDesktop = Boolean(bestDesktop && fs.existsSync(bestDesktop.filePath));
+    const hasAndroid = Boolean(bestAndroid && fs.existsSync(bestAndroid.filePath));
+    const desktopVersion = hasDesktop ? bestDesktop.version : null;
+    const androidVersion = hasAndroid ? bestAndroid.version : null;
     const desktopExt = bestDesktop?.ext || 'exe';
-    const notes = settings.desktopReleaseNotes || settings.releaseNotes || 'نسخه جدید سیستم مدیریت انبار و حسابداری سایان با قابلیت‌های بهبود یافته.';
+    const notes = settings.desktopReleaseNotes || settings.releaseNotes || 'نسخه جدید سیستم با قابلیت‌های بهبود یافته.';
     const pubDate = settings.systemUpdatePublishedAt ? new Date(Number(settings.systemUpdatePublishedAt)).toISOString() : new Date().toISOString();
 
-    const downloadUrl = `${req.protocol}://${req.get('host')}/api/downloads/latest-desktop?v=${encodeURIComponent(desktopVersion)}&ext=${desktopExt}`;
-    const androidDownloadUrl = `${req.protocol}://${req.get('host')}/api/downloads/latest-android?v=${encodeURIComponent(androidVersion)}`;
+    const runtimeParam = `&runtime=${runtime}`;
+    const downloadUrl = hasDesktop
+        ? `${req.protocol}://${req.get('host')}/api/downloads/latest-desktop?v=${encodeURIComponent(desktopVersion)}&ext=${desktopExt}${runtimeParam}`
+        : '';
+    const androidDownloadUrl = hasAndroid
+        ? `${req.protocol}://${req.get('host')}/api/downloads/latest-android?v=${encodeURIComponent(androidVersion)}`
+        : '';
 
-    // Standard Tauri v1 Auto-Updater JSON schema
+    // Standard Auto-Updater manifest
     const updaterManifest = {
         version: desktopVersion,
         desktopLatestVersion: desktopVersion,
         androidLatestVersion: androidVersion,
-        hasDesktopInstaller: Boolean(bestDesktop),
-        hasAndroidInstaller: Boolean(bestAndroid),
-        desktopFileName: bestDesktop ? `dlkam-desktop-v${desktopVersion}.${desktopExt}` : null,
-        androidFileName: bestAndroid ? `dlkam-android-v${androidVersion}.apk` : null,
+        runtime,
+        hasDesktopInstaller: hasDesktop,
+        hasAndroidInstaller: hasAndroid,
+        desktopFileName: hasDesktop ? bestDesktop.fileName : null,
+        androidFileName: hasAndroid ? bestAndroid.fileName : null,
         notes: notes,
         pub_date: pubDate,
         url: downloadUrl,
@@ -8541,14 +8587,6 @@ app.get('/api/desktop/updater.json', (req, res) => {
         intervalMinutes: Number(settings.desktopUpdateIntervalMinutes) || 60,
         platforms: {
             "windows-x86_64": {
-                signature: "",
-                url: downloadUrl
-            },
-            "darwin-x86_64": {
-                signature: "",
-                url: downloadUrl
-            },
-            "linux-x86_64": {
                 signature: "",
                 url: downloadUrl
             }
@@ -8561,7 +8599,7 @@ app.get('/api/desktop/updater.json', (req, res) => {
 app.get('/api/desktop/check-update', (req, res) => {
     const db = getDb();
     const settings = getSyncedVersionSettings(db);
-    const runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || '').toLowerCase();
+    const runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || 'electron').toLowerCase();
     const bestDesktop = findNewestInstallerFile('desktop', 'exe', runtime);
     const bestAndroid = findNewestInstallerFile('android');
     
@@ -8571,7 +8609,7 @@ app.get('/api/desktop/check-update', (req, res) => {
     const desktopVersion = hasDesktop ? bestDesktop.version : null;
     const androidVersion = hasAndroid ? bestAndroid.version : null;
     const desktopExt = bestDesktop?.ext || 'exe';
-    const desktopFileName = hasDesktop ? (bestDesktop.fileName || `dlkam-desktop-v${desktopVersion}.${desktopExt}`) : null;
+    const desktopFileName = hasDesktop ? bestDesktop.fileName : null;
     const runtimeParam = runtime ? `&runtime=${runtime}` : '';
 
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -8579,6 +8617,7 @@ app.get('/api/desktop/check-update', (req, res) => {
         latestVersion: desktopVersion,
         desktopLatestVersion: desktopVersion,
         androidLatestVersion: androidVersion,
+        runtime,
         hasDesktopInstaller: hasDesktop,
         hasAndroidInstaller: hasAndroid,
         desktopFileName: desktopFileName,
@@ -12381,77 +12420,151 @@ app.get('/api/version', (req, res) => {
     try {
         const db = typeof getDb === 'function' ? getDb() : {};
         const settings = getSyncedVersionSettings(db);
-        const runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || '').toLowerCase();
-        const bestDesktop = findNewestInstallerFile('desktop', 'exe', runtime);
+        const runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || 'web').toLowerCase();
+        
+        const bestElectron = findNewestInstallerFile('desktop', 'exe', 'electron');
+        const bestTauri = findNewestInstallerFile('desktop', 'exe', 'tauri');
         const bestAndroid = findNewestInstallerFile('android');
 
-        const hasDesktop = Boolean(bestDesktop && fs.existsSync(bestDesktop.filePath));
+        const hasElectron = Boolean(bestElectron && fs.existsSync(bestElectron.filePath));
+        const hasTauri = Boolean(bestTauri && fs.existsSync(bestTauri.filePath));
         const hasAndroid = Boolean(bestAndroid && fs.existsSync(bestAndroid.filePath));
-        const desktopLatestVersion = hasDesktop ? bestDesktop.version : null;
-        const androidLatestVersion = hasAndroid ? bestAndroid.version : null;
-        const desktopExt = bestDesktop?.ext || 'exe';
-        const desktopFileName = hasDesktop ? (bestDesktop.fileName || `dlkam-desktop-v${desktopLatestVersion}.${desktopExt}`) : null;
-        const runtimeParam = runtime ? `&runtime=${runtime}` : '';
 
-        const version = settings.systemVersion || desktopLatestVersion || androidLatestVersion || '1.0.0';
-        const buildNumber = settings.systemBuildNumber || (settings.systemUpdatePublishedAt ? `b_${settings.systemUpdatePublishedAt}` : '100');
+        const electronVersion = hasElectron ? bestElectron.version : (settings.electronLatestVersion || null);
+        const tauriVersion = hasTauri ? bestTauri.version : (settings.tauriLatestVersion || null);
+        const androidVersion = hasAndroid ? bestAndroid.version : (settings.androidLatestVersion || null);
+        const webVersion = settings.webVersion || settings.systemVersion || '1.0.29';
+
+        let reportedVersion = webVersion;
+        let reportedDownloadUrl = '';
+        let hasInstaller = false;
+        let targetPlatform = 'web';
+        let desktopFileName = null;
+        let desktopFileSize = 0;
+
+        if (runtime === 'android') {
+            targetPlatform = 'android';
+            reportedVersion = androidVersion;
+            hasInstaller = hasAndroid;
+            reportedDownloadUrl = hasAndroid ? `/api/downloads/latest-android?v=${encodeURIComponent(androidVersion || '')}` : '';
+        } else if (runtime === 'electron') {
+            targetPlatform = 'electron';
+            reportedVersion = electronVersion;
+            hasInstaller = hasElectron;
+            desktopFileName = hasElectron ? bestElectron.fileName : null;
+            desktopFileSize = bestElectron?.size || 0;
+            reportedDownloadUrl = hasElectron ? `/api/downloads/latest-desktop?v=${encodeURIComponent(electronVersion || '')}&ext=exe&runtime=electron` : '';
+        } else if (runtime === 'tauri') {
+            targetPlatform = 'tauri';
+            reportedVersion = tauriVersion;
+            hasInstaller = hasTauri;
+            desktopFileName = hasTauri ? bestTauri.fileName : null;
+            desktopFileSize = bestTauri?.size || 0;
+            reportedDownloadUrl = hasTauri ? `/api/downloads/latest-desktop?v=${encodeURIComponent(tauriVersion || '')}&ext=exe&runtime=tauri` : '';
+        } else {
+            // Web / PWA browser client
+            targetPlatform = 'web';
+            reportedVersion = webVersion;
+            hasInstaller = true;
+            reportedDownloadUrl = '';
+        }
+
+        const buildNumber = settings.systemBuildNumber || `b_${Date.now()}`;
         const title = settings.releaseTitle || 'نسخه جدید سامانه';
         const releaseNotes = settings.releaseNotes || settings.desktopReleaseNotes || 'به‌روزرسانی و بهینه‌سازی سامانه مالی و بازرگانی';
         const publishedAt = settings.systemUpdatePublishedAt || 0;
 
-        const androidDownloadUrl = hasAndroid ? `/api/downloads/latest-android?v=${encodeURIComponent(androidLatestVersion || version)}` : '';
-        const downloadUrl = hasDesktop ? `/api/downloads/latest-desktop?v=${encodeURIComponent(desktopLatestVersion || version)}&ext=${desktopExt}${runtimeParam}` : '';
-        
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.json({ 
-            version,
-            desktopLatestVersion,
-            androidLatestVersion,
-            hasDesktopInstaller: hasDesktop,
+            version: reportedVersion,
+            targetPlatform,
+            hasInstaller,
+            webVersion,
+            electronLatestVersion: electronVersion,
+            tauriLatestVersion: tauriVersion,
+            androidLatestVersion: androidVersion,
+            desktopLatestVersion: runtime === 'electron' ? electronVersion : (runtime === 'tauri' ? tauriVersion : (electronVersion || tauriVersion)),
+            hasDesktopInstaller: runtime === 'electron' ? hasElectron : (runtime === 'tauri' ? hasTauri : (hasElectron || hasTauri)),
+            hasElectronInstaller: hasElectron,
+            hasTauriInstaller: hasTauri,
             hasAndroidInstaller: hasAndroid,
-            desktopFileName: desktopFileName,
-            desktopFileSize: bestDesktop?.size || 0,
-            androidFileName: hasAndroid ? (bestAndroid.fileName || `dlkam-android-v${androidLatestVersion}.apk`) : null,
+            desktopFileName,
+            desktopFileSize,
+            androidFileName: hasAndroid ? (bestAndroid.fileName || `dlkam-android-v${androidVersion}.apk`) : null,
             androidFileSize: bestAndroid?.size || 0,
             buildNumber, 
             title, 
             releaseNotes,
             timestamp: publishedAt || 0,
-            downloadUrl,
-            androidDownloadUrl,
+            downloadUrl: reportedDownloadUrl,
+            androidDownloadUrl: hasAndroid ? `/api/downloads/latest-android?v=${encodeURIComponent(androidVersion || '')}` : '',
             updateIntervalMinutes: Number(settings.desktopUpdateIntervalMinutes) || 60,
             autoCheck: settings.desktopAutoCheckUpdates !== false
         });
     } catch (e) {
-        res.json({ version: '1.0.0', buildNumber: '100', title: 'نسخۀ جدید', androidDownloadUrl: '/api/downloads/latest-android' });
+        res.json({ version: '1.0.29', webVersion: '1.0.29', buildNumber: '100', title: 'نسخۀ جدید', androidDownloadUrl: '/api/downloads/latest-android' });
     }
 });
 
-// PUBLISH NEW UPDATE ACROSS THE SYSTEM (Web, PWA, Desktop, Android)
+// PUBLISH NEW UPDATE ACROSS THE SYSTEM (Per-Platform or All)
 app.post('/api/version/publish', async (req, res) => {
     try {
-        const { version, desktopLatestVersion, androidLatestVersion, title, releaseNotes, sendToBots = true } = req.body || {};
-        if (!version) {
+        const { 
+            version, 
+            platform = 'all',
+            webVersion,
+            electronLatestVersion,
+            tauriLatestVersion,
+            desktopLatestVersion, 
+            androidLatestVersion, 
+            title, 
+            releaseNotes, 
+            sendToBots = true 
+        } = req.body || {};
+
+        if (!version && !webVersion && !electronLatestVersion && !tauriLatestVersion && !androidLatestVersion) {
             return res.status(400).json({ success: false, error: 'شماره نسخه الزامی است' });
         }
 
         const db = typeof getDb === 'function' ? getDb() : {};
         if (!db.settings) db.settings = {};
 
-        const bestDesktop = findNewestInstallerFile('desktop', 'exe');
+        const bestElectron = findNewestInstallerFile('desktop', 'exe', 'electron');
+        const bestTauri = findNewestInstallerFile('desktop', 'exe', 'tauri');
         const bestAndroid = findNewestInstallerFile('android');
 
         const now = Date.now();
         const buildNumber = `b_${now.toString(36).toUpperCase()}`;
-        const newVersion = version.trim();
-        const newDesktopVer = bestDesktop?.version || (desktopLatestVersion || newVersion).trim();
-        const newAndroidVer = bestAndroid?.version || (androidLatestVersion || newVersion).trim();
-        const newTitle = title?.trim() || `نسخه جدید ${newVersion}`;
+        const inputVer = (version || webVersion || '1.0.29').trim();
+
+        // Platform-aware assignment:
+        const targetPlatform = String(platform || 'all').toLowerCase();
+        let newWeb = webVersion ? webVersion.trim() : (targetPlatform === 'web' || targetPlatform === 'all' ? inputVer : (db.settings.webVersion || '1.0.29'));
+        let newElectron = electronLatestVersion ? electronLatestVersion.trim() : (bestElectron?.version || (targetPlatform === 'electron' ? inputVer : (db.settings.electronLatestVersion || inputVer)));
+        let newTauri = tauriLatestVersion ? tauriLatestVersion.trim() : (bestTauri?.version || (targetPlatform === 'tauri' ? inputVer : (db.settings.tauriLatestVersion || inputVer)));
+        let newAndroid = androidLatestVersion ? androidLatestVersion.trim() : (bestAndroid?.version || (targetPlatform === 'android' ? inputVer : (db.settings.androidLatestVersion || inputVer)));
+
+        const newTitle = title?.trim() || `نسخه جدید ${inputVer}`;
         const newNotes = releaseNotes?.trim() || 'به‌روزرسانی، ارتقای عملکرد و بهینه‌سازی کلی سیستم.';
 
-        db.settings.systemVersion = newVersion;
-        db.settings.desktopLatestVersion = newDesktopVer;
-        db.settings.androidLatestVersion = newAndroidVer;
+        if (targetPlatform === 'web' || targetPlatform === 'all') {
+            db.settings.webVersion = newWeb;
+            db.settings.systemVersion = newWeb;
+        }
+        if (targetPlatform === 'electron' || targetPlatform === 'all') {
+            db.settings.electronLatestVersion = newElectron;
+            db.settings.electronVersion = newElectron;
+        }
+        if (targetPlatform === 'tauri' || targetPlatform === 'all') {
+            db.settings.tauriLatestVersion = newTauri;
+            db.settings.tauriVersion = newTauri;
+        }
+        if (targetPlatform === 'android' || targetPlatform === 'all') {
+            db.settings.androidLatestVersion = newAndroid;
+            db.settings.androidVersion = newAndroid;
+        }
+
+        db.settings.desktopLatestVersion = newElectron || newTauri;
         db.settings.systemBuildNumber = buildNumber;
         db.settings.releaseTitle = newTitle;
         db.settings.releaseNotes = newNotes;
@@ -12460,10 +12573,21 @@ app.post('/api/version/publish', async (req, res) => {
 
         try {
             const relPath = path.join(__dirname, 'release-version.json');
+            let existingRelease = {};
+            if (fs.existsSync(relPath)) {
+                try { existingRelease = JSON.parse(fs.readFileSync(relPath, 'utf8')); } catch (_) {}
+            }
             fs.writeFileSync(relPath, JSON.stringify({
-                version: newVersion,
-                desktopLatestVersion: newDesktopVer,
-                androidLatestVersion: newAndroidVer,
+                ...existingRelease,
+                webVersion: newWeb,
+                electronVersion: newElectron,
+                electronLatestVersion: newElectron,
+                tauriVersion: newTauri,
+                tauriLatestVersion: newTauri,
+                androidVersion: newAndroid,
+                androidLatestVersion: newAndroid,
+                version: newWeb,
+                desktopLatestVersion: newElectron || newTauri,
                 buildNumber,
                 timestamp: now,
                 publishedAt: new Date(now).toISOString()

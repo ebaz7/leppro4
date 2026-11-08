@@ -10,7 +10,7 @@ import {
   openDesktopUpdateFile,
   openDesktopUpdateFolder
 } from '../services/updateService';
-import { isTauriDesktop, isWebApp } from '../utils/platformDetection';
+import { isTauriDesktop, isWebApp, isElectronDesktop, isTauriDesktopOnly } from '../utils/platformDetection';
 import { getEffectiveApiUrl } from '../services/apiService';
 
 interface UpdateBannerProps {
@@ -35,16 +35,20 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
   if (!updateInfo) return null;
 
   const isAndroid = isCapacitorAndroid();
+  const isElectron = isElectronDesktop();
+  const isTauri = isTauriDesktopOnly();
   const isDesktop = isTauriDesktop();
   const isWeb = isWebApp() && !isAndroid && !isDesktop;
 
   const targetVer = isAndroid
     ? (updateInfo.androidLatestVersion || updateInfo.version)
-    : isDesktop
-      ? (updateInfo.desktopLatestVersion || updateInfo.version)
-      : updateInfo.version;
+    : isElectron
+      ? (updateInfo.electronLatestVersion || updateInfo.desktopLatestVersion || updateInfo.version)
+      : isTauri
+        ? (updateInfo.tauriLatestVersion || updateInfo.desktopLatestVersion || updateInfo.version)
+        : (updateInfo.webVersion || updateInfo.version);
 
-  const exeFileName = updateInfo.desktopFileName || `dlkam-desktop-v${targetVer || 'latest'}.exe`;
+  const exeFileName = updateInfo.desktopFileName || (isElectron ? `dlkam-electron-setup-v${targetVer || 'latest'}.exe` : `dlkam-desktop-v${targetVer || 'latest'}.exe`);
 
   // Detect whether the desktop executable is already present in local app data
   useEffect(() => {

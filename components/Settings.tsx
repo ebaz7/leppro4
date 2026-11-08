@@ -108,7 +108,7 @@ import {
   isNotificationEnabledInApp,
   sendNotification,
 } from "../services/notificationService";
-import { isTauriDesktop } from "../utils/platformDetection";
+import { isTauriDesktop, getDesktopRuntime } from "../utils/platformDetection";
 import { safeLocalStorage } from "../utils/safeStorage";
 import { getUsers } from "../services/authService";
 import { generateUUID } from "../constants";
@@ -542,9 +542,10 @@ const Settings: React.FC<SettingsProps> = ({
     setDownloadPhase("idle");
     setDownloadProgress(0);
 
+    const runtime = getDesktopRuntime();
     const targetUrl =
       (overrideUrl || settings.desktopUpdateUrl || "").trim() ||
-      `${window.location.origin}/api/desktop/updater.json`;
+      `${window.location.origin}/api/desktop/updater.json?runtime=${runtime}`;
 
     try {
       // First check if native Tauri updater IPC is available
@@ -571,13 +572,13 @@ const Settings: React.FC<SettingsProps> = ({
 
       // If not populated by Tauri, fetch HTTP manifest
       if (!fetchedVersion) {
-        const res = await fetch(targetUrl, { cache: "no-cache" });
+        const res = await fetch(targetUrl, { cache: "no-cache", headers: { 'X-Client-Runtime': runtime } });
         if (!res.ok) {
           throw new Error(`خطای سرور (${res.status} ${res.statusText})`);
         }
         const data = await res.json();
         rawData = data;
-        fetchedVersion = data.version || data.latestVersion || "1.0.0";
+        fetchedVersion = data.version || data.latestVersion || (runtime === 'web' ? (data.webVersion || "1.0.29") : "1.0.0");
         fetchedNotes = data.notes || data.releaseNotes || data.body || "بهبود عملکرد، پایداری و بهینه‌سازی سیستم.";
         fetchedDate = data.pub_date || data.date || new Date().toLocaleDateString("fa-IR");
         fetchedUrl =
@@ -611,7 +612,12 @@ const Settings: React.FC<SettingsProps> = ({
       const appliedVer = localStorage.getItem('applied_desktop_version') || localStorage.getItem('applied_android_version') || currentAppVersion;
       const effectiveInstalledVer = compareSemVer(appliedVer, currentAppVersion) > 0 ? appliedVer : currentAppVersion;
       const semVerDiff = compareSemVer(fetchedVersion, effectiveInstalledVer);
-      if (semVerDiff > 0 && rawData?.hasDesktopInstaller !== false) {
+      
+      const isAndroid = runtime === 'android';
+      const isWeb = runtime === 'web';
+      const hasValidInstaller = isWeb || (isAndroid ? rawData?.hasAndroidInstaller !== false : rawData?.hasDesktopInstaller !== false);
+
+      if (semVerDiff > 0 && hasValidInstaller) {
         setUpdateStatus("available");
       } else {
         setUpdateStatus("up_to_date");
@@ -9819,31 +9825,79 @@ const Settings: React.FC<SettingsProps> = ({
                   </select>
                 </div>
 
-                {/* Target Latest Version on Server (Desktop / Tauri) */}
+                {/* Target Latest Version on Server (Web / PWA) */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                    <Sliders size={14} className="text-purple-600" />
-                    شماره نسخه نهایی دسکتاپ تائوری (Tauri Target Version)
+                    <Globe size={14} className="text-blue-600" />
+                    شماره نسخه سامانه وب و PWA (نسخه مستقل وب)
                   </label>
                   <input
                     type="text"
                     dir="ltr"
-                    placeholder="1.0.2"
-                    value={settings.desktopLatestVersion || settings.systemVersion || ""}
+                    placeholder="1.0.29"
+                    value={settings.webVersion || settings.systemVersion || ""}
                     onChange={(e) => {
                       const val = e.target.value;
-                      setReleaseVersionInput(val);
                       setSettings({
                         ...settings,
-                        desktopLatestVersion: val,
-                        androidLatestVersion: settings.androidLatestVersion || val,
-                        systemVersion: val,
+                        webVersion: val,
+                        systemVersion: val
+                      });
+                    }}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-gray-400">
+                    مختص کاربران مرورگر و PWA — هیچ وابستگی به نسخه‌های نصبی ویندوز و اندروید ندارد.
+                  </span>
+                </div>
+
+                {/* Target Latest Version on Server (Windows Electron) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Monitor size={14} className="text-indigo-600" />
+                    شماره نسخه ویندوز - مدل الکترون (Electron Version)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="1.0.29"
+                    value={settings.electronLatestVersion || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings({
+                        ...settings,
+                        electronLatestVersion: val
+                      });
+                    }}
+                    className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-gray-400">
+                    فقط زمانی که فایل نصبی جدید الکترون (dlkam-electron-setup) در سرور موجود باشد به کلاینت‌های الکترون اعلام می‌شود.
+                  </span>
+                </div>
+
+                {/* Target Latest Version on Server (Desktop / Tauri) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
+                    <Sliders size={14} className="text-purple-600" />
+                    شماره نسخه ویندوز - مدل تائوری (Tauri Version)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    placeholder="1.0.29"
+                    value={settings.tauriLatestVersion || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings({
+                        ...settings,
+                        tauriLatestVersion: val
                       });
                     }}
                     className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
                   />
                   <span className="text-[10px] text-gray-400">
-                    پس از نصب این نسخه در تائوری، تا زمان انتشار نسخه بالاتر دیگر پیام آپدیت نمایش داده نمی‌شود.
+                    مستقل از الکترون — فقط به کلاینت‌های تائوری اعلام می‌شود و تداخلی با سایر پلتفرم‌ها ندارد.
                   </span>
                 </div>
 
@@ -9851,13 +9905,13 @@ const Settings: React.FC<SettingsProps> = ({
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
                     <Smartphone size={14} className="text-emerald-600" />
-                    شماره نسخه نهایی اندروید (Android Target Version)
+                    شماره نسخه اندروید (Android APK Version)
                   </label>
                   <input
                     type="text"
                     dir="ltr"
-                    placeholder="1.0.2"
-                    value={settings.androidLatestVersion || settings.desktopLatestVersion || settings.systemVersion || ""}
+                    placeholder="1.0.29"
+                    value={settings.androidLatestVersion || ""}
                     onChange={(e) => {
                       const val = e.target.value;
                       setSettings({ ...settings, androidLatestVersion: val });
@@ -9865,7 +9919,7 @@ const Settings: React.FC<SettingsProps> = ({
                     className="w-full text-xs font-mono p-3 bg-white dark:bg-slate-900 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   />
                   <span className="text-[10px] text-gray-400">
-                    پس از نصب این نسخه در اندروید، تا زمان انتشار نسخه بالاتر دیگر پیام آپدیت نمایش داده نمی‌شود.
+                    منحصراً به اپلیکیشن اندروید اعلام می‌شود و بیلد اندروید نسخه وب یا ویندوز را دستخوش تغییر نمی‌کند.
                   </span>
                 </div>
 
@@ -9873,32 +9927,39 @@ const Settings: React.FC<SettingsProps> = ({
                 <div className="md:col-span-2 p-4 rounded-xl bg-slate-900 text-slate-100 border border-slate-800 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-purple-300">
-                      ⚡ دستورات خط فرمان (ترمینال سرور) برای ساخت خودکار آیکون‌ها و نسخه‌های نصبی:
+                      ⚡ دستورات ساخت و انتشار مستقل هر پلتفرم در ترمینال سرور:
                     </span>
                     <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-md font-mono">
                       Root Directory
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
                     <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
-                      <div className="font-bold text-amber-300 text-[11px]">۱. ساخت تمام آیکون‌ها از app-icon</div>
-                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run icons</code>
-                      <div className="text-[10px] text-slate-400">
-                        با حفظ دقیق رنگ بک‌گراند یا شفافیت (بدون بک‌گراند) برای اندروید و تائوری
-                      </div>
-                    </div>
-                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
-                      <div className="font-bold text-sky-300 text-[11px]">۲. ساخت اتومات نسخه تائوری در دانلود</div>
-                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run release:tauri</code>
-                      <div className="text-[10px] text-slate-400">
-                        ارتقای خودکار ورژن + ساخت فایل نصبی و قرارگیری در پوشه downloads
-                      </div>
-                    </div>
-                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
-                      <div className="font-bold text-emerald-300 text-[11px]">۳. ساخت اتومات نسخه اندروید در دانلود</div>
+                      <div className="font-bold text-emerald-300 text-[11px]">📱 ۱. ساخت نسخه اندروید (APK)</div>
                       <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run release:android</code>
                       <div className="text-[10px] text-slate-400">
-                        ارتقای خودکار ورژن + ساخت APK نهایی و قرارگیری در پوشه downloads
+                        فقط نسخه اندروید را ارتقا داده و APK نهایی را در downloads قرار می‌دهد.
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
+                      <div className="font-bold text-indigo-300 text-[11px]">🖥️ ۲. ساخت نصاب الکترون ویندوز</div>
+                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run build:electron</code>
+                      <div className="text-[10px] text-slate-400">
+                        فقط نسخه الکترون را ارتقا داده و نصاب بدون تداخل می‌سازد.
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
+                      <div className="font-bold text-purple-300 text-[11px]">⚡ ۳. ساخت نصاب تائوری ویندوز</div>
+                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run release:tauri</code>
+                      <div className="text-[10px] text-slate-400">
+                        فقط نسخه تائوری را ارتقا داده و نصاب تائوری می‌سازد.
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-800/90 border border-slate-700 space-y-1">
+                      <div className="font-bold text-blue-300 text-[11px]">🌐 ۴. انتشار نسخه وب / PWA</div>
+                      <code className="block font-mono text-emerald-400 dir-ltr text-left select-all">npm run release:web</code>
+                      <div className="text-[10px] text-slate-400">
+                        فقط نسخه وب را ارتقا داده و باندل وب را می‌سازد.
                       </div>
                     </div>
                   </div>

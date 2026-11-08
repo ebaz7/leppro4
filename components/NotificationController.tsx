@@ -181,19 +181,6 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
     registerOrUpdateSubscription();
 
     if (Capacitor.isNativePlatform()) {
-        PushNotifications.removeAllListeners(); 
-        PushNotifications.addListener('registration', token => {
-            const subObject = { 
-                endpoint: token.value, 
-                keys: { p256dh: 'native', auth: 'native' }, 
-                type: 'android',
-                username: currentUser.username,
-                role: currentUser.role
-            };
-            localStorage.setItem('push_endpoint', token.value);
-            apiCall('/subscribe', 'POST', subObject);
-        });
-        
         let lastPushString = '';
         let lastPushTime = 0;
 
@@ -217,21 +204,33 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
             }
 
             try {
-                // Display foreground notification as a native banner
-                await LocalNotifications.schedule({
-                    notifications: [
-                        {
-                            title: notification.title || 'اعلان جدید',
-                            body: notification.body || (notification.data && notification.data.body) || '',
-                            id: Math.floor(Math.random() * 2147483647),
-                            schedule: { at: new Date(Date.now() + 50) },
-                            extra: notification.data || null,
-                            channelId: (notification.data?.type === 'chat_pv' || notification.data?.tab === 'chat') ? 'chat_pv_channel' : 'fcm_default_channel',
-                            smallIcon: 'res://ic_stat_name',
-                            sound: 'default'
-                        }
-                    ]
-                });
+                const channelId = (notification.data?.type === 'chat_pv' || notification.data?.tab === 'chat') ? 'chat_pv_channel' : 'fcm_default_channel';
+                const dlkamBridge = (window as any).DlkamAndroid;
+                if (dlkamBridge && typeof dlkamBridge.showNativeNotification === 'function') {
+                    dlkamBridge.showNativeNotification(
+                        notification.title || 'اعلان جدید',
+                        notification.body || (notification.data && notification.data.body) || '',
+                        notifId || `push_${now}`,
+                        channelId,
+                        notification.data?.url || ''
+                    );
+                } else {
+                    await LocalNotifications.schedule({
+                        notifications: [
+                            {
+                                title: notification.title || 'اعلان جدید',
+                                body: notification.body || (notification.data && notification.data.body) || '',
+                                id: Math.floor(Math.random() * 2147483647),
+                                extra: notification.data || null,
+                                channelId,
+                                smallIcon: 'ic_stat_dlkam',
+                                largeIcon: 'ic_launcher',
+                                iconColor: '#2563EB',
+                                sound: 'default'
+                            }
+                        ]
+                    });
+                }
             } catch (e) {
                 console.error('Local Notification foreground display failed', e);
             }

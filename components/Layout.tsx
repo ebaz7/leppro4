@@ -517,13 +517,8 @@ const Layout: React.FC<LayoutProps> = ({
 
   const prevShowDropdown = useRef(showNotifDropdown);
   useEffect(() => {
-      if (prevShowDropdown.current && !showNotifDropdown) {
-          if (clearNotifications && notifications.length > 0) {
-              clearNotifications();
-          }
-      }
       prevShowDropdown.current = showNotifDropdown;
-  }, [showNotifDropdown, clearNotifications, notifications]);
+  }, [showNotifDropdown]);
 
   useEffect(() => {
     if (showProfileModal && currentUser) {
@@ -540,7 +535,9 @@ const Layout: React.FC<LayoutProps> = ({
 
   useEffect(() => {
     if (Capacitor.isNativePlatform()) {
-        setNotifEnabled(isNotificationEnabledInApp());
+        // Always ensure native Android app has in-app notification preference enabled
+        setNotificationPreference(true);
+        setNotifEnabled(true);
     } else {
         try {
             if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted' && isNotificationEnabledInApp()) {
@@ -705,9 +702,12 @@ const Layout: React.FC<LayoutProps> = ({
           } 
       }
       
+      // When already enabled, clicking "تست ارسال" sends a real test notification!
       if (notifEnabled) { 
-          setNotifEnabled(false); 
-          setNotificationPreference(false); 
+          setNotificationPreference(true);
+          setNotifEnabled(true);
+          await requestNotificationPermission().catch(() => {});
+          onAddNotification("سیستم دستور پرداخت دلکام", "این یک اعلان آزمایشی است؛ نوتیفیکیشن‌های شما با موفقیت فعال و آماده دریافت هستند."); 
           return;
       } 
 
@@ -716,7 +716,7 @@ const Layout: React.FC<LayoutProps> = ({
           if (granted) { 
               setNotifEnabled(true); 
               setNotificationPreference(true); 
-              onAddNotification("سیستم دستور پرداخت", "نوتیفیکیشن‌ها با موفقیت فعال شدند."); 
+              onAddNotification("سیستم دستور پرداخت دلکام", "نوتیفیکیشن‌های سیستم با موفقیت فعال شدند."); 
           } else {
               setNotifEnabled(false);
               if (!Capacitor.isNativePlatform()) {
