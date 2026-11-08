@@ -89,7 +89,9 @@ export function generateProductionChartSvg(
                 
                 <!-- Title / Date Header -->
                 <text x="${width / 2}" y="22" font-family="Tahoma, sans-serif" font-size="11" font-weight="bold" fill="#1e293b" text-anchor="middle">
-                    مقایسه عملکرد تولید روزانه با ظرفیت اسمی پلن ماشین‌آلات (تاریخ: ${pt.date || pt.label})
+                    ${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) 
+                        ? `مقایسه عملکرد تولید کل بازه با ظرفیت اسمی پلن ماشین‌آلات (${pt.date || pt.label})` 
+                        : `مقایسه عملکرد تولید روزانه با ظرفیت اسمی پلن ماشین‌آلات (تاریخ: ${pt.date || pt.label})`}
                 </text>
 
                 <!-- Legend -->
@@ -118,7 +120,7 @@ export function generateProductionChartSvg(
 
                 <!-- Achievement Badge -->
                 <rect x="50" y="${height / 2 - 25}" width="140" height="50" rx="6" fill="${achPct >= 100 ? '#ecfdf5' : '#fffbeb'}" stroke="${achPct >= 100 ? '#10b981' : '#f59e0b'}" stroke-width="1"/>
-                <text x="120" y="${height / 2 - 7}" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#475569" text-anchor="middle">درصد تحقق روزانه:</text>
+                <text x="120" y="${height / 2 - 7}" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#475569" text-anchor="middle">${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) ? 'درصد تحقق کل بازه:' : 'درصد تحقق روزانه:'}</text>
                 <text x="120" y="${height / 2 + 15}" font-family="Tahoma, sans-serif" font-size="13" font-weight="900" fill="${achPct >= 100 ? '#047857' : '#b45309'}" text-anchor="middle">${achPct.toFixed(1)}%</text>
 
                 <defs>

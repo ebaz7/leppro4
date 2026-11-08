@@ -475,7 +475,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const [prodViewMode, setProdViewMode] = useState<'item' | 'group'>('item'); // default preserves item view 100%
     const [activeProdSubTab, setActiveProdSubTab] = useState<'table' | 'charts' | 'plan'>('table');
     const [activeProdPlan, setActiveProdPlan] = useState<ProductionPlanConfig | null>(null);
-    const [prodChartPeriod, setProdChartPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
+    const [prodChartPeriod, setProdChartPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'custom' | 'single'>('daily');
+    const [prodChartType, setProdChartType] = useState<'line' | 'bar'>('line');
+    const [prodChartSpecificDay, setProdChartSpecificDay] = useState<string>('');
     const [prodChartGroupFilter, setProdChartGroupFilter] = useState<string>('all');
     const [isSavingIdeal, setIsSavingIdeal] = useState(false);
     const [prodLiveTotals, setProdLiveTotals] = useState<any>({ qty_61: 0, qty_67: 0, qty_79: 0, qty_73: 0, grandTotal: 0 });
@@ -860,15 +862,19 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         return match ? parseFloat(match[1]) : 0;
     };
 
-    // Helper to parse or calculate fee / unit price from row details
+    // Helper to parse or calculate fee / unit price from row details: فی میانگین = مبلغ خالص / وزن خالص
     const parseFee = (row: any, netWeight: number) => {
+        const amt = parseFloat(row.Amount || row.netAmount || row.netAmt || 0);
+        const wgt = netWeight > 0 ? netWeight : parseFloat(row.Quantity || row.netWeight || row.netWgt || 0);
+        if (wgt > 0 && amt > 0) {
+            return amt / wgt;
+        }
         const notes = (row.ItemNotes || '') + ' ' + (row.Notes || '');
         const match = notes.match(/(?:فی|قیمت واحد|نرخ|قیمت)\s*[:：\-]?\s*([\d,.]+)/);
         if (match) {
             return parseFloat(match[1].replace(/,/g, ''));
         }
-        const amt = parseFloat(row.Amount || 0);
-        return netWeight > 0 ? (amt / netWeight) : 0;
+        return 0;
     };
 
     // ==========================================
@@ -4095,6 +4101,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         if (timeline.length === 0) {
             return {
                 chartPoints: [],
+                periodLabels: {
+                    title: 'روند مقایسه‌ای',
+                    subtitle: 'داده‌ای موجود نیست',
+                    actualLegend: 'تولید واقعی',
+                    idealLegend: 'سهمیه پلن',
+                    tooltipActual: 'تولید واقعی',
+                    tooltipIdeal: 'سهمیه پلن',
+                    tableDateHeader: 'تاریخ',
+                    tableActualHeader: 'تولید واقعی (kg)',
+                    tableIdealHeader: 'سهمیه ایده‌آل (kg)'
+                },
                 kpis: { totalActual: 0, totalIdeal: 0, achievementPct: 0, variance: 0, avgDaily: 0 }
             };
         }
@@ -4147,7 +4164,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
         let aggregatedPoints: { label: string; date: string; actual: number; ideal: number }[] = [];
 
-        if (prodChartPeriod === 'daily' || prodChartPeriod === 'custom') {
+        if (prodChartPeriod === 'single') {
+            const targetDate = prodChartSpecificDay || (timeline.length > 0 ? timeline[timeline.length - 1].date : dateFrom || '');
+            const targetItem = timeline.find(t => t.date === targetDate) || timeline[timeline.length - 1];
+            const dayActual = targetItem ? (prodChartGroupFilter === 'all' ? (targetItem.total || 0) : (targetItem.groups?.[prodChartGroupFilter] || 0)) : 0;
+            aggregatedPoints = [{
+                label: targetItem ? (targetItem.date ? targetItem.date.slice(5) : targetItem.date) : targetDate,
+                date: targetItem?.date || targetDate,
+                actual: dayActual,
+                ideal: dailyIdeal
+            }];
+        } else if (prodChartPeriod === 'daily') {
             aggregatedPoints = timeline.map(t => {
                 const dayActual = prodChartGroupFilter === 'all'
                     ? (t.total || 0)
@@ -4159,6 +4186,20 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     ideal: dailyIdeal
                 };
             });
+        } else if (prodChartPeriod === 'custom') {
+            const totalActualPeriod = timeline.reduce((sum, t) => {
+                const val = prodChartGroupFilter === 'all' ? (t.total || 0) : (t.groups?.[prodChartGroupFilter] || 0);
+                return sum + val;
+            }, 0);
+            const totalIdealPeriod = dailyIdeal * totalDays;
+            const firstDate = timeline[0]?.date || dateFrom || '';
+            const lastDate = timeline[timeline.length - 1]?.date || dateTo || '';
+            aggregatedPoints = [{
+                label: `کل دوره (${totalDays} روز)`,
+                date: `${firstDate} تا ${lastDate}`,
+                actual: totalActualPeriod,
+                ideal: totalIdealPeriod
+            }];
         } else if (prodChartPeriod === 'weekly') {
             const chunkSize = 7;
             for (let i = 0; i < timeline.length; i += chunkSize) {
@@ -4223,11 +4264,79 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             };
         });
 
-        const totalActualVal = cumActual;
-        const totalIdealVal = cumIdeal > 0 ? cumIdeal : (dailyIdeal * totalDays);
+        let periodLabels = {
+            title: 'روند مقایسه‌ای روزانه (تولید هر روز در برابر سهمیه روزانه پلن)',
+            subtitle: 'شناسایی نوسانات روزانه، کشف افت راندمان یا جهش‌های مقطعی خطوط تولید',
+            actualLegend: 'تولید واقعی روزانه',
+            idealLegend: `سهمیه ایده‌آل روزانه پلن (${Math.round(dailyIdeal).toLocaleString('fa-IR')} kg/روز)`,
+            tooltipActual: 'تولید واقعی این روز',
+            tooltipIdeal: 'سهمیه ایده‌آل روزانه (پلن)',
+            tableDateHeader: 'تاریخ / روز',
+            tableActualHeader: 'تولید واقعی روزانه (kg)',
+            tableIdealHeader: 'سهمیه ایده‌آل روزانه (kg)'
+        };
+
+        if (prodChartPeriod === 'custom') {
+            periodLabels = {
+                title: `مقایسه سرجمع کل بازه انتخابی (${totalDays} روز کاری)`,
+                subtitle: `بررسی مجموع تحقق اهداف پلن ماشین‌آلات در کل بازه ${dateFrom || ''} تا ${dateTo || ''}`,
+                actualLegend: `تولید واقعی کل دوره (${totalDays} روز)`,
+                idealLegend: `سهمیه ایده‌آل کل دوره (${Math.round(dailyIdeal * totalDays).toLocaleString('fa-IR')} kg)`,
+                tooltipActual: `تولید واقعی کل بازه (${totalDays} روز)`,
+                tooltipIdeal: `سهمیه ایده‌آل کل دوره (پلن)`,
+                tableDateHeader: 'بازه زمانی انتخابی',
+                tableActualHeader: 'تولید واقعی کل بازه (kg)',
+                tableIdealHeader: 'سهمیه ایده‌آل کل بازه (kg)'
+            };
+        } else if (prodChartPeriod === 'weekly') {
+            periodLabels = {
+                title: 'روند مقایسه‌ای هفتگی (تولید ۷ روز در برابر سهمیه هفتگی پلن)',
+                subtitle: 'پایش روند راندمان خطوط در مقیاس هفتگی جهت کنترل نوسانات میان‌مدت',
+                actualLegend: 'تولید واقعی هفتگی',
+                idealLegend: `سهمیه ایده‌آل هفتگی (${Math.round(dailyIdeal * 7).toLocaleString('fa-IR')} kg/هفته)`,
+                tooltipActual: 'تولید واقعی این هفته',
+                tooltipIdeal: 'سهمیه ایده‌آل هفتگی (پلن)',
+                tableDateHeader: 'شماره هفته / تاریخ',
+                tableActualHeader: 'تولید واقعی هفتگی (kg)',
+                tableIdealHeader: 'سهمیه ایده‌آل هفتگی (kg)'
+            };
+        } else if (prodChartPeriod === 'monthly') {
+            periodLabels = {
+                title: 'روند مقایسه‌ای ماهانه (تولید ماه در برابر سهمیه ماهانه پلن)',
+                subtitle: 'تحلیل کلان ماه‌های سال و سنجش تحقق بودجه تولید در افق ماهانه',
+                actualLegend: 'تولید واقعی ماهانه',
+                idealLegend: 'سهمیه ایده‌آل ماهانه پلن',
+                tooltipActual: 'تولید واقعی این ماه',
+                tooltipIdeal: 'سهمیه ایده‌آل ماهانه (پلن)',
+                tableDateHeader: 'ماه / دوره',
+                tableActualHeader: 'تولید واقعی ماه (kg)',
+                tableIdealHeader: 'سهمیه ایده‌آل ماه (kg)'
+            };
+        } else if (prodChartPeriod === 'single') {
+            periodLabels = {
+                title: 'مقایسه عملکرد تولید یک روز مشخص با سهمیه روزانه پلن',
+                subtitle: 'بررسی دقیق یک روز انتخابی و محاسبه درصد تحقق و انحراف نسبت به توان اسمی ماشین‌آلات',
+                actualLegend: 'تولید واقعی روز انتخابی',
+                idealLegend: `سهمیه ایده‌آل روزانه پلن (${Math.round(dailyIdeal).toLocaleString('fa-IR')} kg/روز)`,
+                tooltipActual: 'تولید واقعی این روز',
+                tooltipIdeal: 'سهمیه ایده‌آل روزانه (پلن)',
+                tableDateHeader: 'تاریخ روز',
+                tableActualHeader: 'تولید واقعی روز (kg)',
+                tableIdealHeader: 'سهمیه ایده‌آل روزانه (kg)'
+            };
+        }
+
+        const totalActualVal = prodChartPeriod === 'single'
+            ? (aggregatedPoints[0]?.actual || 0)
+            : (prodChartPeriod === 'custom' ? (aggregatedPoints[0]?.actual || 0) : cumActual);
+        const totalIdealVal = prodChartPeriod === 'single'
+            ? dailyIdeal
+            : (prodChartPeriod === 'custom' ? (aggregatedPoints[0]?.ideal || 0) : (cumIdeal > 0 ? cumIdeal : (dailyIdeal * totalDays)));
         const achievementPct = totalIdealVal > 0 ? (totalActualVal / totalIdealVal) * 100 : 0;
         const varianceVal = totalActualVal - totalIdealVal;
-        const avgDailyVal = totalDays > 0 ? totalActualVal / totalDays : 0;
+        const avgDailyVal = prodChartPeriod === 'single'
+            ? totalActualVal
+            : (totalDays > 0 ? totalActualVal / totalDays : 0);
 
         // Peak and low days in timeline
         let peakDay: { date: string; amount: number } | undefined;
@@ -4295,6 +4404,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
         return {
             chartPoints,
+            periodLabels,
             kpis: {
                 totalActual: totalActualVal,
                 totalIdeal: totalIdealVal,
@@ -7576,7 +7686,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     <th className="p-3 text-left text-rose-700 bg-rose-50/60">مبلغ مرجوعی (ریال)</th>
                                                     <th className="p-3 text-center font-black text-blue-900 bg-blue-50/60">وزن خالص (ک‌گ)</th>
                                                     <th className="p-3 text-left font-black text-blue-900 bg-blue-50/60">فروش خالص (ریال)</th>
-                                                    <th className="p-3 text-left font-black text-emerald-900 bg-emerald-50/60">فی نهایی (ریال / ک‌گ)</th>
+                                                    <th className="p-3 text-left font-black text-emerald-900 bg-emerald-50/60">فی میانگین (ریال / ک‌گ)</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
@@ -7646,6 +7756,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                             <th className="p-3 font-semibold">نام مشتری</th>
                                             <th className="p-3 font-semibold text-center">تعداد اقلام</th>
                                             <th className="p-3 font-semibold text-center">مجموع وزن/مقدار</th>
+                                            <th className="p-3 font-semibold text-left">فی میانگین (ریال)</th>
                                             <th className="p-3 font-semibold text-left">مبلغ کل (ریال)</th>
                                             <th className="p-3 font-semibold text-center w-24">جزئیات</th>
                                         </tr>
@@ -7720,13 +7831,14 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                             if (groupedList.length === 0) {
                                                 return (
                                                     <tr>
-                                                        <td colSpan={7} className="p-8 text-center text-slate-400 text-sm">{salesViewMode === 'range' ? 'هیچ فاکتور فروشی برای بازه زمانی انتخابی ثبت نشده است' : 'هیچ فاکتور فروشی برای تاریخ انتخابی ثبت نشده است'}</td>
+                                                        <td colSpan={8} className="p-8 text-center text-slate-400 text-sm">{salesViewMode === 'range' ? 'هیچ فاکتور فروشی برای بازه زمانی انتخابی ثبت نشده است' : 'هیچ فاکتور فروشی برای تاریخ انتخابی ثبت نشده است'}</td>
                                                     </tr>
                                                 );
                                             }
                                             
                                             return groupedList.map((inv, idx) => {
                                                 const isExpanded = expandedInvoiceId === inv.invoiceNum;
+                                                const invAvgFee = inv.totalQuantity > 0 ? Math.round(inv.totalAmount / inv.totalQuantity) : 0;
                                                 return (
                                                     <React.Fragment key={inv.invoiceNum}>
                                                         <tr 
@@ -7738,6 +7850,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             <td className="p-3 font-bold text-slate-800">{inv.customerName}</td>
                                                             <td className="p-3 text-center font-mono font-semibold text-slate-500">{inv.items.length} کالا</td>
                                                             <td className="p-3 text-center font-mono font-bold text-slate-600">{inv.totalQuantity.toFixed(1)}</td>
+                                                            <td className="p-3 text-left font-mono font-bold text-teal-700">{invAvgFee > 0 ? formatMoney(invAvgFee) : '-'}</td>
                                                             <td className="p-3 text-left font-mono font-black text-emerald-600">{formatMoney(inv.totalAmount)}</td>
                                                             <td className="p-3 text-center">
                                                                 <button className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-semibold focus:outline-none">
@@ -7748,7 +7861,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                         </tr>
                                                         {isExpanded && (
                                                             <tr className="bg-slate-50/50">
-                                                                <td colSpan={7} className="p-4 bg-slate-50/30">
+                                                                <td colSpan={8} className="p-4 bg-slate-50/30">
                                                                     <div className="border border-slate-200 rounded-lg bg-white p-3 shadow-inner">
                                                                         <div className="text-[11px] font-bold text-slate-500 mb-2 pb-1 border-b border-slate-100 flex justify-between">
                                                                             <span>جزئیات فاکتور {inv.invoiceNum}</span>
@@ -7863,10 +7976,10 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                 <th className="p-3">{compareGroupBy === 'group' ? 'گروه کالایی' : 'نام دقیق محصول'}</th>
                                                 <th className="p-3 text-center bg-blue-900/40 text-blue-100">وزن خالص A (ک‌گ)</th>
                                                 <th className="p-3 text-left bg-blue-900/40 text-blue-100">فروش خالص A (ریال)</th>
-                                                <th className="p-3 text-left bg-blue-900/40 text-blue-100">فی نهایی A (ریال)</th>
+                                                <th className="p-3 text-left bg-blue-900/40 text-blue-100">فی میانگین A (ریال)</th>
                                                 <th className="p-3 text-center bg-indigo-900/40 text-indigo-100">وزن خالص B (ک‌گ)</th>
                                                 <th className="p-3 text-left bg-indigo-900/40 text-indigo-100">فروش خالص B (ریال)</th>
-                                                <th className="p-3 text-left bg-indigo-900/40 text-indigo-100">فی نهایی B (ریال)</th>
+                                                <th className="p-3 text-left bg-indigo-900/40 text-indigo-100">فی میانگین B (ریال)</th>
                                                 <th className="p-3 text-center">تغییر وزن (%)</th>
                                                 <th className="p-3 text-center">تغییر فروش (%)</th>
                                                 <th className="p-3 text-center">تغییر فی (%)</th>
@@ -7879,7 +7992,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                 <th className="p-3.5 font-bold text-slate-700">شرح کالای فاکتور</th>
                                                 <th className="p-3.5 font-bold text-slate-700 text-left w-24">وزن خالص (ک‌گ)</th>
                                                 <th className="p-3.5 font-bold text-slate-700 text-left w-24">وزن ناخالص (ک‌گ)</th>
-                                                <th className="p-3.5 font-bold text-slate-700 text-left w-32">فی واحد (ریال)</th>
+                                                <th className="p-3.5 font-bold text-slate-700 text-left w-32">فی میانگین (ریال)</th>
                                                 <th className="p-3.5 font-bold text-slate-700 text-left w-36">مجموع مبلغ (ریال)</th>
                                             </tr>
                                         )}
@@ -8191,7 +8304,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                 <span className="font-bold text-slate-600 text-xs">{grossW > 0 ? `${grossW.toFixed(2)} kg` : '-'}</span>
                                                             </div>
                                                             <div>
-                                                                <span className="text-[9px] text-slate-400 font-sans block">فی واحد</span>
+                                                                <span className="text-[9px] text-slate-400 font-sans block">فی میانگین</span>
                                                                 <span className="font-bold text-emerald-700 text-xs">{fee > 0 ? formatMoney(fee) : '-'} ریال</span>
                                                             </div>
                                                             <div className="text-left">
@@ -9136,36 +9249,64 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                                             <div className="flex flex-wrap items-center gap-3">
                                                 <span className="text-xs font-bold text-slate-700">بازه زمانی گام‌ها:</span>
-                                                <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                                                <div className="flex flex-wrap bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                                                     <button
                                                         type="button"
-                                                        onClick={() => setProdChartPeriod('daily')}
+                                                        onClick={() => { setProdChartPeriod('daily'); setProdChartSpecificDay(''); }}
                                                         className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all cursor-pointer ${prodChartPeriod === 'daily' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                                        title="مشاهده روند تک‌تک روزها در بازه (هر روز جداگانه)"
                                                     >
-                                                        روزانه (Daily)
+                                                        روزانه (تک‌تک روزها)
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={() => setProdChartPeriod('weekly')}
+                                                        onClick={() => setProdChartPeriod('single')}
+                                                        className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all cursor-pointer ${prodChartPeriod === 'single' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                                        title="مقایسه عملکرد تولید یک روز مشخص با سهمیه روزانه پلن"
+                                                    >
+                                                        یک روز مشخص
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => { setProdChartPeriod('weekly'); setProdChartSpecificDay(''); }}
                                                         className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all cursor-pointer ${prodChartPeriod === 'weekly' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                                        title="گام‌های هفتگی (۷ روزه)"
                                                     >
-                                                        هفتگی (Weekly)
+                                                        هفتگی (۷ روز)
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={() => setProdChartPeriod('monthly')}
+                                                        onClick={() => { setProdChartPeriod('monthly'); setProdChartSpecificDay(''); }}
                                                         className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all cursor-pointer ${prodChartPeriod === 'monthly' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                                        title="تفکیک بر اساس ماه‌های سال"
                                                     >
-                                                        یک‌ماهه (Monthly)
+                                                        ماهانه
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={() => setProdChartPeriod('custom')}
+                                                        onClick={() => { setProdChartPeriod('custom'); setProdChartSpecificDay(''); }}
                                                         className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all cursor-pointer ${prodChartPeriod === 'custom' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                                                        title="مقایسه سرجمع کل دوره انتخابی (تولید کل در برابر سهمیه کل دوره)"
                                                     >
-                                                        کل بازه انتخابی
+                                                        کل بازه انتخابی (سرجمع دوره)
                                                     </button>
                                                 </div>
+
+                                                {prodChartPeriod === 'single' && (
+                                                    <div className="flex items-center gap-1.5 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                                                        <span className="text-[11px] font-bold text-amber-900">انتخاب روز:</span>
+                                                        <select
+                                                            value={prodChartSpecificDay}
+                                                            onChange={(e) => setProdChartSpecificDay(e.target.value)}
+                                                            className="bg-white border border-amber-300 text-amber-950 text-xs font-mono font-bold rounded px-2 py-1 focus:ring-1 focus:ring-amber-500"
+                                                        >
+                                                            <option value="">آخرین روز ثبت‌شده</option>
+                                                            {(prodDailyTimeline || []).map((t: any) => (
+                                                                <option key={t.date} value={t.date}>{t.date}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                )}
                                             </div>
 
                                             {/* Master Group Filter */}
@@ -9231,7 +9372,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
                                         {/* Chart Data Calculation & 5 KPI Summary Cards */}
                                         {(() => {
-                                            const { chartPoints, kpis } = getProductionTimelineChartData();
+                                            const { chartPoints, periodLabels, kpis } = getProductionTimelineChartData();
                                             const totalActual = kpis.totalActual;
                                             const totalIdeal = kpis.totalIdeal;
                                             const diff = kpis.variance;
@@ -9391,33 +9532,86 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                         )}
                                                     </div>
 
-                                                    {/* Chart 2: Sinuous Periodic Waves Line Chart */}
+                                                    {/* Chart 2: Dynamic Periodic Waves Line or Comparative Bar Chart */}
                                                     <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3">
-                                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                                                             <div>
                                                                 <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
                                                                     <Activity className="w-4 h-4 text-emerald-600" />
-                                                                    <span>روند مقایسه‌ای دوره‌ای / روزانه (تولید هر گام در برابر سهمیه ایده‌آل)</span>
+                                                                    <span>{periodLabels.title}</span>
                                                                 </h3>
                                                                 <p className="text-[11px] text-slate-500 mt-0.5">
-                                                                    شناسایی نوسانات روزانه و هفتگی، کشف افت راندمان یا جهش‌های غیرمنتظره تولید
+                                                                    {periodLabels.subtitle}
                                                                 </p>
                                                             </div>
-                                                            <div className="flex items-center gap-3 text-xs font-bold">
-                                                                <span className="inline-flex items-center gap-1.5 text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
-                                                                    <span className="w-2.5 h-2.5 bg-sky-600 rounded-full inline-block"></span>
-                                                                    تولید در این دوره
-                                                                </span>
-                                                                <span className="inline-flex items-center gap-1.5 text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                                                                    <span className="w-2.5 h-2.5 bg-amber-600 rounded-full inline-block"></span>
-                                                                    سهمیه ایده‌آل دوره
-                                                                </span>
+                                                            <div className="flex flex-wrap items-center gap-3">
+                                                                {/* Chart View Toggle: Line vs Bar */}
+                                                                <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setProdChartType('line')}
+                                                                        className={`text-xs font-bold px-2.5 py-1 rounded transition-all cursor-pointer ${prodChartType === 'line' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'}`}
+                                                                        title="نمایش نمودار خطی روند"
+                                                                    >
+                                                                        خطی (Line)
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setProdChartType('bar')}
+                                                                        className={`text-xs font-bold px-2.5 py-1 rounded transition-all cursor-pointer ${prodChartType === 'bar' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'}`}
+                                                                        title="نمایش ستون‌های مقایسه‌ای"
+                                                                    >
+                                                                        میله‌ای (Bar)
+                                                                    </button>
+                                                                </div>
+
+                                                                {/* Dynamic Legend */}
+                                                                <div className="flex items-center gap-3 text-xs font-bold">
+                                                                    <span className="inline-flex items-center gap-1.5 text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                                                                        <span className="w-2.5 h-2.5 bg-sky-600 rounded-full inline-block"></span>
+                                                                        {periodLabels.actualLegend}
+                                                                    </span>
+                                                                    <span className="inline-flex items-center gap-1.5 text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                                                        <span className="w-2.5 h-2.5 bg-amber-600 rounded-full inline-block"></span>
+                                                                        {periodLabels.idealLegend}
+                                                                    </span>
+                                                                </div>
                                                             </div>
                                                         </div>
 
                                                         {chartPoints.length === 0 ? (
                                                             <div className="h-64 flex items-center justify-center text-slate-400 text-xs">
                                                                 داده‌ای برای ترسیم نمودار در این بازه موجود نیست.
+                                                            </div>
+                                                        ) : prodChartType === 'bar' || chartPoints.length <= 1 ? (
+                                                            <div className="w-full h-72 pt-2" dir="ltr">
+                                                                <ResponsiveContainer width="100%" height="100%">
+                                                                    <BarChart data={chartPoints} margin={{ top: 15, right: 30, left: 10, bottom: 20 }}>
+                                                                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                                                        <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#475569' }} />
+                                                                        <YAxis tick={{ fontSize: 11, fill: '#475569' }} tickFormatter={(val) => Number(val).toLocaleString()} />
+                                                                        <Tooltip
+                                                                            formatter={(value: any, name: any) => [
+                                                                                `${Number(value).toLocaleString()} kg`,
+                                                                                name === 'actual' ? periodLabels.tooltipActual : periodLabels.tooltipIdeal
+                                                                            ]}
+                                                                            labelFormatter={(label) => `${periodLabels.tableDateHeader}: ${label}`}
+                                                                            contentStyle={{ direction: 'rtl', borderRadius: '12px', borderColor: '#cbd5e1' }}
+                                                                        />
+                                                                        <Bar
+                                                                            dataKey="actual"
+                                                                            name="actual"
+                                                                            fill="#0284c7"
+                                                                            radius={[4, 4, 0, 0]}
+                                                                        />
+                                                                        <Bar
+                                                                            dataKey="ideal"
+                                                                            name="ideal"
+                                                                            fill="#d97706"
+                                                                            radius={[4, 4, 0, 0]}
+                                                                        />
+                                                                    </BarChart>
+                                                                </ResponsiveContainer>
                                                             </div>
                                                         ) : (
                                                             <div className="w-full h-72 pt-2" dir="ltr">
@@ -9429,9 +9623,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                         <Tooltip
                                                                             formatter={(value: any, name: any) => [
                                                                                 `${Number(value).toLocaleString()} kg`,
-                                                                                name === 'actual' ? 'تولید واقعی این گام' : 'سهمیه ایده‌آل گام'
+                                                                                name === 'actual' ? periodLabels.tooltipActual : periodLabels.tooltipIdeal
                                                                             ]}
-                                                                            labelFormatter={(label) => `بازه: ${label}`}
+                                                                            labelFormatter={(label) => `${periodLabels.tableDateHeader}: ${label}`}
                                                                             contentStyle={{ direction: 'rtl', borderRadius: '12px', borderColor: '#cbd5e1' }}
                                                                         />
                                                                         <Line
@@ -9472,9 +9666,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                 <thead>
                                                                     <tr className="bg-slate-100 text-slate-800 font-black border-b border-slate-200">
                                                                         <th className="p-2.5 border-r border-slate-200 w-12">#</th>
-                                                                        <th className="p-2.5 border-r border-slate-200 text-right min-w-[130px]">بازه زمانی / تاریخ</th>
-                                                                        <th className="p-2.5 border-r border-slate-200 text-blue-900">تولید واقعی (kg)</th>
-                                                                        <th className="p-2.5 border-r border-slate-200 text-amber-900">سهمیه ایده‌آل (kg)</th>
+                                                                        <th className="p-2.5 border-r border-slate-200 text-right min-w-[130px]">{periodLabels.tableDateHeader}</th>
+                                                                        <th className="p-2.5 border-r border-slate-200 text-blue-900">{periodLabels.tableActualHeader}</th>
+                                                                        <th className="p-2.5 border-r border-slate-200 text-amber-900">{periodLabels.tableIdealHeader}</th>
                                                                         <th className="p-2.5 border-r border-slate-200 text-emerald-900">درصد تحقق (%)</th>
                                                                         <th className="p-2.5 border-r border-slate-200">انحراف (kg)</th>
                                                                         <th className="p-2.5 border-r border-slate-200 bg-blue-50/50">تجمعی واقعی (kg)</th>

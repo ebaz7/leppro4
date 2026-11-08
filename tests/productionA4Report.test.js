@@ -26,6 +26,18 @@ test('Production Report A4: Vector SVG chart generation for multi-day period (S-
     assert.ok(svg.includes('سهمیه پلن تجمعی'), 'SVG should contain plan quota legend');
 });
 
+test('Production Report A4: Vector SVG chart generation for custom period total (comparative bar)', () => {
+    const customPeriodPoints = [
+        { label: 'کل دوره (227 روز)', date: '1405/01/01 تا 1405/08/17', actual: 538000, ideal: 4648234 }
+    ];
+    const svg = generateProductionChartSvg(customPeriodPoints, false, 740, 180);
+    assert.ok(svg.includes('<svg'), 'SVG chart should be generated');
+    assert.ok(svg.includes('مقایسه عملکرد تولید کل بازه با ظرفیت اسمی پلن ماشین‌آلات'), 'Title should show whole period comparison');
+    assert.ok(svg.includes('درصد تحقق کل بازه:'), 'Badge should show total period achievement');
+    assert.ok(svg.includes('تولید واقعی'), 'SVG should contain actual label');
+    assert.ok(svg.includes('سهمیه ایده‌آل پلن'), 'SVG should contain plan label');
+});
+
 test('Production Report A4: Full single-page A4 document builder produces valid HTML with signatures and KPIs', () => {
     const dataset = {
         title: 'گزارش تحلیلی و مانیتورینگ عملکرد خطوط تولید (مقایسه با پلن ظرفیت ماشین‌آلات)',

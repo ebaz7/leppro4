@@ -897,13 +897,14 @@ export const generateAndSendComparisonPDF = async (db, chatId, sendFn, sendDocFn
             allCatNames.push(cat);
         });
 
-        const columns = ['ردیف', 'گروه اصلی کالا', 'وزن A (ک‌گ)', 'مبلغ A (ریال)', 'وزن B (ک‌گ)', 'مبلغ B (ریال)', 'تغییر وزن %', 'تغییر مبلغ %', 'تغییر فی %'];
+        const columns = ['ردیف', 'گروه اصلی کالا', 'وزن A (ک‌گ)', 'مبلغ A (ریال)', 'فی میانگین A (ریال)', 'وزن B (ک‌گ)', 'مبلغ B (ریال)', 'فی میانگین B (ریال)', 'تغییر وزن %', 'تغییر مبلغ %', 'تغییر فی %'];
         const tableRows = [];
         let index = 1;
 
         let totalWgtA = 0, totalAmtA = 0;
         let totalWgtB = 0, totalAmtB = 0;
 
+        let compareBreakdown = '';
         for (const catName of allCatNames) {
             const rowA = mapA.get(catName) || { salesQty: 0, salesAmt: 0, returnQty: 0, returnAmt: 0 };
             const rowB = mapB.get(catName) || { salesQty: 0, salesAmt: 0, returnQty: 0, returnAmt: 0 };
@@ -938,12 +939,18 @@ export const generateAndSendComparisonPDF = async (db, chatId, sendFn, sendDocFn
                 catName,
                 wgtA.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ک‌گ',
                 Math.round(amtA).toLocaleString('fa-IR') + ' ریال',
+                Math.round(feeA).toLocaleString('fa-IR') + ' ریال',
                 wgtB.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ک‌گ',
                 Math.round(amtB).toLocaleString('fa-IR') + ' ریال',
+                Math.round(feeB).toLocaleString('fa-IR') + ' ریال',
                 qtyPctStr,
                 amtPctStr,
                 feePctStr
             ]);
+
+            if (wgtA > 0 || wgtB > 0 || amtA > 0 || amtB > 0) {
+                compareBreakdown += `🔹 *${catName}:*\n   ▫️ دوره A: ${wgtA.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ک‌گ | فی میانگین: ${Math.round(feeA).toLocaleString('fa-IR')} ریال\n   ▫️ دوره B: ${wgtB.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ک‌گ | فی میانگین: ${Math.round(feeB).toLocaleString('fa-IR')} ریال\n`;
+            }
         }
 
         const avgFeeA = totalWgtA > 0 ? (totalAmtA / totalWgtA) : 0;
@@ -966,8 +973,10 @@ export const generateAndSendComparisonPDF = async (db, chatId, sendFn, sendDocFn
             'خلاصه کل عملکرد',
             totalWgtA.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ک‌گ',
             Math.round(totalAmtA).toLocaleString('fa-IR') + ' ریال',
+            Math.round(avgFeeA).toLocaleString('fa-IR') + ' ریال',
             totalWgtB.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' ک‌گ',
             Math.round(totalAmtB).toLocaleString('fa-IR') + ' ریال',
+            Math.round(avgFeeB).toLocaleString('fa-IR') + ' ریال',
             totalQtyPctStr,
             totalAmtPctStr,
             totalFeePctStr
@@ -988,7 +997,7 @@ export const generateAndSendComparisonPDF = async (db, chatId, sendFn, sendDocFn
             `   🏷 فی متوسط: ${Math.round(avgFeeB).toLocaleString('fa-IR')} ریال/ک‌گ\n\n` +
             `📈 **تغییرات وزن:** ${totalQtyPctStr}\n` +
             `💵 **تغییرات مبلغ:** ${totalAmtPctStr}\n` +
-            `📊 **تغییرات فی متوسط:** ${totalFeePctStr}`;
+            `📊 **تغییرات فی متوسط:** ${totalFeePctStr}${compareBreakdown ? `\n\n📋 *تفکیک عملکرد و فی میانگین اقلام:*\n${compareBreakdown}` : ''}`;
 
         await sendDocFn(chatId, pdfBuffer, filename, caption);
     } catch (err) {
@@ -5931,29 +5940,46 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
             }
             
             const title = `گزارش رسمی فروش روزانه و مرجوعی سایان - مورخ ${summary.shamsiFrom || toShamsiFull(new Date())}`;
-            const columns = ['ردیف', 'سرفصل کالا', 'فروش (ک‌گ / ریال)', 'مرجوعی کد ۱۳ (ک‌گ / ریال)', 'خالص نهایی (ک‌گ / ریال)'];
+            const columns = ['ردیف', 'سرفصل کالا', 'فروش (ک‌گ / ریال)', 'مرجوعی کد ۱۳ (ک‌گ / ریال)', 'خالص نهایی (ک‌گ / ریال)', 'فی میانگین (ریال)'];
             
             let idx = 1;
-            const tableRows = categoryList.map(cat => [
-                (idx++).toLocaleString('fa-IR'),
-                cat.name,
-                `${cat.salesQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(cat.salesAmt).toLocaleString('fa-IR')}`,
-                `${cat.returnQty > 0 ? cat.returnQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '۰'} / ${Math.round(cat.returnAmt).toLocaleString('fa-IR')}`,
-                `${cat.netWgt.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(cat.netAmt).toLocaleString('fa-IR')}`
-            ]);
+            let categoryBreakdown = '';
+            const tableRows = categoryList.map(cat => {
+                const rowFee = cat.netFee || (cat.netWgt > 0 ? (cat.netAmt / cat.netWgt) : 0);
+                if (cat.salesQty > 0 || cat.returnQty > 0) {
+                    categoryBreakdown += `🔹 *${cat.name}:* ${cat.netWgt.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ک‌گ | ${Math.round(cat.netAmt).toLocaleString('fa-IR')} ریال | فی: ${Math.round(rowFee).toLocaleString('fa-IR')} ریال\n`;
+                }
+                return [
+                    (idx++).toLocaleString('fa-IR'),
+                    cat.name,
+                    `${cat.salesQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(cat.salesAmt).toLocaleString('fa-IR')}`,
+                    `${cat.returnQty > 0 ? cat.returnQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '۰'} / ${Math.round(cat.returnAmt).toLocaleString('fa-IR')}`,
+                    `${cat.netWgt.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(cat.netAmt).toLocaleString('fa-IR')}`,
+                    Math.round(rowFee).toLocaleString('fa-IR')
+                ];
+            });
 
             tableRows.push([
                 'جمع کل',
                 'خلاصه عملکرد',
                 `${summary.totalSalesQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(summary.totalSalesAmt).toLocaleString('fa-IR')}`,
                 `${summary.totalReturnQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(summary.totalReturnAmt).toLocaleString('fa-IR')}`,
-                `${summary.netWeight.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(summary.netAmount).toLocaleString('fa-IR')}`
+                `${summary.netWeight.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} / ${Math.round(summary.netAmount).toLocaleString('fa-IR')}`,
+                Math.round(summary.avgFee).toLocaleString('fa-IR')
             ]);
             
             const pdfBuffer = await Renderer.generateReportPDF(title, columns, tableRows, true);
             const filename = `Sayan_Daily_Sales_${todayStr}.pdf`;
             
-            await sendDocFn(chatId, pdfBuffer, filename, `Sayan ERP 🧾 ${title}\n 📦 فروش ناخالص: ${summary.totalSalesQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم (${Math.round(summary.totalSalesAmt).toLocaleString('fa-IR')} ریال)\n 🔄 مرجوعی کد ۱۳: ${summary.totalReturnQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم (${Math.round(summary.totalReturnAmt).toLocaleString('fa-IR')} ریال)\n ✅ فروش خالص کل: ${summary.netWeight.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم (${Math.round(summary.netAmount).toLocaleString('fa-IR')} ریال)\n 🏷 فی متوسط خالص: ${Math.round(summary.avgFee).toLocaleString('fa-IR')} ریال/ک‌گ`);
+            const caption = `📊 *گزارش فروش و مرجوعی روزانه سایان ERP*\n` +
+                `📅 *مورخ:* ${summary.shamsiFrom || toShamsiFull(new Date())}\n` +
+                `📦 *فروش ناخالص:* ${summary.totalSalesQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم (${Math.round(summary.totalSalesAmt).toLocaleString('fa-IR')} ریال)\n` +
+                `🔄 *مرجوعی کد ۱۳:* ${summary.totalReturnQty.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم (${Math.round(summary.totalReturnAmt).toLocaleString('fa-IR')} ریال)\n` +
+                `✅ *فروش خالص کل:* ${summary.netWeight.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} کیلوگرم (${Math.round(summary.netAmount).toLocaleString('fa-IR')} ریال)\n` +
+                `🏷 *فی میانگین کل:* ${Math.round(summary.avgFee).toLocaleString('fa-IR')} ریال/ک‌گ` +
+                (categoryBreakdown ? `\n\n📋 *تفکیک عملکرد و فی میانگین اقلام:*\n${categoryBreakdown}` : '');
+
+            await sendDocFn(chatId, pdfBuffer, filename, caption);
         } catch (err) {
             console.error("Bot Daily Sales Error:", err);
             sendFn(chatId, `❌ خطا در تهیه گزارش فروش سایان: ${err.message}`);
