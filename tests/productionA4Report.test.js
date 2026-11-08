@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateProductionChartSvg, buildProductionExecutiveA4PrintHtml } from '../utils/productionReportPrintHtml.js';
+import {
+    generateProductionChartSvg,
+    generateProductionStepChartSvg,
+    buildProductionExecutiveA4PrintHtml
+} from '../utils/productionReportPrintHtml.js';
 
 test('Production Report A4: Vector SVG chart generation for single day (comparative bar)', () => {
     const singleDayPoints = [
         { label: '1405/08/17', date: '1405/08/17', actual: 6400, ideal: 51096, variancePeriod: -44696 }
     ];
-    const svg = generateProductionChartSvg(singleDayPoints, true, 740, 180);
+    const svg = generateProductionChartSvg(singleDayPoints, true, 740, 135);
     assert.ok(svg.includes('<svg'), 'SVG chart should be generated');
     assert.ok(svg.includes('تولید واقعی'), 'SVG should contain actual production label');
     assert.ok(svg.includes('سهمیه ایده‌آل پلن'), 'SVG should contain ideal plan label');
@@ -19,18 +23,43 @@ test('Production Report A4: Vector SVG chart generation for multi-day period (S-
         { label: '08/02', date: '1405/08/02', actual: 5200, ideal: 5100, actualCum: 10200, idealCum: 10200 },
         { label: '08/03', date: '1405/08/03', actual: 5500, ideal: 5100, actualCum: 15700, idealCum: 15300 }
     ];
-    const svg = generateProductionChartSvg(multiDayPoints, false, 740, 180);
+    const svg = generateProductionChartSvg(multiDayPoints, false, 740, 135);
     assert.ok(svg.includes('<svg'), 'SVG chart should be generated');
     assert.ok(svg.includes('path'), 'SVG should contain curve path elements');
+    assert.ok(svg.includes('نمودار ۱: منحنی خطی سینوسی تجمعی S-Curve'), 'SVG should contain Chart 1 title');
     assert.ok(svg.includes('تولید واقعی تجمعی'), 'SVG should contain cumulative legend');
     assert.ok(svg.includes('سهمیه پلن تجمعی'), 'SVG should contain plan quota legend');
+});
+
+test('Production Report A4: Vector SVG step chart generation for periodic comparison (Line & Bar modes)', () => {
+    const monthlyPoints = [
+        { label: 'فروردین', date: '1405/01', actual: 180000, ideal: 810000 },
+        { label: 'اردیبهشت', date: '1405/02', actual: 240000, ideal: 1580000 },
+        { label: 'خرداد', date: '1405/03', actual: 210000, ideal: 1490000 }
+    ];
+    const periodLabels = {
+        title: 'روند مقایسه‌ای ماهانه (تولید ماه در برابر سهمیه ماهانه پلن)',
+        actualLegend: 'تولید واقعی ماهانه',
+        idealLegend: 'سهمیه ایده‌آل ماهانه پلن'
+    };
+
+    const lineSvg = generateProductionStepChartSvg(monthlyPoints, 'line', periodLabels, 740, 135);
+    assert.ok(lineSvg.includes('<svg'), 'Step line SVG should be generated');
+    assert.ok(lineSvg.includes('نمودار ۲: روند مقایسه‌ای ماهانه'), 'Step SVG should contain Chart 2 title');
+    assert.ok(lineSvg.includes('<path'), 'Line mode should render path curves');
+    assert.ok(lineSvg.includes('<circle'), 'Line mode should render data point circles');
+
+    const barSvg = generateProductionStepChartSvg(monthlyPoints, 'bar', periodLabels, 740, 135);
+    assert.ok(barSvg.includes('<svg'), 'Step bar SVG should be generated');
+    assert.ok(barSvg.includes('fill="#0284c7"'), 'Bar mode should render sky-blue actual bars');
+    assert.ok(barSvg.includes('fill="#d97706"'), 'Bar mode should render amber ideal bars');
 });
 
 test('Production Report A4: Vector SVG chart generation for custom period total (comparative bar)', () => {
     const customPeriodPoints = [
         { label: 'کل دوره (227 روز)', date: '1405/01/01 تا 1405/08/17', actual: 538000, ideal: 4648234 }
     ];
-    const svg = generateProductionChartSvg(customPeriodPoints, false, 740, 180);
+    const svg = generateProductionChartSvg(customPeriodPoints, false, 740, 135);
     assert.ok(svg.includes('<svg'), 'SVG chart should be generated');
     assert.ok(svg.includes('مقایسه عملکرد تولید کل بازه با ظرفیت اسمی پلن ماشین‌آلات'), 'Title should show whole period comparison');
     assert.ok(svg.includes('درصد تحقق کل بازه:'), 'Badge should show total period achievement');
@@ -38,7 +67,7 @@ test('Production Report A4: Vector SVG chart generation for custom period total 
     assert.ok(svg.includes('سهمیه ایده‌آل پلن'), 'SVG should contain plan label');
 });
 
-test('Production Report A4: Full single-page A4 document builder produces valid HTML with signatures and KPIs', () => {
+test('Production Report A4: Full single-page A4 document builder embeds BOTH charts, signatures, and KPIs', () => {
     const dataset = {
         title: 'گزارش تحلیلی و مانیتورینگ عملکرد خطوط تولید (مقایسه با پلن ظرفیت ماشین‌آلات)',
         subtitle: 'سامانه پایش خطوط نساجی و ظرفیت‌سنجی ماشین‌آلات کارخانه - دلکام ERP',
@@ -48,6 +77,12 @@ test('Production Report A4: Full single-page A4 document builder produces valid 
         periodLabel: 'روزانه',
         groupFilter: 'all',
         groupFilterName: 'همه گروه‌ها (کل کارخانه)',
+        stepChartType: 'line',
+        periodLabels: {
+            title: 'روند مقایسه‌ای روزانه (تولید هر روز در برابر سهمیه روزانه پلن)',
+            actualLegend: 'تولید واقعی روزانه',
+            idealLegend: 'سهمیه ایده‌آل روزانه پلن'
+        },
         chartPoints: [
             { label: '08/01', date: '1405/08/01', actual: 4800, ideal: 5100, actualCum: 4800, idealCum: 5100 },
             { label: '08/17', date: '1405/08/17', actual: 5300, ideal: 5100, actualCum: 85000, idealCum: 86700 }
@@ -89,5 +124,9 @@ test('Production Report A4: Full single-page A4 document builder produces valid 
     assert.ok(html.includes('مدیریت تولید و برنامه‌ریزی فنی'), 'Must include production manager signature box');
     assert.ok(html.includes('مدیریت عامل کارخانه'), 'Must include CEO signature box');
     assert.ok(html.includes('dty یا پلی استر'), 'Must include line breakdown table');
-    assert.ok(html.includes('<svg'), 'Must embed vector chart directly');
+    assert.ok(html.includes('نمودار ۱: منحنی خطی سینوسی تجمعی S-Curve'), 'Must include Chart 1 (Cumulative S-Curve)');
+    assert.ok(html.includes('نمودار ۲: روند مقایسه‌ای روزانه'), 'Must include Chart 2 (Periodic Step Comparison)');
+    const svgMatches = html.match(/<svg/g) || [];
+    assert.equal(svgMatches.length, 2, 'Must embed BOTH vector charts in the A4 report');
 });
+

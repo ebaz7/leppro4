@@ -4112,7 +4112,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     tableActualHeader: 'تولید واقعی (kg)',
                     tableIdealHeader: 'سهمیه ایده‌آل (kg)'
                 },
-                kpis: { totalActual: 0, totalIdeal: 0, achievementPct: 0, variance: 0, avgDaily: 0 }
+                kpis: { totalActual: 0, totalIdeal: 0, achievementPct: 0, variance: 0, avgDaily: 0, totalDays: 0 }
             };
         }
 
@@ -4416,6 +4416,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 peakDay,
                 lowDay,
                 activeDaysCount,
+                totalDays: prodChartPeriod === 'single' ? 1 : totalDays,
                 totalWaste,
                 wastePct,
                 groupsBreakdown,
@@ -4593,7 +4594,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 }
 
                 customCaption = `📊 گزارش تحلیلی عملکرد خطوط تولید کارخانه (مقایسه با پلن ظرفیت ماشین‌آلات)\n` +
-                                `🗓 بازه زمانی: ${dateFrom || '---'} تا ${dateTo || '---'} (${Math.max(chartPoints.length, 1)} روز)\n` +
+                                `🗓 بازه زمانی: ${dateFrom || '---'} تا ${dateTo || '---'} (${kpis.totalDays || Math.max(chartPoints.length, 1)} روز)\n` +
                                 `🏭 خط مورد بررسی: ${groupFilterName}\n` +
                                 `🎯 سهمیه ایده‌آل پلن: ${Math.round(kpis.totalIdeal).toLocaleString('fa-IR')} کیلوگرم\n` +
                                 `⚙️ مجموع تولید واقعی: ${Math.round(kpis.totalActual).toLocaleString('fa-IR')} کیلوگرم\n` +
@@ -5583,19 +5584,21 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         let bodyContent = '';
 
         if (isCharts) {
-            const { chartPoints, kpis } = getProductionTimelineChartData();
+            const { chartPoints, periodLabels, kpis } = getProductionTimelineChartData();
             const groupFilterName = prodChartGroupFilter === 'all' ? 'همه گروه‌ها (کل تولید کارخانه)' : prodChartGroupFilter;
-            const periodLabel = prodChartPeriod === 'daily' ? 'روزانه' : (prodChartPeriod === 'weekly' ? 'هفتگی' : (prodChartPeriod === 'monthly' ? 'یک‌ماهه' : 'کل بازه انتخابی'));
+            const periodLabel = prodChartPeriod === 'single' ? 'تک‌روزه' : (prodChartPeriod === 'daily' ? 'روزانه' : (prodChartPeriod === 'weekly' ? 'هفتگی' : (prodChartPeriod === 'monthly' ? 'یک‌ماهه' : 'کل بازه انتخابی')));
 
             const dataset: ProductionReportPrintDataset = {
                 title: 'گزارش مدیریتی و تحلیلی عملکرد خطوط تولید (مقایسه با پلن ظرفیت ماشین‌آلات)',
                 subtitle: 'سامانه پایش خطوط نساجی و ظرفیت‌سنجی ماشین‌آلات کارخانه - دلکام ERP',
-                dateFrom: dateFrom || 'ابتدا',
-                dateTo: dateTo || 'امروز',
-                daysCount: Math.max(chartPoints.length, 1),
+                dateFrom: prodChartPeriod === 'single' ? (chartPoints[0]?.date || dateFrom || 'امروز') : (dateFrom || 'ابتدا'),
+                dateTo: prodChartPeriod === 'single' ? (chartPoints[0]?.date || dateTo || 'امروز') : (dateTo || 'امروز'),
+                daysCount: kpis.totalDays || Math.max(chartPoints.length, 1),
                 periodLabel,
                 groupFilter: prodChartGroupFilter,
                 groupFilterName,
+                stepChartType: prodChartType,
+                periodLabels,
                 chartPoints,
                 kpis: {
                     totalActual: kpis.totalActual,
@@ -5808,7 +5811,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 const { chartPoints, kpis } = getProductionTimelineChartData();
                 const groupFilterName = prodChartGroupFilter === 'all' ? 'همه گروه‌ها (کل کارخانه)' : prodChartGroupFilter;
                 text = `📊 گزارش تحلیلی عملکرد خطوط تولید کارخانه (مقایسه با پلن ظرفیت ماشین‌آلات)\n` +
-                       `🗓 بازه زمانی: ${dateFromStr} تا ${dateToStr} (${Math.max(chartPoints.length, 1)} روز)\n` +
+                       `🗓 بازه زمانی: ${dateFromStr} تا ${dateToStr} (${kpis.totalDays || Math.max(chartPoints.length, 1)} روز)\n` +
                        `🏭 خط مورد بررسی: ${groupFilterName}\n` +
                        `🎯 سهمیه ایده‌آل پلن: ${Math.round(kpis.totalIdeal).toLocaleString('fa-IR')} کیلوگرم\n` +
                        `⚙️ مجموع تولید واقعی: ${Math.round(kpis.totalActual).toLocaleString('fa-IR')} کیلوگرم\n` +

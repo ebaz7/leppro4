@@ -20,6 +20,13 @@ export interface ProductionReportPrintDataset {
     periodLabel: string; // 'روزانه' | 'هفتگی' | 'یک‌ماهه' | 'کل دوره'
     groupFilter: string; // 'all' or specific group name
     groupFilterName: string;
+    stepChartType?: 'line' | 'bar';
+    periodLabels?: {
+        title?: string;
+        subtitle?: string;
+        actualLegend?: string;
+        idealLegend?: string;
+    };
     chartPoints: Array<{
         label: string;
         date: string;
@@ -51,14 +58,14 @@ export interface ProductionReportPrintDataset {
 }
 
 /**
- * Generates pure vector SVG chart for PDF and A4 Printout
+ * Chart 1: Generates pure vector SVG chart for Cumulative S-Curve (or single-point comparative bar)
  * Self-contained, offline-safe, high DPI, crisp lines, no canvas/external dependencies.
  */
 export function generateProductionChartSvg(
     points: ProductionReportPrintDataset['chartPoints'],
     isSingleDay: boolean = false,
     width: number = 720,
-    height: number = 190
+    height: number = 135
 ): string {
     if (!points || points.length === 0) {
         return `
@@ -68,60 +75,59 @@ export function generateProductionChartSvg(
         `;
     }
 
-    // 1. Single-day mode: Draw clear comparative bar chart
+    // 1. Single-day / single-point mode: Draw clear comparative bar chart
     if (isSingleDay || points.length === 1) {
         const pt = points[0];
-        const actual = pt.actual || 0;
-        const ideal = pt.ideal || 0;
-        const maxVal = Math.max(actual, ideal, 1) * 1.15;
-        const barWidth = 70;
-        const chartHeight = height - 55;
+        const actual = pt.actualCum ?? pt.actual ?? 0;
+        const ideal = pt.idealCum ?? pt.ideal ?? 0;
+        const maxVal = Math.max(actual, ideal, 1) * 1.18;
+        const barWidth = 64;
+        const chartHeight = height - 52;
         const actualHeight = Math.max(4, (actual / maxVal) * chartHeight);
         const idealHeight = Math.max(4, (ideal / maxVal) * chartHeight);
-        const diff = actual - ideal;
         const achPct = ideal > 0 ? (actual / ideal) * 100 : 0;
 
         return `
-            <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;" xmlns="http://www.w3.org/2000/svg">
+            <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
                 <!-- Background & Grid -->
                 <rect width="${width}" height="${height}" fill="#fafbfc"/>
-                <line x1="40" y1="${height - 35}" x2="${width - 40}" y2="${height - 35}" stroke="#cbd5e1" stroke-width="1.5"/>
+                <line x1="40" y1="${height - 28}" x2="${width - 40}" y2="${height - 28}" stroke="#cbd5e1" stroke-width="1.5"/>
                 
                 <!-- Title / Date Header -->
-                <text x="${width / 2}" y="22" font-family="Tahoma, sans-serif" font-size="11" font-weight="bold" fill="#1e293b" text-anchor="middle">
+                <text x="${width - 14}" y="18" font-family="Tahoma, sans-serif" font-size="9.5" font-weight="bold" fill="#1e293b" text-anchor="end">
                     ${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) 
-                        ? `مقایسه عملکرد تولید کل بازه با ظرفیت اسمی پلن ماشین‌آلات (${pt.date || pt.label})` 
-                        : `مقایسه عملکرد تولید روزانه با ظرفیت اسمی پلن ماشین‌آلات (تاریخ: ${pt.date || pt.label})`}
+                        ? `نمودار ۱: مقایسه عملکرد تولید کل بازه با ظرفیت اسمی پلن ماشین‌آلات (${pt.date || pt.label})` 
+                        : `نمودار ۱: مقایسه عملکرد تولید روزانه با ظرفیت اسمی پلن ماشین‌آلات (تاریخ: ${pt.date || pt.label})`}
                 </text>
 
                 <!-- Legend -->
-                <circle cx="${width - 150}" cy="20" r="5" fill="#2563eb" />
-                <text x="${width - 140}" y="23" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#1e40af">تولید واقعی</text>
-                <circle cx="${width - 70}" cy="20" r="5" fill="#d97706" />
-                <text x="${width - 60}" y="23" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#b45309">سهمیه پلن</text>
+                <circle cx="165" cy="15" r="4.5" fill="#2563eb" />
+                <text x="155" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e40af" text-anchor="end">تولید واقعی</text>
+                <circle cx="85" cy="15" r="4.5" fill="#d97706" />
+                <text x="75" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#b45309" text-anchor="end">سهمیه ایده‌آل پلن</text>
 
                 <!-- Bar 1: Actual Production -->
-                <rect x="${width / 2 - 95}" y="${height - 35 - actualHeight}" width="${barWidth}" height="${actualHeight}" rx="4" fill="url(#barActualGrad)" stroke="#1d4ed8" stroke-width="1.5"/>
-                <text x="${width / 2 - 95 + barWidth / 2}" y="${height - 40 - actualHeight}" font-family="Tahoma, monospace" font-size="10" font-weight="bold" fill="#1e3a8a" text-anchor="middle">
+                <rect x="${width / 2 - 85}" y="${height - 28 - actualHeight}" width="${barWidth}" height="${actualHeight}" rx="4" fill="url(#barActualGrad)" stroke="#1d4ed8" stroke-width="1.2"/>
+                <text x="${width / 2 - 85 + barWidth / 2}" y="${height - 32 - actualHeight}" font-family="Tahoma, monospace" font-size="9" font-weight="bold" fill="#1e3a8a" text-anchor="middle">
                     ${Math.round(actual).toLocaleString('fa-IR')} kg
                 </text>
-                <text x="${width / 2 - 95 + barWidth / 2}" y="${height - 18}" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#1e293b" text-anchor="middle">
+                <text x="${width / 2 - 85 + barWidth / 2}" y="${height - 13}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="middle">
                     تولید واقعی
                 </text>
 
                 <!-- Bar 2: Ideal Plan -->
-                <rect x="${width / 2 + 25}" y="${height - 35 - idealHeight}" width="${barWidth}" height="${idealHeight}" rx="4" fill="url(#barIdealGrad)" stroke="#b45309" stroke-width="1.5" stroke-dasharray="4 2"/>
-                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 40 - idealHeight}" font-family="Tahoma, monospace" font-size="10" font-weight="bold" fill="#b45309" text-anchor="middle">
+                <rect x="${width / 2 + 25}" y="${height - 28 - idealHeight}" width="${barWidth}" height="${idealHeight}" rx="4" fill="url(#barIdealGrad)" stroke="#b45309" stroke-width="1.2" stroke-dasharray="4 2"/>
+                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 32 - idealHeight}" font-family="Tahoma, monospace" font-size="9" font-weight="bold" fill="#b45309" text-anchor="middle">
                     ${Math.round(ideal).toLocaleString('fa-IR')} kg
                 </text>
-                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 18}" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#1e293b" text-anchor="middle">
+                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 13}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="middle">
                     سهمیه ایده‌آل پلن
                 </text>
 
                 <!-- Achievement Badge -->
-                <rect x="50" y="${height / 2 - 25}" width="140" height="50" rx="6" fill="${achPct >= 100 ? '#ecfdf5' : '#fffbeb'}" stroke="${achPct >= 100 ? '#10b981' : '#f59e0b'}" stroke-width="1"/>
-                <text x="120" y="${height / 2 - 7}" font-family="Tahoma, sans-serif" font-size="9" font-weight="bold" fill="#475569" text-anchor="middle">${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) ? 'درصد تحقق کل بازه:' : 'درصد تحقق روزانه:'}</text>
-                <text x="120" y="${height / 2 + 15}" font-family="Tahoma, sans-serif" font-size="13" font-weight="900" fill="${achPct >= 100 ? '#047857' : '#b45309'}" text-anchor="middle">${achPct.toFixed(1)}%</text>
+                <rect x="45" y="${height / 2 - 18}" width="135" height="42" rx="6" fill="${achPct >= 100 ? '#ecfdf5' : '#fffbeb'}" stroke="${achPct >= 100 ? '#10b981' : '#f59e0b'}" stroke-width="1"/>
+                <text x="112" y="${height / 2 - 3}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#475569" text-anchor="middle">${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) ? 'درصد تحقق کل بازه:' : 'درصد تحقق روزانه:'}</text>
+                <text x="112" y="${height / 2 + 15}" font-family="Tahoma, sans-serif" font-size="11.5" font-weight="900" fill="${achPct >= 100 ? '#047857' : '#b45309'}" text-anchor="middle">${achPct.toFixed(1)}%</text>
 
                 <defs>
                     <linearGradient id="barActualGrad" x1="0" y1="0" x2="0" y2="1">
@@ -137,11 +143,11 @@ export function generateProductionChartSvg(
         `;
     }
 
-    // 2. Multi-point Timeline mode: Sinuous S-Curve / Trend Area Chart
+    // 2. Multi-point Timeline mode: Sinuous S-Curve / Cumulative Trend Area Chart
     const paddingLeft = 65;
-    const paddingRight = 25;
+    const paddingRight = 22;
     const paddingTop = 28;
-    const paddingBottom = 28;
+    const paddingBottom = 22;
     const plotWidth = width - paddingLeft - paddingRight;
     const plotHeight = height - paddingTop - paddingBottom;
 
@@ -163,6 +169,7 @@ export function generateProductionChartSvg(
     let actualPath = '';
     let actualAreaPath = '';
     let idealPath = '';
+    let idealAreaPath = '';
 
     points.forEach((p, idx) => {
         const x = getX(idx);
@@ -173,6 +180,7 @@ export function generateProductionChartSvg(
             actualPath += `M ${x.toFixed(1)} ${yAct.toFixed(1)}`;
             actualAreaPath += `M ${x.toFixed(1)} ${yAct.toFixed(1)}`;
             idealPath += `M ${x.toFixed(1)} ${yIdl.toFixed(1)}`;
+            idealAreaPath += `M ${x.toFixed(1)} ${yIdl.toFixed(1)}`;
         } else {
             // Smooth bezier curve
             const prevX = getX(idx - 1);
@@ -183,6 +191,7 @@ export function generateProductionChartSvg(
             actualPath += ` C ${midX.toFixed(1)} ${prevYAct.toFixed(1)}, ${midX.toFixed(1)} ${yAct.toFixed(1)}, ${x.toFixed(1)} ${yAct.toFixed(1)}`;
             actualAreaPath += ` C ${midX.toFixed(1)} ${prevYAct.toFixed(1)}, ${midX.toFixed(1)} ${yAct.toFixed(1)}, ${x.toFixed(1)} ${yAct.toFixed(1)}`;
             idealPath += ` C ${midX.toFixed(1)} ${prevYIdl.toFixed(1)}, ${midX.toFixed(1)} ${yIdl.toFixed(1)}, ${x.toFixed(1)} ${yIdl.toFixed(1)}`;
+            idealAreaPath += ` C ${midX.toFixed(1)} ${prevYIdl.toFixed(1)}, ${midX.toFixed(1)} ${yIdl.toFixed(1)}, ${x.toFixed(1)} ${yIdl.toFixed(1)}`;
         }
     });
 
@@ -190,6 +199,7 @@ export function generateProductionChartSvg(
     const lastX = getX(n - 1);
     const bottomY = paddingTop + plotHeight;
     actualAreaPath += ` L ${lastX.toFixed(1)} ${bottomY.toFixed(1)} L ${firstX.toFixed(1)} ${bottomY.toFixed(1)} Z`;
+    idealAreaPath += ` L ${lastX.toFixed(1)} ${bottomY.toFixed(1)} L ${firstX.toFixed(1)} ${bottomY.toFixed(1)} Z`;
 
     // Horizontal Grid Lines (4 steps)
     let gridLinesHtml = '';
@@ -199,15 +209,15 @@ export function generateProductionChartSvg(
         const gridY = getY(gridVal);
         gridLinesHtml += `
             <line x1="${paddingLeft}" y1="${gridY.toFixed(1)}" x2="${width - paddingRight}" y2="${gridY.toFixed(1)}" stroke="#f1f5f9" stroke-width="1"/>
-            <text x="${paddingLeft - 8}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="8" fill="#64748b" text-anchor="end">
+            <text x="${paddingLeft - 6}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#64748b" text-anchor="end">
                 ${Math.round(gridVal).toLocaleString('fa-IR')}
             </text>
         `;
     }
 
-    // X-Axis Labels (sample at most 8 evenly spaced dates)
+    // X-Axis Labels (sample up to 8 evenly spaced dates)
     let xLabelsHtml = '';
-    const maxLabels = Math.min(n, 7);
+    const maxLabels = Math.min(n, 8);
     const stepInterval = Math.max(1, Math.floor((n - 1) / (maxLabels - 1 || 1)));
     const sampledIndices = new Set<number>();
     sampledIndices.add(0);
@@ -221,51 +231,246 @@ export function generateProductionChartSvg(
         const p = points[idx];
         const labelText = p.label || p.date;
         xLabelsHtml += `
-            <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 4}" stroke="#94a3b8" stroke-width="1"/>
-            <text x="${x.toFixed(1)}" y="${bottomY + 15}" font-family="Tahoma, sans-serif" font-size="8" fill="#475569" text-anchor="middle">
+            <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 3}" stroke="#94a3b8" stroke-width="1"/>
+            <text x="${x.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#475569" text-anchor="middle">
                 ${labelText}
             </text>
         `;
     });
 
     return `
-        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
             <defs>
                 <linearGradient id="chartActualAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#2563eb" stop-opacity="0.25" />
+                    <stop offset="0%" stop-color="#2563eb" stop-opacity="0.28" />
                     <stop offset="100%" stop-color="#2563eb" stop-opacity="0.0" />
+                </linearGradient>
+                <linearGradient id="chartIdealAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.16" />
+                    <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.0" />
                 </linearGradient>
             </defs>
 
             <!-- Background -->
             <rect width="${width}" height="${height}" fill="#fafbfc"/>
 
+            <!-- Chart 1 Title (Right-aligned) -->
+            <text x="${width - 12}" y="16" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="end">
+                📈 نمودار ۱: منحنی خطی سینوسی تجمعی S-Curve (تولید واقعی در برابر ایده‌آل تجمعی)
+            </text>
+
             <!-- Grid Lines & Values -->
             ${gridLinesHtml}
 
-            <!-- Actual Area Fill -->
+            <!-- Ideal & Actual Area Fills -->
+            <path d="${idealAreaPath}" fill="url(#chartIdealAreaGrad)"/>
             <path d="${actualAreaPath}" fill="url(#chartActualAreaGrad)"/>
 
-            <!-- Ideal Quota Line (Dashed Purple/Amber) -->
+            <!-- Ideal Quota Line (Dashed Purple) -->
             <path d="${idealPath}" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="5 3"/>
 
             <!-- Actual Production Line (Solid Blue) -->
             <path d="${actualPath}" fill="none" stroke="#2563eb" stroke-width="2.5"/>
 
             <!-- X-Axis Baseline & Labels -->
-            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#cbd5e1" stroke-width="1.5"/>
+            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#cbd5e1" stroke-width="1.2"/>
             ${xLabelsHtml}
 
-            <!-- Legend at Top -->
-            <rect x="${width - 250}" y="6" width="235" height="18" rx="4" fill="#ffffff" fill-opacity="0.9" stroke="#e2e8f0" stroke-width="1"/>
-            <line x1="${width - 240}" y1="15" x2="${width - 225}" y2="15" stroke="#2563eb" stroke-width="3"/>
-            <circle cx="${width - 232}" cy="15" r="3" fill="#2563eb"/>
-            <text x="${width - 220}" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e40af">
+            <!-- Legend at Top Left -->
+            <rect x="${paddingLeft}" y="4" width="235" height="17" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#e2e8f0" stroke-width="1"/>
+            <line x1="${paddingLeft + 8}" y1="12.5" x2="${paddingLeft + 23}" y2="12.5" stroke="#2563eb" stroke-width="2.5"/>
+            <circle cx="${paddingLeft + 15.5}" cy="12.5" r="2.8" fill="#2563eb"/>
+            <text x="${paddingLeft + 28}" y="15.5" font-family="Tahoma, sans-serif" font-size="8" font-weight="bold" fill="#1e40af">
                 ${hasCum ? 'تولید واقعی تجمعی' : 'تولید واقعی'}
             </text>
-            <line x1="${width - 125}" y1="15" x2="${width - 110}" y2="15" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="3 2"/>
-            <text x="${width - 105}" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#6d28d9">
+            <line x1="${paddingLeft + 125}" y1="12.5" x2="${paddingLeft + 140}" y2="12.5" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="3 2"/>
+            <text x="${paddingLeft + 145}" y="15.5" font-family="Tahoma, sans-serif" font-size="8" font-weight="bold" fill="#6d28d9">
                 ${hasCum ? 'سهمیه پلن تجمعی' : 'سهمیه پلن'}
+            </text>
+        </svg>
+    `;
+}
+
+/**
+ * Chart 2: Generates pure vector SVG chart for Step-by-Step Periodic Comparison (Monthly / Weekly / Daily / Custom)
+ * Plots `actual` vs `ideal` per step (supports both 'line' and 'bar' modes matching the UI).
+ */
+export function generateProductionStepChartSvg(
+    points: ProductionReportPrintDataset['chartPoints'],
+    stepChartType: 'line' | 'bar' = 'line',
+    periodLabels?: ProductionReportPrintDataset['periodLabels'],
+    width: number = 720,
+    height: number = 135
+): string {
+    if (!points || points.length === 0) {
+        return '';
+    }
+
+    const chartTitle = periodLabels?.title || 'روند مقایسه‌ای دوره‌ای / روزانه (تولید هر گام در برابر سهمیه ایده‌آل پلن)';
+    const actualLegend = periodLabels?.actualLegend || 'تولید واقعی این گام';
+    const idealLegend = periodLabels?.idealLegend || 'سهمیه ایده‌آل گام (پلن)';
+
+    const paddingLeft = 65;
+    const paddingRight = 22;
+    const paddingTop = 28;
+    const paddingBottom = 22;
+    const plotWidth = width - paddingLeft - paddingRight;
+    const plotHeight = height - paddingTop - paddingBottom;
+    const bottomY = paddingTop + plotHeight;
+
+    const maxVal = Math.max(
+        ...points.map(p => Math.max(p.actual || 0, p.ideal || 0)),
+        1
+    ) * 1.12;
+
+    const n = points.length;
+    const getY = (val: number) => paddingTop + plotHeight - (Math.max(0, val) / maxVal) * plotHeight;
+
+    // Horizontal Grid Lines (4 steps)
+    let gridLinesHtml = '';
+    const steps = 4;
+    for (let s = 0; s <= steps; s++) {
+        const gridVal = (maxVal / steps) * s;
+        const gridY = getY(gridVal);
+        gridLinesHtml += `
+            <line x1="${paddingLeft}" y1="${gridY.toFixed(1)}" x2="${width - paddingRight}" y2="${gridY.toFixed(1)}" stroke="#f1f5f9" stroke-width="1"/>
+            <text x="${paddingLeft - 6}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#64748b" text-anchor="end">
+                ${Math.round(gridVal).toLocaleString('fa-IR')}
+            </text>
+        `;
+    }
+
+    const useBarMode = stepChartType === 'bar' || n <= 1;
+
+    let plotElementsHtml = '';
+    let xLabelsHtml = '';
+
+    if (useBarMode) {
+        const groupStep = plotWidth / Math.max(n, 1);
+        const barPairWidth = Math.min(48, Math.max(6, groupStep * 0.68));
+        const singleBarW = Math.max(2.5, (barPairWidth - 2) / 2);
+
+        const maxLabels = Math.min(n, 8);
+        const stepInterval = Math.max(1, Math.floor((n - 1) / (maxLabels - 1 || 1)));
+        const sampledIndices = new Set<number>();
+        sampledIndices.add(0);
+        for (let i = stepInterval; i < n - 1; i += stepInterval) {
+            sampledIndices.add(i);
+        }
+        sampledIndices.add(n - 1);
+
+        points.forEach((p, idx) => {
+            const centerX = paddingLeft + (idx + 0.5) * groupStep;
+            const yAct = getY(p.actual || 0);
+            const hAct = Math.max(2, bottomY - yAct);
+            const yIdl = getY(p.ideal || 0);
+            const hIdl = Math.max(2, bottomY - yIdl);
+
+            plotElementsHtml += `
+                <rect x="${(centerX - singleBarW - 1).toFixed(1)}" y="${yAct.toFixed(1)}" width="${singleBarW.toFixed(1)}" height="${hAct.toFixed(1)}" rx="2" fill="#0284c7"/>
+                <rect x="${(centerX + 1).toFixed(1)}" y="${yIdl.toFixed(1)}" width="${singleBarW.toFixed(1)}" height="${hIdl.toFixed(1)}" rx="2" fill="#d97706"/>
+            `;
+
+            if (sampledIndices.has(idx)) {
+                const labelText = p.label || p.date;
+                xLabelsHtml += `
+                    <line x1="${centerX.toFixed(1)}" y1="${bottomY}" x2="${centerX.toFixed(1)}" y2="${bottomY + 3}" stroke="#94a3b8" stroke-width="1"/>
+                    <text x="${centerX.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#475569" text-anchor="middle">
+                        ${labelText}
+                    </text>
+                `;
+            }
+        });
+    } else {
+        const getX = (idx: number) => paddingLeft + (idx / Math.max(n - 1, 1)) * plotWidth;
+        let actualPath = '';
+        let idealPath = '';
+        let dotsHtml = '';
+        const dotRadius = n <= 16 ? 3.2 : (n <= 45 ? 2.2 : 1.5);
+
+        points.forEach((p, idx) => {
+            const x = getX(idx);
+            const yAct = getY(p.actual || 0);
+            const yIdl = getY(p.ideal || 0);
+
+            if (idx === 0) {
+                actualPath += `M ${x.toFixed(1)} ${yAct.toFixed(1)}`;
+                idealPath += `M ${x.toFixed(1)} ${yIdl.toFixed(1)}`;
+            } else {
+                const prevX = getX(idx - 1);
+                const prevYAct = getY(points[idx - 1].actual || 0);
+                const prevYIdl = getY(points[idx - 1].ideal || 0);
+                const midX = (prevX + x) / 2;
+
+                actualPath += ` C ${midX.toFixed(1)} ${prevYAct.toFixed(1)}, ${midX.toFixed(1)} ${yAct.toFixed(1)}, ${x.toFixed(1)} ${yAct.toFixed(1)}`;
+                idealPath += ` C ${midX.toFixed(1)} ${prevYIdl.toFixed(1)}, ${midX.toFixed(1)} ${yIdl.toFixed(1)}, ${x.toFixed(1)} ${yIdl.toFixed(1)}`;
+            }
+
+            if (n <= 65 || idx % Math.ceil(n / 45) === 0 || idx === n - 1) {
+                dotsHtml += `
+                    <circle cx="${x.toFixed(1)}" cy="${yIdl.toFixed(1)}" r="${(dotRadius * 0.85).toFixed(1)}" fill="#d97706"/>
+                    <circle cx="${x.toFixed(1)}" cy="${yAct.toFixed(1)}" r="${dotRadius.toFixed(1)}" fill="#0284c7" stroke="#ffffff" stroke-width="0.7"/>
+                `;
+            }
+        });
+
+        plotElementsHtml = `
+            <path d="${idealPath}" fill="none" stroke="#d97706" stroke-width="2" stroke-dasharray="4 3"/>
+            <path d="${actualPath}" fill="none" stroke="#0284c7" stroke-width="2.3"/>
+            ${dotsHtml}
+        `;
+
+        const maxLabels = Math.min(n, 8);
+        const stepInterval = Math.max(1, Math.floor((n - 1) / (maxLabels - 1 || 1)));
+        const sampledIndices = new Set<number>();
+        sampledIndices.add(0);
+        for (let i = stepInterval; i < n - 1; i += stepInterval) {
+            sampledIndices.add(i);
+        }
+        sampledIndices.add(n - 1);
+
+        sampledIndices.forEach(idx => {
+            const x = getX(idx);
+            const p = points[idx];
+            const labelText = p.label || p.date;
+            xLabelsHtml += `
+                <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 3}" stroke="#94a3b8" stroke-width="1"/>
+                <text x="${x.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#475569" text-anchor="middle">
+                    ${labelText}
+                </text>
+            `;
+        });
+    }
+
+    return `
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
+            <!-- Background -->
+            <rect width="${width}" height="${height}" fill="#fafbfc"/>
+
+            <!-- Chart 2 Title (Right-aligned) -->
+            <text x="${width - 12}" y="16" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="end">
+                📊 نمودار ۲: ${chartTitle}
+            </text>
+
+            <!-- Grid Lines & Values -->
+            ${gridLinesHtml}
+
+            <!-- Step Comparison Plot (Line or Bar) -->
+            ${plotElementsHtml}
+
+            <!-- X-Axis Baseline & Labels -->
+            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#cbd5e1" stroke-width="1.2"/>
+            ${xLabelsHtml}
+
+            <!-- Legend at Top Left -->
+            <rect x="${paddingLeft}" y="4" width="275" height="17" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#e2e8f0" stroke-width="1"/>
+            <circle cx="${paddingLeft + 12}" cy="12.5" r="3.5" fill="#0284c7"/>
+            <text x="${paddingLeft + 20}" y="15.5" font-family="Tahoma, sans-serif" font-size="7.8" font-weight="bold" fill="#0369a1">
+                ${actualLegend.length > 22 ? actualLegend.slice(0, 22) : actualLegend}
+            </text>
+            <circle cx="${paddingLeft + 135}" cy="12.5" r="3.5" fill="#d97706"/>
+            <text x="${paddingLeft + 143}" y="15.5" font-family="Tahoma, sans-serif" font-size="7.8" font-weight="bold" fill="#b45309">
+                ${idealLegend.length > 26 ? idealLegend.slice(0, 26) : idealLegend}
             </text>
         </svg>
     `;
@@ -284,6 +489,8 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         daysCount,
         periodLabel,
         groupFilterName,
+        stepChartType = 'line',
+        periodLabels,
         chartPoints,
         kpis,
         groupsBreakdown = [],
@@ -293,8 +500,9 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         fiscalYear = '۱۴۰۵'
     } = dataset;
 
-    const isSingleDay = dateFrom === dateTo || daysCount === 1;
-    const chartSvg = generateProductionChartSvg(chartPoints, isSingleDay, 740, 180);
+    const isSingleDay = dateFrom === dateTo || (daysCount === 1 && chartPoints.length <= 1);
+    const chart1Svg = generateProductionChartSvg(chartPoints, isSingleDay, 740, 126);
+    const chart2Svg = generateProductionStepChartSvg(chartPoints, stepChartType, periodLabels, 740, 126);
 
     const fKg = (val: number) => Math.round(val || 0).toLocaleString('fa-IR');
     const fDec = (val: number, d = 1) => Number(val || 0).toLocaleString('fa-IR', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -439,11 +647,14 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
 
         /* Chart Container */
         .chart-box {
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             border: 1px solid #cbd5e1;
             border-radius: 6px;
             padding: 4px;
             background: #ffffff;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
         }
 
         /* Executive Analysis Box */
@@ -454,10 +665,10 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             border-bottom: 1px solid #e2e8f0;
             border-left: 1px solid #e2e8f0;
             border-radius: 4px;
-            padding: 6px 10px;
-            margin-bottom: 8px;
-            font-size: 7.8pt;
-            line-height: 1.45;
+            padding: 5px 9px;
+            margin-bottom: 6px;
+            font-size: 7.6pt;
+            line-height: 1.4;
         }
         .summary-box strong {
             color: #1e3a8a;
@@ -465,10 +676,10 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
 
         /* Table */
         .table-title {
-            font-size: 8.5pt;
+            font-size: 8.2pt;
             font-weight: bold;
             color: #1e293b;
-            margin: 0 0 4px 0;
+            margin: 0 0 3px 0;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -476,20 +687,20 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
         th {
             background: #1e293b;
             color: #ffffff;
-            font-size: 7.5pt;
+            font-size: 7.4pt;
             font-weight: bold;
-            padding: 4px 6px;
+            padding: 3.5px 6px;
             border: 1px solid #334155;
             text-align: center;
         }
         td {
             border: 1px solid #cbd5e1;
-            padding: 3.5px 6px;
+            padding: 3px 6px;
         }
 
         /* Signatures Block */
@@ -497,17 +708,17 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 10px;
-            margin-top: 10px;
+            margin-top: 6px;
             border-top: 1px dashed #cbd5e1;
-            padding-top: 8px;
+            padding-top: 6px;
         }
         .sig-box {
             text-align: center;
             border: 1px solid #e2e8f0;
             border-radius: 6px;
-            padding: 6px 4px 22px 4px;
+            padding: 5px 4px 16px 4px;
             background: #ffffff;
-            font-size: 7.5pt;
+            font-size: 7.3pt;
             color: #475569;
         }
         .sig-title {
@@ -522,9 +733,9 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             align-items: center;
             font-size: 6.8pt;
             color: #94a3b8;
-            margin-top: 6px;
+            margin-top: 4px;
             border-top: 1px solid #f1f5f9;
-            padding-top: 4px;
+            padding-top: 3px;
         }
     </style>
 </head>
@@ -580,9 +791,10 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         </div>
     </div>
 
-    <!-- Vector Visual Chart Section -->
+    <!-- Vector Visual Charts Section (Both Chart 1: Cumulative S-Curve & Chart 2: Periodic Step Comparison) -->
     <div class="chart-box">
-        ${chartSvg}
+        ${chart1Svg}
+        ${chart2Svg}
     </div>
 
     <!-- Executive Management Summary Text Box -->
