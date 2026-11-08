@@ -5071,12 +5071,22 @@ app.post('/api/sayan/production-report/send-bot', async (req, res) => {
             console.error("Auto-save waste in send-bot warning:", saveErr.message);
         }
 
-        const title = `گزارش آمار کل تولید و ضایعات (${dateFrom})`;
-        const pdfBuffer = await Renderer.generateProductionReportPDF(title, dateFrom, dateTo, items, totals, waste);
+        const title = req.body.customTitle || (dateTo && dateTo !== dateFrom 
+            ? `گزارش تحلیلی و مانیتورینگ عملکرد خطوط تولید (${dateFrom} تا ${dateTo})`
+            : `گزارش آمار کل تولید و ضایعات (${dateFrom})`);
 
-        const caption = buildProductionCaption(dateFrom, totals, waste);
+        let pdfBuffer = null;
+        if (req.body.pdfBase64) {
+            pdfBuffer = Buffer.from(req.body.pdfBase64, 'base64');
+        } else {
+            pdfBuffer = await Renderer.generateProductionReportPDF(title, dateFrom, dateTo, items, totals, waste);
+        }
 
-        const filename = `Production_Report_${dateFrom.replace(/[\/\\]/g, '-')}.pdf`;
+        const caption = req.body.customCaption || buildProductionCaption(dateFrom, totals, waste);
+
+        const filename = req.body.customFilename || (dateTo && dateTo !== dateFrom 
+            ? `Production_Report_${dateFrom.replace(/[\/\\]/g, '-')}_to_${dateTo.replace(/[\/\\]/g, '-')}.pdf`
+            : `Production_Report_${dateFrom.replace(/[\/\\]/g, '-')}.pdf`);
         const settings = db.settings || {};
         
         const uniqueTargets = collectBotTargets(db, {

@@ -98,6 +98,7 @@ import { SendToChatModal } from './SendToChatModal';
 import { ReportShareToChatModal, TrazScope } from './ReportShareToChatModal';
 import { PersonChequeLedgerModal } from './sayan-cheques/PersonChequeLedgerModal';
 import { generatePdfFromHtml } from '../utils/pdfGenerator';
+import { buildProductionExecutiveA4PrintHtml, ProductionReportPrintDataset } from '../utils/productionReportPrintHtml';
 import { UserRole } from '../types';
 import { getServerHost, getAuthToken } from '../services/apiService';
 
@@ -4098,17 +4099,51 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             };
         }
 
-        let totalIdeal = 0;
-        if (prodChartGroupFilter === 'all') {
-            const groupSum = Object.values(prodIdealTargets.byGroup || {}).reduce((s, v) => s + (Number(v) || 0), 0);
-            const itemSum = Object.values(prodIdealTargets.byItem || {}).reduce((s, v) => s + (Number(v) || 0), 0);
-            totalIdeal = groupSum > 0 ? groupSum : itemSum;
-        } else {
-            totalIdeal = Number(prodIdealTargets.byGroup?.[prodChartGroupFilter]) || 0;
-        }
+        // 1. Calculate Plan Ideal Capacity per day directly from active machines in activeProdPlan
+        const calculatePlanGroupDaily = (groupName: string): number => {
+            if (!activeProdPlan || !Array.isArray(activeProdPlan.lineGroups)) return 0;
+            const targetGrp = activeProdPlan.lineGroups.find(g => g.groupName === groupName);
+            if (!targetGrp || !Array.isArray(targetGrp.machines)) return 0;
+            return targetGrp.machines.reduce((sum, m) => {
+                if (m.active === false) return sum;
+                const yarn = Number(m.yarnCount) || 0;
+                const pos = Number(m.positionsCount) || 0;
+                const spd = Number(m.speedMpm) || 0;
+                const eff = Number(m.efficiencyPct ?? 100) / 100;
+                if (yarn <= 0 || pos <= 0 || spd <= 0) return sum;
+                return sum + (((yarn * 60 * 24 * pos * spd) / 9000000) * eff);
+            }, 0);
+        };
+
+        const calculatePlanGrandDaily = (): number => {
+            if (!activeProdPlan || !Array.isArray(activeProdPlan.lineGroups)) return 0;
+            return activeProdPlan.lineGroups.reduce((grandSum, grp) => {
+                return grandSum + calculatePlanGroupDaily(grp.groupName);
+            }, 0);
+        };
+
+        const planGrandDaily = calculatePlanGrandDaily();
+        const planFilterDaily = prodChartGroupFilter === 'all'
+            ? planGrandDaily
+            : calculatePlanGroupDaily(prodChartGroupFilter);
 
         const totalDays = Math.max(timeline.length, 1);
-        const dailyIdeal = totalIdeal > 0 ? totalIdeal / totalDays : 0;
+        let dailyIdeal = 0;
+
+        if (planFilterDaily > 0) {
+            dailyIdeal = planFilterDaily;
+        } else {
+            // Fallback to prodIdealTargets
+            let totalIdealFallback = 0;
+            if (prodChartGroupFilter === 'all') {
+                const groupSum = Object.values(prodIdealTargets.byGroup || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+                const itemSum = Object.values(prodIdealTargets.byItem || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+                totalIdealFallback = groupSum > 0 ? groupSum : itemSum;
+            } else {
+                totalIdealFallback = Number(prodIdealTargets.byGroup?.[prodChartGroupFilter]) || 0;
+            }
+            dailyIdeal = totalIdealFallback > 0 ? totalIdealFallback / totalDays : 0;
+        }
 
         let aggregatedPoints: { label: string; date: string; actual: number; ideal: number }[] = [];
 
@@ -4189,10 +4224,74 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         });
 
         const totalActualVal = cumActual;
-        const totalIdealVal = cumIdeal > 0 ? cumIdeal : totalIdeal;
+        const totalIdealVal = cumIdeal > 0 ? cumIdeal : (dailyIdeal * totalDays);
         const achievementPct = totalIdealVal > 0 ? (totalActualVal / totalIdealVal) * 100 : 0;
         const varianceVal = totalActualVal - totalIdealVal;
         const avgDailyVal = totalDays > 0 ? totalActualVal / totalDays : 0;
+
+        // Peak and low days in timeline
+        let peakDay: { date: string; amount: number } | undefined;
+        let lowDay: { date: string; amount: number } | undefined;
+        let activeDaysCount = 0;
+
+        timeline.forEach(t => {
+            const val = prodChartGroupFilter === 'all' ? (t.total || 0) : (t.groups?.[prodChartGroupFilter] || 0);
+            if (val > 0) {
+                activeDaysCount++;
+                if (!peakDay || val > peakDay.amount) {
+                    peakDay = { date: t.date, amount: val };
+                }
+                if (!lowDay || val < lowDay.amount) {
+                    lowDay = { date: t.date, amount: val };
+                }
+            }
+        });
+
+        // Group-by-group breakdown for all lines
+        const groupsBreakdown: any[] = (prodLiveGroups && prodLiveGroups.length > 0 ? prodLiveGroups : []).map(g => {
+            const gName = g.name || g.groupName;
+            const actualKg = g.total || 0;
+            const dailyNominal = calculatePlanGroupDaily(gName);
+            const periodNominal = dailyNominal * totalDays;
+            const fallbackIdeal = Number(prodIdealTargets.byGroup?.[gName]) || 0;
+            const effIdeal = periodNominal > 0 ? periodNominal : fallbackIdeal;
+            const achPct = effIdeal > 0 ? (actualKg / effIdeal) * 100 : 0;
+            const varianceKg = actualKg - effIdeal;
+
+            let machineCount = 0;
+            if (activeProdPlan?.lineGroups) {
+                const grpObj = activeProdPlan.lineGroups.find(lg => lg.groupName === gName);
+                machineCount = grpObj?.machines?.filter(m => m.active !== false).length || 0;
+            }
+
+            return {
+                name: gName,
+                machinesCount: machineCount,
+                dailyIdealKg: dailyNominal,
+                periodIdealKg: effIdeal,
+                actualKg,
+                achPct,
+                varianceKg
+            };
+        });
+
+        const totalWaste = (prodWaste?.waste_61 || 0) + (prodWaste?.waste_67 || 0) + (prodWaste?.waste_79 || 0) + (prodWaste?.waste_73 || 0) + (prodWaste?.waste_schweiter || 0);
+        const grandTotalActual = prodLiveTotals?.grandTotal || totalActualVal;
+        const wastePct = grandTotalActual > 0 ? (totalWaste / grandTotalActual) * 100 : 0;
+
+        // Executive Smart Summary Text
+        let summaryStatus = '';
+        if (achievementPct >= 100) {
+            summaryStatus = `عملکرد تولید بسیار مطلوب و فراتر از ظرفیت اسمی پلن (${achievementPct.toFixed(1)}%) ارزیابی می‌گردد و مازاد تولید به میزان ${Math.abs(Math.round(varianceVal)).toLocaleString('fa-IR')} کیلوگرم محقق شده است.`;
+        } else if (achievementPct >= 80) {
+            summaryStatus = `تولید در آستانه استاندارد پلن با راندمان ${achievementPct.toFixed(1)}% قرار دارد. کسری تولید نسبت به ظرفیت اسمی ماشین‌آلات معادل ${Math.abs(Math.round(varianceVal)).toLocaleString('fa-IR')} کیلوگرم می‌باشد.`;
+        } else {
+            summaryStatus = `میزان تولید با تحقق ${achievementPct.toFixed(1)}% نیازمند پایش خطوط و بررسی علل توقف دستگاه‌ها می‌باشد. کسری تجمعی نسبت به ظرفیت اسمی معادل ${Math.abs(Math.round(varianceVal)).toLocaleString('fa-IR')} کیلوگرم ثبت شده است.`;
+        }
+
+        const dateFromDisplay = dateFrom || 'ابتدا';
+        const dateToDisplay = dateTo || 'امروز';
+        const executiveSummaryText = `در بازه زمانی ${dateFromDisplay} تا ${dateToDisplay} (${totalDays} روزه)، مجموع تولید واقعی ثبت‌شده کارخانه معادل ${Math.round(totalActualVal).toLocaleString('fa-IR')} کیلوگرم و سهمیه ایده‌آل تعیین‌شده بر اساس پلن ماشین‌آلات فعال معادل ${Math.round(totalIdealVal).toLocaleString('fa-IR')} کیلوگرم است. میانگین تولید واقعی روزانه ${Math.round(avgDailyVal).toLocaleString('fa-IR')} kg/روز در برابر ظرفیت اسمی روزانه ${Math.round(dailyIdeal).toLocaleString('fa-IR')} kg/روز می‌باشد. ${peakDay ? `بالاترین رکورد روزانه در تاریخ ${peakDay.date} (${Math.round(peakDay.amount).toLocaleString('fa-IR')} kg) به ثبت رسیده است.` : ''} ضایعات کل معادل ${Math.round(totalWaste).toLocaleString('fa-IR')} kg (${wastePct.toFixed(2)}%) گزارش شده است. ${summaryStatus}`;
 
         return {
             chartPoints,
@@ -4201,7 +4300,16 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 totalIdeal: totalIdealVal,
                 achievementPct,
                 variance: varianceVal,
-                avgDaily: avgDailyVal
+                avgDaily: avgDailyVal,
+                avgDailyActual: avgDailyVal,
+                avgDailyIdeal: dailyIdeal,
+                peakDay,
+                lowDay,
+                activeDaysCount,
+                totalWaste,
+                wastePct,
+                groupsBreakdown,
+                executiveSummaryText
             }
         };
     };
@@ -4350,6 +4458,43 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 console.warn("Client pre-save warning:", saveErr);
             }
 
+            let customCaption: string | undefined;
+            let pdfBase64: string | undefined;
+            let customFilename: string | undefined;
+
+            if (activeProdSubTab === 'charts') {
+                const { chartPoints, kpis } = getProductionTimelineChartData();
+                const groupFilterName = prodChartGroupFilter === 'all' ? 'همه گروه‌ها (کل کارخانه)' : prodChartGroupFilter;
+                const pdfFilename = `Production_Executive_Report_${(dateFrom || '').replace(/[\/\\]/g, '-')}_to_${(dateTo || '').replace(/[\/\\]/g, '-')}.pdf`;
+                customFilename = pdfFilename;
+
+                const htmlContent = handlePrintLiveProduction(true) as unknown as string;
+                const blob = await generatePdfFromHtml(htmlContent, pdfFilename);
+                if (blob) {
+                    const reader = new FileReader();
+                    pdfBase64 = await new Promise<string>((resolve) => {
+                        reader.onloadend = () => {
+                            const res = reader.result as string;
+                            const b64 = res.split(',')[1] || '';
+                            resolve(b64);
+                        };
+                        reader.readAsDataURL(blob);
+                    });
+                }
+
+                customCaption = `📊 گزارش تحلیلی عملکرد خطوط تولید کارخانه (مقایسه با پلن ظرفیت ماشین‌آلات)\n` +
+                                `🗓 بازه زمانی: ${dateFrom || '---'} تا ${dateTo || '---'} (${Math.max(chartPoints.length, 1)} روز)\n` +
+                                `🏭 خط مورد بررسی: ${groupFilterName}\n` +
+                                `🎯 سهمیه ایده‌آل پلن: ${Math.round(kpis.totalIdeal).toLocaleString('fa-IR')} کیلوگرم\n` +
+                                `⚙️ مجموع تولید واقعی: ${Math.round(kpis.totalActual).toLocaleString('fa-IR')} کیلوگرم\n` +
+                                `📈 درصد تحقق هدف (KPI): ${kpis.achievementPct.toFixed(1)}%\n` +
+                                `📉 انحراف از برنامه: ${kpis.variance >= 0 ? '+' : ''}${Math.round(kpis.variance).toLocaleString('fa-IR')} کیلوگرم\n` +
+                                `⚡ میانگین روزانه واقعی / اسمی: ${Math.round(kpis.avgDailyActual).toLocaleString('fa-IR')} / ${Math.round(kpis.avgDailyIdeal).toLocaleString('fa-IR')} kg\n` +
+                                (kpis.peakDay ? `🏆 بالاترین رکورد روزانه: ${kpis.peakDay.date} (${Math.round(kpis.peakDay.amount).toLocaleString('fa-IR')} kg)\n` : '') +
+                                `🗑 ضایعات ثبت‌شده: ${Math.round(kpis.totalWaste || 0).toLocaleString('fa-IR')} کیلوگرم (${(kpis.wastePct || 0).toFixed(2)}%)\n` +
+                                `📄 فایل PDF تک‌صفحه‌ای A4 به همراه نمودار تحلیلی پیوست گردید.`;
+            }
+
             const res = await fetch(getEffectiveApiUrl('/api/sayan/production-report/send-bot'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -4358,12 +4503,15 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     dateTo,
                     items: prodLiveItems,
                     totals: prodLiveTotals,
-                    waste: prodWaste
+                    waste: prodWaste,
+                    pdfBase64,
+                    customCaption,
+                    customFilename
                 })
             });
             const data = await res.json();
             if (data.success) {
-                toast.success('گزارش با موفقیت به ربات ارسال شد و مقادیر ضایعات نیز به‌صورت خودکار در سیستم ذخیره گردید.');
+                toast.success('گزارش با موفقیت به همراه فایل PDF و نمودار به ربات ارسال شد.');
                 fetchProdArchive();
             } else {
                 toast.error(data.error || 'خطا در ارسال گزارش به گروه‌ها.');
@@ -5326,71 +5474,53 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
         if (isCharts) {
             const { chartPoints, kpis } = getProductionTimelineChartData();
-            const groupFilterName = prodChartGroupFilter === 'all' ? 'همه گروه‌ها (کل کارخانه)' : prodChartGroupFilter;
-            const periodLabel = prodChartPeriod === 'daily' ? 'روزانه' : (prodChartPeriod === 'weekly' ? 'هفتگی' : (prodChartPeriod === 'monthly' ? 'ماهانه' : 'بازه زمانی انتخابی'));
+            const groupFilterName = prodChartGroupFilter === 'all' ? 'همه گروه‌ها (کل تولید کارخانه)' : prodChartGroupFilter;
+            const periodLabel = prodChartPeriod === 'daily' ? 'روزانه' : (prodChartPeriod === 'weekly' ? 'هفتگی' : (prodChartPeriod === 'monthly' ? 'یک‌ماهه' : 'کل بازه انتخابی'));
 
-            const timelineRows = chartPoints.map((p, idx) => `
-                <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 9pt;">
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold;">${p.label}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-family: monospace;">${p.date}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e3a8a;">${p.actual.toLocaleString('fa-IR')}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; color: #047857; font-weight: bold;">${p.ideal.toLocaleString('fa-IR')}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${p.variancePeriod >= 0 ? '#15803d' : '#b91c1c'};">${p.variancePeriod >= 0 ? '+' : ''}${p.variancePeriod.toLocaleString('fa-IR')}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: 800; color: #1e40af; background-color: #eff6ff;">${p.actualCum.toLocaleString('fa-IR')}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: 800; color: #065f46; background-color: #ecfdf5;">${p.idealCum.toLocaleString('fa-IR')}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${p.ratioCum >= 100 ? '#15803d' : (p.ratioCum >= 80 ? '#b45309' : '#b91c1c')};">${p.ratioCum.toFixed(1)}%</td>
-                </tr>
-            `).join('');
+            const dataset: ProductionReportPrintDataset = {
+                title: 'گزارش مدیریتی و تحلیلی عملکرد خطوط تولید (مقایسه با پلن ظرفیت ماشین‌آلات)',
+                subtitle: 'سامانه پایش خطوط نساجی و ظرفیت‌سنجی ماشین‌آلات کارخانه - دلکام ERP',
+                dateFrom: dateFrom || 'ابتدا',
+                dateTo: dateTo || 'امروز',
+                daysCount: Math.max(chartPoints.length, 1),
+                periodLabel,
+                groupFilter: prodChartGroupFilter,
+                groupFilterName,
+                chartPoints,
+                kpis: {
+                    totalActual: kpis.totalActual,
+                    totalIdeal: kpis.totalIdeal,
+                    achievementPct: kpis.achievementPct,
+                    variance: kpis.variance,
+                    avgDailyActual: kpis.avgDailyActual,
+                    avgDailyIdeal: kpis.avgDailyIdeal,
+                    peakDay: kpis.peakDay,
+                    lowDay: kpis.lowDay,
+                    activeDaysCount: kpis.activeDaysCount,
+                    totalWaste: kpis.totalWaste,
+                    wastePct: kpis.wastePct
+                },
+                groupsBreakdown: kpis.groupsBreakdown,
+                executiveSummaryText: kpis.executiveSummaryText,
+                wasteNotes: prodWaste?.details || '',
+                issuedAt: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' }),
+                fiscalYear: String(getActiveFiscalYearLabel() || '۱۴۰۵')
+            };
 
-            bodyContent = `
-                <div class="stat-cards">
-                    <div class="card">
-                        <div class="card-label">فیلتر گروه کالایی</div>
-                        <div class="card-val" style="font-size: 11pt; color: #3730a3;">${groupFilterName}</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">بازه و تفکیک زمانی</div>
-                        <div class="card-val" style="font-size: 11pt;">${periodLabel} (${dateFrom} تا ${dateTo})</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">کل تولید واقعی (kg)</div>
-                        <div class="card-val" style="color: #2563eb;">${kpis.totalActual.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">هدف کل ایده‌آل (kg)</div>
-                        <div class="card-val" style="color: #059669;">${kpis.totalIdeal.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">درصد تحقق هدف</div>
-                        <div class="card-val" style="color: ${kpis.achievementPct >= 100 ? '#16a34a' : (kpis.achievementPct >= 80 ? '#d97706' : '#dc2626')};">${kpis.achievementPct.toFixed(1)}%</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">انحراف از هدف (kg)</div>
-                        <div class="card-val" style="color: ${kpis.variance >= 0 ? '#16a34a' : '#dc2626'};">${kpis.variance >= 0 ? '+' : ''}${kpis.variance.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</div>
-                    </div>
-                </div>
+            const docHtml = buildProductionExecutiveA4PrintHtml(dataset);
+            if (returnHtml) return docHtml;
 
-                <h3 style="margin-top: 25px; margin-bottom: 8px; font-size: 11pt; color: #1e293b;">جدول روندی تفکیک مقاطع زمانی و مقایسه تجمیعی (S-Curve Data):</h3>
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th style="width: 40px;">ردیف</th>
-                            <th>مقطع زمانی</th>
-                            <th>بازه تاریخ</th>
-                            <th>تولید مقطع (kg)</th>
-                            <th>سهمیه ایده‌آل مقطع (kg)</th>
-                            <th>انحراف مقطع (kg)</th>
-                            <th style="background-color: #1e3a8a;">تولید تجمیعی واقعی (kg)</th>
-                            <th style="background-color: #065f46;">هدف تجمیعی ایده‌آل (kg)</th>
-                            <th>درصد تحقق (%)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${timelineRows || '<tr><td colspan="9" style="text-align:center; padding: 20px;">هیچ رکوردی برای نمایش وجود ندارد.</td></tr>'}
-                    </tbody>
-                </table>
-            `;
+            const printWindow = window.open('', '_blank');
+            if (printWindow) {
+                printWindow.document.open();
+                printWindow.document.write(docHtml);
+                printWindow.document.close();
+                setTimeout(() => {
+                    printWindow.focus();
+                    printWindow.print();
+                }, 500);
+            }
+            return;
         } else {
             const rowsToRender = isGroup ? getGroupedProductionRows() : prodLiveItems;
             let totalIdealSum = 0;
@@ -5563,12 +5693,29 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const achPct = totalIdeal > 0 ? (totalProd / totalIdeal) * 100 : 0;
             const diff = totalProd - totalIdeal;
 
-            const text = `📊 گزارش تولید و ضایعات کارخانه سایان ERP (${dateFromStr} تا ${dateToStr})\n` +
-                         `• نوع نمایش: ${activeProdSubTab === 'charts' ? 'نمودارهای تحلیلی سینوسی S-Curve' : (prodViewMode === 'group' ? 'تفکیک ۱۵ گروه اصلی سایان' : 'تفکیک هر کالا')}\n` +
-                         `• کل تولید خالص: ${totalProd.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم\n` +
-                         (totalIdeal > 0 ? `• کل هدف ایده‌آل: ${totalIdeal.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم\n• درصد تحقق هدف: ${achPct.toFixed(1)}%\n• انحراف از هدف: ${diff >= 0 ? '+' : ''}${diff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم\n` : '') +
-                         `• کل ضایعات ثبت‌شده: ${totalWaste.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم (${prodWaste.totalPct ? prodWaste.totalPct.toFixed(2) : '0'}%)\n` +
-                         `📄 فایل PDF کامل گزارش پیوست گردید.`;
+            let text = '';
+            if (activeProdSubTab === 'charts') {
+                const { chartPoints, kpis } = getProductionTimelineChartData();
+                const groupFilterName = prodChartGroupFilter === 'all' ? 'همه گروه‌ها (کل کارخانه)' : prodChartGroupFilter;
+                text = `📊 گزارش تحلیلی عملکرد خطوط تولید کارخانه (مقایسه با پلن ظرفیت ماشین‌آلات)\n` +
+                       `🗓 بازه زمانی: ${dateFromStr} تا ${dateToStr} (${Math.max(chartPoints.length, 1)} روز)\n` +
+                       `🏭 خط مورد بررسی: ${groupFilterName}\n` +
+                       `🎯 سهمیه ایده‌آل پلن: ${Math.round(kpis.totalIdeal).toLocaleString('fa-IR')} کیلوگرم\n` +
+                       `⚙️ مجموع تولید واقعی: ${Math.round(kpis.totalActual).toLocaleString('fa-IR')} کیلوگرم\n` +
+                       `📈 درصد تحقق هدف (KPI): ${kpis.achievementPct.toFixed(1)}%\n` +
+                       `📉 انحراف از برنامه: ${kpis.variance >= 0 ? '+' : ''}${Math.round(kpis.variance).toLocaleString('fa-IR')} کیلوگرم\n` +
+                       `⚡ میانگین روزانه واقعی / اسمی: ${Math.round(kpis.avgDailyActual).toLocaleString('fa-IR')} / ${Math.round(kpis.avgDailyIdeal).toLocaleString('fa-IR')} kg\n` +
+                       (kpis.peakDay ? `🏆 بالاترین رکورد روزانه: ${kpis.peakDay.date} (${Math.round(kpis.peakDay.amount).toLocaleString('fa-IR')} kg)\n` : '') +
+                       `🗑 کل ضایعات ثبت‌شده: ${Math.round(totalWaste).toLocaleString('fa-IR')} کیلوگرم (${prodWaste.totalPct ? prodWaste.totalPct.toFixed(2) : '0'}%)\n` +
+                       `📄 فایل PDF تک‌صفحه‌ای A4 به همراه نمودار تحلیلی پیوست گردید.`;
+            } else {
+                text = `📊 گزارش تولید و ضایعات کارخانه سایان ERP (${dateFromStr} تا ${dateToStr})\n` +
+                       `• نوع نمایش: ${prodViewMode === 'group' ? 'تفکیک ۱۵ گروه اصلی سایان' : 'تفکیک هر کالا'}\n` +
+                       `• کل تولید خالص: ${totalProd.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم\n` +
+                       (totalIdeal > 0 ? `• کل هدف ایده‌آل: ${totalIdeal.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم\n• درصد تحقق هدف: ${achPct.toFixed(1)}%\n• انحراف از هدف: ${diff >= 0 ? '+' : ''}${diff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم\n` : '') +
+                       `• کل ضایعات ثبت‌شده: ${totalWaste.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلوگرم (${prodWaste.totalPct ? prodWaste.totalPct.toFixed(2) : '0'}%)\n` +
+                       `📄 فایل PDF کامل گزارش پیوست گردید.`;
+            }
 
             setSendToChatAttachment({ fileName: result.fileName, url: result.url });
             setSendToChatDefaultMsg(text);
@@ -9376,6 +9523,153 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                 </tfoot>
                                                             </table>
                                                         </div>
+                                                    </div>
+
+                                                    {/* ================= EXECUTIVE MANAGEMENT PERFORMANCE BRIEF ================= */}
+                                                    <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white rounded-2xl p-4 sm:p-5 border border-slate-700/60 shadow-lg space-y-4">
+                                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <div className="p-2 bg-blue-500/20 text-blue-400 rounded-xl border border-blue-400/30 shrink-0">
+                                                                    <FileText className="w-5 h-5" />
+                                                                </div>
+                                                                <div>
+                                                                    <h4 className="text-sm font-black text-white flex flex-wrap items-center gap-2">
+                                                                        <span>گزارش خلاصه وضعیت واقعی و ارزیابی عملکرد بر اساس پلن ماشین‌آلات</span>
+                                                                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full font-sans font-normal">
+                                                                            آماده پرینت A4 تک‌صفحه‌ای
+                                                                        </span>
+                                                                    </h4>
+                                                                    <p className="text-xs text-slate-300 mt-0.5">
+                                                                        خلاصه شاخص‌های واقعی تولید، انحرافات ظرفیت اسمی و تحلیل پایداری خطوط ({dateFrom || '---'} تا {dateTo || '---'})
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Action Buttons for Print & Share */}
+                                                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handlePrintLiveProduction()}
+                                                                    className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-black px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition-all cursor-pointer"
+                                                                    title="چاپ یا دریافت نسخه شکیل تک‌صفحه‌ای A4 به همراه نمودار تحلیلی"
+                                                                >
+                                                                    <Printer className="w-4 h-4" />
+                                                                    <span>چاپ گزارش مدیریتی A4 با نمودار</span>
+                                                                </button>
+
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleSendBotReport}
+                                                                    disabled={isSendingBot}
+                                                                    className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-black px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition-all cursor-pointer disabled:opacity-50"
+                                                                    title="ارسال فایل PDF A4 به همراه کپشن به گروه تلگرام / بله"
+                                                                >
+                                                                    <Send className="w-4 h-4" />
+                                                                    <span>ارسال PDF مدیریتی به بات</span>
+                                                                </button>
+
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleShareProductionToChat}
+                                                                    className="bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
+                                                                    title="ارسال PDF گزارش به گفتگوی داخلی سیستم"
+                                                                >
+                                                                    <MessageSquare className="w-4 h-4" />
+                                                                    <span>ارسال به چت</span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Executive KPI Mini Grid */}
+                                                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                                                            <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-center">
+                                                                <span className="text-[10px] text-slate-300 block font-medium">تولید واقعی کل</span>
+                                                                <span className="font-mono font-black text-sm text-blue-300 mt-1 block">
+                                                                    {Math.round(totalActual).toLocaleString('fa-IR')} <span className="text-[9px] font-sans text-slate-400">kg</span>
+                                                                </span>
+                                                            </div>
+
+                                                            <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-center">
+                                                                <span className="text-[10px] text-slate-300 block font-medium">سهمیه کل پلن</span>
+                                                                <span className="font-mono font-black text-sm text-purple-300 mt-1 block">
+                                                                    {Math.round(totalIdeal).toLocaleString('fa-IR')} <span className="text-[9px] font-sans text-slate-400">kg</span>
+                                                                </span>
+                                                            </div>
+
+                                                            <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-center">
+                                                                <span className="text-[10px] text-slate-300 block font-medium">درصد تحقق هدف</span>
+                                                                <span className={`font-mono font-black text-sm mt-1 block ${achPct >= 100 ? 'text-emerald-400' : (achPct >= 80 ? 'text-amber-400' : 'text-rose-400')}`}>
+                                                                    {totalIdeal > 0 ? `${achPct.toFixed(1)}%` : '-'}
+                                                                </span>
+                                                            </div>
+
+                                                            <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-center">
+                                                                <span className="text-[10px] text-slate-300 block font-medium">انحراف از برنامه</span>
+                                                                <span className={`font-mono font-black text-sm mt-1 block ${diff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                    {diff >= 0 ? '+' : ''}{Math.round(diff).toLocaleString('fa-IR')} <span className="text-[9px] font-sans text-slate-400">kg</span>
+                                                                </span>
+                                                            </div>
+
+                                                            <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-center">
+                                                                <span className="text-[10px] text-slate-300 block font-medium">میانگین روزانه واقعی / اسمی</span>
+                                                                <span className="font-mono font-bold text-xs text-slate-100 mt-1 block">
+                                                                    {Math.round(kpis.avgDailyActual).toLocaleString('fa-IR')} <span className="text-[9px] text-slate-400">/ {Math.round(kpis.avgDailyIdeal).toLocaleString('fa-IR')}</span>
+                                                                </span>
+                                                            </div>
+
+                                                            <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-center">
+                                                                <span className="text-[10px] text-slate-300 block font-medium">کل ضایعات ثبت‌شده</span>
+                                                                <span className="font-mono font-bold text-xs text-amber-300 mt-1 block">
+                                                                    {Math.round(kpis.totalWaste || 0).toLocaleString('fa-IR')} <span className="text-[9px] text-slate-400">({(kpis.wastePct || 0).toFixed(2)}%)</span>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Textual Statement */}
+                                                        <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 text-xs text-slate-200 leading-relaxed space-y-1.5">
+                                                            <div className="flex items-center gap-2 font-bold text-indigo-300">
+                                                                <span>📝 خلاصه وضعیت و ارزیابی عملکرد مدیران:</span>
+                                                                {kpis.peakDay && (
+                                                                    <span className="text-[10px] bg-indigo-500/30 text-indigo-200 px-2 py-0.5 rounded font-normal">
+                                                                        پیک تولید: {kpis.peakDay.date} ({Math.round(kpis.peakDay.amount).toLocaleString('fa-IR')} kg)
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <p className="font-normal text-slate-300 leading-6 text-justify">
+                                                                {kpis.executiveSummaryText || 'اطلاعات تحلیلی بر مبنای داده‌های ثبت‌شده استخراج گردید.'}
+                                                            </p>
+                                                        </div>
+
+                                                        {/* Groups Overview Grid */}
+                                                        {kpis.groupsBreakdown && kpis.groupsBreakdown.length > 0 && (
+                                                            <div className="space-y-2">
+                                                                <span className="text-xs font-bold text-slate-300 block">
+                                                                    تفکیک ارزیابی خطوط بر اساس پلن مهندسی:
+                                                                </span>
+                                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                                                                    {kpis.groupsBreakdown.slice(0, 8).map((grp: any, gIdx: number) => (
+                                                                        <div key={gIdx} className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1.5 hover:bg-white/10 transition-colors">
+                                                                            <div className="flex items-center justify-between text-xs">
+                                                                                <span className="font-bold text-white truncate">{grp.name}</span>
+                                                                                <span className={`text-[10px] font-mono font-black px-1.5 py-0.5 rounded ${grp.achPct >= 100 ? 'bg-emerald-500/20 text-emerald-300' : (grp.achPct >= 80 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300')}`}>
+                                                                                    {grp.achPct.toFixed(1)}%
+                                                                                </span>
+                                                                            </div>
+                                                                            <div className="flex items-center justify-between text-[11px] text-slate-300 font-mono">
+                                                                                <span>واقعی: {Math.round(grp.actualKg).toLocaleString('fa-IR')} kg</span>
+                                                                                <span className="text-slate-400">سهمیه: {Math.round(grp.periodIdealKg).toLocaleString('fa-IR')}</span>
+                                                                            </div>
+                                                                            <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                                                                <span>دستگاه فعال: {grp.machinesCount}</span>
+                                                                                <span className={`font-mono font-bold ${grp.varianceKg >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                                    {grp.varianceKg >= 0 ? '+' : ''}{Math.round(grp.varianceKg).toLocaleString('fa-IR')} kg
+                                                                                </span>
+                                                                            </div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </>
                                             );
