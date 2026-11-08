@@ -289,7 +289,30 @@ ipcMain.handle('focus-window', () => {
   }
 });
 
+// 8. Request & confirm native permissions (Notifications, Background, Media)
+ipcMain.handle('request-native-permissions', () => {
+  try {
+    return {
+      granted: true,
+      notificationsSupported: Notification.isSupported()
+    };
+  } catch {
+    return { granted: true, notificationsSupported: true };
+  }
+});
+
 app.whenReady().then(() => {
+  try {
+    const { session } = require('electron');
+    if (session && session.defaultSession) {
+      session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+        callback(true);
+      });
+      session.defaultSession.setPermissionCheckHandler(() => true);
+    }
+  } catch (e) {
+    console.warn('[Electron] Permission handler setup warning:', e);
+  }
   createWindow();
   createTray();
 });

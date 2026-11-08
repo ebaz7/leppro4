@@ -81,20 +81,72 @@ export function buildAndroidBrowserIntentUrl(httpUrl: string): string {
   return httpUrl;
 }
 
-// Dismiss an update so it does not keep showing up in current session
-export function dismissUpdate(serverInfo?: AppVersionInfo | null): void {
-  if (typeof window === 'undefined') return;
-  const serverVer = serverInfo?.version || '';
-  const serverBuild = serverInfo?.buildNumber || serverVer;
-  const serverTimestamp = Number(serverInfo?.timestamp) || 0;
-  const sig = `${serverVer}_${serverBuild}_${serverTimestamp}`;
+function extractSemVerFromText(text?: string | null): string | null {
+  if (!text) return null;
+  const m = String(text).match(/(?:v|_|-|\s)(\d+\.\d+\.\d+)/i) || String(text).match(/(\d+\.\d+\.\d+)/);
+  return m ? m[1] : null;
+}
+
+export function getRecordedInstalledVersion(runtime?: string): string | null {
+  if (typeof window === 'undefined') return null;
   try {
+    const rt = runtime || getDesktopRuntime();
+    return localStorage.getItem(`dlkam_installed_version_${rt}`) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function markPlatformUpdateInstalled(version?: string | null, runtimeOverride?: string): void {
+  if (typeof window === 'undefined') return;
+  const cleanVer = extractSemVerFromText(version) || String(version || '').trim();
+  if (!cleanVer || cleanVer === 'latest') return;
+  try {
+    const rt = runtimeOverride || (isCapacitorAndroid() ? 'android' : getDesktopRuntime());
+    const currentRecorded = localStorage.getItem(`dlkam_installed_version_${rt}`);
+    if (!currentRecorded || compareSemVer(cleanVer, currentRecorded) >= 0) {
+      localStorage.setItem(`dlkam_installed_version_${rt}`, cleanVer);
+    }
+    const sig = rt === 'android' ? `android_${cleanVer}` : `${rt}_desktop_${cleanVer}`;
+    localStorage.setItem(`dismissed_update_sig_${rt}`, sig);
+    localStorage.setItem('dismissed_update_sig', sig);
     sessionStorage.setItem('dismissed_update_sig', sig);
-    localStorage.removeItem('dismissed_update_sig');
+    window.dispatchEvent(new CustomEvent('app:update-installed', { detail: { version: cleanVer, runtime: rt } }));
   } catch (_) {}
 }
 
-// Get native client version asynchronously if running on Tauri or Android Capacitor
+// Dismiss an update so it does not keep showing up across sessions for the same version
+export function dismissUpdate(serverInfo?: AppVersionInfo | null): void {
+  if (typeof window === 'undefined') return;
+  const isAndroid = isCapacitorAndroid();
+  const isDesktop = isTauriDesktop();
+  const runtime = isAndroid ? 'android' : getDesktopRuntime();
+
+  const targetVer = isAndroid
+    ? (serverInfo?.androidLatestVersion || serverInfo?.version || '')
+    : isDesktop
+      ? ((runtime === 'electron' ? serverInfo?.electronLatestVersion : serverInfo?.tauriLatestVersion) || serverInfo?.desktopLatestVersion || serverInfo?.version || '')
+      : (serverInfo?.webVersion || serverInfo?.version || '');
+
+  const serverBuild = serverInfo?.buildNumber || targetVer;
+  const serverTimestamp = Number(serverInfo?.timestamp) || 0;
+  const sig = isAndroid
+    ? `android_${targetVer}`
+    : isDesktop
+      ? `${runtime}_desktop_${targetVer}`
+      : `${targetVer}_${serverBuild}_${serverTimestamp}`;
+
+  try {
+    sessionStorage.setItem('dismissed_update_sig', sig);
+    localStorage.setItem('dismissed_update_sig', sig);
+    localStorage.setItem(`dismissed_update_sig_${runtime}`, sig);
+    if (isDesktop && targetVer) {
+      localStorage.setItem(`dlkam_installed_version_${runtime}`, targetVer);
+    }
+  } catch (_) {}
+}
+
+// Get native client version asynchronously if running on Tauri, Electron, or Android Capacitor
 export async function getNativeClientVersion(): Promise<{ version: string; buildNumber: string }> {
   if (typeof window === 'undefined') {
     return { version: CURRENT_CLIENT_BUILD.version, buildNumber: CURRENT_CLIENT_BUILD.buildNumber };
@@ -104,9 +156,10 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
   let detectedVersion = CURRENT_CLIENT_BUILD.version;
   let detectedBuild = CURRENT_CLIENT_BUILD.buildNumber;
 
-  // 1. Check Electron or Tauri app.getVersion() — authoritative version of the installed Windows .exe binary
+  // 1. Check Electron or Tauri — authoritative version of the installed Windows .exe binary
   try {
     if (isTauriDesktop()) {
+      const runtime = getDesktopRuntime();
       if (win.electronAPI?.getVersion) {
         const ver = await win.electronAPI.getVersion();
         if (ver) {
@@ -119,13 +172,38 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
           detectedVersion = String(ver).trim();
           detectedBuild = detectedVersion;
         }
-      } else if (win.__TAURI__?.app?.getVersion) {
-        const ver = await win.__TAURI__.app.getVersion();
-        if (ver) {
-          detectedVersion = String(ver).trim();
+      } else {
+        let tauriVer: string | null = null;
+        if (win.__TAURI__?.app?.getVersion) {
+          try {
+            tauriVer = await win.__TAURI__.app.getVersion();
+          } catch (_) {}
+        }
+        if (!tauriVer) {
+          try {
+            const { getVersion } = await import('@tauri-apps/api/app');
+            tauriVer = await getVersion();
+          } catch (_) {}
+        }
+        if (!tauriVer) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/tauri');
+            tauriVer = await invoke<string>('get_app_version');
+          } catch (_) {}
+        }
+        if (tauriVer) {
+          detectedVersion = String(tauriVer).trim();
           detectedBuild = detectedVersion;
         }
       }
+
+      // Also honor recorded installed version if higher (e.g. right after running installer)
+      const recordedVer = getRecordedInstalledVersion(runtime);
+      if (recordedVer && compareSemVer(recordedVer, detectedVersion) > 0) {
+        detectedVersion = recordedVer;
+        detectedBuild = recordedVer;
+      }
+
       return { version: detectedVersion, buildNumber: detectedBuild };
     }
   } catch (_) {}
@@ -140,6 +218,10 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
           detectedBuild = String(info.build || info.version).trim();
         }
       }
+      const recordedAndroidVer = getRecordedInstalledVersion('android');
+      if (recordedAndroidVer && compareSemVer(recordedAndroidVer, detectedVersion) > 0) {
+        detectedVersion = recordedAndroidVer;
+      }
       return { version: detectedVersion, buildNumber: detectedBuild };
     }
   } catch (_) {}
@@ -149,7 +231,7 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
 
 // Check for updates by querying /api/version and /api/desktop/check-update
 // IMPORTANT:
-// - On Windows Desktop (Tauri): ONLY announces an update when an actual .exe/.msi file on disk has a higher version than the installed Tauri binary.
+// - On Windows Desktop (Tauri / Electron): ONLY announces an update when an actual .exe/.msi file on disk for THAT platform has a higher version than the installed binary.
 // - On Android (Capacitor): ONLY announces an update when an actual .apk file on disk has a higher version than the installed Android APK binary.
 export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverInfo: AppVersionInfo | null }> {
   try {
@@ -243,7 +325,8 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
 
       const currentServerSig = `android_${actualApkVer}`;
       const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
-      if (sessionDismissedSig && sessionDismissedSig === currentServerSig) {
+      const localDismissedSig = localStorage.getItem('dismissed_update_sig_android') || localStorage.getItem('dismissed_update_sig');
+      if (sessionDismissedSig === currentServerSig || localDismissedSig === currentServerSig) {
         return { hasUpdate: false, serverInfo: data };
       }
 
@@ -272,12 +355,32 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
       // Runtime-specific signature so Electron and Tauri don't collide
       const currentServerSig = `${runtime}_desktop_${actualDesktopVer}`;
       const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
-      if (sessionDismissedSig && sessionDismissedSig === currentServerSig) {
+      const localDismissedSig = localStorage.getItem(`dismissed_update_sig_${runtime}`) || localStorage.getItem('dismissed_update_sig');
+      if (sessionDismissedSig === currentServerSig || localDismissedSig === currentServerSig) {
         return { hasUpdate: false, serverInfo: data };
       }
 
       const semVerComp = compareSemVer(actualDesktopVer, clientVer);
-      return { hasUpdate: semVerComp > 0, serverInfo: data };
+      if (semVerComp <= 0) {
+        return { hasUpdate: false, serverInfo: data };
+      }
+
+      // Check if this exact installer file is ALREADY present in DlkamFiles from a prior session's save_and_open_local_file!
+      // Because save_and_open_local_file downloads AND immediately executes the installer, if the file is already sitting
+      // in DlkamFiles on startup, the user already downloaded and ran this installer!
+      const exeFileName = data.desktopFileName || (isElectron ? `dlkam-electron-setup-v${actualDesktopVer}.exe` : `dlkam-desktop-v${actualDesktopVer}.exe`);
+      const justDownloadedInSession = sessionStorage.getItem('dlkam_just_downloaded_exe');
+      if (justDownloadedInSession !== exeFileName) {
+        try {
+          const alreadyDownloadedAndLaunched = await isDesktopUpdateFileReady(exeFileName);
+          if (alreadyDownloadedAndLaunched) {
+            markPlatformUpdateInstalled(actualDesktopVer, runtime);
+            return { hasUpdate: false, serverInfo: data };
+          }
+        } catch (_) {}
+      }
+
+      return { hasUpdate: true, serverInfo: data };
     }
 
     // --- 3. WEB BROWSER CHECK ---
@@ -288,7 +391,8 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
     const currentServerSig = `${serverVer}_${serverBuild}_${serverTimestamp}`;
 
     const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
-    if (sessionDismissedSig && sessionDismissedSig === currentServerSig) {
+    const localDismissedSig = localStorage.getItem('dismissed_update_sig_web') || localStorage.getItem('dismissed_update_sig');
+    if (sessionDismissedSig === currentServerSig || localDismissedSig === currentServerSig) {
       return { hasUpdate: false, serverInfo: data };
     }
 
@@ -574,6 +678,7 @@ export async function applyApplicationUpdate(
         }
       }
 
+      markPlatformUpdateInstalled(targetVer, 'android');
       onProgress?.(100, 'دانلود کامل شد — پنجره نصب باز شد ✓');
       return;
     } catch (downloadErr) {
@@ -586,9 +691,10 @@ export async function applyApplicationUpdate(
 
   // 3. WINDOWS DESKTOP (TAURI & ELECTRON) PLATFORM: Single in-app download of newest .exe + automatic execution
   if (isDesktop) {
-    const targetVer = serverInfo?.desktopLatestVersion || serverInfo?.version || 'latest';
-    const exeFileName = serverInfo?.desktopFileName || `dlkam-desktop-v${targetVer}.exe`;
-    let rawDesktop = serverInfo?.downloadUrl || `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer)}&ext=exe`;
+    const runtime = getDesktopRuntime();
+    const targetVer = (runtime === 'electron' ? serverInfo?.electronLatestVersion : serverInfo?.tauriLatestVersion) || serverInfo?.desktopLatestVersion || serverInfo?.version || 'latest';
+    const exeFileName = serverInfo?.desktopFileName || (runtime === 'electron' ? `dlkam-electron-setup-v${targetVer}.exe` : `dlkam-desktop-v${targetVer}.exe`);
+    let rawDesktop = serverInfo?.downloadUrl || `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer)}&ext=exe&runtime=${runtime}`;
     if (!rawDesktop.startsWith('http://') && !rawDesktop.startsWith('https://')) {
       rawDesktop = getEffectiveApiUrl(rawDesktop);
     }
@@ -626,6 +732,7 @@ export async function applyApplicationUpdate(
           }
         }
 
+        markPlatformUpdateInstalled(targetVer, 'electron');
         onProgress?.(100, 'پنجره نصاب ویندوز باز شد ✓');
         toast.success(`فایل نصبی نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل فرمایید.`, { duration: 9000 });
         return;
@@ -652,6 +759,7 @@ export async function applyApplicationUpdate(
 
       if (!supportsInAppSave) {
         // Older desktop shell: do NOT download in-app and then download again in browser; open direct link ONCE!
+        markPlatformUpdateInstalled(targetVer, 'tauri');
         onProgress?.(100, 'در حال دانلود مستقیم فایل نصبی...');
         await openDirectUpdateLink(downloadUrl);
         return;
@@ -703,6 +811,7 @@ export async function applyApplicationUpdate(
         }
       }
 
+      markPlatformUpdateInstalled(targetVer, 'tauri');
       onProgress?.(100, 'پنجره نصاب ویندوز باز شد ✓');
       toast.success(`فایل نصبی نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل فرمایید.`, { duration: 9000 });
       return;
@@ -791,10 +900,14 @@ export async function isDesktopUpdateFileReady(fileName: string): Promise<boolea
  */
 export async function openDesktopUpdateFile(fileName: string): Promise<string> {
   if (!isTauriDesktop()) throw new Error('Not running in desktop app');
+  const extractedVer = extractSemVerFromText(fileName);
+  const runtime = getDesktopRuntime();
   const win = window as any;
   const electronBridge = win.electronAPI || win.electron;
   if (electronBridge?.openLocalFile) {
-    return await electronBridge.openLocalFile(fileName);
+    const p = await electronBridge.openLocalFile(fileName);
+    if (extractedVer) markPlatformUpdateInstalled(extractedVer, runtime);
+    return p;
   }
   const { invoke } = await import('@tauri-apps/api/tauri');
   let savedPath = '';
@@ -813,6 +926,7 @@ export async function openDesktopUpdateFile(fileName: string): Promise<string> {
       console.debug('Tauri shell open fallback:', e);
     }
   }
+  if (extractedVer) markPlatformUpdateInstalled(extractedVer, runtime);
   return savedPath || fileName;
 }
 

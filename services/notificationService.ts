@@ -111,6 +111,13 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
               }
               if (isGranted) return true;
           }
+          const tauriMod = await import('@tauri-apps/api/notification');
+          let isGranted = await tauriMod.isPermissionGranted();
+          if (!isGranted) {
+              const perm = await tauriMod.requestPermission();
+              isGranted = perm === 'granted';
+          }
+          if (isGranted) return true;
       } catch (e) {
           console.warn('Tauri native notification check:', e);
       }
@@ -693,6 +700,12 @@ export const sendNotification = async (title: string, body: string, data?: any) 
                   tauriNotif.sendNotification({ title, body });
                   return;
               }
+          }
+          const tauriMod = await import('@tauri-apps/api/notification');
+          const isGranted = await tauriMod.isPermissionGranted();
+          if (isGranted) {
+              tauriMod.sendNotification({ title, body });
+              return;
           }
       } catch (e) {
           console.warn('Tauri native notification dispatch error:', e);

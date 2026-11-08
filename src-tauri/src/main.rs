@@ -116,6 +116,21 @@ fn sanitize_desktop_filename(name: &str) -> String {
 }
 
 #[tauri::command]
+fn get_app_version(handle: tauri::AppHandle) -> String {
+    handle.package_info().version.to_string()
+}
+
+#[tauri::command]
+fn delete_local_file(handle: tauri::AppHandle, file_name: String) -> bool {
+    let safe_name = sanitize_desktop_filename(&file_name);
+    let target = get_desktop_app_files_dir(&handle).join(safe_name);
+    if target.exists() {
+        return fs::remove_file(&target).is_ok();
+    }
+    false
+}
+
+#[tauri::command]
 fn check_local_file_exists(handle: tauri::AppHandle, file_name: String) -> bool {
     let safe_name = sanitize_desktop_filename(&file_name);
     let target = get_desktop_app_files_dir(&handle).join(safe_name);
@@ -472,6 +487,8 @@ fn main() {
             save_client_config,
             check_desktop_update,
             start_server_cmd,
+            get_app_version,
+            delete_local_file,
             check_local_file_exists,
             open_local_file,
             open_local_file_dir,

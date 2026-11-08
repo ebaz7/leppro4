@@ -23,6 +23,7 @@ import { DEFAULT_MOBILE_NAV_ORDER } from '../constants';
 import { Capacitor } from '@capacitor/core';
 import { getAppNavItems } from '../utils/navigationItems';
 import { safeLocalStorage } from '../utils/safeStorage';
+import { isTauriDesktop } from '../utils/platformDetection';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -54,6 +55,7 @@ interface LayoutProps {
 
 import { SearchModal } from './SearchModal';
 import { UpdateBanner } from './UpdateBanner';
+import { FirstLaunchPermissionsModal } from './FirstLaunchPermissionsModal';
 import { checkServerUpdate, dismissUpdate, AppVersionInfo } from '../services/updateService';
 
 const Layout: React.FC<LayoutProps> = ({ 
@@ -534,8 +536,8 @@ const Layout: React.FC<LayoutProps> = ({
   }, [showProfileModal, currentUser]);
 
   useEffect(() => {
-    if (Capacitor.isNativePlatform()) {
-        // Always ensure native Android app has in-app notification preference enabled
+    if (Capacitor.isNativePlatform() || isTauriDesktop()) {
+        // Always ensure native Android and Desktop apps have in-app notification preference enabled
         setNotificationPreference(true);
         setNotifEnabled(true);
     } else {
@@ -550,6 +552,14 @@ const Layout: React.FC<LayoutProps> = ({
             setNotifEnabled(false);
         }
     }
+    const handlePermissionsGranted = () => {
+      setNotificationPreference(true);
+      setNotifEnabled(true);
+    };
+    window.addEventListener('app:permissions-granted', handlePermissionsGranted);
+    return () => {
+      window.removeEventListener('app:permissions-granted', handlePermissionsGranted);
+    };
   }, []);
 
   // Update Detection State
@@ -596,8 +606,13 @@ const Layout: React.FC<LayoutProps> = ({
     const handleSettingsChanged = () => {
       checkVersion();
     };
+    const handleUpdateInstalled = () => {
+      setIsUpdateAvailable(false);
+      setIsUpdateDismissed(true);
+    };
     window.addEventListener('app:update-published', handleUpdatePublished);
     window.addEventListener('app:update-settings-changed', handleSettingsChanged);
+    window.addEventListener('app:update-installed', handleUpdateInstalled);
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -609,6 +624,7 @@ const Layout: React.FC<LayoutProps> = ({
       clearInterval(interval);
       window.removeEventListener('app:update-published', handleUpdatePublished);
       window.removeEventListener('app:update-settings-changed', handleSettingsChanged);
+      window.removeEventListener('app:update-installed', handleUpdateInstalled);
     };
   }, [settings?.desktopUpdateIntervalMinutes, settings?.desktopAutoCheckUpdates]);
 
@@ -2154,6 +2170,7 @@ const Layout: React.FC<LayoutProps> = ({
       </AnimatePresence>
 
       {showNotifDropdown && <NotificationDropdown />}
+      <FirstLaunchPermissionsModal currentUserId={currentUser?.id} />
     </div>
   );
 };

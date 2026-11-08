@@ -25,6 +25,7 @@ import { DashboardAdminRoleLocksModal } from './DashboardAdminRoleLocksModal';
 import { UpdateBanner } from './UpdateBanner';
 import { checkServerUpdate, AppVersionInfo, CURRENT_CLIENT_BUILD } from '../services/updateService';
 import { RefreshCw, DownloadCloud, ArrowUpCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 interface DashboardProps {
   orders: PaymentOrder[];
@@ -231,7 +232,7 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
   const [isUpdateDismissed, setIsUpdateDismissed] = useState<boolean>(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
 
-  const checkDashboardVersion = async () => {
+  const checkDashboardVersion = async (manual = false) => {
     setIsCheckingUpdate(true);
     try {
       const updateResult = await checkServerUpdate();
@@ -240,6 +241,11 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
         if (updateResult.hasUpdate) {
           setIsUpdateAvailable(true);
           setIsUpdateDismissed(false);
+        } else {
+          setIsUpdateAvailable(false);
+          if (manual) {
+            toast.success('شما از آخرین نسخه به‌روز سامانه استفاده می‌کنید ✓');
+          }
         }
       }
     } catch (e) {
@@ -250,19 +256,25 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
   };
 
   useEffect(() => {
-    checkDashboardVersion();
+    checkDashboardVersion(false);
     const handleUpdatePublished = (e: any) => {
       if (e?.detail) {
         setUpdateInfo(e.detail);
         setIsUpdateAvailable(true);
         setIsUpdateDismissed(false);
       } else {
-        checkDashboardVersion();
+        checkDashboardVersion(false);
       }
     };
+    const handleUpdateInstalled = () => {
+      setIsUpdateAvailable(false);
+      setIsUpdateDismissed(true);
+    };
     window.addEventListener('app:update-published', handleUpdatePublished);
+    window.addEventListener('app:update-installed', handleUpdateInstalled);
     return () => {
       window.removeEventListener('app:update-published', handleUpdatePublished);
+      window.removeEventListener('app:update-installed', handleUpdateInstalled);
     };
   }, []);
 
@@ -1804,7 +1816,7 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
 
                 {/* Manual Check Update Button */}
                 <button
-                  onClick={checkDashboardVersion}
+                  onClick={() => checkDashboardVersion(true)}
                   disabled={isCheckingUpdate}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs hover:opacity-90 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
                   title="بررسی دستی به‌روزرسانی سامانه"

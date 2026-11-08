@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openLocalFile: (fileName) => ipcRenderer.invoke('open-local-file', fileName),
   openLocalFileDir: (fileName) => ipcRenderer.invoke('open-local-file-dir', fileName),
   showNativeNotification: (title, body, options) => ipcRenderer.invoke('show-native-notification', { title, body, ...options }),
+  requestNativePermissions: () => ipcRenderer.invoke('request-native-permissions'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   focusWindow: () => ipcRenderer.invoke('focus-window'),
   onNavigate: (callback) => {

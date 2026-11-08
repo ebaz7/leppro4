@@ -8,7 +8,9 @@ import {
   openDirectUpdateLink,
   isDesktopUpdateFileReady,
   openDesktopUpdateFile,
-  openDesktopUpdateFolder
+  openDesktopUpdateFolder,
+  markPlatformUpdateInstalled,
+  dismissUpdate
 } from '../services/updateService';
 import { isTauriDesktop, isWebApp, isElectronDesktop, isTauriDesktopOnly } from '../utils/platformDetection';
 import { getEffectiveApiUrl } from '../services/apiService';
@@ -80,7 +82,13 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
     e.preventDefault();
     e.stopPropagation();
     if (!rawDownloadUrl) return;
+    if (targetVer) {
+      markPlatformUpdateInstalled(targetVer);
+    }
     await openDirectUpdateLink(rawDownloadUrl);
+    setTimeout(() => {
+      onDismiss?.();
+    }, 2000);
   };
 
   const handleOpenFolderClick = async (e: React.MouseEvent) => {
@@ -104,12 +112,17 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
       setProgressText('در حال اجرای نصاب ویندوز...');
       try {
         await openDesktopUpdateFile(exeFileName);
+        if (targetVer) {
+          markPlatformUpdateInstalled(targetVer);
+        }
+        dismissUpdate(updateInfo);
         setIsSuccess(true);
         setIsUpdating(false);
-        toast.success(`پنجره نصاب نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل نمایید.`, { duration: 9000 });
+        toast.success(`پنجره نصاب نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل نمایید.`, { duration: 6000 });
         setTimeout(() => {
           setIsSuccess(false);
-        }, 12000);
+          onDismiss?.();
+        }, 2200);
         return;
       } catch (err) {
         console.warn('Execution error, opening folder fallback:', err);
@@ -136,11 +149,18 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
       if (isDesktop) {
         setIsLocalFileReady(true);
       }
+      if (targetVer && (isDesktop || isAndroid)) {
+        markPlatformUpdateInstalled(targetVer);
+        dismissUpdate(updateInfo);
+      }
       setIsSuccess(true);
       setIsUpdating(false);
       setTimeout(() => {
         setIsSuccess(false);
-      }, 10000);
+        if (isDesktop || isAndroid) {
+          onDismiss?.();
+        }
+      }, 2500);
     } catch (e) {
       console.error('Update failed:', e);
       setIsUpdating(false);
