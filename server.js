@@ -4588,6 +4588,7 @@ app.get('/api/sayan/production-report', async (req, res) => {
             groups,
             dailyTimeline,
             idealTargets: db.productionIdealTargets || { byItem: {}, byGroup: {} },
+            productionPlan: (db.productionPlans && db.productionPlans[`${dateFrom}_${dateTo}`]) || (db.productionPlans && db.productionPlans[dateFrom]) || db.productionPlanDefault || DEFAULT_PRODUCTION_PLAN,
             totals: {
                 qty_61,
                 qty_67,
@@ -4625,6 +4626,180 @@ app.post('/api/sayan/production-report/save-ideal', (req, res) => {
         db.productionIdealTargets = idealTargets || { byItem: {}, byGroup: {} };
         saveDb(db);
         res.json({ success: true, message: 'مقادیر تولید ایده‌آل با موفقیت ذخیره گردید.', idealTargets: db.productionIdealTargets });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Production Plan & Machine Capacity Calculation Endpoints
+// Formula: (نمره نخ × 60 × 24 × تعداد پوزیشن × سرعت دستگاه) / 9,000,000
+const DEFAULT_PRODUCTION_PLAN = {
+    scopeType: 'default',
+    title: 'تنظیمات پیش‌فرض خطوط و ماشین‌آلات تولید',
+    lineGroups: [
+        {
+            groupName: 'dty یا پلی استر',
+            machines: [
+                { id: 'm_dty_1', code: 'DTY-01', name: 'دستگاه DTY شماره ۱ (بارمگ)', yarnCount: 150, positionsCount: 288, speedMpm: 800, active: true },
+                { id: 'm_dty_2', code: 'DTY-02', name: 'دستگاه DTY شماره ۲ (بارمگ)', yarnCount: 150, positionsCount: 288, speedMpm: 800, active: true },
+                { id: 'm_dty_3', code: 'DTY-03', name: 'دستگاه DTY شماره ۳ (تکستچره)', yarnCount: 75, positionsCount: 240, speedMpm: 750, active: true },
+                { id: 'm_dty_4', code: 'DTY-04', name: 'دستگاه DTY شماره ۴ (تکستچره)', yarnCount: 300, positionsCount: 216, speedMpm: 700, active: true }
+            ]
+        },
+        {
+            groupName: 'POY',
+            machines: [
+                { id: 'm_poy_1', code: 'POY-01', name: 'خط ریسندگی POY شماره ۱', yarnCount: 250, positionsCount: 144, speedMpm: 2800, active: true },
+                { id: 'm_poy_2', code: 'POY-02', name: 'خط ریسندگی POY شماره ۲', yarnCount: 130, positionsCount: 144, speedMpm: 3000, active: true }
+            ]
+        },
+        {
+            groupName: 'کش',
+            machines: [
+                { id: 'm_el_1', code: 'EL-01', name: 'دستگاه بافت کش شماره ۱', yarnCount: 150, positionsCount: 120, speedMpm: 450, active: true },
+                { id: 'm_el_2', code: 'EL-02', name: 'دستگاه بافت کش شماره ۲', yarnCount: 150, positionsCount: 120, speedMpm: 450, active: true }
+            ]
+        },
+        {
+            groupName: 'اسپاندکس (کاور)',
+            machines: [
+                { id: 'm_sp_1', code: 'SP-01', name: 'دستگاه کاورینگ اسپاندکس ۱', yarnCount: 70, positionsCount: 128, speedMpm: 550, active: true },
+                { id: 'm_sp_2', code: 'SP-02', name: 'دستگاه کاورینگ اسپاندکس ۲', yarnCount: 140, positionsCount: 128, speedMpm: 500, active: true }
+            ]
+        },
+        {
+            groupName: 'پلی استر شوایتر',
+            machines: [
+                { id: 'm_sch_1', code: 'SCH-01', name: 'دستگاه شوایتر شماره ۱', yarnCount: 150, positionsCount: 48, speedMpm: 600, active: true }
+            ]
+        }
+    ]
+};
+
+app.get('/api/sayan/production-plan', (req, res) => {
+    try {
+        const db = getDb();
+        db.productionPlans = db.productionPlans || {};
+        db.productionPlanDefault = db.productionPlanDefault || DEFAULT_PRODUCTION_PLAN;
+
+        const dateFrom = String(req.query.dateFrom || '').trim();
+        const dateTo = String(req.query.dateTo || dateFrom).trim();
+        const key = dateFrom && dateTo ? `${dateFrom}_${dateTo}` : (dateFrom || 'default');
+
+        let plan = null;
+        if (key !== 'default' && db.productionPlans[key]) {
+            plan = db.productionPlans[key];
+        } else if (dateFrom && db.productionPlans[dateFrom]) {
+            plan = db.productionPlans[dateFrom];
+        } else {
+            plan = db.productionPlanDefault;
+        }
+
+        // Return current active plan and all saved plans index
+        const savedPlansList = Object.keys(db.productionPlans).map(k => ({
+            key: k,
+            dateFrom: db.productionPlans[k].dateFrom,
+            dateTo: db.productionPlans[k].dateTo,
+            daysCount: db.productionPlans[k].daysCount || 1,
+            title: db.productionPlans[k].title,
+            updatedAt: db.productionPlans[k].updatedAt
+        }));
+
+        res.json({
+            success: true,
+            plan,
+            defaultPlan: db.productionPlanDefault,
+            savedPlansList,
+            key
+        });
+    } catch (e) {
+        console.error("Get production plan error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/sayan/production-plan/save', (req, res) => {
+    try {
+        const db = getDb();
+        const { plan, dateFrom, dateTo, isDefault, applyToIdealTargets } = req.body;
+        if (!plan || !plan.lineGroups) {
+            return res.status(400).json({ error: 'اطلاعات پلن و دستگاه‌های تولید الزامی است' });
+        }
+
+        db.productionPlans = db.productionPlans || {};
+        db.productionPlanDefault = db.productionPlanDefault || DEFAULT_PRODUCTION_PLAN;
+
+        const now = new Date().toISOString();
+        const planToSave = {
+            ...plan,
+            updatedAt: now
+        };
+
+        if (isDefault) {
+            db.productionPlanDefault = planToSave;
+        }
+
+        if (dateFrom) {
+            const actualDateTo = dateTo || dateFrom;
+            const key = `${dateFrom}_${actualDateTo}`;
+            db.productionPlans[key] = {
+                ...planToSave,
+                dateFrom,
+                dateTo: actualDateTo
+            };
+        }
+
+        // If applyToIdealTargets is requested, calculate ideal capacity per group and sync into productionIdealTargets
+        if (applyToIdealTargets) {
+            db.productionIdealTargets = db.productionIdealTargets || { byItem: {}, byGroup: {} };
+            db.productionIdealTargets.byGroup = db.productionIdealTargets.byGroup || {};
+
+            const days = Math.max(1, Number(plan.daysCount) || 1);
+
+            plan.lineGroups.forEach(grp => {
+                let groupDailyTotal = 0;
+                (grp.machines || []).forEach(m => {
+                    if (m.active !== false) {
+                        const yarn = Number(m.yarnCount) || 0;
+                        const pos = Number(m.positionsCount) || 0;
+                        const spd = Number(m.speedMpm) || 0;
+                        const eff = Number(m.efficiencyPct || 100) / 100;
+                        // Daily formula: (yarn * 60 * 24 * pos * spd) / 9,000,000
+                        const dailyIdeal = ((yarn * 60 * 24 * pos * spd) / 9000000) * eff;
+                        groupDailyTotal += dailyIdeal;
+                    }
+                });
+                const groupPeriodTotal = Math.round(groupDailyTotal * days);
+                db.productionIdealTargets.byGroup[grp.groupName] = groupPeriodTotal;
+                db.productionIdealTargets[`group_${grp.groupName}`] = groupPeriodTotal;
+            });
+        }
+
+        saveDb(db);
+        res.json({
+            success: true,
+            message: 'پلن تولید و ظرفیت محاسباتی دستگاه‌ها با موفقیت ذخیره شد.',
+            plan: planToSave,
+            idealTargets: db.productionIdealTargets
+        });
+    } catch (e) {
+        console.error("Save production plan error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/sayan/production-plan/:key', (req, res) => {
+    try {
+        const db = getDb();
+        db.productionPlans = db.productionPlans || {};
+        const key = req.params.key;
+        if (db.productionPlans[key]) {
+            delete db.productionPlans[key];
+            saveDb(db);
+            res.json({ success: true, message: 'پلن ذخیره‌شده با موفقیت حذف شد.' });
+        } else {
+            res.status(404).json({ error: 'پلن مورد نظر یافت نشد.' });
+        }
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

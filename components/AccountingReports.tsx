@@ -67,8 +67,11 @@ import {
     Info,
     CreditCard,
     MessageSquare,
-    Target
+    Target,
+    Cpu
 } from 'lucide-react';
+import ProductionPlanManager from './ProductionPlanManager';
+import { ProductionPlanConfig } from '../types';
 import * as jalaali from 'jalaali-js';
 import { 
     BarChart, 
@@ -469,7 +472,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const [prodDailyTimeline, setProdDailyTimeline] = useState<any[]>([]);
     const [prodIdealTargets, setProdIdealTargets] = useState<{ byItem: Record<string, number>; byGroup: Record<string, number> }>({ byItem: {}, byGroup: {} });
     const [prodViewMode, setProdViewMode] = useState<'item' | 'group'>('item'); // default preserves item view 100%
-    const [activeProdSubTab, setActiveProdSubTab] = useState<'table' | 'charts'>('table');
+    const [activeProdSubTab, setActiveProdSubTab] = useState<'table' | 'charts' | 'plan'>('table');
+    const [activeProdPlan, setActiveProdPlan] = useState<ProductionPlanConfig | null>(null);
     const [prodChartPeriod, setProdChartPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
     const [prodChartGroupFilter, setProdChartGroupFilter] = useState<string>('all');
     const [isSavingIdeal, setIsSavingIdeal] = useState(false);
@@ -3785,6 +3789,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 let totals = { qty_61: 0, qty_67: 0, qty_79: 0, qty_73: 0, qty_schweiter: 0, grandTotal: 0 };
                 let wasteData: any = null;
                 let idealTargetsData: any = null;
+                let productionPlanData: any = null;
 
                 try {
                     const url = `/api/sayan/production-report?dateFrom=${encodeURIComponent(from)}&dateTo=${encodeURIComponent(to)}`;
@@ -3797,6 +3802,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         totals = data.totals || totals;
                         wasteData = data.waste;
                         idealTargetsData = data.idealTargets;
+                        productionPlanData = data.productionPlan;
                     }
                 } catch (err) {
                     console.warn("Backend production-report endpoint error:", err);
@@ -3954,7 +3960,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     };
                 }
 
-                return { items, groups, dailyTimeline, totals, wasteData, idealTargetsData };
+                return { items, groups, dailyTimeline, totals, wasteData, idealTargetsData, productionPlanData };
             };
 
             const cleanDateFromA = normalizeDate(dateFrom);
@@ -3968,6 +3974,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             if (resA.groups && resA.groups.length > 0) setProdLiveGroups(resA.groups);
             if (resA.dailyTimeline && resA.dailyTimeline.length > 0) setProdDailyTimeline(resA.dailyTimeline);
             if (resA.idealTargetsData) setProdIdealTargets(resA.idealTargetsData);
+            if (resA.productionPlanData) setActiveProdPlan(resA.productionPlanData);
 
             if (resA.wasteData) {
                 setProdWaste(resA.wasteData);
@@ -8412,11 +8419,11 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                             <div className="space-y-4 mb-6">
                                 {/* Sub-Tab Navigation Bar */}
                                 <div className="flex flex-wrap items-center justify-between bg-slate-100 p-2 rounded-xl border border-slate-200 gap-3">
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
                                         <button
                                             type="button"
                                             onClick={() => setActiveProdSubTab('table')}
-                                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${activeProdSubTab === 'table' ? 'bg-white text-blue-900 shadow-sm border border-slate-200' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'}`}
+                                            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${activeProdSubTab === 'table' ? 'bg-white text-blue-900 shadow-sm border border-slate-200' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'}`}
                                         >
                                             <Layers className="w-4 h-4 text-blue-600" />
                                             <span>صفحه اول: جدول و آمار تولید</span>
@@ -8424,11 +8431,19 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                         <button
                                             type="button"
                                             onClick={() => setActiveProdSubTab('charts')}
-                                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${activeProdSubTab === 'charts' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'}`}
+                                            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${activeProdSubTab === 'charts' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'}`}
                                         >
                                             <TrendingUp className={`w-4 h-4 ${activeProdSubTab === 'charts' ? 'text-amber-300' : 'text-indigo-600'}`} />
-                                            <span>صفحه دوم: نمودار تحلیلی مقایسه با ایده‌آل (سینوسی)</span>
-                                            <span className="bg-amber-400 text-slate-950 text-[10px] px-1.5 py-0.5 rounded-full font-black animate-pulse">جدید</span>
+                                            <span>صفحه دوم: نمودار تحلیلی مقایسه با ایده‌آل</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setActiveProdSubTab('plan')}
+                                            className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${activeProdSubTab === 'plan' ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-slate-950 font-black shadow-md ring-2 ring-amber-400/50' : 'text-slate-700 hover:text-slate-950 hover:bg-slate-200/60 bg-amber-50 border border-amber-200/80'}`}
+                                        >
+                                            <Cpu className={`w-4 h-4 ${activeProdSubTab === 'plan' ? 'text-slate-950' : 'text-amber-600'}`} />
+                                            <span>صفحه سوم: پلن و فرمول دستگاه‌ها (DTY و خطوط)</span>
+                                            <span className="bg-slate-950 text-amber-300 text-[10px] px-1.5 py-0.2 rounded-full font-black animate-pulse">جدید</span>
                                         </button>
                                     </div>
 
@@ -8485,7 +8500,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                         <th className="p-2.5 border-r border-slate-300 w-28 bg-amber-50 text-amber-900">70 کارت شوایتر</th>
                                                         <th className="p-2.5 border-r border-slate-300 bg-slate-200 font-black w-32">جمع کل تولید (kg)</th>
                                                         <th className="p-2.5 border-r border-slate-300 bg-amber-50 text-amber-950 font-black w-36">
-                                                            میزان تولید ایده‌آل (kg) 🎯
+                                                            <div className="flex items-center justify-center gap-1">
+                                                                <span>میزان تولید ایده‌آل (kg) 🎯</span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setActiveProdSubTab('plan')}
+                                                                    className="p-0.5 hover:bg-amber-200 text-amber-900 rounded cursor-pointer transition-colors"
+                                                                    title="تنظیم فرمول دستگاه‌ها و پلن خطوط"
+                                                                >
+                                                                    <Cpu size={12} className="text-amber-800" />
+                                                                </button>
+                                                            </div>
                                                         </th>
                                                         <th className="p-2.5 border-r border-slate-300 bg-emerald-50 text-emerald-950 font-black w-28">درصد تحقق (%)</th>
                                                         <th className="p-2.5 bg-blue-50 text-blue-950 font-black w-32">انحراف از هدف (kg)</th>
@@ -8957,7 +8982,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                             )}
                                         </div>
                                     </div>
-                                ) : (
+                                ) : activeProdSubTab === 'charts' ? (
                                     /* ================= PAGE 2: ANALYTICAL SINUOUS CHARTS ================= */
                                     <div className="space-y-6">
                                         {/* Chart Controls & Filters Bar */}
@@ -9346,7 +9371,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                             {diff >= 0 ? '+' : ''}{diff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}
                                                                         </td>
                                                                         <td className="p-3 font-mono text-blue-900">{totalActual.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                                                                        <td className="p-3 font-mono text-purple-900">{totalIdeal.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                                                                         <td className="p-3 font-mono text-purple-900">{totalIdeal.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
                                                                     </tr>
                                                                 </tfoot>
                                                             </table>
@@ -9356,6 +9381,20 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                             );
                                         })()}
                                     </div>
+                                ) : (
+                                    /* ================= PAGE 3: PRODUCTION PLAN & MACHINE CAPACITY ================= */
+                                    <ProductionPlanManager
+                                        dateFrom={dateFrom}
+                                        dateTo={dateTo}
+                                        currentPlan={activeProdPlan}
+                                        availableGroups={prodLiveGroups && prodLiveGroups.length > 0 ? prodLiveGroups.map((g: any) => g.name || g.groupName || g) : ['dty یا پلی استر', 'POY', 'کش', 'اسپاندکس (کاور)', 'پلی استر شوایتر', 'نایلون', 'FDY', 'الیاف']}
+                                        onPlanUpdated={(updatedPlan, newIdealTargets) => {
+                                            setActiveProdPlan(updatedPlan);
+                                            if (newIdealTargets) {
+                                                setProdIdealTargets(newIdealTargets);
+                                            }
+                                        }}
+                                    />
                                 )}
                             </div>
                         )}

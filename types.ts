@@ -2160,6 +2160,31 @@ export interface BioLinkConfig {
     updatedAt?: number;
 }
 
+export interface ProductionMachine {
+    id: string;
+    code: string; // e.g. "M-01" or "دستگاه ۱"
+    name: string; // Machine name/description e.g. "DTY بارمگ ۱"
+    yarnCount: number; // نمره نخ (دنییر) e.g. 150, 75, 300
+    positionsCount: number; // تعداد پوزیشن e.g. 216, 240, 288
+    speedMpm: number; // سرعت دستگاه (متر بر دقیقه) e.g. 700, 800, 900
+    efficiencyPct?: number; // ضریب بازدهی (اختیاری، پیش‌فرض ۱۰۰٪)
+    active?: boolean; // دستگاه فعال در خط تولید
+    notes?: string;
+}
 
+export interface ProductionLineGroup {
+    groupName: string; // e.g. "dty یا پلی استر", "POY", "کش", "اسپاندکس (کاور)", etc.
+    machines: ProductionMachine[];
+}
 
-
+export interface ProductionPlanConfig {
+    id?: string;
+    scopeType: 'daily' | 'monthly' | 'custom' | 'default';
+    dateFrom?: string; // e.g. "1405/08/17"
+    dateTo?: string; // e.g. "1405/08/17" or "1405/08/30"
+    daysCount?: number; // تعداد روزهای بازه (پیش‌فرض ۱ برای یک روز)
+    title?: string;
+    lineGroups: ProductionLineGroup[];
+    updatedAt?: string;
+    updatedBy?: string;
+}
