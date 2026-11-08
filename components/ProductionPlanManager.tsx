@@ -686,12 +686,18 @@ export const ProductionPlanManager: React.FC<ProductionPlanManagerProps> = ({
                                                         </td>
 
                                                         {/* Daily Calculated Ideal (kg) */}
-                                                        <td className="p-2 border-r border-slate-200 dark:border-zinc-700 font-mono font-black text-xs bg-emerald-50/60 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300">
+                                                        <td
+                                                            className="p-2 border-r border-slate-200 dark:border-zinc-700 font-mono font-black text-xs bg-emerald-50/60 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 cursor-help"
+                                                            title={dailyKg > 0 ? `محاسبه روزانه:\n(${m.yarnCount || 0} × 60 × 24 × ${m.positionsCount || 0} × ${m.speedMpm || 0}) ÷ 9,000,000\n= ${dailyKg.toFixed(1)} کیلوگرم در روز` : 'اطلاعات دستگاه را وارد کنید'}
+                                                        >
                                                             {dailyKg > 0 ? Math.round(dailyKg).toLocaleString('fa-IR') : '۰'}
                                                         </td>
 
                                                         {/* Period Calculated Ideal (kg) */}
-                                                        <td className="p-2 border-r border-slate-200 dark:border-zinc-700 font-mono font-black text-xs bg-emerald-100/50 dark:bg-emerald-950/50 text-emerald-950 dark:text-emerald-200">
+                                                        <td
+                                                            className="p-2 border-r border-slate-200 dark:border-zinc-700 font-mono font-black text-xs bg-emerald-100/50 dark:bg-emerald-950/50 text-emerald-950 dark:text-emerald-200 cursor-help"
+                                                            title={periodKg > 0 ? `محاسبه دوره (${planDays} روزه):\n${dailyKg.toFixed(1)} kg/روز × ${planDays} روز\n= ${Math.round(periodKg).toLocaleString('fa-IR')} کیلوگرم` : '۰'}
+                                                        >
                                                             {periodKg > 0 ? Math.round(periodKg).toLocaleString('fa-IR') : '۰'}
                                                         </td>
 
