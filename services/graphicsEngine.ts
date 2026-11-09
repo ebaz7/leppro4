@@ -41,17 +41,14 @@ class HybridGraphicsEngineClient {
 
   private detectCapabilities() {
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
-    const isCapacitor = typeof window !== 'undefined' && Boolean((window as any).Capacitor?.isNativePlatform?.());
 
     // Apply root attributes
     document.documentElement.setAttribute('data-gpu-active', 'true');
     document.documentElement.setAttribute('data-device-category', isMobile ? 'mobile' : 'desktop');
 
-    // Enable WebView turbo mode automatically on Tauri Desktop & Android Capacitor
-    if (isTauri || isCapacitor || isMobile) {
-      this.enableTurboMode(true);
-    }
+    // Enable WebView turbo mode across Desktop (WebView2/Tauri/Electron/Browser) & Mobile
+    // to eliminate multi-pass backdrop-filter GPU/CPU drain while preserving all theme visuals
+    this.enableTurboMode(true);
   }
 
   private applyHardwareAccelerationCSS() {
@@ -92,8 +89,13 @@ class HybridGraphicsEngineClient {
         touch-action: manipulation !important;
       }
 
-      /* Performance Turbo Mode for Tauri WebView2 & Android WebView */
-      html.perf-turbo .glass-panel {
+      /* Performance Turbo Mode for Tauri WebView2, Electron & Android WebView */
+      html.perf-turbo .glass-panel,
+      html.perf-turbo .glass-header,
+      html.perf-turbo .apple-glass,
+      html.perf-turbo header,
+      html.perf-turbo aside,
+      html.perf-turbo [class*="backdrop-blur"] {
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
       }
@@ -112,13 +114,33 @@ class HybridGraphicsEngineClient {
   }
 
   private optimizeInputAndTouch() {
-    // Prevent passive listener blocking on touch events
+    // Prevent passive listener blocking on touch events and pause animations when window is idle/hidden
     if (typeof window !== 'undefined') {
       window.addEventListener(
         'touchmove',
         () => {},
         { passive: true }
       );
+
+      const syncVisibilityState = () => {
+        if (typeof document === 'undefined') return;
+        if (document.hidden) {
+          document.documentElement.classList.add('window-hidden');
+        } else {
+          document.documentElement.classList.remove('window-hidden');
+        }
+      };
+
+      document.addEventListener('visibilitychange', syncVisibilityState, { passive: true });
+      window.addEventListener('blur', () => {
+        document.documentElement.classList.add('window-unfocused');
+      }, { passive: true });
+      window.addEventListener('focus', () => {
+        document.documentElement.classList.remove('window-unfocused');
+        document.documentElement.classList.remove('window-hidden');
+      }, { passive: true });
+
+      syncVisibilityState();
     }
   }
 

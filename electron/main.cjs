@@ -7,27 +7,16 @@ let tray = null;
 let isQuitting = false;
 let powerBlockerId = null;
 
-// Optimize Chromium startup, hardware rendering flags, and cap V8 heap to prevent memory bloat
+// Optimize Chromium startup, enable Windows EcoQoS efficiency mode, and cap V8 heap to prevent CPU/memory bloat
 try {
-  app.commandLine.appendSwitch('enable-gpu-rasterization');
-  app.commandLine.appendSwitch('enable-zero-copy');
-  app.commandLine.appendSwitch('ignore-gpu-blocklist');
-  app.commandLine.appendSwitch('disable-background-timer-throttling');
-  app.commandLine.appendSwitch('disable-renderer-backgrounding');
-  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('enable-features', 'UseEcoQoSForBackgroundProcess');
+  app.commandLine.appendSwitch('disable-features', 'Translate,BackForwardCache,MediaRouter');
+  app.commandLine.appendSwitch('process-per-site');
   app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512');
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.delkam.erp');
   }
 } catch (_) {}
-
-// Keep application active in background without suspension
-try {
-  powerBlockerId = powerSaveBlocker.start('prevent-app-suspension');
-  console.log('[Electron] Background power save blocker active with ID:', powerBlockerId);
-} catch (e) {
-  console.warn('[Electron] Power save blocker failed:', e);
-}
 
 function createTray() {
   if (tray) return;
@@ -116,7 +105,7 @@ function createWindow() {
       sandbox: false,
       webSecurity: false,
       spellcheck: false,
-      backgroundThrottling: false
+      backgroundThrottling: true
     }
   });
 

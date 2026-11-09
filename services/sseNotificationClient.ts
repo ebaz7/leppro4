@@ -46,7 +46,7 @@ function registerWakeListeners() {
 
 const MAX_RECONNECT_DELAY = 15000;
 const KEEPALIVE_TIMEOUT_MS = 45000;
-const QUEUE_DRAIN_INTERVAL_MS = 10000;
+const QUEUE_DRAIN_INTERVAL_MS = 45000;
 
 function resetWatchdog(currentUser: User) {
     if (keepAliveWatchdog) clearTimeout(keepAliveWatchdog);
@@ -59,6 +59,9 @@ function resetWatchdog(currentUser: User) {
 function startQueueDrainHeartbeat(username: string) {
     if (queueDrainTimer) clearInterval(queueDrainTimer);
     queueDrainTimer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        // Skip redundant HTTP polling when real-time SSE stream is actively open
+        if (eventSourceInstance && eventSourceInstance.readyState === EventSource.OPEN) return;
         if (activeUserRef && activeUserRef.username === username) {
             drainOfflineQueue(username);
         }

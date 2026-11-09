@@ -74,3 +74,26 @@ test('Windows Desktop auto-logs out on app close/relaunch and supports multi-acc
   assert.ok(loginTsx.includes('ذخیره رمز عبور برای این نام کاربری'), 'Login.tsx must allow optional password saving per username');
 });
 
+test('WebView2 and Desktop CPU optimization eliminates 60fps compositor loops, enables EcoQoS, and avoids redundant background polling', () => {
+  const mainRs = fs.readFileSync(path.join(ROOT, 'src-tauri', 'src', 'main.rs'), 'utf8');
+  assert.ok(mainRs.includes('UseEcoQoSForBackgroundProcess'), 'Tauri main.rs must enable Windows EcoQoS efficiency mode for WebView2 background processes');
+  assert.ok(!mainRs.includes('--enable-gpu-rasterization'), 'Tauri main.rs must not force CPU-heavy GPU rasterization on integrated graphics');
+  assert.ok(mainRs.includes('WindowEvent::Destroyed'), 'Tauri main.rs must cleanly exit process on WindowEvent::Destroyed to prevent zombie WebView2 processes');
+
+  const electronMain = fs.readFileSync(path.join(ROOT, 'electron', 'main.cjs'), 'utf8');
+  assert.ok(electronMain.includes('UseEcoQoSForBackgroundProcess'), 'Electron main.cjs must enable UseEcoQoSForBackgroundProcess');
+  assert.ok(electronMain.includes('backgroundThrottling: true'), 'Electron main.cjs must enable backgroundThrottling');
+
+  const indexCss = fs.readFileSync(path.join(ROOT, 'index.css'), 'utf8');
+  assert.ok(indexCss.includes('animation-iteration-count: 3 !important'), 'index.css must cap decorative infinite animations to prevent perpetual 60fps DWM/WebView2 repaints');
+  assert.ok(indexCss.includes('html.window-hidden *'), 'index.css must pause animations when window is hidden/minimized');
+
+  const graphicsEngine = fs.readFileSync(path.join(ROOT, 'services', 'graphicsEngine.ts'), 'utf8');
+  assert.ok(graphicsEngine.includes('this.enableTurboMode(true)'), 'graphicsEngine.ts must enable perf-turbo mode');
+  assert.ok(graphicsEngine.includes('window-unfocused'), 'graphicsEngine.ts must track window focus/visibility to pause idle animations');
+
+  const sseClient = fs.readFileSync(path.join(ROOT, 'services', 'sseNotificationClient.ts'), 'utf8');
+  assert.ok(sseClient.includes('eventSourceInstance.readyState === EventSource.OPEN'), 'sseNotificationClient.ts must skip redundant HTTP polling when SSE stream is open');
+});
+
+

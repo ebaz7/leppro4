@@ -426,7 +426,7 @@ fn main() {
 
         std::env::set_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=msSmartScreenProtection --enable-gpu-rasterization --enable-zero-copy",
+            "--disable-features=msSmartScreenProtection,Translate,BackForwardCache,MediaRouter --enable-features=UseEcoQoSForBackgroundProcess --process-per-site",
         );
     }
 
@@ -468,10 +468,16 @@ fn main() {
                     println!("Main desktop window successfully spawned with local UI.");
                     let win_for_close = win.clone();
                     win.on_window_event(move |event| {
-                        if let tauri::WindowEvent::CloseRequested { .. } = event {
-                            let _ = win_for_close.eval(
-                                "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
-                            );
+                        match event {
+                            tauri::WindowEvent::CloseRequested { .. } => {
+                                let _ = win_for_close.eval(
+                                    "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
+                                );
+                            }
+                            tauri::WindowEvent::Destroyed => {
+                                std::process::exit(0);
+                            }
+                            _ => {}
                         }
                     });
                     let _ = win.maximize();

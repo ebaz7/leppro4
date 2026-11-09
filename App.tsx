@@ -1759,7 +1759,10 @@ function App() {
       }
     };
 
-    const timer = setInterval(checkTaskAlarms, 20000);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      checkTaskAlarms();
+    }, 60000);
     const initialTimer = setTimeout(checkTaskAlarms, 6000);
 
     return () => {
@@ -1808,18 +1811,18 @@ function App() {
   useEffect(() => { 
       if (currentUser && !isPublicBioView) { 
           loadData(false); 
-          // Ultra-efficient enterprise polling: 25s in foreground, 60s in background
-          // (Zero lag: instant sync happens immediately on window focus, visibility change, or order dispatch)
-          const isAppActive = typeof document !== 'undefined' && !document.hidden;
-          const intervalDuration = isAppActive ? 25000 : 60000;
+          // Ultra-efficient enterprise polling: 35s when visible, paused when window is hidden/minimized
+          // (SSE handles real-time background alerts, and instant sync happens immediately on window focus/visibility)
           const intervalId = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
             if (!isPublicBioView) loadData(true);
-          }, intervalDuration); 
+          }, 35000); 
           
-          // Heartbeat for Last Seen (Every 1.5 minutes)
+          // Heartbeat for Last Seen (Every 2 minutes when active)
           const heartbeatId = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
             if (!isPublicBioView) apiCall('/heartbeat', 'POST', { username: currentUser.username }).catch(console.error);
-          }, 90000);
+          }, 120000);
 
           // Immediate instant synchronization on window focus / tab visibility
           const handleVisibilitySync = () => {
@@ -1846,6 +1849,7 @@ function App() {
       let isFetchingChat = false;
       if (activeTab === 'chat') {
           const fetchChatMessages = async () => {
+              if (typeof document !== 'undefined' && document.hidden) return;
               if (isFetchingChat) return;
               isFetchingChat = true;
               try {
@@ -1869,7 +1873,7 @@ function App() {
               }
           };
           
-          fastChatInterval = setInterval(fetchChatMessages, 4500);
+          fastChatInterval = setInterval(fetchChatMessages, 8000);
       }
       
       return () => {

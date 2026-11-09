@@ -908,7 +908,10 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
 
     useEffect(() => { 
         loadMeta();
-        const interval = setInterval(loadMeta, 20000); 
+        const interval = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            loadMeta();
+        }, 30000); 
         return () => clearInterval(interval);
     }, []);
 
@@ -916,11 +919,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     useEffect(() => {
         if (!currentUser?.username) return;
         const sendChatHeartbeat = () => {
+            if (typeof document !== 'undefined' && document.hidden) return;
             const activeChatPayload = activeChannel ? { type: activeChannel.type, id: activeChannel.id } : null;
             apiCall('/heartbeat', 'POST', { username: currentUser.username, activeChat: activeChatPayload }).catch(() => {});
         };
         sendChatHeartbeat();
-        const interval = setInterval(sendChatHeartbeat, 15000);
+        const interval = setInterval(sendChatHeartbeat, 30000);
         return () => clearInterval(interval);
     }, [currentUser?.username, activeChannel?.type, activeChannel?.id]);
 

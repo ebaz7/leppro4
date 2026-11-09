@@ -835,7 +835,10 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
 
   useEffect(() => {
       fetchPendingCheques();
-      const timer = setInterval(fetchPendingCheques, 30000);
+      const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return;
+          fetchPendingCheques();
+      }, 45000);
       return () => clearInterval(timer);
   }, []);
 
@@ -865,8 +868,9 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
   useEffect(() => {
       fetchWarehouseAlert(false);
 
-      // Periodic background polling every 90 seconds to stay in sync without saturating Sayan API
+      // Periodic background polling every 90 seconds when visible to stay in sync without saturating Sayan API or CPU
       const intervalTimer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return;
           fetchWarehouseAlert(false);
       }, 90000);
 
@@ -874,6 +878,7 @@ const Dashboard: React.FC<DashboardProps> = ({ orders: rawOrders, settings, curr
       const handleWindowFocus = () => {
           if (!document.hidden) {
               fetchWarehouseAlert(false);
+              fetchPendingCheques();
           }
       };
 

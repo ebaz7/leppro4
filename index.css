@@ -184,7 +184,8 @@ html:not(.theme-light-aurora):not(.has-custom-bg):not(.has-preset-bg-cosmic-dark
   opacity: 0;
   display: none;
   transform: translate3d(0, 0, 0);
-  animation: blob-float 28s infinite alternate cubic-bezier(0.4, 0, 0.2, 1);
+  animation: none !important;
+  will-change: auto !important;
 }
 
 .theme-light-aurora .blob,
@@ -192,7 +193,8 @@ html:not(.theme-light-aurora):not(.has-custom-bg):not(.has-preset-bg-cosmic-dark
 .has-custom-bg .blob {
   display: block;
   opacity: 0.18 !important;
-  filter: blur(60px) !important;
+  filter: blur(48px) !important;
+  animation: none !important;
 }
 
 .blob-1 {
@@ -2850,6 +2852,46 @@ html.low-spec-mode tr {
   -webkit-transform: translateZ(0);
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+}
+
+/* ==========================================================================
+   🛡️ WEBVIEW2 & DESKTOP CPU EFFICIENCY PIPELINE (ZERO IDLE CPU DRAIN)
+   Prevents perpetual 60Hz Blink Compositor + DWM.exe repaints from infinite
+   decorative animations and multi-pass backdrop-filter shaders.
+   ========================================================================== */
+.animate-pulse,
+.animate-ping,
+.animate-bounce,
+.animate-bg-pan,
+.animate-pulse-subtle {
+  animation-iteration-count: 3 !important;
+}
+
+/* Pause all CSS animations when window is minimized, hidden, or unfocused */
+html.window-hidden *,
+html.window-hidden *::before,
+html.window-hidden *::after,
+html.window-unfocused .animate-pulse,
+html.window-unfocused .animate-ping,
+html.window-unfocused .animate-bounce,
+html.window-unfocused .animate-spin {
+  animation-play-state: paused !important;
+}
+
+/* Performance Turbo Mode: Eliminates expensive per-frame GPU backdrop resampling
+   while keeping crisp, high-legibility theme colors, borders, and shadows intact */
+html.perf-turbo .glass-panel,
+html.perf-turbo .glass-header,
+html.perf-turbo .apple-glass,
+html.perf-turbo header,
+html.perf-turbo aside,
+html.perf-turbo main,
+html.perf-turbo input,
+html.perf-turbo select,
+html.perf-turbo textarea,
+html.perf-turbo [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* Hide all AI buttons and widgets when user or admin disables AI features */
