@@ -81,10 +81,9 @@ test('SSE client resolves server URL via getEffectiveApiUrl and Layout test butt
   assert.ok(layoutCode.includes('این یک اعلان آزمایشی است'), 'Layout.tsx must send a test notification when clicking تست ارسال');
 });
 
-test('Android app prevents background sleep via DlkamBackgroundService foreground service, BootReceiver, and battery optimization exemption', () => {
+test('Android app checks notifications at battery-friendly periodic intervals without any sticky status-bar notification', () => {
   const manifest = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
   assert.ok(manifest.includes('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), 'AndroidManifest.xml must declare REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
-  assert.ok(manifest.includes('android.permission.FOREGROUND_SERVICE_DATA_SYNC'), 'AndroidManifest.xml must declare FOREGROUND_SERVICE_DATA_SYNC');
   assert.ok(manifest.includes('com.payment.system.DlkamBackgroundService'), 'AndroidManifest.xml must register DlkamBackgroundService');
   assert.ok(manifest.includes('com.payment.system.BootReceiver'), 'AndroidManifest.xml must register BootReceiver');
 
@@ -92,8 +91,14 @@ test('Android app prevents background sleep via DlkamBackgroundService foregroun
   assert.equal(fs.existsSync(bgServicePath), true, 'DlkamBackgroundService.java must exist');
   const bgService = fs.readFileSync(bgServicePath, 'utf8');
   assert.ok(bgService.includes('START_STICKY'), 'DlkamBackgroundService must return START_STICKY');
-  assert.ok(bgService.includes('SyncWorker.pollAndDispatchNotifications'), 'DlkamBackgroundService must continuously poll and dispatch notifications in background');
-  assert.ok(bgService.includes('setAndAllowWhileIdle'), 'DlkamBackgroundService must schedule Doze-safe AlarmManager pulse');
+  assert.ok(bgService.includes('SyncWorker.pollAndDispatchNotifications'), 'DlkamBackgroundService must poll and dispatch notifications at periodic intervals');
+  assert.ok(bgService.includes('setAndAllowWhileIdle'), 'DlkamBackgroundService must schedule periodic AlarmManager check');
+  assert.ok(bgService.includes('clearLegacyStickyNotification'), 'DlkamBackgroundService must remove any legacy sticky notification and channel');
+  assert.equal(bgService.includes('دریافت آنی اعلان‌ها در پس‌زمینه فعال است'), false, 'DlkamBackgroundService must NEVER show a permanent sticky notification in the status bar');
+  assert.equal(bgService.includes('startForeground('), false, 'DlkamBackgroundService must not call startForeground()');
+
+  const bootReceiver = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'BootReceiver.java'), 'utf8');
+  assert.ok(bootReceiver.includes('goAsync()'), 'BootReceiver must use goAsync() for lightweight periodic background checks');
 
   const mainActivity = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'MainActivity.java'), 'utf8');
   assert.ok(mainActivity.includes('DlkamBackgroundService.startServiceSafely'), 'MainActivity.java must start DlkamBackgroundService');

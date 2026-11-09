@@ -74,8 +74,7 @@
             android:name="com.payment.system.DlkamBackgroundService"
             android:enabled="true"
             android:exported="false"
-            android:stopWithTask="false"
-            android:foregroundServiceType="dataSync" />
+            android:stopWithTask="false" />
 
         <receiver
             android:name="com.payment.system.BootReceiver"

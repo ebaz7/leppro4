@@ -124,10 +124,14 @@ public class MainActivity extends BridgeActivity {
         if (nativePollExecutor != null && !nativePollExecutor.isShutdown()) {
             nativePollExecutor.shutdownNow();
         }
-        // Ensure the persistent Foreground Service stays running even after MainActivity closes
+        // Schedule silent periodic background check after MainActivity closes (no sticky notification)
         try {
+            DlkamBackgroundService.clearLegacyStickyNotification(getApplicationContext());
             if (DlkamBackgroundService.hasLoggedInUser(getApplicationContext())) {
-                DlkamBackgroundService.startServiceSafely(getApplicationContext());
+                DlkamBackgroundService.schedulePeriodicBackgroundCheck(
+                        getApplicationContext(),
+                        DlkamBackgroundService.IDLE_ALARM_INTERVAL_MS
+                );
             }
         } catch (Exception ignored) {}
         super.onDestroy();
@@ -173,6 +177,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     public static void ensureNotificationChannels(Context context) {
+        DlkamBackgroundService.clearLegacyStickyNotification(context);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -661,13 +666,14 @@ public class MainActivity extends BridgeActivity {
                 return;
             }
             nativePollExecutor = Executors.newSingleThreadScheduledExecutor();
+            // Battery-friendly 45-second periodic check while activity is alive
             nativePollExecutor.scheduleWithFixedDelay(() -> {
                 try {
                     SyncWorker.pollAndDispatchNotifications(getApplicationContext());
                 } catch (Exception e) {
-                    Log.w(TAG, "Native fast poll iteration error", e);
+                    Log.w(TAG, "Native periodic poll iteration error", e);
                 }
-            }, 8, 12, TimeUnit.SECONDS);
+            }, 15, 45, TimeUnit.SECONDS);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start native notification poller", e);
         }

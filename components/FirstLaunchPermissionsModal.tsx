@@ -14,9 +14,7 @@ import {
 import { isCapacitorAndroid } from '../services/updateService';
 import {
   requestNotificationPermission,
-  setNotificationPreference,
-  setupNativePushNotifications,
-  sendNotification
+  setNotificationPreference
 } from '../services/notificationService';
 
 const PERMISSION_ONBOARDED_KEY = 'dlkam_first_install_permissions_v2';
@@ -229,16 +227,7 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
 
       window.dispatchEvent(new CustomEvent('app:permissions-granted', { detail: { granted: true } }));
 
-      // 6. Send immediate confirmation notification so user sees it in Android status bar / Windows Notification Center
-      try {
-        await sendNotification(
-          'سامانه هوشمند دلکام',
-          `دسترسی اعلان‌ها و فعالیت پس‌زمینه در ${platformLabel} با موفقیت فعال شد ✓`,
-          { id: `perm-activated-${Date.now()}` }
-        );
-      } catch (_) {}
-
-      toast.success('تمامی دسترسی‌های اعلان و فعالیت پس‌زمینه فعال شدند ✓', { duration: 4500 });
+      toast.success('تمامی دسترسی‌های اعلان و فعالیت پس‌زمینه فعال شدند ✓', { duration: 4000 });
 
       setTimeout(() => {
         setIsOpen(false);
