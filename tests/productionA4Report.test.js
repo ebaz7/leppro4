@@ -120,7 +120,8 @@ test('Production Report A4: Full single-page A4 document builder embeds BOTH cha
     const html = buildProductionExecutiveA4PrintHtml(dataset);
     assert.ok(html.includes('<!DOCTYPE html>'), 'Must start with DOCTYPE');
     assert.ok(html.includes('@page'), 'Must include @page CSS');
-    assert.ok(html.includes('A4 portrait'), 'Must be specified as A4 portrait');
+    assert.ok(!html.includes('size: A4 portrait') && !html.includes('size: A4 landscape'), 'Must NOT lock @page size orientation so Portrait/Landscape toggle is enabled in Print dialog');
+    assert.ok(html.includes('#000000'), 'Must use high-contrast pure black (#000000) borders and text for sharp B&W printing');
     assert.ok(html.includes('مدیریت تولید و برنامه‌ریزی فنی'), 'Must include production manager signature box');
     assert.ok(html.includes('مدیریت عامل کارخانه'), 'Must include CEO signature box');
     assert.ok(html.includes('dty یا پلی استر'), 'Must include line breakdown table');

@@ -69,7 +69,7 @@ export function generateProductionChartSvg(
 ): string {
     if (!points || points.length === 0) {
         return `
-            <div style="width:${width}px; height:${height}px; display:flex; align-items:center; justify-content:center; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; font-size:9pt; color:#64748b;">
+            <div style="width:${width}px; height:${height}px; display:flex; align-items:center; justify-content:center; background:#f8fafc; border:1.5px dashed #000000; border-radius:8px; font-size:9pt; font-weight:bold; color:#000000;">
                 داده‌ای برای ترسیم نمودار در این بازه زمانی موجود نیست.
             </div>
         `;
@@ -88,46 +88,46 @@ export function generateProductionChartSvg(
         const achPct = ideal > 0 ? (actual / ideal) * 100 : 0;
 
         return `
-            <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
+            <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1.2px solid #000000; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
                 <!-- Background & Grid -->
-                <rect width="${width}" height="${height}" fill="#fafbfc"/>
-                <line x1="40" y1="${height - 28}" x2="${width - 40}" y2="${height - 28}" stroke="#cbd5e1" stroke-width="1.5"/>
+                <rect width="${width}" height="${height}" fill="#ffffff"/>
+                <line x1="40" y1="${height - 28}" x2="${width - 40}" y2="${height - 28}" stroke="#000000" stroke-width="1.5"/>
                 
                 <!-- Title / Date Header -->
-                <text x="${width - 14}" y="18" font-family="Tahoma, sans-serif" font-size="9.5" font-weight="bold" fill="#1e293b" text-anchor="end">
+                <text x="${width - 14}" y="18" font-family="Tahoma, sans-serif" font-size="9.5" font-weight="bold" fill="#000000" text-anchor="end">
                     ${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) 
                         ? `نمودار ۱: مقایسه عملکرد تولید کل بازه با ظرفیت اسمی پلن ماشین‌آلات (${pt.date || pt.label})` 
                         : `نمودار ۱: مقایسه عملکرد تولید روزانه با ظرفیت اسمی پلن ماشین‌آلات (تاریخ: ${pt.date || pt.label})`}
                 </text>
 
                 <!-- Legend -->
-                <circle cx="165" cy="15" r="4.5" fill="#2563eb" />
-                <text x="155" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e40af" text-anchor="end">تولید واقعی</text>
-                <circle cx="85" cy="15" r="4.5" fill="#d97706" />
-                <text x="75" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#b45309" text-anchor="end">سهمیه ایده‌آل پلن</text>
+                <circle cx="165" cy="15" r="4.5" fill="#1d4ed8" />
+                <text x="155" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="end">تولید واقعی</text>
+                <circle cx="85" cy="15" r="4.5" fill="#b45309" />
+                <text x="75" y="18" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="end">سهمیه ایده‌آل پلن</text>
 
                 <!-- Bar 1: Actual Production -->
-                <rect x="${width / 2 - 85}" y="${height - 28 - actualHeight}" width="${barWidth}" height="${actualHeight}" rx="4" fill="url(#barActualGrad)" stroke="#1d4ed8" stroke-width="1.2"/>
-                <text x="${width / 2 - 85 + barWidth / 2}" y="${height - 32 - actualHeight}" font-family="Tahoma, monospace" font-size="9" font-weight="bold" fill="#1e3a8a" text-anchor="middle">
+                <rect x="${width / 2 - 85}" y="${height - 28 - actualHeight}" width="${barWidth}" height="${actualHeight}" rx="4" fill="url(#barActualGrad)" stroke="#000000" stroke-width="1.5"/>
+                <text x="${width / 2 - 85 + barWidth / 2}" y="${height - 32 - actualHeight}" font-family="Tahoma, monospace" font-size="9" font-weight="bold" fill="#000000" text-anchor="middle">
                     ${Math.round(actual).toLocaleString('fa-IR')} kg
                 </text>
-                <text x="${width / 2 - 85 + barWidth / 2}" y="${height - 13}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="middle">
+                <text x="${width / 2 - 85 + barWidth / 2}" y="${height - 13}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="middle">
                     تولید واقعی
                 </text>
 
                 <!-- Bar 2: Ideal Plan -->
-                <rect x="${width / 2 + 25}" y="${height - 28 - idealHeight}" width="${barWidth}" height="${idealHeight}" rx="4" fill="url(#barIdealGrad)" stroke="#b45309" stroke-width="1.2" stroke-dasharray="4 2"/>
-                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 32 - idealHeight}" font-family="Tahoma, monospace" font-size="9" font-weight="bold" fill="#b45309" text-anchor="middle">
+                <rect x="${width / 2 + 25}" y="${height - 28 - idealHeight}" width="${barWidth}" height="${idealHeight}" rx="4" fill="url(#barIdealGrad)" stroke="#000000" stroke-width="1.5" stroke-dasharray="4 2"/>
+                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 32 - idealHeight}" font-family="Tahoma, monospace" font-size="9" font-weight="bold" fill="#000000" text-anchor="middle">
                     ${Math.round(ideal).toLocaleString('fa-IR')} kg
                 </text>
-                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 13}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="middle">
+                <text x="${width / 2 + 25 + barWidth / 2}" y="${height - 13}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="middle">
                     سهمیه ایده‌آل پلن
                 </text>
 
                 <!-- Achievement Badge -->
-                <rect x="45" y="${height / 2 - 18}" width="135" height="42" rx="6" fill="${achPct >= 100 ? '#ecfdf5' : '#fffbeb'}" stroke="${achPct >= 100 ? '#10b981' : '#f59e0b'}" stroke-width="1"/>
-                <text x="112" y="${height / 2 - 3}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#475569" text-anchor="middle">${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) ? 'درصد تحقق کل بازه:' : 'درصد تحقق روزانه:'}</text>
-                <text x="112" y="${height / 2 + 15}" font-family="Tahoma, sans-serif" font-size="11.5" font-weight="900" fill="${achPct >= 100 ? '#047857' : '#b45309'}" text-anchor="middle">${achPct.toFixed(1)}%</text>
+                <rect x="45" y="${height / 2 - 18}" width="135" height="42" rx="6" fill="${achPct >= 100 ? '#ecfdf5' : '#fffbeb'}" stroke="#000000" stroke-width="1.2"/>
+                <text x="112" y="${height / 2 - 3}" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="middle">${pt.label && (pt.label.includes('دوره') || pt.label.includes('بازه')) ? 'درصد تحقق کل بازه:' : 'درصد تحقق روزانه:'}</text>
+                <text x="112" y="${height / 2 + 15}" font-family="Tahoma, sans-serif" font-size="11.5" font-weight="900" fill="#000000" text-anchor="middle">${achPct.toFixed(1)}%</text>
 
                 <defs>
                     <linearGradient id="barActualGrad" x1="0" y1="0" x2="0" y2="1">
@@ -208,8 +208,8 @@ export function generateProductionChartSvg(
         const gridVal = (maxVal / steps) * s;
         const gridY = getY(gridVal);
         gridLinesHtml += `
-            <line x1="${paddingLeft}" y1="${gridY.toFixed(1)}" x2="${width - paddingRight}" y2="${gridY.toFixed(1)}" stroke="#f1f5f9" stroke-width="1"/>
-            <text x="${paddingLeft - 6}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#64748b" text-anchor="end">
+            <line x1="${paddingLeft}" y1="${gridY.toFixed(1)}" x2="${width - paddingRight}" y2="${gridY.toFixed(1)}" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="${paddingLeft - 6}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="7.5" font-weight="bold" fill="#000000" text-anchor="end">
                 ${Math.round(gridVal).toLocaleString('fa-IR')}
             </text>
         `;
@@ -231,15 +231,15 @@ export function generateProductionChartSvg(
         const p = points[idx];
         const labelText = p.label || p.date;
         xLabelsHtml += `
-            <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 3}" stroke="#94a3b8" stroke-width="1"/>
-            <text x="${x.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#475569" text-anchor="middle">
+            <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 3}" stroke="#000000" stroke-width="1.2"/>
+            <text x="${x.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" font-weight="bold" fill="#000000" text-anchor="middle">
                 ${labelText}
             </text>
         `;
     });
 
     return `
-        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1.2px solid #000000; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
             <defs>
                 <linearGradient id="chartActualAreaGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stop-color="#2563eb" stop-opacity="0.28" />
@@ -252,10 +252,10 @@ export function generateProductionChartSvg(
             </defs>
 
             <!-- Background -->
-            <rect width="${width}" height="${height}" fill="#fafbfc"/>
+            <rect width="${width}" height="${height}" fill="#ffffff"/>
 
             <!-- Chart 1 Title (Right-aligned) -->
-            <text x="${width - 12}" y="16" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="end">
+            <text x="${width - 12}" y="16" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="end">
                 📈 نمودار ۱: منحنی خطی سینوسی تجمعی S-Curve (تولید واقعی در برابر ایده‌آل تجمعی)
             </text>
 
@@ -266,25 +266,25 @@ export function generateProductionChartSvg(
             <path d="${idealAreaPath}" fill="url(#chartIdealAreaGrad)"/>
             <path d="${actualAreaPath}" fill="url(#chartActualAreaGrad)"/>
 
-            <!-- Ideal Quota Line (Dashed Purple) -->
-            <path d="${idealPath}" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="5 3"/>
+            <!-- Ideal Quota Line (Dashed Purple/Dark) -->
+            <path d="${idealPath}" fill="none" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="5 3"/>
 
-            <!-- Actual Production Line (Solid Blue) -->
-            <path d="${actualPath}" fill="none" stroke="#2563eb" stroke-width="2.5"/>
+            <!-- Actual Production Line (Solid Blue/Dark) -->
+            <path d="${actualPath}" fill="none" stroke="#1d4ed8" stroke-width="2.8"/>
 
             <!-- X-Axis Baseline & Labels -->
-            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#cbd5e1" stroke-width="1.2"/>
+            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#000000" stroke-width="1.5"/>
             ${xLabelsHtml}
 
             <!-- Legend at Top Left -->
-            <rect x="${paddingLeft}" y="4" width="235" height="17" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#e2e8f0" stroke-width="1"/>
-            <line x1="${paddingLeft + 8}" y1="12.5" x2="${paddingLeft + 23}" y2="12.5" stroke="#2563eb" stroke-width="2.5"/>
-            <circle cx="${paddingLeft + 15.5}" cy="12.5" r="2.8" fill="#2563eb"/>
-            <text x="${paddingLeft + 28}" y="15.5" font-family="Tahoma, sans-serif" font-size="8" font-weight="bold" fill="#1e40af">
+            <rect x="${paddingLeft}" y="4" width="235" height="17" rx="4" fill="#ffffff" fill-opacity="0.96" stroke="#000000" stroke-width="1"/>
+            <line x1="${paddingLeft + 8}" y1="12.5" x2="${paddingLeft + 23}" y2="12.5" stroke="#1d4ed8" stroke-width="2.5"/>
+            <circle cx="${paddingLeft + 15.5}" cy="12.5" r="2.8" fill="#1d4ed8"/>
+            <text x="${paddingLeft + 28}" y="15.5" font-family="Tahoma, sans-serif" font-size="8" font-weight="bold" fill="#000000">
                 ${hasCum ? 'تولید واقعی تجمعی' : 'تولید واقعی'}
             </text>
-            <line x1="${paddingLeft + 125}" y1="12.5" x2="${paddingLeft + 140}" y2="12.5" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="3 2"/>
-            <text x="${paddingLeft + 145}" y="15.5" font-family="Tahoma, sans-serif" font-size="8" font-weight="bold" fill="#6d28d9">
+            <line x1="${paddingLeft + 125}" y1="12.5" x2="${paddingLeft + 140}" y2="12.5" stroke="#6d28d9" stroke-width="2.2" stroke-dasharray="3 2"/>
+            <text x="${paddingLeft + 145}" y="15.5" font-family="Tahoma, sans-serif" font-size="8" font-weight="bold" fill="#000000">
                 ${hasCum ? 'سهمیه پلن تجمعی' : 'سهمیه پلن'}
             </text>
         </svg>
@@ -333,8 +333,8 @@ export function generateProductionStepChartSvg(
         const gridVal = (maxVal / steps) * s;
         const gridY = getY(gridVal);
         gridLinesHtml += `
-            <line x1="${paddingLeft}" y1="${gridY.toFixed(1)}" x2="${width - paddingRight}" y2="${gridY.toFixed(1)}" stroke="#f1f5f9" stroke-width="1"/>
-            <text x="${paddingLeft - 6}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#64748b" text-anchor="end">
+            <line x1="${paddingLeft}" y1="${gridY.toFixed(1)}" x2="${width - paddingRight}" y2="${gridY.toFixed(1)}" stroke="#cbd5e1" stroke-width="1"/>
+            <text x="${paddingLeft - 6}" y="${(gridY + 3).toFixed(1)}" font-family="Tahoma, sans-serif" font-size="7.5" font-weight="bold" fill="#000000" text-anchor="end">
                 ${Math.round(gridVal).toLocaleString('fa-IR')}
             </text>
         `;
@@ -367,15 +367,15 @@ export function generateProductionStepChartSvg(
             const hIdl = Math.max(2, bottomY - yIdl);
 
             plotElementsHtml += `
-                <rect x="${(centerX - singleBarW - 1).toFixed(1)}" y="${yAct.toFixed(1)}" width="${singleBarW.toFixed(1)}" height="${hAct.toFixed(1)}" rx="2" fill="#0284c7"/>
-                <rect x="${(centerX + 1).toFixed(1)}" y="${yIdl.toFixed(1)}" width="${singleBarW.toFixed(1)}" height="${hIdl.toFixed(1)}" rx="2" fill="#d97706"/>
+                <rect x="${(centerX - singleBarW - 1).toFixed(1)}" y="${yAct.toFixed(1)}" width="${singleBarW.toFixed(1)}" height="${hAct.toFixed(1)}" rx="2" fill="#0284c7" stroke="#000000" stroke-width="0.6"/>
+                <rect x="${(centerX + 1).toFixed(1)}" y="${yIdl.toFixed(1)}" width="${singleBarW.toFixed(1)}" height="${hIdl.toFixed(1)}" rx="2" fill="#d97706" stroke="#000000" stroke-width="0.6"/>
             `;
 
             if (sampledIndices.has(idx)) {
                 const labelText = p.label || p.date;
                 xLabelsHtml += `
-                    <line x1="${centerX.toFixed(1)}" y1="${bottomY}" x2="${centerX.toFixed(1)}" y2="${bottomY + 3}" stroke="#94a3b8" stroke-width="1"/>
-                    <text x="${centerX.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#475569" text-anchor="middle">
+                    <line x1="${centerX.toFixed(1)}" y1="${bottomY}" x2="${centerX.toFixed(1)}" y2="${bottomY + 3}" stroke="#000000" stroke-width="1.2"/>
+                    <text x="${centerX.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" font-weight="bold" fill="#000000" text-anchor="middle">
                         ${labelText}
                     </text>
                 `;
@@ -409,14 +409,14 @@ export function generateProductionStepChartSvg(
             if (n <= 65 || idx % Math.ceil(n / 45) === 0 || idx === n - 1) {
                 dotsHtml += `
                     <circle cx="${x.toFixed(1)}" cy="${yIdl.toFixed(1)}" r="${(dotRadius * 0.85).toFixed(1)}" fill="#d97706"/>
-                    <circle cx="${x.toFixed(1)}" cy="${yAct.toFixed(1)}" r="${dotRadius.toFixed(1)}" fill="#0284c7" stroke="#ffffff" stroke-width="0.7"/>
+                    <circle cx="${x.toFixed(1)}" cy="${yAct.toFixed(1)}" r="${dotRadius.toFixed(1)}" fill="#0284c7" stroke="#000000" stroke-width="0.7"/>
                 `;
             }
         });
 
         plotElementsHtml = `
-            <path d="${idealPath}" fill="none" stroke="#d97706" stroke-width="2" stroke-dasharray="4 3"/>
-            <path d="${actualPath}" fill="none" stroke="#0284c7" stroke-width="2.3"/>
+            <path d="${idealPath}" fill="none" stroke="#b45309" stroke-width="2.2" stroke-dasharray="4 3"/>
+            <path d="${actualPath}" fill="none" stroke="#0369a1" stroke-width="2.6"/>
             ${dotsHtml}
         `;
 
@@ -434,8 +434,8 @@ export function generateProductionStepChartSvg(
             const p = points[idx];
             const labelText = p.label || p.date;
             xLabelsHtml += `
-                <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 3}" stroke="#94a3b8" stroke-width="1"/>
-                <text x="${x.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" fill="#475569" text-anchor="middle">
+                <line x1="${x.toFixed(1)}" y1="${bottomY}" x2="${x.toFixed(1)}" y2="${bottomY + 3}" stroke="#000000" stroke-width="1.2"/>
+                <text x="${x.toFixed(1)}" y="${bottomY + 13}" font-family="Tahoma, sans-serif" font-size="7.5" font-weight="bold" fill="#000000" text-anchor="middle">
                     ${labelText}
                 </text>
             `;
@@ -443,12 +443,12 @@ export function generateProductionStepChartSvg(
     }
 
     return `
-        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" style="background:#ffffff; border:1.2px solid #000000; border-radius:6px; overflow:hidden; display:block;" xmlns="http://www.w3.org/2000/svg">
             <!-- Background -->
-            <rect width="${width}" height="${height}" fill="#fafbfc"/>
+            <rect width="${width}" height="${height}" fill="#ffffff"/>
 
             <!-- Chart 2 Title (Right-aligned) -->
-            <text x="${width - 12}" y="16" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#1e293b" text-anchor="end">
+            <text x="${width - 12}" y="16" font-family="Tahoma, sans-serif" font-size="8.5" font-weight="bold" fill="#000000" text-anchor="end">
                 📊 نمودار ۲: ${chartTitle}
             </text>
 
@@ -459,17 +459,17 @@ export function generateProductionStepChartSvg(
             ${plotElementsHtml}
 
             <!-- X-Axis Baseline & Labels -->
-            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#cbd5e1" stroke-width="1.2"/>
+            <line x1="${paddingLeft}" y1="${bottomY}" x2="${width - paddingRight}" y2="${bottomY}" stroke="#000000" stroke-width="1.5"/>
             ${xLabelsHtml}
 
             <!-- Legend at Top Left -->
-            <rect x="${paddingLeft}" y="4" width="275" height="17" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#e2e8f0" stroke-width="1"/>
+            <rect x="${paddingLeft}" y="4" width="275" height="17" rx="4" fill="#ffffff" fill-opacity="0.96" stroke="#000000" stroke-width="1"/>
             <circle cx="${paddingLeft + 12}" cy="12.5" r="3.5" fill="#0284c7"/>
-            <text x="${paddingLeft + 20}" y="15.5" font-family="Tahoma, sans-serif" font-size="7.8" font-weight="bold" fill="#0369a1">
+            <text x="${paddingLeft + 20}" y="15.5" font-family="Tahoma, sans-serif" font-size="7.8" font-weight="bold" fill="#000000">
                 ${actualLegend.length > 22 ? actualLegend.slice(0, 22) : actualLegend}
             </text>
             <circle cx="${paddingLeft + 135}" cy="12.5" r="3.5" fill="#d97706"/>
-            <text x="${paddingLeft + 143}" y="15.5" font-family="Tahoma, sans-serif" font-size="7.8" font-weight="bold" fill="#b45309">
+            <text x="${paddingLeft + 143}" y="15.5" font-family="Tahoma, sans-serif" font-size="7.8" font-weight="bold" fill="#000000">
                 ${idealLegend.length > 26 ? idealLegend.slice(0, 26) : idealLegend}
             </text>
         </svg>
@@ -510,25 +510,23 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
     // Status color helper
     const achStatusColor = kpis.achievementPct >= 100 ? '#15803d' : (kpis.achievementPct >= 80 ? '#b45309' : '#b91c1c');
     const achStatusBg = kpis.achievementPct >= 100 ? '#f0fdf4' : (kpis.achievementPct >= 80 ? '#fffbeb' : '#fef2f2');
-    const achStatusBorder = kpis.achievementPct >= 100 ? '#86efac' : (kpis.achievementPct >= 80 ? '#fde68a' : '#fca5a5');
     const achStatusLabel = kpis.achievementPct >= 100 ? 'عالی (فراتر از برنامه)' : (kpis.achievementPct >= 80 ? 'مطلوب (در آستانه هدف)' : 'نیازمند پیگیری (کسری تولید)');
 
-    // Compact group rows (Top 6 lines if many, to guarantee single A4 page fit)
+    // Compact group rows (Top 7 lines if many, to guarantee single A4 page fit)
     const groupsToDisplay = groupsBreakdown.slice(0, 7);
     const groupsTableHtml = groupsToDisplay.map((grp, idx) => {
-        const rowAchColor = grp.achPct >= 100 ? '#15803d' : (grp.achPct >= 80 ? '#b45309' : '#b91c1c');
         const diffText = grp.varianceKg >= 0 ? `+${fKg(grp.varianceKg)}` : fKg(grp.varianceKg);
 
         return `
-            <tr style="background:${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size:7.8pt;">
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center;">${idx + 1}</td>
-                <td style="padding:4px 8px; border:1px solid #cbd5e1; font-weight:bold; text-align:right;">${grp.name}</td>
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center;">${grp.machinesCount} دستگاه</td>
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center; font-family:monospace;">${fKg(grp.dailyIdealKg)}</td>
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center; font-family:monospace; color:#475569;">${fKg(grp.periodIdealKg)}</td>
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center; font-family:monospace; font-weight:bold; color:#1e40af; background:#eff6ff;">${fKg(grp.actualKg)}</td>
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center; font-weight:bold; color:${rowAchColor}; font-family:monospace;">${grp.achPct.toFixed(1)}%</td>
-                <td style="padding:4px 6px; border:1px solid #cbd5e1; text-align:center; font-family:monospace; color:${grp.varianceKg >= 0 ? '#15803d' : '#b91c1c'}; font-weight:bold;">${diffText}</td>
+            <tr style="background:${idx % 2 === 0 ? '#ffffff' : '#f1f5f9'}; font-size:7.8pt; color:#000000; font-weight:bold;">
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center;">${idx + 1}</td>
+                <td style="padding:4px 8px; border:1.2px solid #000000; font-weight:900; text-align:right; color:#000000;">${grp.name}</td>
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center;">${grp.machinesCount} دستگاه</td>
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center; font-family:monospace; font-weight:900;">${fKg(grp.dailyIdealKg)}</td>
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center; font-family:monospace; color:#000000; font-weight:900;">${fKg(grp.periodIdealKg)}</td>
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center; font-family:monospace; font-weight:900; color:#000000; background:#e2e8f0;">${fKg(grp.actualKg)}</td>
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center; font-weight:900; color:#000000; font-family:monospace;">${grp.achPct.toFixed(1)}%</td>
+                <td style="padding:4px 6px; border:1.2px solid #000000; text-align:center; font-family:monospace; color:#000000; font-weight:900;">${diffText}</td>
             </tr>
         `;
     }).join('');
@@ -541,8 +539,7 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
     <title>${title} (${dateFrom} تا ${dateTo})</title>
     <style>
         @page {
-            size: A4 portrait;
-            margin: 8mm 9mm 8mm 9mm;
+            margin: 7mm 8mm;
         }
         * {
             box-sizing: border-box;
@@ -553,20 +550,18 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             font-family: 'Vazirmatn', 'Vazir', 'Tahoma', sans-serif;
             margin: 0;
             padding: 0;
-            color: #0f172a;
+            color: #000000;
             direction: rtl;
             background: #ffffff;
             font-size: 8.5pt;
             line-height: 1.35;
             width: 100%;
-            max-width: 794px;
-            margin: 0 auto;
         }
         .header-container {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            border-bottom: 2px solid #1e3a8a;
+            border-bottom: 2.5px solid #000000;
             padding-bottom: 6px;
             margin-bottom: 8px;
         }
@@ -577,20 +572,22 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         .main-title {
             font-size: 11.5pt;
             font-weight: 900;
-            color: #1e3a8a;
+            color: #000000;
             margin: 0 0 2px 0;
         }
         .sub-title {
-            font-size: 7.5pt;
-            color: #64748b;
+            font-size: 7.8pt;
+            font-weight: bold;
+            color: #000000;
             margin: 0;
         }
         .meta-box {
             text-align: left;
             font-size: 7.5pt;
-            color: #334155;
+            font-weight: bold;
+            color: #000000;
             background: #f8fafc;
-            border: 1px solid #e2e8f0;
+            border: 1.5px solid #000000;
             padding: 4px 8px;
             border-radius: 6px;
             line-height: 1.4;
@@ -601,6 +598,7 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             gap: 6px;
             margin-bottom: 8px;
             background: #f1f5f9;
+            border: 1.2px solid #000000;
             padding: 4px 8px;
             border-radius: 6px;
             font-size: 8pt;
@@ -608,13 +606,15 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         }
         .badge {
             background: #ffffff;
-            border: 1px solid #cbd5e1;
+            border: 1.2px solid #000000;
             padding: 2px 7px;
             border-radius: 4px;
-            color: #1e293b;
+            color: #000000;
+            font-weight: bold;
         }
         .badge strong {
-            color: #1d4ed8;
+            color: #000000;
+            font-weight: 900;
         }
 
         /* KPI Cards Grid */
@@ -625,16 +625,16 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             margin-bottom: 8px;
         }
         .kpi-card {
-            border: 1px solid #e2e8f0;
+            border: 1.5px solid #000000;
             border-radius: 6px;
             padding: 5px 6px;
             background: #ffffff;
             text-align: center;
         }
         .kpi-label {
-            font-size: 6.8pt;
-            color: #64748b;
-            font-weight: bold;
+            font-size: 7pt;
+            color: #000000;
+            font-weight: 900;
             margin-bottom: 2px;
             white-space: nowrap;
         }
@@ -642,13 +642,13 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             font-size: 9.5pt;
             font-weight: 900;
             font-family: monospace, Tahoma;
-            color: #0f172a;
+            color: #000000;
         }
 
         /* Chart Container */
         .chart-box {
             margin-bottom: 6px;
-            border: 1px solid #cbd5e1;
+            border: 1.5px solid #000000;
             border-radius: 6px;
             padding: 4px;
             background: #ffffff;
@@ -659,26 +659,29 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
 
         /* Executive Analysis Box */
         .summary-box {
-            border-right: 3px solid #2563eb;
+            border-right: 3.5px solid #000000;
             background: #f8fafc;
-            border-top: 1px solid #e2e8f0;
-            border-bottom: 1px solid #e2e8f0;
-            border-left: 1px solid #e2e8f0;
+            border-top: 1.2px solid #000000;
+            border-bottom: 1.2px solid #000000;
+            border-left: 1.2px solid #000000;
             border-radius: 4px;
             padding: 5px 9px;
             margin-bottom: 6px;
-            font-size: 7.6pt;
+            font-size: 7.8pt;
+            font-weight: bold;
+            color: #000000;
             line-height: 1.4;
         }
         .summary-box strong {
-            color: #1e3a8a;
+            color: #000000;
+            font-weight: 900;
         }
 
         /* Table */
         .table-title {
-            font-size: 8.2pt;
-            font-weight: bold;
-            color: #1e293b;
+            font-size: 8.4pt;
+            font-weight: 900;
+            color: #000000;
             margin: 0 0 3px 0;
             display: flex;
             align-items: center;
@@ -688,19 +691,22 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 6px;
+            border: 2px solid #000000;
         }
         th {
-            background: #1e293b;
-            color: #ffffff;
-            font-size: 7.4pt;
-            font-weight: bold;
-            padding: 3.5px 6px;
-            border: 1px solid #334155;
+            background: #e2e8f0 !important;
+            color: #000000 !important;
+            font-size: 7.6pt;
+            font-weight: 900;
+            padding: 4px 6px;
+            border: 1.5px solid #000000 !important;
             text-align: center;
         }
         td {
-            border: 1px solid #cbd5e1;
+            border: 1.2px solid #000000 !important;
             padding: 3px 6px;
+            color: #000000;
+            font-weight: bold;
         }
 
         /* Signatures Block */
@@ -709,21 +715,22 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             grid-template-columns: repeat(3, 1fr);
             gap: 10px;
             margin-top: 6px;
-            border-top: 1px dashed #cbd5e1;
+            border-top: 1.5px dashed #000000;
             padding-top: 6px;
         }
         .sig-box {
             text-align: center;
-            border: 1px solid #e2e8f0;
+            border: 1.5px solid #000000;
             border-radius: 6px;
             padding: 5px 4px 16px 4px;
             background: #ffffff;
-            font-size: 7.3pt;
-            color: #475569;
+            font-size: 7.5pt;
+            font-weight: bold;
+            color: #000000;
         }
         .sig-title {
-            font-weight: bold;
-            color: #1e293b;
+            font-weight: 900;
+            color: #000000;
             margin-bottom: 2px;
         }
 
@@ -731,10 +738,11 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 6.8pt;
-            color: #94a3b8;
+            font-size: 7pt;
+            font-weight: bold;
+            color: #000000;
             margin-top: 4px;
-            border-top: 1px solid #f1f5f9;
+            border-top: 1.2px solid #000000;
             padding-top: 3px;
         }
     </style>
@@ -758,36 +766,36 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         <span class="badge">فیلتر خط کالایی: <strong>${groupFilterName}</strong></span>
         <span class="badge">گام زمانی تحلیل: <strong>${periodLabel}</strong></span>
         <span class="badge">تعداد روزهای فعال دارای تولید: <strong>${kpis.activeDaysCount || daysCount} روز</strong></span>
-        <span class="badge" style="background:${achStatusBg}; border-color:${achStatusBorder}; color:${achStatusColor};">
+        <span class="badge" style="background:${achStatusBg}; border-color:#000000; color:#000000;">
             ارزیابی تحقق: <strong>${achStatusLabel}</strong>
         </span>
     </div>
 
     <!-- Top KPI Cards Grid -->
     <div class="kpi-grid">
-        <div class="kpi-card" style="border-top: 2px solid #2563eb;">
+        <div class="kpi-card" style="border-top: 3px solid #000000;">
             <div class="kpi-label">مجموع تولید واقعی</div>
-            <div class="kpi-value" style="color:#1d4ed8;">${fKg(kpis.totalActual)} <span style="font-size:7pt; font-family:sans-serif;">kg</span></div>
+            <div class="kpi-value" style="color:#000000;">${fKg(kpis.totalActual)} <span style="font-size:7pt; font-family:sans-serif;">kg</span></div>
         </div>
-        <div class="kpi-card" style="border-top: 2px solid #8b5cf6;">
+        <div class="kpi-card" style="border-top: 3px solid #000000;">
             <div class="kpi-label">سهمیه ایده‌آل پلن</div>
-            <div class="kpi-value" style="color:#6d28d9;">${fKg(kpis.totalIdeal)} <span style="font-size:7pt; font-family:sans-serif;">kg</span></div>
+            <div class="kpi-value" style="color:#000000;">${fKg(kpis.totalIdeal)} <span style="font-size:7pt; font-family:sans-serif;">kg</span></div>
         </div>
-        <div class="kpi-card" style="border-top: 2px solid ${achStatusColor}; background:${achStatusBg};">
+        <div class="kpi-card" style="border-top: 3px solid #000000; background:${achStatusBg};">
             <div class="kpi-label">درصد تحقق هدف (KPI)</div>
-            <div class="kpi-value" style="color:${achStatusColor};">${kpis.achievementPct.toFixed(1)}%</div>
+            <div class="kpi-value" style="color:#000000;">${kpis.achievementPct.toFixed(1)}%</div>
         </div>
-        <div class="kpi-card" style="border-top: 2px solid ${kpis.variance >= 0 ? '#10b981' : '#ef4444'};">
+        <div class="kpi-card" style="border-top: 3px solid #000000;">
             <div class="kpi-label">انحراف از برنامه</div>
-            <div class="kpi-value" style="color:${kpis.variance >= 0 ? '#047857' : '#b91c1c'};">${kpis.variance >= 0 ? '+' : ''}${fKg(kpis.variance)}</div>
+            <div class="kpi-value" style="color:#000000;">${kpis.variance >= 0 ? '+' : ''}${fKg(kpis.variance)}</div>
         </div>
-        <div class="kpi-card" style="border-top: 2px solid #0284c7;">
+        <div class="kpi-card" style="border-top: 3px solid #000000;">
             <div class="kpi-label">میانگین روزانه واقعی / اسمی</div>
-            <div class="kpi-value" style="font-size:8.5pt;">${fKg(kpis.avgDailyActual)} <span style="font-size:7pt; color:#64748b;">/ ${fKg(kpis.avgDailyIdeal)}</span></div>
+            <div class="kpi-value" style="font-size:8.5pt; color:#000000;">${fKg(kpis.avgDailyActual)} <span style="font-size:7pt; color:#000000;">/ ${fKg(kpis.avgDailyIdeal)}</span></div>
         </div>
-        <div class="kpi-card" style="border-top: 2px solid #f59e0b;">
+        <div class="kpi-card" style="border-top: 3px solid #000000;">
             <div class="kpi-label">ضایعات کارخانه</div>
-            <div class="kpi-value" style="color:#b45309; font-size:8.5pt;">${fKg(kpis.totalWaste || 0)} <span style="font-size:7pt;">(${fDec(kpis.wastePct || 0, 2)}%)</span></div>
+            <div class="kpi-value" style="color:#000000; font-size:8.5pt;">${fKg(kpis.totalWaste || 0)} <span style="font-size:7pt;">(${fDec(kpis.wastePct || 0, 2)}%)</span></div>
         </div>
     </div>
 
@@ -805,7 +813,7 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
             ${kpis.peakDay ? `بالاترین رکورد روزانه در تاریخ ${kpis.peakDay.date} با مقدار ${fKg(kpis.peakDay.amount)} کیلوگرم ثبت شده است.` : ''}
             میزان ضایعات ثبت‌شده خطوط در این بازه معادل ${fKg(kpis.totalWaste || 0)} کیلوگرم (${fDec(kpis.wastePct || 0, 2)}%) گزارش گردیده است.
         `}
-        ${wasteNotes ? `<br><span style="color:#64748b; font-size:7.2pt;"><strong>یادداشت ضایعات:</strong> ${wasteNotes}</span>` : ''}
+        ${wasteNotes ? `<br><span style="color:#000000; font-size:7.4pt;"><strong>یادداشت ضایعات:</strong> ${wasteNotes}</span>` : ''}
     </div>
 
     <!-- Group Breakdown Table -->
@@ -813,7 +821,7 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
         <div>
             <div class="table-title">
                 <span>📊 ارزیابی و تفکیک عملکرد خطوط تولید بر اساس پلن مهندسی:</span>
-                <span style="font-size:7pt; color:#64748b; font-weight:normal;">(اوزان بر حسب کیلوگرم)</span>
+                <span style="font-size:7.2pt; color:#000000; font-weight:bold;">(اوزان بر حسب کیلوگرم)</span>
             </div>
             <table>
                 <thead>
@@ -823,7 +831,7 @@ export function buildProductionExecutiveA4PrintHtml(dataset: ProductionReportPri
                         <th style="width:65px;">دستگاه فعال</th>
                         <th style="width:75px;">ظرفیت روزانه</th>
                         <th style="width:85px;">سهمیه دوره (${daysCount} روز)</th>
-                        <th style="width:85px; background:#1e3a8a;">تولید واقعی</th>
+                        <th style="width:85px; background:#cbd5e1 !important; color:#000000 !important;">تولید واقعی</th>
                         <th style="width:65px;">تحقق (%)</th>
                         <th style="width:75px;">انحراف (kg)</th>
                     </tr>

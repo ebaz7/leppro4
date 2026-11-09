@@ -1541,17 +1541,19 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="utf-8">
                 <title>${title}</title>
                 <style>
-                    body { font-family: 'Tahoma', 'Segoe UI', sans-serif; padding: 20px; background: #fff; color: #1e293b; direction: rtl; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 15px; }
-                    .header h1 { margin: 0; font-size: 17px; font-weight: bold; color: #0f172a; }
-                    .header p { margin: 3px 0 0; font-size: 11.5px; color: #475569; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
-                    th, td { border: 1px solid #cbd5e1; padding: 7px 9px; text-align: right; }
-                    th { background-color: #f1f5f9; font-weight: bold; color: #0f172a; font-size: 11.5px; }
-                    tr:nth-child(even) { background-color: #f8fafc; }
-                    .total { font-weight: bold; background: #e2e8f0 !important; font-size: 11.5px; }
-                    .num { text-align: left; font-family: monospace; font-size: 11.5px; }
-                    .footer { text-align: center; margin-top: 25px; font-size: 10.5px; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 10px; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Tahoma', 'Segoe UI', sans-serif; padding: 15px; background: #fff; color: #000000; direction: rtl; font-weight: bold; }
+                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #000000; padding-bottom: 12px; margin-bottom: 15px; }
+                    .header h1 { margin: 0; font-size: 17px; font-weight: 900; color: #000000; }
+                    .header p { margin: 3px 0 0; font-size: 11.5px; font-weight: bold; color: #000000; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; border: 2px solid #000000; }
+                    th, td { border: 1.2px solid #000000 !important; padding: 7px 9px; text-align: right; color: #000000; font-weight: bold; }
+                    th { background-color: #e2e8f0 !important; font-weight: 900; color: #000000 !important; font-size: 11.5px; border: 1.5px solid #000000 !important; }
+                    tr:nth-child(even) { background-color: #f1f5f9; }
+                    .total { font-weight: 900; background: #cbd5e1 !important; color: #000000 !important; font-size: 11.5px; border-top: 2px solid #000000 !important; }
+                    .num { text-align: left; font-family: monospace; font-size: 11.5px; font-weight: 900; color: #000000; }
+                    .footer { text-align: center; margin-top: 25px; font-size: 10.5px; font-weight: bold; color: #000000; border-top: 1.5px dashed #000000; padding-top: 10px; }
                 </style>
             </head>
             <body>
@@ -2048,13 +2050,15 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="utf-8">
                 <title>ریز صورتحساب - ${name}</title>
                 <style>
-                    body { font-family: 'Tahoma', sans-serif; padding: 25px; background: #fff; }
-                    .header { border-bottom: 2px solid #334155; padding-bottom: 10px; margin-bottom: 20px; }
-                    .header h1 { font-size: 18px; margin: 0; }
-                    table { width: 100%; border-collapse: collapse; }
-                    th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: right; font-size: 11px; }
-                    th { background-color: #f1f5f9; }
-                    .total { font-weight: bold; background: #f8fafc; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Tahoma', sans-serif; padding: 15px; background: #fff; color: #000000; font-weight: bold; }
+                    .header { border-bottom: 2.5px solid #000000; padding-bottom: 10px; margin-bottom: 20px; color: #000000; }
+                    .header h1 { font-size: 18px; margin: 0; font-weight: 900; color: #000000; }
+                    table { width: 100%; border-collapse: collapse; border: 2px solid #000000; }
+                    th, td { border: 1.2px solid #000000 !important; padding: 8px 10px; text-align: right; font-size: 11px; color: #000000; font-weight: bold; }
+                    th { background-color: #e2e8f0 !important; color: #000000 !important; font-weight: 900; border: 1.5px solid #000000 !important; }
+                    .total { font-weight: 900; background: #cbd5e1 !important; color: #000000 !important; border-top: 2px solid #000000 !important; }
                 </style>
             </head>
             <body>
@@ -2727,25 +2731,27 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="utf-8">
                 <title>${title}</title>
                 <style>
-                    body { font-family: 'Tahoma', 'Segoe UI', sans-serif; padding: 25px; background: #fff; color: #1e293b; font-size: 11px; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; }
-                    .header h1 { margin: 0; font-size: 20px; color: #0f172a; font-weight: bold; }
-                    .header p { margin: 4px 0 0; font-size: 12px; color: #64748b; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Tahoma', 'Segoe UI', sans-serif; padding: 15px; background: #fff; color: #000000; font-size: 11px; font-weight: bold; }
+                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #000000; padding-bottom: 12px; margin-bottom: 20px; }
+                    .header h1 { margin: 0; font-size: 20px; color: #000000; font-weight: 900; }
+                    .header p { margin: 4px 0 0; font-size: 12px; color: #000000; font-weight: bold; }
                     .stats-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
-                    .stat-card { border: 1px solid #cbd5e1; background: #f8fafc; padding: 10px; border-radius: 8px; text-align: center; }
-                    .stat-card h3 { margin: 0 0 4px 0; font-size: 10px; color: #64748b; font-weight: bold; }
-                    .stat-card p { margin: 0; font-size: 14px; font-weight: 800; color: #0f172a; font-family: monospace; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-                    th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: center; font-size: 11px; line-height: 1.4; }
-                    th { background-color: #0f172a; color: white; font-weight: bold; border: 1px solid #334155; }
-                    tr:nth-child(even) { background-color: #f8fafc; }
-                    .total { font-weight: bold; background: #1e293b !important; color: white !important; }
-                    .total td { border-color: #475569; color: white; }
-                    .ret { color: #e11d48; font-weight: bold; }
-                    .net { color: #15803d; font-weight: bold; }
-                    .footer { text-align: center; margin-top: 35px; font-size: 10px; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 10px; }
-                    .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 40px; text-align: center; font-size: 11px; font-weight: bold; }
-                    .signature-box { height: 60px; border-bottom: 1px dashed #94a3b8; margin-top: 8px; }
+                    .stat-card { border: 1.5px solid #000000; background: #f8fafc; padding: 10px; border-radius: 8px; text-align: center; }
+                    .stat-card h3 { margin: 0 0 4px 0; font-size: 10px; color: #000000; font-weight: 900; }
+                    .stat-card p { margin: 0; font-size: 14px; font-weight: 900; color: #000000; font-family: monospace; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 2px solid #000000; }
+                    th, td { border: 1.2px solid #000000 !important; padding: 8px 10px; text-align: center; font-size: 11px; line-height: 1.4; color: #000000; font-weight: bold; }
+                    th { background-color: #e2e8f0 !important; color: #000000 !important; font-weight: 900; border: 1.5px solid #000000 !important; }
+                    tr:nth-child(even) { background-color: #f1f5f9; }
+                    .total { font-weight: 900; background: #cbd5e1 !important; color: #000000 !important; }
+                    .total td { border: 1.5px solid #000000 !important; color: #000000 !important; font-weight: 900; }
+                    .ret { color: #000000; font-weight: 900; }
+                    .net { color: #000000; font-weight: 900; }
+                    .footer { text-align: center; margin-top: 35px; font-size: 10px; font-weight: bold; color: #000000; border-top: 1.5px dashed #000000; padding-top: 10px; }
+                    .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 40px; text-align: center; font-size: 11px; font-weight: 900; color: #000000; }
+                    .signature-box { height: 60px; border-bottom: 1.5px dashed #000000; margin-top: 8px; }
                     @media print {
                         body { padding: 0; }
                     }
@@ -2936,25 +2942,27 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="utf-8">
                 <title>${title}</title>
                 <style>
-                    body { font-family: 'Tahoma', 'Segoe UI', sans-serif; padding: 25px; background: #fff; color: #1e293b; font-size: 11px; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; }
-                    .header h1 { margin: 0; font-size: 20px; color: #0f172a; font-weight: bold; }
-                    .header p { margin: 4px 0 0; font-size: 12px; color: #64748b; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Tahoma', 'Segoe UI', sans-serif; padding: 15px; background: #fff; color: #000000; font-size: 11px; font-weight: bold; }
+                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #000000; padding-bottom: 12px; margin-bottom: 20px; }
+                    .header h1 { margin: 0; font-size: 20px; color: #000000; font-weight: 900; }
+                    .header p { margin: 4px 0 0; font-size: 12px; color: #000000; font-weight: bold; }
                     .stats-container { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
-                    .stat-card { border: 1px solid #cbd5e1; background: #f8fafc; padding: 10px; border-radius: 8px; text-align: center; }
-                    .stat-card h3 { margin: 0 0 4px 0; font-size: 10px; color: #64748b; font-weight: bold; }
-                    .stat-card p { margin: 0; font-size: 14px; font-weight: 800; color: #0f172a; font-family: monospace; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-                    th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: center; font-size: 11px; line-height: 1.4; }
-                    th { background-color: #0f172a; color: white; font-weight: bold; border: 1px solid #334155; }
-                    tr:nth-child(even) { background-color: #f8fafc; }
-                    .total { font-weight: bold; background: #1e293b !important; color: white !important; }
-                    .total td { border-color: #475569; color: white; }
-                    .ret { color: #e11d48; font-weight: bold; }
-                    .net { color: #15803d; font-weight: bold; }
-                    .footer { text-align: center; margin-top: 35px; font-size: 10px; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 10px; }
-                    .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 40px; text-align: center; font-size: 11px; font-weight: bold; }
-                    .signature-box { height: 60px; border-bottom: 1px dashed #94a3b8; margin-top: 8px; }
+                    .stat-card { border: 1.5px solid #000000; background: #f8fafc; padding: 10px; border-radius: 8px; text-align: center; }
+                    .stat-card h3 { margin: 0 0 4px 0; font-size: 10px; color: #000000; font-weight: 900; }
+                    .stat-card p { margin: 0; font-size: 14px; font-weight: 900; color: #000000; font-family: monospace; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 2px solid #000000; }
+                    th, td { border: 1.2px solid #000000 !important; padding: 8px 10px; text-align: center; font-size: 11px; line-height: 1.4; color: #000000; font-weight: bold; }
+                    th { background-color: #e2e8f0 !important; color: #000000 !important; font-weight: 900; border: 1.5px solid #000000 !important; }
+                    tr:nth-child(even) { background-color: #f1f5f9; }
+                    .total { font-weight: 900; background: #cbd5e1 !important; color: #000000 !important; }
+                    .total td { border: 1.5px solid #000000 !important; color: #000000 !important; font-weight: 900; }
+                    .ret { color: #000000; font-weight: 900; }
+                    .net { color: #000000; font-weight: 900; }
+                    .footer { text-align: center; margin-top: 35px; font-size: 10px; font-weight: bold; color: #000000; border-top: 1.5px dashed #000000; padding-top: 10px; }
+                    .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 40px; text-align: center; font-size: 11px; font-weight: 900; color: #000000; }
+                    .signature-box { height: 60px; border-bottom: 1.5px dashed #000000; margin-top: 8px; }
                     @media print {
                         body { padding: 0; }
                     }
@@ -3169,25 +3177,27 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="utf-8">
                 <title>${title}</title>
                 <style>
-                    body { font-family: Tahoma, 'B Nazanin', Arial, sans-serif; margin: 25px; direction: rtl; color: #1e293b; font-size: 11px; }
-                    .header { text-align: center; border-bottom: 2px solid #2563eb; padding-bottom: 15px; margin-bottom: 20px; }
-                    .header h1 { margin: 0; font-size: 18px; color: #1e3a8a; }
-                    .header p { margin: 5px 0 0 0; color: #64748b; font-size: 12px; }
-                    .info-box { display: flex; justify-content: space-between; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 18px; margin-bottom: 20px; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: Tahoma, 'B Nazanin', Arial, sans-serif; margin: 15px; direction: rtl; color: #000000; font-size: 11px; font-weight: bold; }
+                    .header { text-align: center; border-bottom: 2.5px solid #000000; padding-bottom: 15px; margin-bottom: 20px; }
+                    .header h1 { margin: 0; font-size: 18px; color: #000000; font-weight: 900; }
+                    .header p { margin: 5px 0 0 0; color: #000000; font-size: 12px; font-weight: bold; }
+                    .info-box { display: flex; justify-content: space-between; background-color: #f8fafc; border: 1.5px solid #000000; border-radius: 8px; padding: 12px 18px; margin-bottom: 20px; color: #000000; font-weight: bold; }
                     .info-box div { line-height: 1.6; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
-                    th { background-color: #0f172a; color: white; padding: 10px 6px; text-align: center; border: 1px solid #334155; font-weight: bold; }
-                    td { border: 1px solid #cbd5e1; padding: 8px 6px; text-align: center; }
-                    tr:nth-child(even) { background-color: #f8fafc; }
-                    .total { background-color: #1e293b !important; color: white !important; font-weight: bold; }
-                    .total td { border-color: #475569; color: white; }
-                    .pos { color: #16a34a; font-weight: bold; }
-                    .neg { color: #dc2626; font-weight: bold; }
-                    .ret { color: #e11d48; font-size: 9px; }
-                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; page-break-inside: avoid; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; border: 2px solid #000000; }
+                    th { background-color: #e2e8f0 !important; color: #000000 !important; padding: 10px 6px; text-align: center; border: 1.5px solid #000000 !important; font-weight: 900; }
+                    td { border: 1.2px solid #000000 !important; padding: 8px 6px; text-align: center; color: #000000; font-weight: bold; }
+                    tr:nth-child(even) { background-color: #f1f5f9; }
+                    .total { background-color: #cbd5e1 !important; color: #000000 !important; font-weight: 900; }
+                    .total td { border: 1.5px solid #000000 !important; color: #000000 !important; font-weight: 900; }
+                    .pos { color: #000000; font-weight: 900; }
+                    .neg { color: #000000; font-weight: 900; }
+                    .ret { color: #000000; font-size: 9px; font-weight: bold; }
+                    .signatures { display: flex; justify-content: space-between; margin-top: 40px; page-break-inside: avoid; font-weight: 900; color: #000000; }
                     .signatures div { text-align: center; width: 30%; }
-                    .signature-box { height: 60px; border-bottom: 1px dashed #94a3b8; margin-top: 10px; }
-                    .footer { text-align: center; margin-top: 30px; font-size: 9px; color: #94a3b8; border-t: 1px solid #e2e8f0; padding-top: 10px; }
+                    .signature-box { height: 60px; border-bottom: 1.5px dashed #000000; margin-top: 10px; }
+                    .footer { text-align: center; margin-top: 30px; font-size: 9.5px; font-weight: bold; color: #000000; border-top: 1.5px solid #000000; padding-top: 10px; }
                 </style>
             </head>
             <body>
@@ -3554,12 +3564,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const pctColor = diff > 0 ? '#15803d' : (diff < 0 ? '#b91c1c' : '#475569');
 
             return `
-                <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 9.5pt;">
-                    <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${item.name}</td>
-                    <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;">${(item.totalA || 0).toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
-                    <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center;">${(item.totalB || 0).toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
-                    <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${diff >= 0 ? '#15803d' : '#b91c1c'};">${diff.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
-                    <td style="padding: 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${pctColor};">${pctText}</td>
+                <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f1f5f9'}; font-size: 9.5pt; color: #000000; font-weight: bold;">
+                    <td style="padding: 8px; border: 1.2px solid #000000; text-align: right; font-weight: 900; color: #000000;">${item.name}</td>
+                    <td style="padding: 8px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${(item.totalA || 0).toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+                    <td style="padding: 8px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${(item.totalB || 0).toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+                    <td style="padding: 8px; border: 1.2px solid #000000; text-align: center; font-weight: 900; color: #000000;">${diff.toLocaleString('fa-IR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
+                    <td style="padding: 8px; border: 1.2px solid #000000; text-align: center; font-weight: 900; color: #000000;">${pctText}</td>
                 </tr>
             `;
         }).join('');
@@ -3570,14 +3580,16 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="UTF-8">
                 <title>${title}</title>
                 <style>
-                    body { font-family: 'Tahoma', sans-serif; margin: 20px; color: #0f172a; direction: rtl; }
-                    .header-box { border: 1px solid #cbd5e1; padding: 12px; border-radius: 6px; background-color: #f8fafc; margin-bottom: 20px; }
-                    .title { font-size: 14pt; font-weight: bold; text-align: center; color: #1e3a8a; margin-bottom: 10px; }
-                    .table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-                    .table th, .table td { border: 1px solid #cbd5e1; padding: 10px; text-align: center; }
-                    .table th { background-color: #f1f5f9; font-weight: bold; }
-                    .summary-row { background-color: #e2e8f0; font-weight: bold; }
-                    .footer { margin-top: 40px; text-align: center; font-size: 8pt; color: #64748b; border-top: 1px solid #cbd5e1; padding-top: 10px; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Tahoma', sans-serif; margin: 15px; color: #000000; direction: rtl; font-weight: bold; }
+                    .header-box { border: 1.5px solid #000000; padding: 12px; border-radius: 6px; background-color: #f8fafc; margin-bottom: 20px; color: #000000; }
+                    .title { font-size: 14pt; font-weight: 900; text-align: center; color: #000000; margin-bottom: 10px; }
+                    .table { width: 100%; border-collapse: collapse; margin-top: 15px; border: 2px solid #000000; }
+                    .table th, .table td { border: 1.2px solid #000000 !important; padding: 10px; text-align: center; color: #000000; font-weight: bold; }
+                    .table th { background-color: #e2e8f0 !important; color: #000000 !important; font-weight: 900; border: 1.5px solid #000000 !important; }
+                    .summary-row { background-color: #cbd5e1 !important; font-weight: 900; color: #000000 !important; border-top: 2px solid #000000 !important; }
+                    .footer { margin-top: 40px; text-align: center; font-size: 8.5pt; font-weight: bold; color: #000000; border-top: 1.5px solid #000000; padding-top: 10px; }
                 </style>
             </head>
             <body>
@@ -5201,15 +5213,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         font-weight: bold;
                         font-style: normal;
                     }
-                    @page { size: A4 landscape; margin: 8mm; }
+                    @page { margin: 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                     body {
                         font-family: Tahoma, 'Vazirmatn', Arial, sans-serif;
                         direction: rtl;
-                        color: #000;
+                        color: #000000;
                         background: #fff;
                         margin: 0;
                         padding: 6px;
                         font-size: 10px;
+                        font-weight: bold;
                         line-height: 1.3;
                     }
                     .top-header {
@@ -5218,10 +5232,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         align-items: flex-start;
                         margin-bottom: 8px;
                         padding-bottom: 4px;
+                        border-bottom: 2px solid #000000;
                     }
                     .top-right {
                         font-size: 9px;
-                        color: #333;
+                        color: #000000;
+                        font-weight: bold;
                         line-height: 1.5;
                         text-align: right;
                     }
@@ -5231,18 +5247,19 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     }
                     .company-name {
                         font-size: 14px;
-                        font-weight: bold;
-                        color: #000;
+                        font-weight: 900;
+                        color: #000000;
                         margin-bottom: 3px;
                     }
                     .report-title {
                         font-size: 13px;
-                        font-weight: bold;
-                        color: #000;
+                        font-weight: 900;
+                        color: #000000;
                     }
                     .top-left {
                         font-size: 9px;
-                        color: #333;
+                        color: #000000;
+                        font-weight: bold;
                         text-align: left;
                         line-height: 1.5;
                         direction: ltr;
@@ -5251,21 +5268,24 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         width: 100%;
                         border-collapse: collapse;
                         margin-bottom: 10px;
+                        border: 2px solid #000000;
                     }
                     th {
-                        background-color: #f1f5f9;
-                        color: #000;
-                        font-weight: bold;
+                        background-color: #e2e8f0 !important;
+                        color: #000000 !important;
+                        font-weight: 900;
                         padding: 5px 4px;
-                        border: 1px solid #000;
+                        border: 1.5px solid #000000 !important;
                         font-size: 9.5px;
                         text-align: center;
                     }
                     td {
                         padding: 4px 5px;
-                        border: 1px solid #666;
+                        border: 1.2px solid #000000 !important;
                         font-size: 9.5px;
                         text-align: center;
+                        color: #000000;
+                        font-weight: bold;
                     }
                     tr:nth-child(even) {
                         background-color: #fafafa;
@@ -5646,18 +5666,18 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 const diff = actual - ideal;
 
                 return `
-                    <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; font-size: 9pt;">
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${idx + 1}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold;">${row.name}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${row.qty_61 > 0 ? row.qty_61.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${row.qty_67 > 0 ? row.qty_67.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${row.qty_79 > 0 ? row.qty_79.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${row.qty_73 > 0 ? row.qty_73.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center;">${row.qty_schweiter > 0 ? row.qty_schweiter.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: 800; color: #1e3a8a; background-color: #f1f5f9;">${actual.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #059669;">${ideal > 0 ? ideal.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${achPct >= 100 ? '#16a34a' : (achPct >= 80 ? '#d97706' : '#dc2626')};">${ideal > 0 ? `${achPct.toFixed(1)}%` : '-'}</td>
-                        <td style="padding: 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${diff >= 0 ? '#16a34a' : '#dc2626'};">${ideal > 0 ? `${diff >= 0 ? '+' : ''}${diff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}` : '-'}</td>
+                    <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f1f5f9'}; font-size: 9pt; color: #000000; font-weight: bold;">
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${idx + 1}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: right; font-weight: 900; color: #000000;">${row.name}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${row.qty_61 > 0 ? row.qty_61.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${row.qty_67 > 0 ? row.qty_67.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${row.qty_79 > 0 ? row.qty_79.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${row.qty_73 > 0 ? row.qty_73.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: bold; color: #000000;">${row.qty_schweiter > 0 ? row.qty_schweiter.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: 900; color: #000000; background-color: #e2e8f0;">${actual.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: 900; color: #000000;">${ideal > 0 ? ideal.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: 900; color: #000000;">${ideal > 0 ? `${achPct.toFixed(1)}%` : '-'}</td>
+                        <td style="padding: 7px; border: 1.2px solid #000000; text-align: center; font-weight: 900; color: #000000;">${ideal > 0 ? `${diff >= 0 ? '+' : ''}${diff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}` : '-'}</td>
                     </tr>
                 `;
             }).join('');
@@ -5669,19 +5689,19 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <div class="stat-cards">
                     <div class="card">
                         <div class="card-label">کل تولید خالص (کیلوگرم)</div>
-                        <div class="card-val" style="color: #2563eb;">${totalProd.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</div>
+                        <div class="card-val" style="color: #000000;">${totalProd.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</div>
                     </div>
                     <div class="card">
                         <div class="card-label">کل هدف ایده‌آل (کیلوگرم)</div>
-                        <div class="card-val" style="color: #059669;">${totalIdealSum > 0 ? totalIdealSum.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : 'تعیین نشده'}</div>
+                        <div class="card-val" style="color: #000000;">${totalIdealSum > 0 ? totalIdealSum.toLocaleString('fa-IR', { maximumFractionDigits: 1 }) : 'تعیین نشده'}</div>
                     </div>
                     <div class="card">
                         <div class="card-label">درصد تحقق هدف</div>
-                        <div class="card-val" style="color: ${grandAchPct >= 100 ? '#16a34a' : (grandAchPct >= 80 ? '#d97706' : '#dc2626')};">${totalIdealSum > 0 ? `${grandAchPct.toFixed(1)}%` : '-'}</div>
+                        <div class="card-val" style="color: #000000;">${totalIdealSum > 0 ? `${grandAchPct.toFixed(1)}%` : '-'}</div>
                     </div>
                     <div class="card">
                         <div class="card-label">کل ضایعات کارخانه</div>
-                        <div class="card-val" style="color: #dc2626;">${totalWaste.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} kg (${wastePct}%)</div>
+                        <div class="card-val" style="color: #000000;">${totalWaste.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} kg (${wastePct}%)</div>
                     </div>
                 </div>
 
@@ -5695,8 +5715,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                             <th>کش (۷۹)</th>
                             <th>اسپاندکس (۷۳)</th>
                             <th>شوایتر (۷۰)</th>
-                            <th style="background-color: #1e3a8a;">جمع کل تولید (kg)</th>
-                            <th style="background-color: #065f46;">تولید ایده‌آل (kg)</th>
+                            <th style="background-color: #cbd5e1 !important; color: #000000 !important;">جمع کل تولید (kg)</th>
+                            <th style="background-color: #cbd5e1 !important; color: #000000 !important;">تولید ایده‌آل (kg)</th>
                             <th>درصد تحقق</th>
                             <th>انحراف</th>
                         </tr>
@@ -5705,17 +5725,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         ${rowsHtml || '<tr><td colspan="11" style="text-align:center; padding: 20px;">هیچ رکوردی برای نمایش وجود ندارد.</td></tr>'}
                     </tbody>
                     <tfoot>
-                        <tr style="background-color: #e2e8f0; font-weight: bold; border-top: 2px solid #64748b;">
-                            <td colspan="2" style="padding: 10px; text-align: right;">جمع کل تولید و اهداف:</td>
-                            <td style="padding: 8px; text-align: center;">${(prodLiveTotals.qty_61 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center;">${(prodLiveTotals.qty_67 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center;">${(prodLiveTotals.qty_79 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center;">${(prodLiveTotals.qty_73 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center;">${(prodLiveTotals.qty_schweiter || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center; color: #1e3a8a; font-size: 11pt;">${totalProd.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center; color: #059669; font-size: 11pt;">${totalIdealSum.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
-                            <td style="padding: 8px; text-align: center; color: ${grandAchPct >= 100 ? '#16a34a' : '#d97706'}; font-size: 10pt;">${totalIdealSum > 0 ? `${grandAchPct.toFixed(1)}%` : '-'}</td>
-                            <td style="padding: 8px; text-align: center; color: ${grandDiff >= 0 ? '#16a34a' : '#dc2626'}; font-size: 10pt;">${totalIdealSum > 0 ? `${grandDiff >= 0 ? '+' : ''}${grandDiff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}` : '-'}</td>
+                        <tr style="background-color: #cbd5e1; font-weight: 900; border-top: 2px solid #000000; color: #000000;">
+                            <td colspan="2" style="padding: 10px; text-align: right; color: #000000;">جمع کل تولید و اهداف:</td>
+                            <td style="padding: 8px; text-align: center; color: #000000;">${(prodLiveTotals.qty_61 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000;">${(prodLiveTotals.qty_67 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000;">${(prodLiveTotals.qty_79 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000;">${(prodLiveTotals.qty_73 || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000;">${(prodLiveTotals.qty_schweiter || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000; font-size: 11pt;">${totalProd.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000; font-size: 11pt;">${totalIdealSum.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000; font-size: 10pt;">${totalIdealSum > 0 ? `${grandAchPct.toFixed(1)}%` : '-'}</td>
+                            <td style="padding: 8px; text-align: center; color: #000000; font-size: 10pt;">${totalIdealSum > 0 ? `${grandDiff >= 0 ? '+' : ''}${grandDiff.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}` : '-'}</td>
                         </tr>
                     </tfoot>
                 </table>
@@ -5728,20 +5748,22 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 <meta charset="UTF-8">
                 <title>${title}</title>
                 <style>
-                    body { font-family: 'Tahoma', sans-serif; margin: 20px; color: #0f172a; direction: rtl; }
-                    .header-box { border: 1px solid #cbd5e1; padding: 14px; border-radius: 8px; background-color: #f8fafc; margin-bottom: 20px; text-align: center; }
-                    .title { font-size: 13pt; font-weight: bold; color: #1e3a8a; margin-bottom: 6px; }
-                    .subtitle { font-size: 9.5pt; color: #475569; }
+                    @page { margin: 7mm 8mm; }
+                    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                    body { font-family: 'Tahoma', sans-serif; margin: 15px; color: #000000; direction: rtl; font-weight: bold; }
+                    .header-box { border: 1.5px solid #000000; padding: 14px; border-radius: 8px; background-color: #f8fafc; margin-bottom: 20px; text-align: center; }
+                    .title { font-size: 13pt; font-weight: 900; color: #000000; margin-bottom: 6px; }
+                    .subtitle { font-size: 9.5pt; font-weight: bold; color: #000000; }
                     .stat-cards { display: flex; justify-content: space-around; margin: 15px 0; gap: 8px; flex-wrap: wrap; }
-                    .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; background: white; text-align: center; flex: 1; min-width: 120px; }
-                    .card-label { font-size: 8.5pt; color: #64748b; margin-bottom: 4px; }
-                    .card-val { font-size: 11pt; font-weight: bold; color: #0f172a; }
-                    .table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 9pt; }
-                    .table th { background-color: #1e293b; color: white; padding: 8px 6px; border: 1px solid #334155; font-size: 9pt; }
-                    .table td { border: 1px solid #cbd5e1; padding: 6px; }
-                    .footer { text-align: center; font-size: 8.5pt; color: #94a3b8; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
+                    .card { border: 1.5px solid #000000; border-radius: 8px; padding: 10px 12px; background: white; text-align: center; flex: 1; min-width: 120px; }
+                    .card-label { font-size: 8.5pt; font-weight: 900; color: #000000; margin-bottom: 4px; }
+                    .card-val { font-size: 11pt; font-weight: 900; color: #000000; }
+                    .table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 9pt; border: 2px solid #000000; }
+                    .table th { background-color: #e2e8f0 !important; color: #000000 !important; font-weight: 900; padding: 8px 6px; border: 1.5px solid #000000 !important; font-size: 9pt; }
+                    .table td { border: 1.2px solid #000000 !important; padding: 6px; color: #000000; font-weight: bold; }
+                    .footer { text-align: center; font-size: 8.5pt; font-weight: bold; color: #000000; margin-top: 30px; border-top: 1.5px solid #000000; padding-top: 10px; }
                     @media print {
-                        body { margin: 10mm; }
+                        body { margin: 0; }
                         button { display: none !important; }
                     }
                 </style>
