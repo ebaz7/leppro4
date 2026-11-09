@@ -81,28 +81,18 @@ test('SSE client resolves server URL via getEffectiveApiUrl and Layout test butt
   assert.ok(layoutCode.includes('این یک اعلان آزمایشی است'), 'Layout.tsx must send a test notification when clicking تست ارسال');
 });
 
-test('Android app checks notifications at battery-friendly periodic intervals without any sticky status-bar notification', () => {
+test('Android app uses Play-Protect-safe Jetpack WorkManager periodic sync without sticky notifications or suspicious permissions', () => {
   const manifest = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
-  assert.ok(manifest.includes('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), 'AndroidManifest.xml must declare REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
-  assert.ok(manifest.includes('com.payment.system.DlkamBackgroundService'), 'AndroidManifest.xml must register DlkamBackgroundService');
-  assert.ok(manifest.includes('com.payment.system.BootReceiver'), 'AndroidManifest.xml must register BootReceiver');
+  assert.equal(manifest.includes('REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), false, 'AndroidManifest.xml must not include REQUEST_IGNORE_BATTERY_OPTIMIZATIONS which triggers Play Protect when combined with REQUEST_INSTALL_PACKAGES');
+  assert.equal(manifest.includes('DlkamBackgroundService'), false, 'AndroidManifest.xml must not register custom covert background services');
 
-  const bgServicePath = path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'DlkamBackgroundService.java');
-  assert.equal(fs.existsSync(bgServicePath), true, 'DlkamBackgroundService.java must exist');
-  const bgService = fs.readFileSync(bgServicePath, 'utf8');
-  assert.ok(bgService.includes('START_STICKY'), 'DlkamBackgroundService must return START_STICKY');
-  assert.ok(bgService.includes('SyncWorker.pollAndDispatchNotifications'), 'DlkamBackgroundService must poll and dispatch notifications at periodic intervals');
-  assert.ok(bgService.includes('setAndAllowWhileIdle'), 'DlkamBackgroundService must schedule periodic AlarmManager check');
-  assert.ok(bgService.includes('clearLegacyStickyNotification'), 'DlkamBackgroundService must remove any legacy sticky notification and channel');
-  assert.equal(bgService.includes('دریافت آنی اعلان‌ها در پس‌زمینه فعال است'), false, 'DlkamBackgroundService must NEVER show a permanent sticky notification in the status bar');
-  assert.equal(bgService.includes('startForeground('), false, 'DlkamBackgroundService must not call startForeground()');
-
-  const bootReceiver = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'BootReceiver.java'), 'utf8');
-  assert.ok(bootReceiver.includes('goAsync()'), 'BootReceiver must use goAsync() for lightweight periodic background checks');
+  const syncWorker = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'SyncWorker.java'), 'utf8');
+  assert.ok(syncWorker.includes('scheduleNextPeriodicWorkPulse'), 'SyncWorker.java must schedule periodic WorkManager checks');
+  assert.ok(syncWorker.includes('ExistingWorkPolicy.REPLACE'), 'SyncWorker.java must enqueue unique periodic pulse via WorkManager');
 
   const mainActivity = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'MainActivity.java'), 'utf8');
-  assert.ok(mainActivity.includes('DlkamBackgroundService.startServiceSafely'), 'MainActivity.java must start DlkamBackgroundService');
-  assert.ok(mainActivity.includes('ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), 'MainActivity.java must prompt to ignore battery optimizations');
+  assert.ok(mainActivity.includes('SyncWorker.scheduleNextPeriodicWorkPulse'), 'MainActivity.java must schedule periodic WorkManager checks');
   assert.ok(mainActivity.includes('syncSessionCredentialsNative'), 'MainActivity.java must expose syncSessionCredentialsNative to keep native SharedPreferences in sync');
+  assert.equal(mainActivity.includes('ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), false, 'MainActivity.java must not launch ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
 });
 

@@ -162,30 +162,11 @@ async function buildAndroid() {
       modified = true;
     }
 
-    // Ensure REQUEST_INSTALL_PACKAGES and background wake/service permissions are present
-    const requiredPermissions = [
-      'android.permission.REQUEST_INSTALL_PACKAGES',
-      'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
-      'android.permission.FOREGROUND_SERVICE',
-      'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
-      'android.permission.WAKE_LOCK',
-      'android.permission.RECEIVE_BOOT_COMPLETED'
-    ];
-    for (const perm of requiredPermissions) {
-      if (!manifestContent.includes(perm)) {
-        manifestContent = manifestContent.replace(
-          '<uses-permission android:name="android.permission.INTERNET" />',
-          `<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="${perm}" />`
-        );
-        modified = true;
-      }
-    }
-
-    // Ensure DlkamBackgroundService and BootReceiver are registered in <application>
-    if (!manifestContent.includes('com.payment.system.DlkamBackgroundService')) {
+    // Ensure REQUEST_INSTALL_PACKAGES is present so the app can directly launch the Android Package Installer for in-place updates
+    if (!manifestContent.includes('android.permission.REQUEST_INSTALL_PACKAGES')) {
       manifestContent = manifestContent.replace(
-        '</application>',
-        `        <service\n            android:name="com.payment.system.DlkamBackgroundService"\n            android:enabled="true"\n            android:exported="false"\n            android:stopWithTask="false" />\n        <receiver\n            android:name="com.payment.system.BootReceiver"\n            android:enabled="true"\n            android:exported="true"\n            android:directBootAware="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" />\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />\n                <action android:name="com.payment.system.ACTION_KEEPALIVE_PULSE" />\n            </intent-filter>\n        </receiver>\n    </application>`
+        '<uses-permission android:name="android.permission.INTERNET" />',
+        '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
       );
       modified = true;
     }

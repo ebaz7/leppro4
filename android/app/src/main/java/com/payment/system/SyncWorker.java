@@ -4,6 +4,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
 import androidx.annotation.NonNull;
+import androidx.work.Constraints;
+import androidx.work.ExistingWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.WorkManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 import org.json.JSONArray;
@@ -12,11 +17,14 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.TimeUnit;
 
 public class SyncWorker extends Worker {
     private static final String TAG = "SyncWorker";
     private static final String PREFS_NAME = "CapacitorStorage";
     private static final String DEFAULT_SERVER_URL = "https://dlkam.ir";
+    public static final String PERIODIC_PULSE_WORK_NAME = "DlkamPeriodicSyncPulse";
+    public static final long PERIODIC_PULSE_INTERVAL_SECONDS = 90L;
 
     public SyncWorker(@NonNull Context context, @NonNull WorkerParameters workerParams) {
         super(context, workerParams);
@@ -26,8 +34,54 @@ public class SyncWorker extends Worker {
     @Override
     public Result doWork() {
         Log.d(TAG, "Background synchronization started...");
-        boolean ok = pollAndDispatchNotifications(getApplicationContext());
+        Context appContext = getApplicationContext();
+        boolean ok = pollAndDispatchNotifications(appContext);
+        scheduleNextPeriodicWorkPulse(appContext, PERIODIC_PULSE_INTERVAL_SECONDS);
         return ok ? Result.success() : Result.retry();
+    }
+
+    public static boolean hasLoggedInUser(Context context) {
+        if (context == null) return false;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String u1 = prefs.getString("_cap_user_username", null);
+            String u2 = prefs.getString("user_username", null);
+            if ((u1 != null && !u1.trim().isEmpty()) || (u2 != null && !u2.trim().isEmpty())) {
+                return true;
+            }
+            String rawJson = prefs.getString("_cap_app_current_user_data", prefs.getString("app_current_user_data", null));
+            return rawJson != null && rawJson.contains("username");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Uses Android's official Jetpack WorkManager (JobScheduler) to schedule the next periodic
+     * notification check in 90 seconds. Completely Play-Protect safe, zero sticky notifications,
+     * and battery-friendly.
+     */
+    public static void scheduleNextPeriodicWorkPulse(Context context, long delaySeconds) {
+        if (context == null) return;
+        try {
+            Constraints constraints = new Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build();
+
+            long safeDelay = Math.max(60L, delaySeconds);
+            OneTimeWorkRequest nextPulse = new OneTimeWorkRequest.Builder(SyncWorker.class)
+                    .setConstraints(constraints)
+                    .setInitialDelay(safeDelay, TimeUnit.SECONDS)
+                    .build();
+
+            WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
+                    PERIODIC_PULSE_WORK_NAME,
+                    ExistingWorkPolicy.REPLACE,
+                    nextPulse
+            );
+        } catch (Exception e) {
+            Log.w(TAG, "scheduleNextPeriodicWorkPulse notice", e);
+        }
     }
 
     public static synchronized boolean pollAndDispatchNotifications(Context context) {
@@ -53,6 +107,22 @@ public class SyncWorker extends Worker {
             String role = prefs.getString("_cap_user_role", null);
             if (role == null || role.isEmpty()) {
                 role = prefs.getString("user_role", "");
+            }
+
+            // Fallback: parse JSON from app_current_user_data if direct keys were not populated yet
+            if (username == null || username.isEmpty() || role == null || role.isEmpty()) {
+                String rawUserJson = prefs.getString("_cap_app_current_user_data", prefs.getString("app_current_user_data", null));
+                if (rawUserJson != null && !rawUserJson.isEmpty()) {
+                    try {
+                        JSONObject userObj = new JSONObject(rawUserJson);
+                        if (username == null || username.isEmpty()) {
+                            username = userObj.optString("username", "");
+                        }
+                        if (role == null || role.isEmpty()) {
+                            role = userObj.optString("role", "");
+                        }
+                    } catch (Exception ignored) {}
+                }
             }
 
             if (username == null || username.isEmpty()) {
@@ -164,8 +234,8 @@ public class SyncWorker extends Worker {
             URL url = new URL(urlStr);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(8000);
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
             conn.setRequestProperty("Accept", "application/json");
             if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
                 BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"));

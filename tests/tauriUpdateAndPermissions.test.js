@@ -44,7 +44,6 @@ test('FirstLaunchPermissionsModal prompts and activates permissions across Tauri
 
   assert.ok(modalContent.includes("import('@tauri-apps/api/notification')"), 'Modal must request Tauri notification permission');
   assert.ok(modalContent.includes('requestNotificationPermissionNative'), 'Modal must request Android native notification permission');
-  assert.ok(modalContent.includes('requestIgnoreBatteryOptimizationsNative'), 'Modal must request Android battery optimization exemption');
   assert.ok(modalContent.includes('requestNativePermissions'), 'Modal must request Electron native permissions');
   assert.ok(modalContent.includes('dlkam_first_install_permissions_v2'), 'Modal must persist first-install permission onboarding state');
 });

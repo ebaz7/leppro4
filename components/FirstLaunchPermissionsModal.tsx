@@ -171,12 +171,6 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
         } catch (_) {}
 
         try {
-          if (win.DlkamAndroid && typeof win.DlkamAndroid.requestIgnoreBatteryOptimizationsNative === 'function') {
-            win.DlkamAndroid.requestIgnoreBatteryOptimizationsNative();
-          }
-        } catch (_) {}
-
-        try {
           await LocalNotifications.requestPermissions();
         } catch (_) {}
 

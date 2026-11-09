@@ -17,9 +17,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.PowerManager;
 import android.provider.MediaStore;
-import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -60,7 +58,6 @@ public class MainActivity extends BridgeActivity {
         // Ensure Android 8+ notification channels and Android 13+ runtime permission are initialized immediately
         ensureNotificationChannels(this);
         requestPostNotificationsPermissionIfNeeded();
-        requestIgnoreBatteryOptimizationsIfNeeded(false);
 
         // Save server URL in native SharedPreferences on start so SyncWorker has immediate access to it
         saveWebServerUrlToSharedPreferences();
@@ -113,10 +110,41 @@ public class MainActivity extends BridgeActivity {
             Log.e(TAG, "Failed to register DlkamAndroid JavascriptInterface", e);
         }
 
-        // Enqueue the WorkManager background synchronization task + live background executor + persistent foreground service
+        // Enqueue the WorkManager background synchronization task + live background executor
         setupScheduler();
         startFastNativeNotificationPoller();
-        DlkamBackgroundService.startServiceSafely(getApplicationContext());
+    }
+
+    private void syncWebViewUserToNativePrefsIfNeeded() {
+        try {
+            if (this.getBridge() != null && this.getBridge().getWebView() != null) {
+                WebView webView = this.getBridge().getWebView();
+                webView.evaluateJavascript(
+                        "(function(){ try { var u = localStorage.getItem('app_current_user'); var h = localStorage.getItem('app_server_host') || window.location.origin; if (u && window.DlkamAndroid && window.DlkamAndroid.syncSessionCredentialsNative) { var p = JSON.parse(u); if (p && p.username) { window.DlkamAndroid.syncSessionCredentialsNative(p.username, p.role || '', h || 'https://dlkam.ir'); } } } catch(e){} })();",
+                        null
+                );
+            }
+        } catch (Exception ignored) {}
+    }
+
+    @Override
+    public void onPause() {
+        syncWebViewUserToNativePrefsIfNeeded();
+        try {
+            SyncWorker.scheduleNextPeriodicWorkPulse(getApplicationContext(), 60L);
+        } catch (Exception ignored) {}
+        super.onPause();
+    }
+
+    @Override
+    public void onStop() {
+        try {
+            SyncWorker.scheduleNextPeriodicWorkPulse(
+                    getApplicationContext(),
+                    SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+            );
+        } catch (Exception ignored) {}
+        super.onStop();
     }
 
     @Override
@@ -124,39 +152,13 @@ public class MainActivity extends BridgeActivity {
         if (nativePollExecutor != null && !nativePollExecutor.isShutdown()) {
             nativePollExecutor.shutdownNow();
         }
-        // Schedule silent periodic background check after MainActivity closes (no sticky notification)
         try {
-            DlkamBackgroundService.clearLegacyStickyNotification(getApplicationContext());
-            if (DlkamBackgroundService.hasLoggedInUser(getApplicationContext())) {
-                DlkamBackgroundService.schedulePeriodicBackgroundCheck(
-                        getApplicationContext(),
-                        DlkamBackgroundService.IDLE_ALARM_INTERVAL_MS
-                );
-            }
+            SyncWorker.scheduleNextPeriodicWorkPulse(
+                    getApplicationContext(),
+                    SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+            );
         } catch (Exception ignored) {}
         super.onDestroy();
-    }
-
-    private void requestIgnoreBatteryOptimizationsIfNeeded(boolean forcePrompt) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                String pkg = getPackageName();
-                if (pm != null && !pm.isIgnoringBatteryOptimizations(pkg)) {
-                    SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                    boolean alreadyPromptedOnce = prefs.getBoolean("battery_opt_prompted_v1", false);
-                    if (forcePrompt || !alreadyPromptedOnce) {
-                        prefs.edit().putBoolean("battery_opt_prompted_v1", true).apply();
-                        Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                        intent.setData(Uri.parse("package:" + pkg));
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(intent);
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Could not request ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", e);
-            }
-        }
     }
 
     private void requestPostNotificationsPermissionIfNeeded() {
@@ -177,7 +179,6 @@ public class MainActivity extends BridgeActivity {
     }
 
     public static void ensureNotificationChannels(Context context) {
-        DlkamBackgroundService.clearLegacyStickyNotification(context);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -332,7 +333,10 @@ public class MainActivity extends BridgeActivity {
             try {
                 requestPostNotificationsPermissionIfNeeded();
                 ensureNotificationChannels(context);
-                DlkamBackgroundService.startServiceSafely(context.getApplicationContext());
+                SyncWorker.scheduleNextPeriodicWorkPulse(
+                        context.getApplicationContext(),
+                        SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+                );
                 return true;
             } catch (Exception e) {
                 return false;
@@ -349,30 +353,6 @@ public class MainActivity extends BridgeActivity {
                 return NotificationManagerCompat.from(context).areNotificationsEnabled();
             } catch (Exception e) {
                 return true;
-            }
-        }
-
-        @JavascriptInterface
-        public boolean requestIgnoreBatteryOptimizationsNative() {
-            try {
-                requestIgnoreBatteryOptimizationsIfNeeded(true);
-                DlkamBackgroundService.startServiceSafely(context.getApplicationContext());
-                return true;
-            } catch (Exception e) {
-                return false;
-            }
-        }
-
-        @JavascriptInterface
-        public boolean isIgnoringBatteryOptimizationsNative() {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
-                    return pm != null && pm.isIgnoringBatteryOptimizations(context.getPackageName());
-                }
-                return true;
-            } catch (Exception e) {
-                return false;
             }
         }
 
@@ -399,7 +379,10 @@ public class MainActivity extends BridgeActivity {
                     editor.putString("_cap_server_url", cleanUrl);
                 }
                 editor.apply();
-                DlkamBackgroundService.startServiceSafely(context.getApplicationContext());
+                SyncWorker.scheduleNextPeriodicWorkPulse(
+                        context.getApplicationContext(),
+                        SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+                );
                 return true;
             } catch (Exception e) {
                 Log.e(TAG, "syncSessionCredentialsNative error", e);
@@ -699,11 +682,15 @@ public class MainActivity extends BridgeActivity {
                     syncRequest
             );
 
-            // Also run an immediate one-time sync on startup
+            // Also run an immediate one-time sync on startup + schedule periodic 90s WorkManager pulse
             OneTimeWorkRequest immediateSync = new OneTimeWorkRequest.Builder(SyncWorker.class)
                     .setConstraints(constraints)
                     .build();
             WorkManager.getInstance(this).enqueue(immediateSync);
+            SyncWorker.scheduleNextPeriodicWorkPulse(
+                    getApplicationContext(),
+                    SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+            );
             
             Log.i(TAG, "WorkManager Background Sync Task successfully registered.");
         } catch (Exception e) {
