@@ -13557,13 +13557,14 @@ async function executeReportJob(job) {
         const waGroup = job.whatsappGroup || job.destinationGroup || defaultWaGroup;
 
         const customTargets = [];
-        if (job.botPlatforms?.includes('telegram') && teleGroup) {
-            const ids = String(teleGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean);
-            ids.forEach(id => customTargets.push({ platform: 'telegram', id }));
-        }
+        // Prioritize Bale (domestic National Information Network) first so it delivers immediately even if international internet is cut
         if (job.botPlatforms?.includes('bale') && baleGroup) {
             const ids = String(baleGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean);
             ids.forEach(id => customTargets.push({ platform: 'bale', id }));
+        }
+        if (job.botPlatforms?.includes('telegram') && teleGroup) {
+            const ids = String(teleGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean);
+            ids.forEach(id => customTargets.push({ platform: 'telegram', id }));
         }
         if (job.botPlatforms?.includes('whatsapp') && waGroup) {
             const ids = String(waGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean);
@@ -15158,11 +15159,12 @@ app.post('/api/ai/sayan-send-bot', async (req, res) => {
         const waGroup = customGroupWa || settings.botBijakGroupIdWhatsApp || settings.dailySalesWhatsappGroupId;
 
         const targets = [];
-        if (selectedPlatforms.includes('telegram') && tgGroup) {
-            String(tgGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean).forEach(id => targets.push({ platform: 'telegram', id }));
-        }
+        // Prioritize Bale (domestic National Information Network) first so it delivers immediately even if international internet is cut
         if (selectedPlatforms.includes('bale') && bGroup) {
             String(bGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean).forEach(id => targets.push({ platform: 'bale', id }));
+        }
+        if (selectedPlatforms.includes('telegram') && tgGroup) {
+            String(tgGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean).forEach(id => targets.push({ platform: 'telegram', id }));
         }
         if (selectedPlatforms.includes('whatsapp') && waGroup) {
             String(waGroup).split(/[,،;\n\r]+/).map(s => s.trim()).filter(Boolean).forEach(id => targets.push({ platform: 'whatsapp', id }));

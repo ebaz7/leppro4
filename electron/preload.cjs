@@ -15,6 +15,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('navigate-to-url', handler);
     return () => ipcRenderer.removeListener('navigate-to-url', handler);
+  },
+  onAutoLogout: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('desktop-auto-logout', handler);
+    return () => ipcRenderer.removeListener('desktop-auto-logout', handler);
   }
 });
+
+ipcRenderer.on('desktop-auto-logout', () => {
+  try {
+    localStorage.removeItem('app_current_user');
+    sessionStorage.removeItem('dlkam_desktop_session_active');
+    window.dispatchEvent(new CustomEvent('desktop-auto-logout'));
+  } catch (_) {}
+});
+
 

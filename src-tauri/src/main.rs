@@ -466,6 +466,14 @@ fn main() {
             match main_window {
                 Ok(win) => {
                     println!("Main desktop window successfully spawned with local UI.");
+                    let win_for_close = win.clone();
+                    win.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { .. } = event {
+                            let _ = win_for_close.eval(
+                                "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
+                            );
+                        }
+                    });
                     let _ = win.maximize();
                     let _ = win.show();
                     let _ = win.set_focus();

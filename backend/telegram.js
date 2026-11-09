@@ -4,8 +4,51 @@ import * as BotCore from './bot-core.js';
 import { getDb } from './db-manager.js';
 
 let bot = null;
-
 let currentToken = null;
+let telegramOfflineUntil = 0;
+
+const isNetworkConnectivityError = (err) => {
+    const msg = String(err?.message || err?.code || err || '').toUpperCase();
+    return (
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('ESOCKETTIMEDOUT') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ENOTFOUND') ||
+        msg.includes('EHOSTUNREACH') ||
+        msg.includes('ENETUNREACH') ||
+        msg.includes('EFATAL') ||
+        msg.includes('TELEGRAM_TIMEOUT')
+    );
+};
+
+const withTelegramTimeout = async (operationPromise, timeoutMs = 6000) => {
+    if (Date.now() < telegramOfflineUntil && !process.env.PROXY_URL) {
+        throw new Error('سرور تلگرام در دسترس نیست (احتمال قطع اینترنت بین‌الملل - مدار محافظ فعال)');
+    }
+    let timer = null;
+    try {
+        const result = await Promise.race([
+            operationPromise,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    const err = new Error('TELEGRAM_TIMEOUT: عدم پاسخگویی سرور تلگرام در زمان مجاز (احتمال قطع اینترنت بین‌الملل)');
+                    err.code = 'ETIMEDOUT';
+                    reject(err);
+                }, timeoutMs);
+            })
+        ]);
+        telegramOfflineUntil = 0;
+        return result;
+    } catch (err) {
+        if (isNetworkConnectivityError(err)) {
+            telegramOfflineUntil = Date.now() + 45000;
+        }
+        throw err;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+};
 
 const ensureBotActive = async () => {
     if (!bot) {
@@ -40,7 +83,7 @@ export const initTelegram = async (token) => {
 
     currentToken = token;
 
-    const requestOptions = { agentOptions: { keepAlive: true, family: 4 }, timeout: 30000 };
+    const requestOptions = { agentOptions: { keepAlive: true, family: 4 }, timeout: 8000 };
     if (process.env.PROXY_URL) requestOptions.proxy = process.env.PROXY_URL;
 
     try {
@@ -203,6 +246,9 @@ export const initTelegram = async (token) => {
         });
         
         bot.on('polling_error', (error) => {
+            if (isNetworkConnectivityError(error)) {
+                telegramOfflineUntil = Date.now() + 45000;
+            }
             console.error(`[Telegram Polling Error] ${error.code}: ${error.message}`);
         });
 
@@ -216,7 +262,7 @@ export const sendBotMessage = async (chatId, text, opts) => {
         if (token) await initTelegram(token);
     }
     if (!bot) return Promise.reject(new Error("ربات تلگرام غیرفعال است. لطفاً توکن ربات تلگرام را در «تنظیمات سیستم ⚙️ -> تب ربات‌ها» وارد نمایید."));
-    return bot.sendMessage(chatId, text, opts);
+    return withTelegramTimeout(bot.sendMessage(chatId, text, opts), 6000);
 };
 
 export const sendBotPhoto = async (chatId, buffer, caption, opts) => {
@@ -226,11 +272,13 @@ export const sendBotPhoto = async (chatId, buffer, caption, opts) => {
         if (token) await initTelegram(token);
     }
     if (!bot) return Promise.reject(new Error("ربات تلگرام غیرفعال است. لطفاً توکن ربات تلگرام را در «تنظیمات سیستم ⚙️ -> تب ربات‌ها» وارد نمایید."));
-    const safeBuf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    const safeBuf = Buffer.isBuffer(buffer) ? bufOrCopy(buffer) : Buffer.from(buffer);
     const safeCaption = caption && caption.length > 1000 ? caption.slice(0, 995) + '...' : caption;
     const fileOptions = { filename: opts?.filename || 'image.png', contentType: opts?.contentType || 'image/png' };
-    return bot.sendPhoto(chatId, safeBuf, { caption: safeCaption, ...opts }, fileOptions);
+    return withTelegramTimeout(bot.sendPhoto(chatId, safeBuf, { caption: safeCaption, ...opts }, fileOptions), 8000);
 };
+
+const bufOrCopy = (b) => b;
 
 export const sendBotDocument = async (chatId, buffer, name, caption) => {
     await ensureBotActive();
@@ -244,11 +292,14 @@ export const sendBotDocument = async (chatId, buffer, name, caption) => {
     const contentType = name && name.endsWith('.xlsx')
         ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         : (name && name.endsWith('.csv') ? 'text/csv' : 'application/pdf');
-    return bot.sendDocument(chatId, safeBuf, { caption: safeCaption }, { filename: name || 'document.pdf', contentType });
+    return withTelegramTimeout(
+        bot.sendDocument(chatId, safeBuf, { caption: safeCaption }, { filename: name || 'document.pdf', contentType }),
+        9000
+    );
 };
 
 export const deleteBotMessage = async (chatId, messageId) => {
     await ensureBotActive();
     if (!bot) return Promise.reject("Bot Telegram not initialized");
-    return bot.deleteMessage(chatId, messageId).catch(e => console.error("TG delete error:", e.message));
+    return withTelegramTimeout(bot.deleteMessage(chatId, messageId), 5000).catch(e => console.error("TG delete error:", e.message));
 };

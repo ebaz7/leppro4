@@ -241,6 +241,8 @@ async function dispatchPushNotification(queueItem) {
     const deadEndpoints = new Set();
     let pushSentCount = 0;
 
+    const pushTasks = [];
+
     for (const sub of subscriptions) {
         const subUsername = sub.username ? String(sub.username).toLowerCase().trim() : null;
         const subRole = sub.role ? String(sub.role).toLowerCase().trim() : null;
@@ -260,19 +262,28 @@ async function dispatchPushNotification(queueItem) {
 
         const pushSub = sub.subscription || (sub.endpoint && sub.keys ? { endpoint: sub.endpoint, keys: sub.keys } : null);
         if (pushSub && pushSub.endpoint && pushSub.endpoint.startsWith('http')) {
-            try {
-                await webpush.sendNotification(pushSub, pushPayload, {
-                    TTL: queueItem.priority === 1 ? 86400 : 43200, // 24h for urgent PVs
-                    urgency: queueItem.priority === 1 ? 'high' : 'normal'
-                });
-                pushSentCount++;
-            } catch (err) {
-                // If 404 or 410 Gone, device subscription has expired
-                if (err.statusCode === 404 || err.statusCode === 410) {
-                    deadEndpoints.add(sub.endpoint);
-                }
-            }
+            pushTasks.push(
+                Promise.race([
+                    webpush.sendNotification(pushSub, pushPayload, {
+                        TTL: queueItem.priority === 1 ? 86400 : 43200, // 24h for urgent PVs
+                        urgency: queueItem.priority === 1 ? 'high' : 'normal',
+                        timeout: 3500
+                    }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('WebPush timeout (National Internet / LAN fallback)')), 3500))
+                ]).then(() => {
+                    pushSentCount++;
+                }).catch((err) => {
+                    // If 404 or 410 Gone, device subscription has expired
+                    if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+                        deadEndpoints.add(sub.endpoint);
+                    }
+                })
+            );
         }
+    }
+
+    if (pushTasks.length > 0) {
+        await Promise.allSettled(pushTasks);
     }
 
     // Prune dead subscriptions if any failed with 404/410

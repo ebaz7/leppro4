@@ -85,7 +85,10 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
           const result = await PushNotifications.requestPermissions();
           if (result.receive === 'granted') {
               pushGranted = true;
-              await PushNotifications.register();
+              await Promise.race([
+                  PushNotifications.register(),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('FCM register timeout (National Internet / LAN fallback)')), 3500))
+              ]);
           }
       } catch (e) {
           console.warn("PushNotifications registration notice (using Local/SSE fallback):", e);
@@ -140,7 +143,10 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
   try {
       const permission = await Notification.requestPermission();
       if (permission === 'granted') {
-          await subscribeToPushNotifications();
+          // Run push subscription in background so unreachable FCM (without international internet) never blocks UI permission flow
+          subscribeToPushNotifications().catch(err => {
+              console.warn('[Push] Background push subscription skipped (using SSE/Local notification fallback):', err?.message || err);
+          });
           return true;
       }
       return false;
@@ -414,14 +420,17 @@ export const setupNativePushNotifications = async (username: string, role: strin
             }
         }
 
-        // Request permissions and trigger register
+        // Request permissions and trigger register with 3.5s timeout for National Internet / LAN resilience
         const result = await PushNotifications.requestPermissions();
         if (result.receive === 'granted') {
-            await PushNotifications.register();
+            await Promise.race([
+                PushNotifications.register(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('FCM register timeout (SSE/Local active)')), 3500))
+            ]);
             console.log("PushNotifications registered for user:", username);
         }
     } catch (e) {
-        console.error("setupNativePushNotifications setup failed:", e);
+        console.warn("setupNativePushNotifications notice (SSE/Local notifications active):", e);
     }
 };
 
@@ -440,20 +449,31 @@ export const subscribeToPushNotifications = async () => {
     }
 
     try {
+        // Always sync Service Worker auth state first so local/SSE notifications work offline/intranet immediately
+        await syncServiceWorkerAuth(user);
+
         // 1. Get VAPID Key from Server
         const { publicKey } = await apiCall<{publicKey: string}>('/vapid-key');
         if (!publicKey) throw new Error("No VAPID key returned");
 
         // 2. Get Service Worker Registration
-        const registration = await navigator.serviceWorker.ready;
+        const registration = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise<ServiceWorkerRegistration>((_, reject) => setTimeout(() => reject(new Error("ServiceWorker ready timeout")), 3500))
+        ]);
         if (!registration || !registration.pushManager) throw new Error("Push manager not available");
 
-        // 3. Subscribe to Push Manager
+        // 3. Subscribe to Push Manager with a strict 3.5s timeout (avoids hanging on fcm.googleapis.com when international internet is cut)
         const convertedVapidKey = urlBase64ToUint8Array(publicKey);
-        const subscription = await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: convertedVapidKey
-        });
+        const subscription = await Promise.race([
+            registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: convertedVapidKey
+            }),
+            new Promise<PushSubscription>((_, reject) =>
+                setTimeout(() => reject(new Error("WebPush FCM endpoint unreachable (National Internet / Intranet mode - using SSE real-time channel)")), 3500)
+            )
+        ]);
 
         // 4. Send Subscription to Server
         const subData = subscription.toJSON();
@@ -468,12 +488,9 @@ export const subscribeToPushNotifications = async () => {
             localStorage.setItem('push_endpoint', subscription.endpoint);
         }
 
-        // 5. Inform Service Worker of logged-in status
-        await syncServiceWorkerAuth(user);
-
         console.log("✅ Web Push Subscribed Successfully for user:", user.username);
-    } catch (e) {
-        console.error("Failed to subscribe to push:", e);
+    } catch (e: any) {
+        console.warn("[Push] WebPush subscription unavailable (SSE & Local SW notifications remain active):", e?.message || e);
     }
 };
 

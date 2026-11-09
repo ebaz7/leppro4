@@ -80,3 +80,24 @@ test('SSE client resolves server URL via getEffectiveApiUrl and Layout test butt
   assert.equal(layoutCode.includes('if (notifEnabled) { \n          setNotifEnabled(false);'), false, 'Layout.tsx must not disable notifications when clicking تست ارسال');
   assert.ok(layoutCode.includes('این یک اعلان آزمایشی است'), 'Layout.tsx must send a test notification when clicking تست ارسال');
 });
+
+test('Android app prevents background sleep via DlkamBackgroundService foreground service, BootReceiver, and battery optimization exemption', () => {
+  const manifest = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  assert.ok(manifest.includes('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), 'AndroidManifest.xml must declare REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
+  assert.ok(manifest.includes('android.permission.FOREGROUND_SERVICE_DATA_SYNC'), 'AndroidManifest.xml must declare FOREGROUND_SERVICE_DATA_SYNC');
+  assert.ok(manifest.includes('com.payment.system.DlkamBackgroundService'), 'AndroidManifest.xml must register DlkamBackgroundService');
+  assert.ok(manifest.includes('com.payment.system.BootReceiver'), 'AndroidManifest.xml must register BootReceiver');
+
+  const bgServicePath = path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'DlkamBackgroundService.java');
+  assert.equal(fs.existsSync(bgServicePath), true, 'DlkamBackgroundService.java must exist');
+  const bgService = fs.readFileSync(bgServicePath, 'utf8');
+  assert.ok(bgService.includes('START_STICKY'), 'DlkamBackgroundService must return START_STICKY');
+  assert.ok(bgService.includes('SyncWorker.pollAndDispatchNotifications'), 'DlkamBackgroundService must continuously poll and dispatch notifications in background');
+  assert.ok(bgService.includes('setAndAllowWhileIdle'), 'DlkamBackgroundService must schedule Doze-safe AlarmManager pulse');
+
+  const mainActivity = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'MainActivity.java'), 'utf8');
+  assert.ok(mainActivity.includes('DlkamBackgroundService.startServiceSafely'), 'MainActivity.java must start DlkamBackgroundService');
+  assert.ok(mainActivity.includes('ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS'), 'MainActivity.java must prompt to ignore battery optimizations');
+  assert.ok(mainActivity.includes('syncSessionCredentialsNative'), 'MainActivity.java must expose syncSessionCredentialsNative to keep native SharedPreferences in sync');
+});
+

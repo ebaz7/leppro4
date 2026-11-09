@@ -1,5 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { login } from '../services/authService';
+import {
+  login,
+  getSavedAccounts,
+  saveAccountOnLogin,
+  removeSavedAccount,
+  decodeSavedPassword,
+  SavedAccountEntry
+} from '../services/authService';
 import { getServerHost, setServerHost, apiCall } from '../services/apiService';
 import { User } from '../types';
 import { 
@@ -27,7 +34,9 @@ import {
   Eye,
   EyeOff,
   Monitor,
-  Smartphone
+  Smartphone,
+  ChevronDown,
+  Trash2
 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
@@ -37,29 +46,18 @@ interface LoginProps {
   onLogin: (user: User) => void;
 }
 
-const encodeSavedPass = (str: string): string => {
-  try {
-    return btoa(encodeURIComponent(str));
-  } catch (e) {
-    return str;
-  }
-};
-
-const decodeSavedPass = (str: string): string => {
-  try {
-    return decodeURIComponent(atob(str));
-  } catch (e) {
-    return str;
-  }
-};
-
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [rememberPassword, setRememberPassword] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [savedAccounts, setSavedAccounts] = useState<SavedAccountEntry[]>([]);
+  const [showAccountsDropdown, setShowAccountsDropdown] = useState(false);
+  const [isAutoFilledPassword, setIsAutoFilledPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const dropdownContainerRef = useRef<HTMLDivElement>(null);
   
   // Interactive Lamp States
   const [isLampOn, setIsLampOn] = useState(true);
@@ -79,26 +77,72 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [testMessage, setTestMessage] = useState('');
 
+  const selectSavedAccount = (acc: SavedAccountEntry, focusPassIfEmpty = false) => {
+    setUsername(acc.username);
+    setShowAccountsDropdown(false);
+    setError('');
+
+    if (!isMobileApp() && acc.rememberPassword && acc.encodedPassword) {
+      setPassword(decodeSavedPassword(acc.encodedPassword));
+      setRememberPassword(true);
+      setIsAutoFilledPassword(true);
+    } else {
+      setPassword('');
+      setRememberPassword(false);
+      setIsAutoFilledPassword(false);
+      if (focusPassIfEmpty) {
+        setTimeout(() => passwordInputRef.current?.focus(), 60);
+      }
+    }
+  };
+
+  const handleUsernameChange = (val: string) => {
+    setUsername(val);
+    const trimmed = val.trim().toLowerCase();
+    const matched = savedAccounts.find(a => a.username.toLowerCase() === trimmed);
+
+    if (matched) {
+      if (!isMobileApp() && matched.rememberPassword && matched.encodedPassword) {
+        setPassword(decodeSavedPassword(matched.encodedPassword));
+        setRememberPassword(true);
+        setIsAutoFilledPassword(true);
+      } else {
+        if (isAutoFilledPassword) {
+          setPassword('');
+        }
+        setRememberPassword(false);
+        setIsAutoFilledPassword(false);
+      }
+    } else if (isAutoFilledPassword) {
+      setPassword('');
+      setRememberPassword(false);
+      setIsAutoFilledPassword(false);
+    }
+  };
+
+  const handleRemoveSavedAccount = (e: React.MouseEvent, targetUsername: string) => {
+    e.stopPropagation();
+    const updated = removeSavedAccount(targetUsername);
+    setSavedAccounts(updated);
+    if (username.trim().toLowerCase() === targetUsername.trim().toLowerCase()) {
+      if (updated.length > 0) {
+        selectSavedAccount(updated[0], false);
+      } else {
+        setUsername('');
+        setPassword('');
+        setRememberPassword(false);
+        setIsAutoFilledPassword(false);
+      }
+    }
+  };
+
   useEffect(() => {
     try {
-      const savedUsername = localStorage.getItem('saved_username');
-      if (savedUsername) setUsername(savedUsername);
+      const accounts = getSavedAccounts();
+      setSavedAccounts(accounts);
 
-      // Save password logic for Web & Windows Desktop (Not Mobile/Android)
-      if (!isMobileApp()) {
-        const savedCredsRaw = localStorage.getItem('dlkam_saved_credentials');
-        if (savedCredsRaw) {
-          try {
-            const parsed = JSON.parse(savedCredsRaw);
-            if (parsed && parsed.username) {
-              setUsername(parsed.username);
-              if (parsed.password) {
-                setPassword(decodeSavedPass(parsed.password));
-                setRememberPassword(true);
-              }
-            }
-          } catch (e) {}
-        }
+      if (accounts.length > 0) {
+        selectSavedAccount(accounts[0], false);
       }
       
       const native = Capacitor.isNativePlatform();
@@ -115,6 +159,16 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     } catch(e) {
       console.error("Login Init Error", e);
     }
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (ev: MouseEvent) => {
+      if (dropdownContainerRef.current && !dropdownContainerRef.current.contains(ev.target as Node)) {
+        setShowAccountsDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const toggleLamp = () => {
@@ -159,19 +213,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       const user = await login(username, password);
       if (user) {
-        localStorage.setItem('saved_username', username);
-
-        // Save password handling for Web & Windows Desktop (Not Mobile/Android)
-        if (!isMobileApp()) {
-          if (rememberPassword) {
-            localStorage.setItem('dlkam_saved_credentials', JSON.stringify({
-              username,
-              password: encodeSavedPass(password)
-            }));
-          } else {
-            localStorage.removeItem('dlkam_saved_credentials');
-          }
-        }
+        // Save username in the saved accounts list; only store password if rememberPassword was checked
+        const updatedAccounts = saveAccountOnLogin(
+          { username: user.username || username, fullName: user.fullName, role: user.role },
+          password,
+          !isMobileApp() && rememberPassword
+        );
+        setSavedAccounts(updatedAccounts);
 
         onLogin(user);
       }
@@ -605,22 +653,140 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 {/* Form Body */}
                 <form onSubmit={handleSubmit} className="space-y-4">
                   
-                  {/* Username Field */}
-                  <div className="space-y-1.5">
+                  {/* Saved Usernames Quick Selector + Input */}
+                  <div className="space-y-2" ref={dropdownContainerRef}>
                     <label className="text-xs font-bold text-slate-300 block mr-1 flex items-center justify-between">
                       <span>نام کاربری</span>
-                      <span className="text-[10px] text-slate-500">شناسه پرسنلی / ایمیل</span>
+                      {savedAccounts.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAccountsDropdown(prev => !prev)}
+                          className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <span>لیست کاربران ({savedAccounts.length})</span>
+                          <ChevronDown size={13} className={`transition-transform ${showAccountsDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-500">شناسه پرسنلی / ایمیل</span>
+                      )}
                     </label>
+
+                    {/* Quick Select Chips for Saved Usernames */}
+                    {savedAccounts.length > 0 && (
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                        {savedAccounts.map((acc) => {
+                          const isSelected = username.trim().toLowerCase() === acc.username.toLowerCase();
+                          return (
+                            <button
+                              key={acc.username}
+                              type="button"
+                              onClick={() => selectSavedAccount(acc, true)}
+                              className={`group inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-all shrink-0 cursor-pointer ${
+                                isSelected
+                                  ? 'bg-amber-500/20 border-amber-400/60 text-amber-300 shadow-sm shadow-amber-500/10'
+                                  : 'bg-slate-900/70 border-slate-700/70 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                              }`}
+                              title={acc.rememberPassword ? 'رمز عبور ذخیره شده است (کلیک برای بارگذاری)' : 'نیازمند وارد کردن رمز عبور'}
+                            >
+                              {acc.rememberPassword ? (
+                                <KeyRound size={12} className="text-emerald-400 shrink-0" />
+                              ) : (
+                                <Lock size={12} className="text-slate-400 shrink-0" />
+                              )}
+                              <span>{acc.fullName ? `${acc.username} (${acc.fullName})` : acc.username}</span>
+                              <span
+                                role="button"
+                                tabIndex={-1}
+                                onClick={(e) => handleRemoveSavedAccount(e, acc.username)}
+                                className="mr-0.5 p-0.5 rounded-md text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                title="حذف این نام کاربری از لیست"
+                              >
+                                <Trash2 size={11} />
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
                     <div className="relative">
                       <input 
                         type="text" 
                         value={username} 
-                        onChange={(e) => setUsername(e.target.value)} 
-                        className="w-full bg-slate-950/70 border border-slate-700/70 rounded-2xl px-4 py-3.5 pr-11 text-right text-sm text-slate-100 font-medium placeholder:text-slate-600 focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20 outline-none transition-all" 
-                        placeholder="نام کاربری خود را وارد کنید"
+                        onChange={(e) => handleUsernameChange(e.target.value)}
+                        onFocus={() => {
+                          if (savedAccounts.length > 1) setShowAccountsDropdown(true);
+                        }}
+                        className="w-full bg-slate-950/70 border border-slate-700/70 rounded-2xl px-4 py-3.5 pr-11 pl-10 text-right text-sm text-slate-100 font-medium placeholder:text-slate-600 focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20 outline-none transition-all" 
+                        placeholder="نام کاربری خود را وارد یا از لیست انتخاب کنید"
+                        autoComplete="username"
                         required 
                       />
                       <UserIcon size={18} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                      {savedAccounts.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAccountsDropdown(prev => !prev)}
+                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-400 p-1 transition-colors cursor-pointer"
+                          title="نمایش لیست نام‌های کاربری"
+                        >
+                          <ChevronDown size={16} className={`transition-transform ${showAccountsDropdown ? 'rotate-180 text-amber-400' : ''}`} />
+                        </button>
+                      )}
+
+                      {/* Dropdown Menu of Saved Accounts */}
+                      <AnimatePresence>
+                        {showAccountsDropdown && savedAccounts.length > 0 && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -6 }}
+                            transition={{ duration: 0.15 }}
+                            className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-slate-900/95 backdrop-blur-xl border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden max-h-52 overflow-y-auto divide-y divide-slate-800/70"
+                          >
+                            {savedAccounts.map((acc) => {
+                              const isSelected = username.trim().toLowerCase() === acc.username.toLowerCase();
+                              return (
+                                <div
+                                  key={acc.username}
+                                  onClick={() => selectSavedAccount(acc, true)}
+                                  className={`flex items-center justify-between px-3.5 py-2.5 cursor-pointer transition-colors ${
+                                    isSelected ? 'bg-amber-500/15 text-amber-300' : 'hover:bg-slate-800/80 text-slate-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${
+                                      acc.rememberPassword
+                                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                    }`}>
+                                      {acc.rememberPassword ? <KeyRound size={14} /> : <Lock size={14} />}
+                                    </div>
+                                    <div className="min-w-0 text-right">
+                                      <div className="text-xs font-extrabold truncate">
+                                        {acc.username}
+                                        {acc.fullName ? ` (${acc.fullName})` : ''}
+                                      </div>
+                                      <div className="text-[10px] text-slate-400">
+                                        {acc.rememberPassword ? 'رمز عبور ذخیره شده • آماده ورود' : 'بدون رمز ذخیره‌شده • نیازمند وارد کردن رمز'}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleRemoveSavedAccount(e, acc.username)}
+                                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
+                                    title="حذف حساب از لیست"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   </div>
 
@@ -628,15 +794,22 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-slate-300 block mr-1 flex items-center justify-between">
                       <span>کلمه عبور</span>
-                      <span className="text-[10px] text-slate-500">حساس به حروف بزرگ و کوچک</span>
+                      <span className="text-[10px] text-slate-500">
+                        {isAutoFilledPassword ? 'رمز ذخیره‌شده بارگذاری شد (دکمه ورود را بزنید)' : 'حساس به حروف بزرگ و کوچک'}
+                      </span>
                     </label>
                     <div className="relative">
                       <input 
+                        ref={passwordInputRef}
                         type={showPassword ? 'text' : 'password'} 
                         value={password} 
-                        onChange={(e) => setPassword(e.target.value)} 
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          setIsAutoFilledPassword(false);
+                        }} 
                         className="w-full bg-slate-950/70 border border-slate-700/70 rounded-2xl px-4 py-3.5 pr-11 pl-11 text-right text-sm text-slate-100 font-medium placeholder:text-slate-600 focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20 outline-none transition-all" 
                         placeholder="••••••••"
+                        autoComplete="current-password"
                         required 
                       />
                       <Lock size={18} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
@@ -663,7 +836,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                           className="w-4 h-4 rounded border-slate-700/80 bg-slate-950 text-amber-500 focus:ring-2 focus:ring-amber-400/20 transition-all cursor-pointer accent-amber-500"
                         />
                         <span className="group-hover:text-amber-300 transition-colors">
-                          ذخیره رمز عبور در این سیستم
+                          ذخیره رمز عبور برای این نام کاربری
                         </span>
                       </label>
                       <span className="text-[10px] text-slate-500">ذخیره‌سازی ایمن محلی</span>

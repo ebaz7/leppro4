@@ -1055,11 +1055,17 @@ function App() {
         if (e.detail) setActiveTab(e.detail);
     };
     const handleOpenNotes = () => setActiveTab('notes');
+    const handleDesktopAutoLogout = () => {
+        authLogout();
+        setCurrentUser(null);
+    };
     window.addEventListener('CHANGE_TAB' as any, handleTabChange);
     window.addEventListener('OPEN_NOTES_TAB' as any, handleOpenNotes);
+    window.addEventListener('desktop-auto-logout' as any, handleDesktopAutoLogout);
     return () => {
         window.removeEventListener('CHANGE_TAB' as any, handleTabChange);
         window.removeEventListener('OPEN_NOTES_TAB' as any, handleOpenNotes);
+        window.removeEventListener('desktop-auto-logout' as any, handleDesktopAutoLogout);
     };
   }, []);
 
@@ -1078,6 +1084,12 @@ function App() {
         Preferences.remove({ key: 'user_role' }).catch(() => {});
         Preferences.remove({ key: 'user_logged_in' }).catch(() => {});
       }
+      try {
+        const win = window as any;
+        if (win.DlkamAndroid && typeof win.DlkamAndroid.clearSessionCredentialsNative === 'function') {
+          win.DlkamAndroid.clearSessionCredentialsNative();
+        }
+      } catch (_) {}
       setCurrentUser(null); 
       isFirstLoad.current = true; 
       if (idleTimeoutRef.current) {
@@ -1758,9 +1770,20 @@ function App() {
 
   useEffect(() => {
     const syncSettings = async () => {
+      const host = getServerHost() || 'https://dlkam.ir';
+      try {
+        const win = window as any;
+        if (win.DlkamAndroid) {
+          if (currentUser && typeof win.DlkamAndroid.syncSessionCredentialsNative === 'function') {
+            win.DlkamAndroid.syncSessionCredentialsNative(currentUser.username, currentUser.role, host);
+          } else if (!currentUser && typeof win.DlkamAndroid.clearSessionCredentialsNative === 'function') {
+            win.DlkamAndroid.clearSessionCredentialsNative();
+          }
+        }
+      } catch (_) {}
+
       if (Capacitor.isNativePlatform()) {
         try {
-          const host = getServerHost() || 'https://dlkam.ir';
           if (currentUser) {
             await Preferences.set({ key: 'user_username', value: currentUser.username });
             await Preferences.set({ key: 'user_role', value: currentUser.role });

@@ -1,22 +1,42 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User as FirebaseUser, Auth } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
 
-// Reuse existing app if already initialized
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+// Lazy initialization of Firebase App & Auth so importing this module on Dashboard startup
+// NEVER triggers background connections to googleapis.com when operating on National Internet / LAN
+let _firebaseApp: FirebaseApp | null = null;
+let _firebaseAuth: Auth | null = null;
+
+export const getFirebaseAuth = (): Auth => {
+  if (!_firebaseAuth) {
+    _firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    _firebaseAuth = getAuth(_firebaseApp);
+  }
+  return _firebaseAuth;
+};
+
+export const fetchWithGoogleTimeout = async (
+  input: string,
+  init?: RequestInit,
+  timeoutMs: number = 4000
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 export const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/calendar.events.readonly',
   'https://www.googleapis.com/auth/tasks.readonly',
 ];
-
-const provider = new GoogleAuthProvider();
-GOOGLE_WORKSPACE_SCOPES.forEach(scope => provider.addScope(scope));
-provider.setCustomParameters({
-  prompt: 'select_account',
-});
 
 export const isRunningInIframe = (): boolean => {
   try {
@@ -132,9 +152,9 @@ export const signInWithGsi = async (
           }
 
           try {
-            const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            const userInfoRes = await fetchWithGoogleTimeout('https://www.googleapis.com/oauth2/v3/userinfo', {
               headers: { Authorization: `Bearer ${accessToken}` }
-            });
+            }, 4000);
             const userInfo = await userInfoRes.json();
             resolve({
               email: userInfo.email || 'Google User',
@@ -234,10 +254,16 @@ export const initGoogleAuth = (
   onAuthFailure?: () => void,
   userId?: string | number
 ) => {
-  return onAuthStateChanged(auth, async (user) => {
-    const token = getStoredGoogleTokenForUser(userId);
-    if (user && token) {
-      if (onAuthSuccess) onAuthSuccess(user, token);
+  const token = getStoredGoogleTokenForUser(userId);
+  if (!token) {
+    if (onAuthFailure) onAuthFailure();
+    return () => {};
+  }
+  const authInstance = getFirebaseAuth();
+  return onAuthStateChanged(authInstance, async (user) => {
+    const activeToken = getStoredGoogleTokenForUser(userId);
+    if (user && activeToken) {
+      if (onAuthSuccess) onAuthSuccess(user, activeToken);
     } else {
       if (onAuthFailure) onAuthFailure();
     }
@@ -251,10 +277,12 @@ export const signInWithGoogleWorkspace = async (
   isSigningIn = true;
   const clientId = (firebaseConfig as any)?.oAuthClientId;
 
-  // Clear previous Firebase session first to guarantee isolation across users
-  try {
-    await auth.signOut();
-  } catch {}
+  // Clear previous Firebase session first if already initialized to guarantee isolation across users
+  if (_firebaseAuth) {
+    try {
+      await _firebaseAuth.signOut();
+    } catch {}
+  }
 
   try {
     const google = (typeof window !== 'undefined' && (window as any).google);
@@ -290,7 +318,8 @@ export const signInWithGoogleWorkspace = async (
       ...(options?.loginHint ? { login_hint: options.loginHint } : {})
     });
 
-    const result = await signInWithPopup(auth, customProvider);
+    const authInstance = getFirebaseAuth();
+    const result = await signInWithPopup(authInstance, customProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Failed to get access token from Google');
@@ -319,9 +348,11 @@ export const getGoogleAccessToken = async (userId?: string | number): Promise<st
 export const logoutGoogleWorkspace = async (userId?: string | number) => {
   const currentToken = userId ? getStoredGoogleTokenForUser(userId) : null;
   
-  try {
-    await auth.signOut();
-  } catch {}
+  if (_firebaseAuth) {
+    try {
+      await _firebaseAuth.signOut();
+    } catch {}
+  }
 
   try {
     const google = (typeof window !== 'undefined' && (window as any).google);
@@ -381,9 +412,9 @@ export const fetchGoogleCalendarEvents = async (
   url.searchParams.append('orderBy', 'startTime');
   url.searchParams.append('maxResults', '50');
 
-  const res = await fetch(url.toString(), {
+  const res = await fetchWithGoogleTimeout(url.toString(), {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, 4000);
 
   if (!res.ok) {
     const errorText = await res.text();
@@ -397,9 +428,9 @@ export const fetchGoogleCalendarEvents = async (
 // Fetch user's Google Tasks
 export const fetchGoogleTasks = async (token: string): Promise<GoogleTaskItem[]> => {
   // First fetch task lists
-  const listsRes = await fetch('https://tasks.googleapis.com/tasks/v1/users/@me/lists', {
+  const listsRes = await fetchWithGoogleTimeout('https://tasks.googleapis.com/tasks/v1/users/@me/lists', {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, 4000);
 
   if (!listsRes.ok) {
     const errorText = await listsRes.text();
@@ -414,9 +445,9 @@ export const fetchGoogleTasks = async (token: string): Promise<GoogleTaskItem[]>
   const allTasks: GoogleTaskItem[] = [];
   for (const list of lists.slice(0, 3)) {
     try {
-      const taskRes = await fetch(`https://tasks.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=true&maxResults=50`, {
+      const taskRes = await fetchWithGoogleTimeout(`https://tasks.googleapis.com/tasks/v1/lists/${list.id}/tasks?showCompleted=true&maxResults=50`, {
         headers: { Authorization: `Bearer ${token}` },
-      });
+      }, 4000);
       if (taskRes.ok) {
         const taskData = await taskRes.json();
         if (taskData.items) {
@@ -444,9 +475,9 @@ export interface GoogleCalendarItem {
 // Fetch all Google Calendars of the connected user
 export const fetchGoogleCalendarList = async (token: string): Promise<GoogleCalendarItem[]> => {
   try {
-    const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+    const res = await fetchWithGoogleTimeout('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: { Authorization: `Bearer ${token}` }
-    });
+    }, 4000);
     if (!res.ok) {
       return [];
     }
@@ -471,14 +502,14 @@ export const createGoogleCalendarEvent = async (
   calendarId: string = 'primary'
 ): Promise<GoogleCalendarEvent> => {
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
-  const res = await fetch(url, {
+  const res = await fetchWithGoogleTimeout(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(event)
-  });
+  }, 4000);
 
   if (!res.ok) {
     const errorText = await res.text();

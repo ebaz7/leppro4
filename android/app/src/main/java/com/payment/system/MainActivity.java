@@ -17,7 +17,9 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.PowerManager;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -25,6 +27,7 @@ import android.webkit.MimeTypeMap;
 import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
@@ -57,6 +60,7 @@ public class MainActivity extends BridgeActivity {
         // Ensure Android 8+ notification channels and Android 13+ runtime permission are initialized immediately
         ensureNotificationChannels(this);
         requestPostNotificationsPermissionIfNeeded();
+        requestIgnoreBatteryOptimizationsIfNeeded(false);
 
         // Save server URL in native SharedPreferences on start so SyncWorker has immediate access to it
         saveWebServerUrlToSharedPreferences();
@@ -109,9 +113,10 @@ public class MainActivity extends BridgeActivity {
             Log.e(TAG, "Failed to register DlkamAndroid JavascriptInterface", e);
         }
 
-        // Enqueue the WorkManager background synchronization task + live background executor
+        // Enqueue the WorkManager background synchronization task + live background executor + persistent foreground service
         setupScheduler();
         startFastNativeNotificationPoller();
+        DlkamBackgroundService.startServiceSafely(getApplicationContext());
     }
 
     @Override
@@ -119,7 +124,35 @@ public class MainActivity extends BridgeActivity {
         if (nativePollExecutor != null && !nativePollExecutor.isShutdown()) {
             nativePollExecutor.shutdownNow();
         }
+        // Ensure the persistent Foreground Service stays running even after MainActivity closes
+        try {
+            if (DlkamBackgroundService.hasLoggedInUser(getApplicationContext())) {
+                DlkamBackgroundService.startServiceSafely(getApplicationContext());
+            }
+        } catch (Exception ignored) {}
         super.onDestroy();
+    }
+
+    private void requestIgnoreBatteryOptimizationsIfNeeded(boolean forcePrompt) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                String pkg = getPackageName();
+                if (pm != null && !pm.isIgnoringBatteryOptimizations(pkg)) {
+                    SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                    boolean alreadyPromptedOnce = prefs.getBoolean("battery_opt_prompted_v1", false);
+                    if (forcePrompt || !alreadyPromptedOnce) {
+                        prefs.edit().putBoolean("battery_opt_prompted_v1", true).apply();
+                        Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                        intent.setData(Uri.parse("package:" + pkg));
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(intent);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Could not request ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", e);
+            }
+        }
     }
 
     private void requestPostNotificationsPermissionIfNeeded() {
@@ -294,8 +327,98 @@ public class MainActivity extends BridgeActivity {
             try {
                 requestPostNotificationsPermissionIfNeeded();
                 ensureNotificationChannels(context);
+                DlkamBackgroundService.startServiceSafely(context.getApplicationContext());
                 return true;
             } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean areNotificationsEnabledNative() {
+            try {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                            == PackageManager.PERMISSION_GRANTED;
+                }
+                return NotificationManagerCompat.from(context).areNotificationsEnabled();
+            } catch (Exception e) {
+                return true;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean requestIgnoreBatteryOptimizationsNative() {
+            try {
+                requestIgnoreBatteryOptimizationsIfNeeded(true);
+                DlkamBackgroundService.startServiceSafely(context.getApplicationContext());
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean isIgnoringBatteryOptimizationsNative() {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+                    return pm != null && pm.isIgnoringBatteryOptimizations(context.getPackageName());
+                }
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean syncSessionCredentialsNative(String username, String role, String serverUrl) {
+            try {
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                SharedPreferences.Editor editor = prefs.edit();
+                if (username != null && !username.trim().isEmpty()) {
+                    String cleanUser = username.trim();
+                    editor.putString("user_username", cleanUser);
+                    editor.putString("_cap_user_username", cleanUser);
+                    editor.putString("user_logged_in", "true");
+                    editor.putString("_cap_user_logged_in", "true");
+                }
+                if (role != null && !role.trim().isEmpty()) {
+                    String cleanRole = role.trim();
+                    editor.putString("user_role", cleanRole);
+                    editor.putString("_cap_user_role", cleanRole);
+                }
+                if (serverUrl != null && !serverUrl.trim().isEmpty()) {
+                    String cleanUrl = serverUrl.trim();
+                    editor.putString("server_url", cleanUrl);
+                    editor.putString("_cap_server_url", cleanUrl);
+                }
+                editor.apply();
+                DlkamBackgroundService.startServiceSafely(context.getApplicationContext());
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "syncSessionCredentialsNative error", e);
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean clearSessionCredentialsNative() {
+            try {
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit()
+                        .remove("user_username")
+                        .remove("_cap_user_username")
+                        .remove("user_role")
+                        .remove("_cap_user_role")
+                        .remove("user_logged_in")
+                        .remove("_cap_user_logged_in")
+                        .remove("app_current_user_data")
+                        .remove("_cap_app_current_user_data")
+                        .apply();
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "clearSessionCredentialsNative error", e);
                 return false;
             }
         }

@@ -85,18 +85,34 @@ export const safeGenerateContent = async (ai, params) => {
     const errors = [];
     for (const model of candidateModels) {
         try {
-            const response = await ai.models.generateContent({
-                ...params,
-                model
-            });
+            const response = await Promise.race([
+                ai.models.generateContent({
+                    ...params,
+                    model
+                }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('AI_NETWORK_TIMEOUT: عدم دسترسی به سرور هوش مصنوعی در زمان مجاز (احتمال قطع اینترنت بین‌الملل)')), 12000)
+                )
+            ]);
             return { response, model };
         } catch (err) {
             const errMsg = err.message || String(err);
             errors.push(`${model}: ${errMsg}`);
-            console.warn(`Gemini generation with ${model} failed, trying next candidate:`, errMsg);
+            console.warn(`Gemini generation with ${model} failed:`, errMsg);
+            const upper = errMsg.toUpperCase();
+            if (
+                upper.includes('AI_NETWORK_TIMEOUT') ||
+                upper.includes('FETCH FAILED') ||
+                upper.includes('ETIMEDOUT') ||
+                upper.includes('ECONNREFUSED') ||
+                upper.includes('ENOTFOUND') ||
+                upper.includes('UND_ERR_CONNECT_TIMEOUT')
+            ) {
+                break; // Do not retry other models on the same unreachable host when international internet is cut
+            }
         }
     }
-    const combinedError = new Error(`تمامی تلاش‌ها برای اتصال به مدل‌های Gemini با خطا مواجه شدند:\n${errors.join('\n')}`);
+    const combinedError = new Error(`عدم امکان ارتباط با سرویس هوش مصنوعی ابری (در وضعیت اینترنت ملی یا شبکه داخلی، ماژول‌های آفلاین سامانه فعال هستند):\n${errors.join('\n')}`);
     combinedError.rawErrors = errors;
     throw combinedError;
 };

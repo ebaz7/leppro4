@@ -2014,7 +2014,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
 
   const handleSaveOnlyOfficeServerUrl = (url: string) => {
     let clean = url.trim().replace(/\/+$/, "");
-    if (!clean) clean = "https://documentserver.onlyoffice.com";
+    if (!clean) clean = typeof window !== "undefined" ? `${window.location.origin}/onlyoffice-proxy` : "/onlyoffice-proxy";
     setOnlyOfficeDocServerUrl(clean);
     localStorage.setItem("ONLYOFFICE_DOC_SERVER_URL", clean);
     setOnlyOfficeLoadError(null);

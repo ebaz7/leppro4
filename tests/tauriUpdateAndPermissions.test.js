@@ -44,6 +44,34 @@ test('FirstLaunchPermissionsModal prompts and activates permissions across Tauri
 
   assert.ok(modalContent.includes("import('@tauri-apps/api/notification')"), 'Modal must request Tauri notification permission');
   assert.ok(modalContent.includes('requestNotificationPermissionNative'), 'Modal must request Android native notification permission');
+  assert.ok(modalContent.includes('requestIgnoreBatteryOptimizationsNative'), 'Modal must request Android battery optimization exemption');
   assert.ok(modalContent.includes('requestNativePermissions'), 'Modal must request Electron native permissions');
   assert.ok(modalContent.includes('dlkam_first_install_permissions_v2'), 'Modal must persist first-install permission onboarding state');
 });
+
+test('Windows Desktop auto-logs out on app close/relaunch and supports multi-account username selector with optional password save', async () => {
+  const authServicePath = path.join(ROOT, 'services', 'authService.ts');
+  const authContent = fs.readFileSync(authServicePath, 'utf8');
+  assert.ok(authContent.includes('dlkam_desktop_session_active'), 'authService.ts must track active desktop session in sessionStorage');
+  assert.ok(authContent.includes('isWindowsDesktopApp()'), 'authService.ts must detect Windows Desktop (Tauri/Electron) for auto-logout on new launch');
+  assert.ok(authContent.includes('export const getSavedAccounts'), 'authService.ts must export getSavedAccounts');
+  assert.ok(authContent.includes('export const saveAccountOnLogin'), 'authService.ts must export saveAccountOnLogin');
+  assert.ok(authContent.includes('export const removeSavedAccount'), 'authService.ts must export removeSavedAccount');
+
+  // Verify Tauri and Electron clear session on window close
+  const mainRs = fs.readFileSync(path.join(ROOT, 'src-tauri', 'src', 'main.rs'), 'utf8');
+  assert.ok(mainRs.includes('WindowEvent::CloseRequested'), 'Tauri main.rs must clear active session on CloseRequested');
+  assert.ok(mainRs.includes('dlkam_desktop_session_active'), 'Tauri main.rs must remove dlkam_desktop_session_active on close');
+
+  const electronMain = fs.readFileSync(path.join(ROOT, 'electron', 'main.cjs'), 'utf8');
+  assert.ok(electronMain.includes('desktop-auto-logout'), 'Electron main.cjs must notify renderer on window close');
+  assert.ok(electronMain.includes('dlkam_desktop_session_active'), 'Electron main.cjs must clear active session on window close');
+
+  // Verify Login.tsx renders saved accounts list and respects per-user rememberPassword setting
+  const loginTsx = fs.readFileSync(path.join(ROOT, 'components', 'Login.tsx'), 'utf8');
+  assert.ok(loginTsx.includes('getSavedAccounts'), 'Login.tsx must load saved accounts list');
+  assert.ok(loginTsx.includes('saveAccountOnLogin'), 'Login.tsx must save account entry on login');
+  assert.ok(loginTsx.includes('لیست کاربران'), 'Login.tsx must display saved usernames selector');
+  assert.ok(loginTsx.includes('ذخیره رمز عبور برای این نام کاربری'), 'Login.tsx must allow optional password saving per username');
+});
+

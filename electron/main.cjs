@@ -126,8 +126,17 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // Background Persistence: Close button hides to System Tray instead of terminating
+  // Security & Background Persistence: Closing the window automatically logs out to the Login screen
   mainWindow.on('close', (event) => {
+    try {
+      if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('desktop-auto-logout');
+        mainWindow.webContents.executeJavaScript(
+          "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); window.dispatchEvent(new CustomEvent('desktop-auto-logout')); } catch(e) {}",
+          true
+        ).catch(() => {});
+      }
+    } catch (_) {}
     if (!isQuitting) {
       event.preventDefault();
       mainWindow.hide();

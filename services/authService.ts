@@ -1,8 +1,156 @@
 
 import { User, UserRole, SystemSettings, RolePermissions } from '../types';
 import { apiCall } from './apiService';
+import { isWindowsDesktopApp } from '../utils/platformDetection';
 
 const CURRENT_USER_KEY = 'app_current_user';
+export const DESKTOP_SESSION_ACTIVE_KEY = 'dlkam_desktop_session_active';
+export const SAVED_ACCOUNTS_STORAGE_KEY = 'dlkam_saved_accounts_v2';
+
+export interface SavedAccountEntry {
+    username: string;
+    fullName?: string;
+    role?: string;
+    rememberPassword: boolean;
+    encodedPassword?: string;
+    lastLoginAt: number;
+}
+
+export const encodeSavedPassword = (str: string): string => {
+    try {
+        return btoa(encodeURIComponent(str));
+    } catch {
+        return str;
+    }
+};
+
+export const decodeSavedPassword = (str: string): string => {
+    try {
+        return decodeURIComponent(atob(str));
+    } catch {
+        return str;
+    }
+};
+
+export const getSavedAccounts = (): SavedAccountEntry[] => {
+    try {
+        const raw = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
+        let list: SavedAccountEntry[] = [];
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                list = parsed.filter(item => item && typeof item.username === 'string' && item.username.trim().length > 0);
+            }
+        }
+
+        // Migrate legacy single-account keys ('dlkam_saved_credentials' and 'saved_username') if not yet in list
+        const legacyCredsRaw = localStorage.getItem('dlkam_saved_credentials');
+        if (legacyCredsRaw) {
+            try {
+                const legacyCreds = JSON.parse(legacyCredsRaw);
+                if (legacyCreds && typeof legacyCreds.username === 'string' && legacyCreds.username.trim()) {
+                    const cleanUser = legacyCreds.username.trim();
+                    const exists = list.some(a => a.username.toLowerCase() === cleanUser.toLowerCase());
+                    if (!exists) {
+                        list.push({
+                            username: cleanUser,
+                            rememberPassword: Boolean(legacyCreds.password),
+                            encodedPassword: legacyCreds.password || undefined,
+                            lastLoginAt: Date.now()
+                        });
+                    }
+                }
+            } catch {}
+        }
+
+        const legacyUsername = localStorage.getItem('saved_username');
+        if (legacyUsername && legacyUsername.trim()) {
+            const cleanUser = legacyUsername.trim();
+            const exists = list.some(a => a.username.toLowerCase() === cleanUser.toLowerCase());
+            if (!exists) {
+                list.push({
+                    username: cleanUser,
+                    rememberPassword: false,
+                    lastLoginAt: Date.now() - 1000
+                });
+            }
+        }
+
+        list.sort((a, b) => (b.lastLoginAt || 0) - (a.lastLoginAt || 0));
+        return list;
+    } catch {
+        return [];
+    }
+};
+
+export const saveAccountOnLogin = (
+    user: { username: string; fullName?: string; role?: string },
+    plainPassword: string,
+    rememberPassword: boolean
+): SavedAccountEntry[] => {
+    try {
+        const cleanUsername = (user.username || '').trim();
+        if (!cleanUsername) return getSavedAccounts();
+
+        const existing = getSavedAccounts().filter(
+            a => a.username.toLowerCase() !== cleanUsername.toLowerCase()
+        );
+
+        const newEntry: SavedAccountEntry = {
+            username: cleanUsername,
+            fullName: user.fullName || undefined,
+            role: user.role || undefined,
+            rememberPassword: Boolean(rememberPassword),
+            encodedPassword: rememberPassword ? encodeSavedPassword(plainPassword) : undefined,
+            lastLoginAt: Date.now()
+        };
+
+        const updated = [newEntry, ...existing];
+        localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(updated));
+        localStorage.setItem('saved_username', cleanUsername);
+
+        if (rememberPassword) {
+            localStorage.setItem('dlkam_saved_credentials', JSON.stringify({
+                username: cleanUsername,
+                password: newEntry.encodedPassword
+            }));
+        } else {
+            localStorage.removeItem('dlkam_saved_credentials');
+        }
+
+        return updated;
+    } catch {
+        return [];
+    }
+};
+
+export const removeSavedAccount = (username: string): SavedAccountEntry[] => {
+    try {
+        const clean = (username || '').trim().toLowerCase();
+        const filtered = getSavedAccounts().filter(a => a.username.toLowerCase() !== clean);
+        localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(filtered));
+        const legacyUser = localStorage.getItem('saved_username');
+        if (legacyUser && legacyUser.trim().toLowerCase() === clean) {
+            if (filtered.length > 0) {
+                localStorage.setItem('saved_username', filtered[0].username);
+            } else {
+                localStorage.removeItem('saved_username');
+            }
+        }
+        const legacyCredsRaw = localStorage.getItem('dlkam_saved_credentials');
+        if (legacyCredsRaw) {
+            try {
+                const parsed = JSON.parse(legacyCredsRaw);
+                if (parsed?.username?.trim().toLowerCase() === clean) {
+                    localStorage.removeItem('dlkam_saved_credentials');
+                }
+            } catch {}
+        }
+        return filtered;
+    } catch {
+        return [];
+    }
+};
 
 export const getUsers = async (): Promise<User[]> => {
     return await apiCall<User[]>('/users');
@@ -30,16 +178,37 @@ export const deleteUser = async (id: string): Promise<User[]> => {
 export const login = async (username: string, password: string): Promise<User | null> => {
     const user = await apiCall<User>('/login', 'POST', { username, password });
     localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(DESKTOP_SESSION_ACTIVE_KEY, 'true');
+        }
+    } catch {}
     return user;
 };
 
 export const logout = (): void => {
-  localStorage.removeItem(CURRENT_USER_KEY);
+    localStorage.removeItem(CURRENT_USER_KEY);
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.removeItem(DESKTOP_SESSION_ACTIVE_KEY);
+        }
+    } catch {}
 };
 
 export const getCurrentUser = (): User | null => {
-  const stored = localStorage.getItem(CURRENT_USER_KEY);
-  return stored ? JSON.parse(stored) : null;
+    // Windows Desktop Security Policy:
+    // When the Windows Desktop app (Tauri / Electron) is closed and reopened, sessionStorage is cleared.
+    // Require an active unlocked window session so closing the Windows app always logs out and shows the Login screen.
+    if (isWindowsDesktopApp()) {
+        try {
+            if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(DESKTOP_SESSION_ACTIVE_KEY) !== 'true') {
+                localStorage.removeItem(CURRENT_USER_KEY);
+                return null;
+            }
+        } catch {}
+    }
+    const stored = localStorage.getItem(CURRENT_USER_KEY);
+    return stored ? JSON.parse(stored) : null;
 };
 
 export const hasPermission = (user: User | null, permissionType: string): boolean => {
