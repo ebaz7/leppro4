@@ -458,8 +458,12 @@ fn main() {
             };
 
             let _ = win.set_title(window_title);
-            let icon_bytes = include_bytes!("../icons/icon.ico");
-            let _ = win.set_icon(tauri::Icon::Raw(icon_bytes.to_vec()));
+            let icon_rgba = include_bytes!("../icons/icon-64x64.rgba");
+            let _ = win.set_icon(tauri::Icon::Rgba {
+                rgba: icon_rgba.to_vec(),
+                width: 64,
+                height: 64,
+            });
 
             let win_for_close = win.clone();
             win.on_window_event(move |event| {

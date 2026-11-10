@@ -413,6 +413,14 @@ async function generateAllIcons() {
   // We ALWAYS overwrite icon.ico with our true Win32-compliant ICO (16, 24, 32, 48, 64 as uncompressed DIB with AND-mask + 256 as PNG).
   fs.writeFileSync(path.join(TAURI_ICONS_DIR, 'icon.ico'), win32IcoBuffer);
 
+  // Also write raw 64x64 RGBA buffer for zero-feature compile-time embedding via tauri::Icon::Rgba
+  const raw64Rgba = await sharp(master1024Buffer)
+    .resize(64, 64, { fit: 'contain', background: bgInfo.rgba })
+    .ensureAlpha()
+    .raw()
+    .toBuffer();
+  fs.writeFileSync(path.join(TAURI_ICONS_DIR, 'icon-64x64.rgba'), raw64Rgba);
+
   // CRITICAL: Purge cached Cargo/Tauri .exe and Windows resource build files so the next Tauri build is 100% forced to embed the new icon!
   purgeTauriIconBuildCache();
   refreshWindowsIconCache();
