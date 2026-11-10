@@ -408,10 +408,10 @@ async function generateAllIcons() {
     tauriCliSucceeded = true;
   } catch (_) {}
 
-  // Ensure our true Win32 .ico (with 16, 24, 32, 48, 64 DIB + 256 PNG) is in place if Tauri CLI didn't create it
-  if (!fs.existsSync(path.join(TAURI_ICONS_DIR, 'icon.ico')) || fs.statSync(path.join(TAURI_ICONS_DIR, 'icon.ico')).size < 1000) {
-    fs.writeFileSync(path.join(TAURI_ICONS_DIR, 'icon.ico'), win32IcoBuffer);
-  }
+  // CRITICAL FIX FOR WINDOWS TASK MANAGER & WIN32:
+  // Tauri CLI generates an all-PNG .ico which Windows Task Manager, Alt+Tab, and Explorer fail to load for 16x16 / 32x32 frames.
+  // We ALWAYS overwrite icon.ico with our true Win32-compliant ICO (16, 24, 32, 48, 64 as uncompressed DIB with AND-mask + 256 as PNG).
+  fs.writeFileSync(path.join(TAURI_ICONS_DIR, 'icon.ico'), win32IcoBuffer);
 
   // CRITICAL: Purge cached Cargo/Tauri .exe and Windows resource build files so the next Tauri build is 100% forced to embed the new icon!
   purgeTauriIconBuildCache();

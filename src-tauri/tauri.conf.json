@@ -50,6 +50,20 @@
     "security": {
       "csp": null
     },
-    "windows": []
+    "windows": [
+      {
+        "label": "main",
+        "title": "دلکام",
+        "width": 1366,
+        "height": 840,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "center": true,
+        "maximized": true
+      }
+    ]
   }
 }

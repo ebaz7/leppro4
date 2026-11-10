@@ -426,7 +426,7 @@ fn main() {
 
         std::env::set_var(
             "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=msSmartScreenProtection,Translate,BackForwardCache,MediaRouter --enable-features=UseEcoQoSForBackgroundProcess --process-per-site",
+            "--disable-features=msSmartScreenProtection,Translate,BackForwardCache,MediaRouter --enable-features=UseEcoQoSForBackgroundProcess",
         );
     }
 
@@ -447,52 +447,51 @@ fn main() {
                 });
             }
 
-            // ALWAYS load the local bundled offline application UI
-            let window_url = WindowUrl::App("index.html".into());
-
             // Window title using pure ASCII escape for "دلکام" to avoid any encoding/quote bugs on Windows
             let window_title = "\u{062F}\u{0644}\u{06A9}\u{0627}\u{0645}";
 
-            let main_window = WindowBuilder::new(app, "main", window_url)
-                .title(window_title)
-                .inner_size(1366.0, 840.0)
-                .min_inner_size(960.0, 640.0)
-                .resizable(true)
-                .fullscreen(false)
-                .decorations(true)
-                .center()
-                .build();
-
-            match main_window {
-                Ok(win) => {
-                    println!("Main desktop window successfully spawned with local UI.");
-                    let win_for_close = win.clone();
-                    win.on_window_event(move |event| {
-                        match event {
-                            tauri::WindowEvent::CloseRequested { .. } => {
-                                let _ = win_for_close.eval(
-                                    "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
-                                );
-                            }
-                            tauri::WindowEvent::Destroyed => {
-                                std::process::exit(0);
-                            }
-                            _ => {}
-                        }
-                    });
-                    let _ = win.maximize();
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                    let win_clone = win.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                        let _ = win_clone.maximize();
-                        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-                        let _ = win_clone.maximize();
-                    });
+            let win = match app.get_window("main") {
+                Some(w) => w,
+                None => {
+                    let window_url = WindowUrl::App("index.html".into());
+                    WindowBuilder::new(app, "main", window_url)
+                        .title(window_title)
+                        .inner_size(1366.0, 840.0)
+                        .min_inner_size(960.0, 640.0)
+                        .resizable(true)
+                        .fullscreen(false)
+                        .decorations(true)
+                        .center()
+                        .build()
+                        .expect("failed to spawn main window")
                 }
-                Err(e) => eprintln!("Error spawning desktop window: {:?}", e),
-            }
+            };
+
+            let _ = win.set_title(window_title);
+            let win_for_close = win.clone();
+            win.on_window_event(move |event| {
+                match event {
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        let _ = win_for_close.eval(
+                            "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
+                        );
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        std::process::exit(0);
+                    }
+                    _ => {}
+                }
+            });
+            let _ = win.maximize();
+            let _ = win.show();
+            let _ = win.set_focus();
+            let win_clone = win.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                let _ = win_clone.maximize();
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                let _ = win_clone.maximize();
+            });
 
             Ok(())
         })
