@@ -1121,30 +1121,26 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         }
     };
 
-    // Auto-fetch aging effect: automatically processes all visible accounts in background without clicking
+    // One-time lightweight initial load of top 10 accounts only; never re-triggers on state updates to prevent CPU lag
+    const hasInitialAgingFetchedRef = React.useRef(false);
     useEffect(() => {
-        if (!trazData || trazData.length === 0) return;
+        if (hasInitialAgingFetchedRef.current || !trazData || trazData.length === 0) return;
+        hasInitialAgingFetchedRef.current = true;
 
-        const filtered = getFilteredTraz(false);
-        if (!filtered || filtered.length === 0) return;
+        const timer = setTimeout(() => {
+            const filtered = getFilteredTraz(false);
+            if (!filtered || filtered.length === 0) return;
+            const topMissing = filtered.slice(0, 10).filter(item => {
+                const code = String(item.code).trim();
+                return code && !trazAging[code];
+            });
+            if (topMissing.length > 0) {
+                fetchAgingForTraz(topMissing, false);
+            }
+        }, 1500);
 
-        const missing = filtered.filter(item => {
-            const code = String(item.code).trim();
-            if (!code) return false;
-            if (fetchingAgingCodesRef.current.has(code)) return false;
-            const existing = trazAging[code];
-            if (!existing) return true;
-            if (existing.balance !== item.balance) return true;
-            return false;
-        });
-
-        if (missing.length === 0) return;
-
-        const chunk = missing.slice(0, 20);
-        chunk.forEach(c => fetchingAgingCodesRef.current.add(String(c.code).trim()));
-
-        fetchAgingForTraz(chunk, false);
-    }, [trazData, trazCategory, trazSearch, showOnlyExcluded, trazAging]);
+        return () => clearTimeout(timer);
+    }, [trazData]);
     const toggleExcludeTraz = (code: string) => {
         setExcludedTrazCodes(prev => {
             const exists = prev.includes(code);
@@ -6540,32 +6536,32 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
                         {/* Traz KPIs */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="bg-white dark:bg-zinc-800/90 rounded-2xl border border-slate-200/90 dark:border-zinc-700/80 p-4 shadow-2xs">
-                                <div className="flex items-center justify-between text-xs font-bold text-slate-600 dark:text-slate-400">
+                            <div className="bg-gradient-to-br from-white to-red-50/40 dark:from-zinc-800 dark:to-red-950/20 rounded-2xl border border-red-200/80 dark:border-red-900/40 p-4 shadow-2xs">
+                                <div className="flex items-center justify-between text-xs font-bold text-red-800 dark:text-red-300">
                                     <span>جمع بدهی بدهکاران (فعال در گزارش)</span>
-                                    <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-800 border border-rose-200/80 dark:bg-rose-950/60 dark:text-rose-300 text-[10px] font-black">بدهکار</span>
+                                    <span className="px-2.5 py-0.5 rounded-full bg-red-100/90 text-red-800 dark:bg-red-950/80 dark:text-red-200 border border-red-200 text-[10px] font-black">بدهکار</span>
                                 </div>
-                                <div className="text-2xl font-black text-slate-900 dark:text-white mt-2 font-mono">
+                                <div className="text-2xl font-black text-red-700 dark:text-red-300 mt-2 font-mono">
                                     {formatMoney(filteredTraz.filter(t => t.balance > 0).reduce((sum, r) => sum + r.balance, 0))} <span className="text-xs font-bold text-slate-500">ریال</span>
                                 </div>
                                 <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1">شامل {filteredTraz.filter(t => t.balance > 0).length.toLocaleString('fa-IR')} شخص بدهکار</div>
                             </div>
-                            <div className="bg-white dark:bg-zinc-800/90 rounded-2xl border border-slate-200/90 dark:border-zinc-700/80 p-4 shadow-2xs">
-                                <div className="flex items-center justify-between text-xs font-bold text-slate-600 dark:text-slate-400">
+                            <div className="bg-gradient-to-br from-white to-emerald-50/40 dark:from-zinc-800 dark:to-emerald-950/20 rounded-2xl border border-emerald-200/80 dark:border-emerald-900/40 p-4 shadow-2xs">
+                                <div className="flex items-center justify-between text-xs font-bold text-emerald-800 dark:text-emerald-300">
                                     <span>جمع طلب بستانکاران (فعال در گزارش)</span>
-                                    <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200/80 dark:bg-teal-950/60 dark:text-teal-300 text-[10px] font-black">بستانکار</span>
+                                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100/90 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200 border border-emerald-200 text-[10px] font-black">بستانکار</span>
                                 </div>
-                                <div className="text-2xl font-black text-slate-900 dark:text-white mt-2 font-mono">
+                                <div className="text-2xl font-black text-emerald-700 dark:text-emerald-300 mt-2 font-mono">
                                     {formatMoney(filteredTraz.filter(t => t.balance < 0).reduce((sum, r) => sum + Math.abs(r.balance), 0))} <span className="text-xs font-bold text-slate-500">ریال</span>
                                 </div>
                                 <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1">شامل {filteredTraz.filter(t => t.balance < 0).length.toLocaleString('fa-IR')} شخص بستانکار</div>
                             </div>
-                            <div className="bg-white dark:bg-zinc-800/90 rounded-2xl border border-slate-200/90 dark:border-zinc-700/80 p-4 shadow-2xs">
-                                <div className="flex items-center justify-between text-xs font-bold text-slate-600 dark:text-slate-400">
+                            <div className="bg-gradient-to-br from-white to-blue-50/40 dark:from-zinc-800 dark:to-blue-950/20 rounded-2xl border border-blue-200/80 dark:border-blue-900/40 p-4 shadow-2xs">
+                                <div className="flex items-center justify-between text-xs font-bold text-blue-800 dark:text-blue-300">
                                     <span>خالص وضعیت تعهدات</span>
-                                    <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200/80 dark:bg-blue-950/60 dark:text-blue-300 text-[10px] font-black">برآیند</span>
+                                    <span className="px-2.5 py-0.5 rounded-full bg-blue-100/90 text-blue-800 dark:bg-blue-950/80 dark:text-blue-200 border border-blue-200 text-[10px] font-black">برآیند</span>
                                 </div>
-                                <div className="text-2xl font-black text-slate-900 dark:text-white mt-2 font-mono">
+                                <div className="text-2xl font-black text-blue-800 dark:text-blue-200 mt-2 font-mono">
                                     {formatMoney(filteredTraz.reduce((sum, r) => sum + r.balance, 0))} <span className="text-xs font-bold text-slate-500">ریال</span>
                                 </div>
                                 <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1">برآیند {filteredTraz.length.toLocaleString('fa-IR')} حساب فعال در لیست</div>
@@ -6573,9 +6569,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         </div>
 
                         {/* Traz Data Table */}
-                        <div className="rounded-xl border border-slate-200 overflow-hidden md:max-h-[550px] md:overflow-y-auto shadow-xs">
+                        <div className="rounded-xl border border-slate-200 overflow-x-auto md:max-h-[550px] md:overflow-y-auto shadow-xs">
                             {/* Desktop View */}
-                            <table className="w-full text-right text-xs hidden md:table">
+                            <table className="w-full min-w-[1050px] text-right text-xs hidden md:table">
                                 <thead className="bg-slate-100 sticky top-0 border-b border-slate-200 z-10 select-none">
                                     <tr>
                                         <th className="p-3 font-bold text-slate-700 w-12 text-center">
@@ -6733,21 +6729,23 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             )}
                                                         </div>
                                                     </td>
-                                                    <td className="p-3 text-left text-slate-800 dark:text-slate-200 font-mono font-bold">{formatMoney(row.bed)}</td>
-                                                    <td className="p-3 text-left text-slate-800 dark:text-slate-200 font-mono font-bold">{formatMoney(row.bes)}</td>
-                                                    <td className="p-3 text-left font-mono font-black text-slate-900 dark:text-white">
+                                                    <td className="p-3 text-left text-red-700 dark:text-red-400 font-mono font-bold whitespace-nowrap">{formatMoney(row.bed)}</td>
+                                                    <td className="p-3 text-left text-emerald-700 dark:text-emerald-400 font-mono font-bold whitespace-nowrap">{formatMoney(row.bes)}</td>
+                                                    <td className={`p-3 text-left font-mono font-black whitespace-nowrap ${
+                                                        row.balance > 0 ? 'text-red-700 dark:text-red-400' : (row.balance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
+                                                    }`}>
                                                         <div className="flex items-center justify-end gap-1.5">
-                                                            <span>{formatMoney(row.balance)}</span>
-                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-black ${
+                                                            <span>{formatMoney(Math.abs(row.balance))}</span>
+                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-black font-sans border ${
                                                                 row.balance > 0 
-                                                                    ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' 
-                                                                    : 'bg-teal-50 text-teal-800 dark:bg-teal-950/40 dark:text-teal-300'
+                                                                    ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/40 dark:text-red-300' 
+                                                                    : (row.balance < 0 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-200')
                                                             }`}>
-                                                                {row.balance > 0 ? 'بد' : 'بس'}
+                                                                {row.balance > 0 ? 'بد' : (row.balance < 0 ? 'بس' : 'صفر')}
                                                             </span>
                                                         </div>
                                                     </td>
-                                                    <td className="p-3 text-center">
+                                                    <td className="p-3 text-center whitespace-nowrap">
                                                         {!ag ? (
                                                             <span className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
                                                                 <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
@@ -6763,12 +6761,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                 onClick={() => setSelectedAgingParty({ ...row, ...ag })}
                                                                 className={`px-2 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-1 mx-auto ${
                                                                     ag.daysOverdue > 90
-                                                                        ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                                                                        ? 'bg-red-50 hover:bg-red-100 text-red-700 border-red-200'
                                                                         : ag.daysOverdue > 60
                                                                         ? 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
                                                                         : ag.daysOverdue > 30
                                                                         ? 'bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border-yellow-200'
-                                                                        : 'bg-teal-50 hover:bg-teal-100 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300 border-teal-200'
+                                                                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200'
                                                                 }`}
                                                                 title="مشاهده جزییات راس‌گیری و فاکتورهای باز"
                                                             >
@@ -6780,9 +6778,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             </button>
                                                         )}
                                                     </td>
-                                                    <td className="p-3 text-center">
-                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                                                            row.balance > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200/80' : 'bg-teal-50 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300 border border-teal-200/80'
+                                                    <td className="p-3 text-center whitespace-nowrap">
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                                                            row.balance > 0 ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
                                                         }`}>
                                                             {row.balance > 0 ? 'بدهکار' : 'بستانکار'}
                                                         </span>
@@ -6932,7 +6930,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                         </div>
                                                     </div>
                                                     <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${
-                                                        row.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-200/80' : 'bg-teal-50 text-teal-800 dark:bg-teal-950/60 dark:text-teal-300 border border-teal-200/80'
+                                                        row.balance > 0 ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
                                                     }`}>
                                                         {row.balance > 0 ? 'بدهکار' : 'بستانکار'}
                                                     </span>
@@ -6941,22 +6939,24 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                 <div className="grid grid-cols-3 gap-2 bg-slate-50 dark:bg-zinc-800/60 p-2.5 rounded-xl text-[11px]">
                                                     <div>
                                                         <div className="text-slate-500 dark:text-slate-400 font-medium">گردش بدهکار</div>
-                                                        <div className="font-mono font-bold text-slate-800 dark:text-slate-200 mt-0.5">{formatMoney(row.bed)}</div>
+                                                        <div className="font-mono font-bold text-red-700 dark:text-red-400 mt-0.5">{formatMoney(row.bed)}</div>
                                                     </div>
                                                     <div>
                                                         <div className="text-slate-500 dark:text-slate-400 font-medium">گردش بستانکار</div>
-                                                        <div className="font-mono font-bold text-slate-800 dark:text-slate-200 mt-0.5">{formatMoney(row.bes)}</div>
+                                                        <div className="font-mono font-bold text-emerald-700 dark:text-emerald-400 mt-0.5">{formatMoney(row.bes)}</div>
                                                     </div>
                                                     <div className="text-left">
                                                         <div className="text-slate-500 dark:text-slate-400 font-medium">مانده نهایی</div>
-                                                        <div className="font-mono font-black text-slate-900 dark:text-white mt-0.5 flex items-center justify-end gap-1">
-                                                            <span>{formatMoney(row.balance)}</span>
+                                                        <div className={`font-mono font-black mt-0.5 flex items-center justify-end gap-1 ${
+                                                            row.balance > 0 ? 'text-red-700 dark:text-red-400' : (row.balance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
+                                                        }`}>
+                                                            <span>{formatMoney(Math.abs(row.balance))}</span>
                                                             <span className={`text-[9px] px-1 py-0.2 rounded font-bold ${
                                                                 row.balance > 0 
-                                                                    ? 'text-rose-700 dark:text-rose-300' 
-                                                                    : 'text-teal-700 dark:text-teal-300'
+                                                                    ? 'text-red-700 dark:text-red-300' 
+                                                                    : 'text-emerald-700 dark:text-emerald-300'
                                                             }`}>
-                                                                {row.balance > 0 ? 'بد' : 'بس'}
+                                                                {row.balance > 0 ? 'بد' : (row.balance < 0 ? 'بس' : 'صفر')}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -10968,15 +10968,15 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         {/* Compact Statement Summary KPIs Strip (Fixed at top so statement scrolls freely below) */}
                         <div className="flex-none px-2.5 py-2 sm:px-5 sm:py-3 bg-slate-50/90 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
                             <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
-                                <div className="bg-white dark:bg-zinc-800/90 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200/90 dark:border-zinc-700/80 shadow-2xs flex flex-col justify-between">
-                                    <span className="text-[10px] sm:text-xs text-slate-600 dark:text-slate-300 font-bold block">مجموع بدهکار (ریال)</span>
-                                    <span className="text-[11px] sm:text-lg font-black text-slate-900 dark:text-slate-100 font-mono mt-0.5 break-all leading-tight">
+                                <div className="bg-gradient-to-br from-white to-red-50/40 dark:from-zinc-800 dark:to-red-950/20 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-red-200/80 dark:border-red-900/40 shadow-2xs flex flex-col justify-between">
+                                    <span className="text-[10px] sm:text-xs text-red-700 dark:text-red-300 font-bold block">مجموع بدهکار (ریال)</span>
+                                    <span className="text-[11px] sm:text-lg font-black text-red-700 dark:text-red-300 font-mono mt-0.5 break-all leading-tight">
                                         {formatMoney(filteredStatementData.reduce((sum, r) => sum + r.bed, 0))}
                                     </span>
                                 </div>
-                                <div className="bg-white dark:bg-zinc-800/90 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200/90 dark:border-zinc-700/80 shadow-2xs flex flex-col justify-between">
-                                    <span className="text-[10px] sm:text-xs text-slate-600 dark:text-slate-300 font-bold block">مجموع بستانکار (ریال)</span>
-                                    <span className="text-[11px] sm:text-lg font-black text-slate-900 dark:text-slate-100 font-mono mt-0.5 break-all leading-tight">
+                                <div className="bg-gradient-to-br from-white to-emerald-50/40 dark:from-zinc-800 dark:to-emerald-950/20 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-emerald-200/80 dark:border-emerald-900/40 shadow-2xs flex flex-col justify-between">
+                                    <span className="text-[10px] sm:text-xs text-emerald-700 dark:text-emerald-300 font-bold block">مجموع بستانکار (ریال)</span>
+                                    <span className="text-[11px] sm:text-lg font-black text-emerald-700 dark:text-emerald-300 font-mono mt-0.5 break-all leading-tight">
                                         {formatMoney(filteredStatementData.reduce((sum, r) => sum + r.bes, 0))}
                                     </span>
                                 </div>
@@ -10984,18 +10984,24 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                     const lastBal = filteredStatementData[filteredStatementData.length - 1]?.balance || 0;
                                     const isBed = lastBal > 0;
                                     return (
-                                        <div className="bg-white dark:bg-zinc-800/90 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200/90 dark:border-zinc-700/80 shadow-2xs flex flex-col justify-between">
-                                            <span className="text-[10px] sm:text-xs font-bold flex items-center justify-between gap-1 text-slate-600 dark:text-slate-300">
+                                        <div className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl border shadow-2xs flex flex-col justify-between ${
+                                            isBed 
+                                                ? 'bg-gradient-to-br from-white to-red-50/50 dark:from-zinc-800 dark:to-red-950/30 border-red-200/80 dark:border-red-900/50' 
+                                                : (lastBal < 0 ? 'bg-gradient-to-br from-white to-emerald-50/50 dark:from-zinc-800 dark:to-emerald-950/30 border-emerald-200/80 dark:border-emerald-900/50' : 'bg-white dark:bg-zinc-800 border-slate-200')
+                                        }`}>
+                                            <span className="text-[10px] sm:text-xs font-bold flex items-center justify-between gap-1 text-slate-700 dark:text-slate-300">
                                                 <span>مانده نهایی</span>
                                                 <span className={`px-2 py-0.5 rounded-md text-[9px] sm:text-[10px] font-black ${
                                                     isBed 
-                                                        ? 'bg-rose-100/90 text-rose-900 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200/70' 
-                                                        : (lastBal < 0 ? 'bg-teal-100/90 text-teal-900 dark:bg-teal-950/60 dark:text-teal-300 border border-teal-200/70' : 'bg-slate-100 text-slate-700')
+                                                        ? 'bg-red-100 text-red-800 dark:bg-red-950/80 dark:text-red-200 border border-red-200' 
+                                                        : (lastBal < 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200 border border-emerald-200' : 'bg-slate-100 text-slate-700')
                                                 }`}>
                                                     {isBed ? 'بدهکار' : (lastBal < 0 ? 'بستانکار' : 'تسویه')}
                                                 </span>
                                             </span>
-                                            <span className="text-[11px] sm:text-lg font-black font-mono text-slate-900 dark:text-white mt-0.5 break-all leading-tight">
+                                            <span className={`text-[11px] sm:text-lg font-black font-mono mt-0.5 break-all leading-tight ${
+                                                isBed ? 'text-red-700 dark:text-red-300' : (lastBal < 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-800 dark:text-white')
+                                            }`}>
                                                 {formatMoney(Math.abs(lastBal))}
                                             </span>
                                         </div>
@@ -11055,17 +11061,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     {/* Row 3: Full Unshortened Amounts (Bed / Bes / Balance) */}
                                                     <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-100 dark:border-zinc-800/80 text-[11px]">
                                                         {row.bed > 0 && (
-                                                            <div className="bg-slate-50 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-slate-200/60 dark:border-zinc-700/60">
-                                                                <span className="text-slate-600 dark:text-slate-400 font-bold text-[10px]">بدهکار:</span>
-                                                                <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                                                            <div className="bg-red-50/40 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-red-200/60 dark:border-red-900/40">
+                                                                <span className="text-red-700 dark:text-red-300 font-bold text-[10px]">بدهکار:</span>
+                                                                <span className="font-mono font-bold text-red-700 dark:text-red-300">
                                                                     {formatMoney(row.bed)}
                                                                 </span>
                                                             </div>
                                                         )}
                                                         {row.bes > 0 && (
-                                                            <div className="bg-slate-50 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-slate-200/60 dark:border-zinc-700/60">
-                                                                <span className="text-slate-600 dark:text-slate-400 font-bold text-[10px]">بستانکار:</span>
-                                                                <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                                                            <div className="bg-emerald-50/40 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-emerald-200/60 dark:border-emerald-900/40">
+                                                                <span className="text-emerald-700 dark:text-emerald-300 font-bold text-[10px]">بستانکار:</span>
+                                                                <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
                                                                     {formatMoney(row.bes)}
                                                                 </span>
                                                             </div>
@@ -11074,9 +11080,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             (row.bed > 0 && row.bes > 0) ? 'col-span-2' : ''
                                                         } ${
                                                             isBed
-                                                                ? 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200/70 text-rose-900 dark:text-rose-200'
+                                                                ? 'bg-red-50/80 dark:bg-red-950/30 border-red-200 text-red-800 dark:text-red-200'
                                                                 : isBes
-                                                                    ? 'bg-teal-50/80 dark:bg-teal-950/30 border-teal-200/70 text-teal-900 dark:text-teal-200'
+                                                                    ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 text-emerald-800 dark:text-emerald-200'
                                                                     : 'bg-slate-50 dark:bg-zinc-800 border-slate-200 text-slate-700 dark:text-slate-300'
                                                         }`}>
                                                             <span className="font-bold text-[10px]">مانده حساب:</span>
@@ -11121,21 +11127,21 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             <td className="px-3 py-2.5 text-center text-slate-600 dark:text-slate-300 whitespace-nowrap font-bold">{row.SanadNo}</td>
                                                             <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300 font-sans whitespace-nowrap">{row.MoeinName || 'سایر'}</td>
                                                             <td className="px-4 py-2.5 text-slate-800 dark:text-slate-100 font-sans break-words">{row.Description || '-'}</td>
-                                                            <td className="px-4 py-2.5 text-left text-slate-800 dark:text-slate-200 font-bold whitespace-nowrap">
+                                                            <td className="px-4 py-2.5 text-left text-red-700 dark:text-red-400 font-bold whitespace-nowrap">
                                                                 {row.bed > 0 ? formatMoney(row.bed) : <span className="text-slate-300 dark:text-zinc-600 font-normal">-</span>}
                                                             </td>
-                                                            <td className="px-4 py-2.5 text-left text-slate-800 dark:text-slate-200 font-bold whitespace-nowrap">
+                                                            <td className="px-4 py-2.5 text-left text-emerald-700 dark:text-emerald-400 font-bold whitespace-nowrap">
                                                                 {row.bes > 0 ? formatMoney(row.bes) : <span className="text-slate-300 dark:text-zinc-600 font-normal">-</span>}
                                                             </td>
-                                                            <td className="px-4 py-2.5 text-left whitespace-nowrap">
+                                                            <td className={`px-4 py-2.5 text-left whitespace-nowrap font-mono font-black ${
+                                                                isBed ? 'text-red-700 dark:text-red-400' : (isBes ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
+                                                            }`}>
                                                                 <div className="flex items-center justify-end gap-1.5">
-                                                                    <span className="font-mono font-black text-slate-900 dark:text-white">
-                                                                        {formatMoney(Math.abs(row.balance))}
-                                                                    </span>
-                                                                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-black font-sans border ${
+                                                                    <span>{formatMoney(Math.abs(row.balance))}</span>
+                                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-black font-sans border ${
                                                                         isBed 
-                                                                            ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-900' 
-                                                                            : (isBes ? 'bg-teal-50 text-teal-800 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300 dark:border-teal-900' : 'bg-slate-100 text-slate-600 border-slate-200')
+                                                                            ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/60 dark:text-red-300' 
+                                                                            : (isBes ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-200')
                                                                     }`}>
                                                                         {isBed ? 'بد' : (isBes ? 'بس' : 'صفر')}
                                                                     </span>
