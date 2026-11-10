@@ -128,9 +128,17 @@ async function detectIconBackground(imagePath) {
  * - Size 256 is stored as a compressed RGBA PNG frame (Windows Vista+ high-DPI standard).
  */
 async function createTrueWin32Ico(masterPngBuffer, bgRgba) {
-  const dibSizes = [16, 24, 32, 48, 64];
   const frames = [];
 
+  // 1. Put 256x256 PNG frame FIRST (index 0) so Win32 Shell / Task Manager primary icon extraction always gets highest quality
+  const png256 = await sharp(masterPngBuffer)
+    .resize(256, 256, { fit: 'contain', background: bgRgba })
+    .png()
+    .toBuffer();
+  frames.push({ size: 256, buffer: png256 });
+
+  // 2. Add uncompressed 32-bit BGRA DIB frames in descending order (64, 48, 32, 24, 16)
+  const dibSizes = [64, 48, 32, 24, 16];
   for (const sz of dibSizes) {
     const { data } = await sharp(masterPngBuffer)
       .resize(sz, sz, { fit: 'contain', background: bgRgba })
@@ -166,16 +174,19 @@ async function createTrueWin32Ico(masterPngBuffer, bgRgba) {
         const b = data[srcIdx + 2];
         const a = data[srcIdx + 3];
 
-        xorMask[dstIdx] = b;
-        xorMask[dstIdx + 1] = g;
-        xorMask[dstIdx + 2] = r;
-        xorMask[dstIdx + 3] = a;
-
-        // If pixel is transparent (alpha < 128), set bit in AND mask
         if (a < 32) {
+          xorMask[dstIdx] = 0;
+          xorMask[dstIdx + 1] = 0;
+          xorMask[dstIdx + 2] = 0;
+          xorMask[dstIdx + 3] = 0;
           const byteIndex = y * andRowBytes + (x >> 3);
           const bitMask = 0x80 >> (x & 7);
           andMask[byteIndex] |= bitMask;
+        } else {
+          xorMask[dstIdx] = b;
+          xorMask[dstIdx + 1] = g;
+          xorMask[dstIdx + 2] = r;
+          xorMask[dstIdx + 3] = a;
         }
       }
     }
@@ -185,13 +196,6 @@ async function createTrueWin32Ico(masterPngBuffer, bgRgba) {
       buffer: Buffer.concat([header, xorMask, andMask])
     });
   }
-
-  // Add 256x256 PNG frame
-  const png256 = await sharp(masterPngBuffer)
-    .resize(256, 256, { fit: 'contain', background: bgRgba })
-    .png()
-    .toBuffer();
-  frames.push({ size: 256, buffer: png256 });
 
   const numImages = frames.length;
   const icoHeader = Buffer.alloc(6);

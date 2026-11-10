@@ -412,14 +412,6 @@ fn get_or_create_config(handle: &tauri::AppHandle) -> ClientConfig {
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::set_var(
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=msSmartScreenProtection,Translate,BackForwardCache,MediaRouter --enable-features=UseEcoQoSForBackgroundProcess",
-        );
-    }
-
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.app_handle();
@@ -467,16 +459,10 @@ fn main() {
 
             let win_for_close = win.clone();
             win.on_window_event(move |event| {
-                match event {
-                    tauri::WindowEvent::CloseRequested { .. } => {
-                        let _ = win_for_close.eval(
-                            "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
-                        );
-                    }
-                    tauri::WindowEvent::Destroyed => {
-                        std::process::exit(0);
-                    }
-                    _ => {}
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    let _ = win_for_close.eval(
+                        "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
+                    );
                 }
             });
             let _ = win.maximize();

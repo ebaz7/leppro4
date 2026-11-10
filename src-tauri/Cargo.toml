@@ -1,7 +1,7 @@
 [package]
 name = "dlkam"
 version = "1.0.29"
-description = "Dlkam Enterprise Desktop Application"
+description = "Dlkam"
 authors = ["Dlkam Core Team"]
 license = "MIT"
 repository = ""
@@ -34,7 +34,7 @@ codegen-units = 16
 lto = false
 incremental = false
 debug = false
-strip = true
+strip = false
 
 [profile.release.package.dlkam]
 opt-level = 2

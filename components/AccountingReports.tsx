@@ -951,10 +951,6 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const fetchTraz = async () => {
         setIsLoading(true);
         try {
-            // Always refresh tafsilis (with Sayan categories from GNR_TBL_001) in real-time
-            // so any newly added or modified person in Sayan ERP is automatically loaded
-            const activeTafsilis = await fetchTafsilis();
-
             const activeYear = getActiveFiscalYearLabel();
             // In Sayan ERP, PeriodCode for 1405 is '4', 1404 is '3', 1403 is '2'
             const periodCode = (activeYear && activeYear >= 1402) ? String(activeYear - 1401) : '4';
@@ -962,11 +958,6 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const gregFrom = dateFrom ? jalaliToGregorianStr(dateFrom) : '';
             const gregTo = dateTo ? jalaliToGregorianStr(dateTo) : '';
 
-            // Sayan ERP standard: A person's balance (مانده حساب) is the cumulative sum of all vouchers
-            // from the beginning of the active fiscal year up to the selected end date (dateTo).
-            // Concurrently, we calculate PeriodBed and PeriodBes strictly between dateFrom and dateTo
-            // so that 1-day slices (e.g. 1405/08/17 to 1405/08/17) show both the exact account balance
-            // and the specific day's turnover without filtering out any person!
             const dateToFilter = gregTo ? `AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'` : '';
             const periodBedExpr = (gregFrom && gregTo) 
                 ? `SUM(CASE WHEN t8.Field_008 >= '${gregFrom}T00:00:00.000Z' AND t8.Field_008 <= '${gregTo}T23:59:59.000Z' THEN CAST(t9.Field_009 AS FLOAT) ELSE 0 END)`
@@ -1003,22 +994,31 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                   )
                 GROUP BY t9.Field_015
             `;
-            
-            const rawData = await runSayanQuery(sql);
-            
+
+            // Run both Sayan queries in parallel to cut network latency in half
+            const [activeTafsilis, rawData] = await Promise.all([
+                fetchTafsilis(),
+                runSayanQuery(sql)
+            ]);
+
+            // Build O(1) lookup map for tafsilis to avoid 4M+ linear .find() scans
+            const tafMap = new Map<string, any>();
+            (activeTafsilis || []).forEach((t: any) => {
+                if (t.Code) tafMap.set(String(t.Code).trim(), t);
+                if (t.TafsiliCode) tafMap.set(String(t.TafsiliCode).trim(), t);
+                if (t.PersonCode && !tafMap.has(String(t.PersonCode).trim())) {
+                    tafMap.set(String(t.PersonCode).trim(), t);
+                }
+            });
+
             // Map Sayan codes to names and group them by unique customer code to prevent any duplicates
             const groupedMap = new Map<string, any>();
             rawData.forEach((row: any) => {
                 const parsed = parseTafsiliRaw(row.TafsiliRaw);
                 const code = parsed.code;
                 if (!code) return;
-                
-                const tafsili = (activeTafsilis || []).find((t: any) => 
-                    t.Code === code || 
-                    t.TafsiliCode === code || 
-                    t.PersonCode === code ||
-                    (code.length > 2 && (t.Code === code.substring(2) || t.PersonCode === code.substring(2)))
-                );
+
+                const tafsili = tafMap.get(code) || (code.length > 2 ? tafMap.get(code.substring(2)) : undefined);
                 const name = tafsili ? tafsili.Name : `کد اشخاص ${code}`;
                 const moein = parsed.moein || (tafsili?.TafsiliGroup ? String(tafsili.TafsiliGroup) : (code.startsWith('11') ? '11' : (code.startsWith('31') ? '31' : '')));
                 const categories = tafsili?.Categories || '';
@@ -1182,15 +1182,33 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         toast('وضعیت انتخاب اشخاص معکوس شد', { icon: 'ℹ️' });
     };
 
-    // Helper: Determine Sayan ERP Layer & Category Info for any account
+    // Pre-indexed O(1) lookup map for tafsilis + cached category info to eliminate 65M+ array iterations during sort/render
+    const tafsiliLookupMap = useMemo(() => {
+        const map = new Map<string, any>();
+        (tafsilis || []).forEach((t: any) => {
+            if (t.Code) map.set(String(t.Code).trim(), t);
+            if (t.PersonCode && !map.has(String(t.PersonCode).trim())) {
+                map.set(String(t.PersonCode).trim(), t);
+            }
+        });
+        return map;
+    }, [tafsilis]);
+
+    const categoryCacheRef = React.useRef<Map<string, { code: '11' | '12' | '13' | '14' | '15' | '16'; label: string; priority: number; categories: string[] }>>(new Map());
+    useEffect(() => {
+        categoryCacheRef.current.clear();
+    }, [tafsilis, trazData]);
+
+    // Helper: Determine Sayan ERP Layer & Category Info for any account (O(1) cached)
     const getSayanCategoryInfo = (item: any): { code: '11' | '12' | '13' | '14' | '15' | '16'; label: string; priority: number; categories: string[] } => {
         const codeStr = String(item.code || item.Code || '').trim();
-        const taf = (tafsilis || []).find((t: any) => 
-            t.Code === codeStr || 
-            t.PersonCode === codeStr || 
-            (item.personCode && t.PersonCode === item.personCode) ||
-            (codeStr.length > 2 && (t.Code === codeStr.substring(2) || t.PersonCode === codeStr.substring(2)))
-        );
+        if (codeStr && categoryCacheRef.current.has(codeStr)) {
+            return categoryCacheRef.current.get(codeStr)!;
+        }
+
+        const taf = tafsiliLookupMap.get(codeStr) ||
+            (item.personCode ? tafsiliLookupMap.get(String(item.personCode).trim()) : undefined) ||
+            (codeStr.length > 2 ? tafsiliLookupMap.get(codeStr.substring(2)) : undefined);
         const categoriesRaw = String(item.categories || taf?.Categories || '').trim();
         const tafsiliGroup = String(item.tafsiliGroup || taf?.TafsiliGroup || item.moein || '').trim();
         const nameStr = String(item.name || taf?.Name || '').trim();
@@ -1205,48 +1223,37 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             });
         }
 
+        let result: { code: '11' | '12' | '13' | '14' | '15' | '16'; label: string; priority: number; categories: string[] };
+
         // 1. Direct check against Sayan GNR_TBL_001.Field_032 categories & ACT_TBL_007.Field_004
-        // Priority 1: Suppliers (11)
         if (foundCategories.includes('11')) {
-            return { code: '11', label: '۱۱ تامین‌کنندگان (حساب‌های پرداختنی)', priority: 1, categories: foundCategories };
-        }
-        // Priority 2: Customers (12)
-        if (foundCategories.includes('12')) {
-            return { code: '12', label: '۱۲ مشتریان (حساب‌های دریافتنی)', priority: 2, categories: foundCategories };
-        }
-        // Priority 3: Personnel (13) or TafsiliGroup 52/53/54/55
-        if (foundCategories.includes('13') || tafsiliGroup === '52' || tafsiliGroup === '53' || tafsiliGroup === '54' || tafsiliGroup === '55') {
-            return { code: '13', label: '۱۳ پرسنل و همکاران', priority: 3, categories: foundCategories.length ? foundCategories : ['13'] };
-        }
-        // Priority 4: Shareholders (14) or TafsiliGroup 51
-        if (foundCategories.includes('14') || tafsiliGroup === '51') {
-            return { code: '14', label: '۱۴ سهام‌داران و شرکا', priority: 4, categories: foundCategories.length ? foundCategories : ['14'] };
-        }
-        // Priority 5: Others (15)
-        if (foundCategories.includes('15')) {
-            return { code: '15', label: '۱۵ سایر اشخاص', priority: 5, categories: foundCategories };
-        }
-
-        // Fallback heuristics if person was not categorized in Sayan GNR_TBL_001
-        if (nameStr.includes('سهام') || nameStr.includes('سهامدار') || nameStr.includes('شرکا') || nameStr.includes('هیات مدیره') || nameStr.includes('هیئت مدیره')) {
-            return { code: '14', label: '۱۴ سهام‌داران و شرکا', priority: 4, categories: ['14'] };
-        }
-        if (nameStr.includes('پرسنل') || nameStr.includes('کارمند') || nameStr.includes('همکار') || nameStr.startsWith('آقای ') || nameStr.startsWith('خانم ')) {
-            return { code: '13', label: '۱۳ پرسنل و همکاران', priority: 3, categories: ['13'] };
-        }
-        if (nameStr.includes('تامین') || nameStr.includes('پتروشیمی') || nameStr.includes('پالایش') || nameStr.includes('فروشنده') || nameStr.includes('بورس کالا')) {
-            return { code: '11', label: '۱۱ تامین‌کنندگان (حساب‌های پرداختنی)', priority: 1, categories: ['11'] };
-        }
-        if (nameStr.includes('مالیات') || nameStr.includes('دارایی') || nameStr.includes('بیمه') || nameStr.includes('شهرداری') || nameStr.includes('آب و فاضلاب') || nameStr.includes('برق') || nameStr.includes('گاز')) {
-            return { code: '15', label: '۱۵ سایر اشخاص', priority: 5, categories: ['15'] };
+            result = { code: '11', label: '۱۱ تامین‌کنندگان (حساب‌های پرداختنی)', priority: 1, categories: foundCategories };
+        } else if (foundCategories.includes('12')) {
+            result = { code: '12', label: '۱۲ مشتریان (حساب‌های دریافتنی)', priority: 2, categories: foundCategories };
+        } else if (foundCategories.includes('13') || tafsiliGroup === '52' || tafsiliGroup === '53' || tafsiliGroup === '54' || tafsiliGroup === '55') {
+            result = { code: '13', label: '۱۳ پرسنل و همکاران', priority: 3, categories: foundCategories.length ? foundCategories : ['13'] };
+        } else if (foundCategories.includes('14') || tafsiliGroup === '51') {
+            result = { code: '14', label: '۱۴ سهام‌داران و شرکا', priority: 4, categories: foundCategories.length ? foundCategories : ['14'] };
+        } else if (foundCategories.includes('15')) {
+            result = { code: '15', label: '۱۵ سایر اشخاص', priority: 5, categories: foundCategories };
+        } else if (nameStr.includes('سهام') || nameStr.includes('سهامدار') || nameStr.includes('شرکا') || nameStr.includes('هیات مدیره') || nameStr.includes('هیئت مدیره')) {
+            result = { code: '14', label: '۱۴ سهام‌داران و شرکا', priority: 4, categories: ['14'] };
+        } else if (nameStr.includes('پرسنل') || nameStr.includes('کارمند') || nameStr.includes('همکار') || nameStr.startsWith('آقای ') || nameStr.startsWith('خانم ')) {
+            result = { code: '13', label: '۱۳ پرسنل و همکاران', priority: 3, categories: ['13'] };
+        } else if (nameStr.includes('تامین') || nameStr.includes('پتروشیمی') || nameStr.includes('پالایش') || nameStr.includes('فروشنده') || nameStr.includes('بورس کالا')) {
+            result = { code: '11', label: '۱۱ تامین‌کنندگان (حساب‌های پرداختنی)', priority: 1, categories: ['11'] };
+        } else if (nameStr.includes('مالیات') || nameStr.includes('دارایی') || nameStr.includes('بیمه') || nameStr.includes('شهرداری') || nameStr.includes('آب و فاضلاب') || nameStr.includes('برق') || nameStr.includes('گاز')) {
+            result = { code: '15', label: '۱۵ سایر اشخاص', priority: 5, categories: ['15'] };
+        } else if (foundCategories.includes('16')) {
+            result = { code: '16', label: '۱۶ همه اشخاص (سایر)', priority: 6, categories: foundCategories };
+        } else {
+            result = { code: '12', label: '۱۲ مشتریان (پیش‌فرض)', priority: 2, categories: ['12'] };
         }
 
-        // If in Sayan Network
-        if (foundCategories.includes('16')) {
-            return { code: '16', label: '۱۶ همه اشخاص (سایر)', priority: 6, categories: foundCategories };
+        if (codeStr) {
+            categoryCacheRef.current.set(codeStr, result);
         }
-
-        return { code: '12', label: '۱۲ مشتریان (پیش‌فرض)', priority: 2, categories: ['12'] };
+        return result;
     };
 
     // Permanent Excluded Persons Handlers
@@ -1323,23 +1330,26 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
     // Filter and categorise Traz data (Synchronized with Sayan ERP Logic & Permanent Exclusions)
     const getFilteredTraz = (includeExcluded: boolean = false) => {
+        const permMap = new Map<string, any>();
+        permanentExcluded.forEach(p => permMap.set(String(p.code).trim(), p));
+        const tempExcludedSet = new Set(excludedTrazCodes);
+        const searchLower = trazSearch.toLowerCase().trim();
+
         let items = trazData.filter(item => {
             const codeStr = String(item.code || '').trim();
 
-            // 1. Check Permanent Exclusion Rules
-            const permRule = permanentExcluded.find(p => p.code === codeStr);
+            // 1. Check Permanent Exclusion Rules (O(1))
+            const permRule = permMap.get(codeStr);
             if (permRule) {
                 if (permRule.excludeFrom === 'all') {
                     if (showOnlyExcluded) return true;
                     if (!includeExcluded) return false;
                 } else if (permRule.excludeFrom === 'debtors') {
-                    // Exclude from debtors category or from general list when debtor
                     if (trazCategory === 'debtors' || (item.balance > 0 && (trazCategory === 'all' || trazCategory === '16'))) {
                         if (showOnlyExcluded) return true;
                         if (!includeExcluded) return false;
                     }
                 } else if (permRule.excludeFrom === 'creditors') {
-                    // Exclude from creditors category or from general list when creditor
                     if (trazCategory === 'creditors' || (item.balance < 0 && (trazCategory === 'all' || trazCategory === '16'))) {
                         if (showOnlyExcluded) return true;
                         if (!includeExcluded) return false;
@@ -1347,8 +1357,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 }
             }
 
-            // 2. Check Temporary Selection Checkbox Exclusions
-            const isTempExcluded = excludedTrazCodes.includes(item.code);
+            // 2. Check Temporary Selection Checkbox Exclusions (O(1))
+            const isTempExcluded = tempExcludedSet.has(item.code);
             if (showOnlyExcluded) {
                 if (!isTempExcluded && !permRule) return false;
             } else if (!includeExcluded && isTempExcluded) {
@@ -1356,7 +1366,6 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             }
 
             // 3. Search Filter
-            const searchLower = trazSearch.toLowerCase().trim();
             const matchesSearch = !searchLower || 
                                   item.name.toLowerCase().includes(searchLower) || 
                                   item.code.includes(searchLower);
@@ -1389,7 +1398,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return true;
         });
 
-        // 5. Dynamic Sorting (With Sayan Layer Hierarchy as primary default)
+        // 5. Dynamic Sorting (With fast O(1) numeric code comparison)
         items.sort((a, b) => {
             let res = 0;
             if (trazSortBy === 'sayan_hierarchy') {
@@ -1398,8 +1407,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 if (catA.priority !== catB.priority) {
                     res = catA.priority - catB.priority;
                 } else {
-                    // Within the same Sayan layer, sort by code numerically
-                    res = a.code.localeCompare(b.code, 'fa', { numeric: true });
+                    const numA = Number(a.code) || 0;
+                    const numB = Number(b.code) || 0;
+                    res = numA !== numB ? (numA - numB) : (a.code < b.code ? -1 : (a.code > b.code ? 1 : 0));
                 }
             } else if (trazSortBy === 'abs_balance') {
                 res = Math.abs(b.balance || 0) - Math.abs(a.balance || 0);
@@ -1412,7 +1422,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             } else if (trazSortBy === 'name') {
                 res = a.name.localeCompare(b.name, 'fa');
             } else if (trazSortBy === 'code') {
-                res = a.code.localeCompare(b.code, 'fa', { numeric: true });
+                const numA = Number(a.code) || 0;
+                const numB = Number(b.code) || 0;
+                res = numA !== numB ? (numA - numB) : (a.code < b.code ? -1 : (a.code > b.code ? 1 : 0));
             } else {
                 res = Math.abs(b.balance || 0) - Math.abs(a.balance || 0);
             }
@@ -5571,14 +5583,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         } else if (activeTab === 'cheques') {
             fetchCheques();
         }
-    }, [activeTab, dateFrom, dateTo, trazCategory, compareMode, salesDateFromB, salesDateToB, prodGrouping]);
+    }, [activeTab, dateFrom, dateTo, compareMode, salesDateFromB, salesDateToB, prodGrouping]);
 
-    // Sales calculations
+    // Sales & Report calculations (Memoized to prevent lag on state/modal updates)
     const stats = getSalesOverviewStats();
     const chartData = getComparisonChartData();
     const todayInvoices = getTodayInvoices();
     const displayedInvoices = salesViewMode === 'range' ? salesData : todayInvoices;
-    const filteredTraz = getFilteredTraz();
+    const filteredTraz = useMemo(
+        () => getFilteredTraz(false),
+        [trazData, permanentExcluded, excludedTrazCodes, showOnlyExcluded, trazSearch, trazFilterMode, trazCategory, trazSortBy, trazSortOrder, tafsilis]
+    );
     const groupedProduction = getGroupedProduction();
     const filteredCheques = getFilteredCheques();
 
@@ -6536,12 +6551,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
                         {/* Traz KPIs */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="bg-gradient-to-br from-white to-red-50/40 dark:from-zinc-800 dark:to-red-950/20 rounded-2xl border border-red-200/80 dark:border-red-900/40 p-4 shadow-2xs">
-                                <div className="flex items-center justify-between text-xs font-bold text-red-800 dark:text-red-300">
+                            <div className="bg-gradient-to-br from-white to-rose-50/40 dark:from-zinc-800 dark:to-rose-950/20 rounded-2xl border border-rose-200/80 dark:border-rose-900/40 p-4 shadow-2xs">
+                                <div className="flex items-center justify-between text-xs font-bold text-rose-800 dark:text-rose-300">
                                     <span>جمع بدهی بدهکاران (فعال در گزارش)</span>
-                                    <span className="px-2.5 py-0.5 rounded-full bg-red-100/90 text-red-800 dark:bg-red-950/80 dark:text-red-200 border border-red-200 text-[10px] font-black">بدهکار</span>
+                                    <span className="px-2.5 py-0.5 rounded-full bg-rose-100/90 text-rose-800 dark:bg-rose-950/80 dark:text-rose-200 border border-rose-200 text-[10px] font-black">بدهکار</span>
                                 </div>
-                                <div className="text-2xl font-black text-red-700 dark:text-red-300 mt-2 font-mono">
+                                <div className="text-2xl font-black text-rose-700 dark:text-rose-300 mt-2 font-mono">
                                     {formatMoney(filteredTraz.filter(t => t.balance > 0).reduce((sum, r) => sum + r.balance, 0))} <span className="text-xs font-bold text-slate-500">ریال</span>
                                 </div>
                                 <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1">شامل {filteredTraz.filter(t => t.balance > 0).length.toLocaleString('fa-IR')} شخص بدهکار</div>
@@ -6729,16 +6744,16 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             )}
                                                         </div>
                                                     </td>
-                                                    <td className="p-3 text-left text-red-700 dark:text-red-400 font-mono font-bold whitespace-nowrap">{formatMoney(row.bed)}</td>
+                                                    <td className="p-3 text-left text-rose-700 dark:text-rose-400 font-mono font-bold whitespace-nowrap">{formatMoney(row.bed)}</td>
                                                     <td className="p-3 text-left text-emerald-700 dark:text-emerald-400 font-mono font-bold whitespace-nowrap">{formatMoney(row.bes)}</td>
                                                     <td className={`p-3 text-left font-mono font-black whitespace-nowrap ${
-                                                        row.balance > 0 ? 'text-red-700 dark:text-red-400' : (row.balance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
+                                                        row.balance > 0 ? 'text-rose-700 dark:text-rose-400' : (row.balance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
                                                     }`}>
                                                         <div className="flex items-center justify-end gap-1.5">
                                                             <span>{formatMoney(Math.abs(row.balance))}</span>
                                                             <span className={`text-[10px] px-1.5 py-0.5 rounded font-black font-sans border ${
                                                                 row.balance > 0 
-                                                                    ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/40 dark:text-red-300' 
+                                                                    ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300' 
                                                                     : (row.balance < 0 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-200')
                                                             }`}>
                                                                 {row.balance > 0 ? 'بد' : (row.balance < 0 ? 'بس' : 'صفر')}
@@ -6747,10 +6762,15 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     </td>
                                                     <td className="p-3 text-center whitespace-nowrap">
                                                         {!ag ? (
-                                                            <span className="text-[10px] text-slate-400 flex items-center justify-center gap-1">
-                                                                <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
-                                                                <span>محاسبه خودکار...</span>
-                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => fetchAgingForTraz([row], false)}
+                                                                className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-50 hover:bg-amber-50 text-slate-500 hover:text-amber-700 border border-slate-200 hover:border-amber-200 transition-colors flex items-center justify-center gap-1 mx-auto cursor-pointer"
+                                                                title="کلیک برای استعلام زنده راس فاکتورهای این شخص"
+                                                            >
+                                                                <Clock className="w-3 h-3 text-slate-400" />
+                                                                <span>محاسبه راس</span>
+                                                            </button>
                                                         ) : ag.status === 'settled' ? (
                                                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
                                                                 تسویه شده
@@ -6761,7 +6781,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                 onClick={() => setSelectedAgingParty({ ...row, ...ag })}
                                                                 className={`px-2 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer shadow-2xs flex items-center justify-center gap-1 mx-auto ${
                                                                     ag.daysOverdue > 90
-                                                                        ? 'bg-red-50 hover:bg-red-100 text-red-700 border-red-200'
+                                                                        ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
                                                                         : ag.daysOverdue > 60
                                                                         ? 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
                                                                         : ag.daysOverdue > 30
@@ -6780,7 +6800,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     </td>
                                                     <td className="p-3 text-center whitespace-nowrap">
                                                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
-                                                            row.balance > 0 ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                                            row.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
                                                         }`}>
                                                             {row.balance > 0 ? 'بدهکار' : 'بستانکار'}
                                                         </span>
@@ -6930,7 +6950,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                         </div>
                                                     </div>
                                                     <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${
-                                                        row.balance > 0 ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                                        row.balance > 0 ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300'
                                                     }`}>
                                                         {row.balance > 0 ? 'بدهکار' : 'بستانکار'}
                                                     </span>
@@ -6939,7 +6959,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                 <div className="grid grid-cols-3 gap-2 bg-slate-50 dark:bg-zinc-800/60 p-2.5 rounded-xl text-[11px]">
                                                     <div>
                                                         <div className="text-slate-500 dark:text-slate-400 font-medium">گردش بدهکار</div>
-                                                        <div className="font-mono font-bold text-red-700 dark:text-red-400 mt-0.5">{formatMoney(row.bed)}</div>
+                                                        <div className="font-mono font-bold text-rose-700 dark:text-rose-400 mt-0.5">{formatMoney(row.bed)}</div>
                                                     </div>
                                                     <div>
                                                         <div className="text-slate-500 dark:text-slate-400 font-medium">گردش بستانکار</div>
@@ -6948,12 +6968,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     <div className="text-left">
                                                         <div className="text-slate-500 dark:text-slate-400 font-medium">مانده نهایی</div>
                                                         <div className={`font-mono font-black mt-0.5 flex items-center justify-end gap-1 ${
-                                                            row.balance > 0 ? 'text-red-700 dark:text-red-400' : (row.balance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
+                                                            row.balance > 0 ? 'text-rose-700 dark:text-rose-400' : (row.balance < 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
                                                         }`}>
                                                             <span>{formatMoney(Math.abs(row.balance))}</span>
                                                             <span className={`text-[9px] px-1 py-0.2 rounded font-bold ${
                                                                 row.balance > 0 
-                                                                    ? 'text-red-700 dark:text-red-300' 
+                                                                    ? 'text-rose-700 dark:text-rose-300' 
                                                                     : 'text-emerald-700 dark:text-emerald-300'
                                                             }`}>
                                                                 {row.balance > 0 ? 'بد' : (row.balance < 0 ? 'بس' : 'صفر')}
@@ -6969,7 +6989,13 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                         راس و تاخیر فاکتورها:
                                                     </span>
                                                     {!ag ? (
-                                                        <span className="text-[10px] text-slate-400">محاسبه خودکار...</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => fetchAgingForTraz([row], false)}
+                                                            className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 cursor-pointer"
+                                                        >
+                                                            محاسبه راس
+                                                        </button>
                                                     ) : ag.status === 'settled' ? (
                                                         <span className="text-[10px] font-bold text-slate-500">تسویه شده</span>
                                                     ) : (
@@ -10920,8 +10946,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
             {/* Individual Customer Detailed Statement Modal */}
             {isStatementModalOpen && createPortal(
-                <div className="fixed inset-0 z-[99999] flex items-center justify-center p-0 sm:p-3 md:p-6 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white dark:bg-zinc-900 rounded-none sm:rounded-2xl shadow-2xl w-full max-w-7xl xl:max-w-[95vw] 2xl:max-w-[1650px] h-[100dvh] sm:h-[92vh] max-h-[100dvh] sm:max-h-[94vh] flex flex-col overflow-hidden border-0 sm:border border-slate-200 dark:border-zinc-800 animate-in zoom-in-95 duration-200 text-right" dir="rtl">
+                <div className="fixed inset-0 z-[99999] flex items-center justify-center p-0 sm:p-3 md:p-6 bg-slate-950/80 animate-in fade-in duration-150">
+                    <div className="modal-opaque-surface bg-white dark:bg-zinc-900 rounded-none sm:rounded-2xl shadow-2xl w-full max-w-7xl xl:max-w-[95vw] 2xl:max-w-[1650px] h-[100dvh] sm:h-[92vh] max-h-[100dvh] sm:max-h-[94vh] flex flex-col overflow-hidden border-0 sm:border border-slate-200 dark:border-zinc-800 animate-in zoom-in-95 duration-150 text-right" dir="rtl">
                         {/* Modal Header - Ultra-compact on Android/Mobile */}
                         <div className="flex-none px-3 py-2 sm:p-4 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center gap-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white">
                             <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -10930,7 +10956,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                 </div>
                                 <div className="min-w-0 flex-1">
                                     <h3 className="font-black text-xs sm:text-base md:text-lg truncate">
-                                        صورتحساب: {modalTafsiliName || (tafsilis.find(t => t.Code === (modalTafsiliCode || selectedTafsili))?.Name) || 'شخص'}
+                                        صورتحساب: {modalTafsiliName || (tafsiliLookupMap.get(modalTafsiliCode || selectedTafsili)?.Name) || 'شخص'}
                                     </h3>
                                     <p className="text-[10px] sm:text-xs text-blue-100 mt-0.5 truncate">
                                         کد: <span className="font-mono font-bold bg-white/20 px-1.5 py-0.2 rounded">{modalTafsiliCode || selectedTafsili}</span> | {dateFrom} تا {dateTo}
@@ -10966,15 +10992,15 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         </div>
 
                         {/* Compact Statement Summary KPIs Strip (Fixed at top so statement scrolls freely below) */}
-                        <div className="flex-none px-2.5 py-2 sm:px-5 sm:py-3 bg-slate-50/90 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
+                        <div className="flex-none px-2.5 py-2 sm:px-5 sm:py-3 bg-slate-50 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
                             <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
-                                <div className="bg-gradient-to-br from-white to-red-50/40 dark:from-zinc-800 dark:to-red-950/20 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-red-200/80 dark:border-red-900/40 shadow-2xs flex flex-col justify-between">
-                                    <span className="text-[10px] sm:text-xs text-red-700 dark:text-red-300 font-bold block">مجموع بدهکار (ریال)</span>
-                                    <span className="text-[11px] sm:text-lg font-black text-red-700 dark:text-red-300 font-mono mt-0.5 break-all leading-tight">
+                                <div className="bg-white dark:bg-zinc-800 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-rose-200 dark:border-rose-900/40 shadow-2xs flex flex-col justify-between">
+                                    <span className="text-[10px] sm:text-xs text-rose-700 dark:text-rose-300 font-bold block">مجموع بدهکار (ریال)</span>
+                                    <span className="text-[11px] sm:text-lg font-black text-rose-700 dark:text-rose-300 font-mono mt-0.5 break-all leading-tight">
                                         {formatMoney(filteredStatementData.reduce((sum, r) => sum + r.bed, 0))}
                                     </span>
                                 </div>
-                                <div className="bg-gradient-to-br from-white to-emerald-50/40 dark:from-zinc-800 dark:to-emerald-950/20 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-emerald-200/80 dark:border-emerald-900/40 shadow-2xs flex flex-col justify-between">
+                                <div className="bg-white dark:bg-zinc-800 p-2 sm:p-3 rounded-xl sm:rounded-2xl border border-emerald-200 dark:border-emerald-900/40 shadow-2xs flex flex-col justify-between">
                                     <span className="text-[10px] sm:text-xs text-emerald-700 dark:text-emerald-300 font-bold block">مجموع بستانکار (ریال)</span>
                                     <span className="text-[11px] sm:text-lg font-black text-emerald-700 dark:text-emerald-300 font-mono mt-0.5 break-all leading-tight">
                                         {formatMoney(filteredStatementData.reduce((sum, r) => sum + r.bes, 0))}
@@ -10984,23 +11010,23 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                     const lastBal = filteredStatementData[filteredStatementData.length - 1]?.balance || 0;
                                     const isBed = lastBal > 0;
                                     return (
-                                        <div className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl border shadow-2xs flex flex-col justify-between ${
+                                        <div className={`bg-white dark:bg-zinc-800 p-2 sm:p-3 rounded-xl sm:rounded-2xl border shadow-2xs flex flex-col justify-between ${
                                             isBed 
-                                                ? 'bg-gradient-to-br from-white to-red-50/50 dark:from-zinc-800 dark:to-red-950/30 border-red-200/80 dark:border-red-900/50' 
-                                                : (lastBal < 0 ? 'bg-gradient-to-br from-white to-emerald-50/50 dark:from-zinc-800 dark:to-emerald-950/30 border-emerald-200/80 dark:border-emerald-900/50' : 'bg-white dark:bg-zinc-800 border-slate-200')
+                                                ? 'border-rose-200 dark:border-rose-900/50' 
+                                                : (lastBal < 0 ? 'border-emerald-200 dark:border-emerald-900/50' : 'border-slate-200')
                                         }`}>
                                             <span className="text-[10px] sm:text-xs font-bold flex items-center justify-between gap-1 text-slate-700 dark:text-slate-300">
                                                 <span>مانده نهایی</span>
                                                 <span className={`px-2 py-0.5 rounded-md text-[9px] sm:text-[10px] font-black ${
                                                     isBed 
-                                                        ? 'bg-red-100 text-red-800 dark:bg-red-950/80 dark:text-red-200 border border-red-200' 
-                                                        : (lastBal < 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200 border border-emerald-200' : 'bg-slate-100 text-slate-700')
+                                                        ? 'bg-rose-50 text-rose-800 dark:bg-rose-950/80 dark:text-rose-200 border border-rose-200' 
+                                                        : (lastBal < 0 ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200 border border-emerald-200' : 'bg-slate-100 text-slate-700')
                                                 }`}>
                                                     {isBed ? 'بدهکار' : (lastBal < 0 ? 'بستانکار' : 'تسویه')}
                                                 </span>
                                             </span>
                                             <span className={`text-[11px] sm:text-lg font-black font-mono mt-0.5 break-all leading-tight ${
-                                                isBed ? 'text-red-700 dark:text-red-300' : (lastBal < 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-800 dark:text-white')
+                                                isBed ? 'text-rose-700 dark:text-rose-300' : (lastBal < 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-800 dark:text-white')
                                             }`}>
                                                 {formatMoney(Math.abs(lastBal))}
                                             </span>
@@ -11011,7 +11037,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         </div>
 
                         {/* Modal Body - Dedicated 80%+ Viewport Height for Statement Records */}
-                        <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5">
+                        <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5 bg-white dark:bg-zinc-900">
                             {isLoading ? (
                                 <div className="py-20 flex flex-col items-center justify-center gap-3 text-slate-400">
                                     <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
@@ -11061,15 +11087,15 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     {/* Row 3: Full Unshortened Amounts (Bed / Bes / Balance) */}
                                                     <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-100 dark:border-zinc-800/80 text-[11px]">
                                                         {row.bed > 0 && (
-                                                            <div className="bg-red-50/40 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-red-200/60 dark:border-red-900/40">
-                                                                <span className="text-red-700 dark:text-red-300 font-bold text-[10px]">بدهکار:</span>
-                                                                <span className="font-mono font-bold text-red-700 dark:text-red-300">
+                                                            <div className="bg-rose-50/50 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-rose-200/70 dark:border-rose-900/40">
+                                                                <span className="text-rose-700 dark:text-rose-300 font-bold text-[10px]">بدهکار:</span>
+                                                                <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
                                                                     {formatMoney(row.bed)}
                                                                 </span>
                                                             </div>
                                                         )}
                                                         {row.bes > 0 && (
-                                                            <div className="bg-emerald-50/40 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-emerald-200/60 dark:border-emerald-900/40">
+                                                            <div className="bg-emerald-50/50 dark:bg-zinc-800 px-2 py-1 rounded-lg flex items-center justify-between gap-1 border border-emerald-200/70 dark:border-emerald-900/40">
                                                                 <span className="text-emerald-700 dark:text-emerald-300 font-bold text-[10px]">بستانکار:</span>
                                                                 <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
                                                                     {formatMoney(row.bes)}
@@ -11080,14 +11106,14 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             (row.bed > 0 && row.bes > 0) ? 'col-span-2' : ''
                                                         } ${
                                                             isBed
-                                                                ? 'bg-red-50/80 dark:bg-red-950/30 border-red-200 text-red-800 dark:text-red-200'
+                                                                ? 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200 text-rose-800 dark:text-rose-200'
                                                                 : isBes
                                                                     ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 text-emerald-800 dark:text-emerald-200'
                                                                     : 'bg-slate-50 dark:bg-zinc-800 border-slate-200 text-slate-700 dark:text-slate-300'
                                                         }`}>
                                                             <span className="font-bold text-[10px]">مانده حساب:</span>
                                                             <div className="flex items-center gap-1">
-                                                                <span className="font-mono font-black text-slate-900 dark:text-white">
+                                                                <span className={`font-mono font-black ${isBed ? 'text-rose-700 dark:text-rose-300' : (isBes ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-900 dark:text-white')}`}>
                                                                     {formatMoney(Math.abs(row.balance))}
                                                                 </span>
                                                                 <span className="text-[10px] font-black opacity-80">
@@ -11102,7 +11128,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                     </div>
 
                                     {/* DESKTOP TABLE VIEW */}
-                                    <div className="hidden md:block rounded-2xl border border-slate-200 dark:border-zinc-700 overflow-x-auto w-full shadow-xs">
+                                    <div className="hidden md:block rounded-2xl border border-slate-200 dark:border-zinc-700 overflow-x-auto w-full shadow-xs bg-white dark:bg-zinc-900">
                                         <table className="w-full text-right text-xs border-collapse">
                                             <thead className="bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-100 font-extrabold border-b border-slate-200 dark:border-zinc-700 sticky top-0 z-10 shadow-xs">
                                                 <tr>
@@ -11116,7 +11142,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                     <th className="px-4 py-3 w-40 text-left whitespace-nowrap">مانده حساب (ریال)</th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="divide-y divide-slate-100 dark:divide-zinc-800 font-mono">
+                                            <tbody className="divide-y divide-slate-100 dark:divide-zinc-800 font-mono bg-white dark:bg-zinc-900">
                                                 {filteredStatementData.map((row, idx) => {
                                                     const isBed = row.balance > 0;
                                                     const isBes = row.balance < 0;
@@ -11127,20 +11153,20 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                             <td className="px-3 py-2.5 text-center text-slate-600 dark:text-slate-300 whitespace-nowrap font-bold">{row.SanadNo}</td>
                                                             <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300 font-sans whitespace-nowrap">{row.MoeinName || 'سایر'}</td>
                                                             <td className="px-4 py-2.5 text-slate-800 dark:text-slate-100 font-sans break-words">{row.Description || '-'}</td>
-                                                            <td className="px-4 py-2.5 text-left text-red-700 dark:text-red-400 font-bold whitespace-nowrap">
+                                                            <td className="px-4 py-2.5 text-left text-rose-700 dark:text-rose-400 font-bold whitespace-nowrap">
                                                                 {row.bed > 0 ? formatMoney(row.bed) : <span className="text-slate-300 dark:text-zinc-600 font-normal">-</span>}
                                                             </td>
                                                             <td className="px-4 py-2.5 text-left text-emerald-700 dark:text-emerald-400 font-bold whitespace-nowrap">
                                                                 {row.bes > 0 ? formatMoney(row.bes) : <span className="text-slate-300 dark:text-zinc-600 font-normal">-</span>}
                                                             </td>
                                                             <td className={`px-4 py-2.5 text-left whitespace-nowrap font-mono font-black ${
-                                                                isBed ? 'text-red-700 dark:text-red-400' : (isBes ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
+                                                                isBed ? 'text-rose-700 dark:text-rose-400' : (isBes ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-600')
                                                             }`}>
                                                                 <div className="flex items-center justify-end gap-1.5">
                                                                     <span>{formatMoney(Math.abs(row.balance))}</span>
                                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-black font-sans border ${
                                                                         isBed 
-                                                                            ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-950/60 dark:text-red-300' 
+                                                                            ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300' 
                                                                             : (isBes ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-200')
                                                                     }`}>
                                                                         {isBed ? 'بد' : (isBes ? 'بس' : 'صفر')}

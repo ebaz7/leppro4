@@ -1694,21 +1694,38 @@ html.has-preset-bg-aurora-light.dark aside {
 }
 
 /* Ensure that regular table body cells in report panels have pristine text clarity and weight */
-html.has-custom-bg tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-html.has-preset-bg-cosmic-dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-html.has-preset-bg-cyan-cosmic tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-html.has-preset-bg-aurora-light tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-.theme-light-aurora tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]) {
+html.has-custom-bg tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+html.has-preset-bg-cosmic-dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+html.has-preset-bg-cyan-cosmic tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+html.has-preset-bg-aurora-light tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+.theme-light-aurora tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]) {
   color: #1e293b;
   font-weight: 550;
 }
 
-html.has-custom-bg.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-html.has-preset-bg-cosmic-dark.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-html.has-preset-bg-cyan-cosmic.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]),
-html.has-preset-bg-aurora-light.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-rose-"]) {
+html.has-custom-bg.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+html.has-preset-bg-cosmic-dark.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+html.has-preset-bg-cyan-cosmic.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]),
+html.has-preset-bg-aurora-light.dark tbody td:not([class*="text-white"]):not([class*="text-emerald-"]):not([class*="text-teal-"]):not([class*="text-green-"]):not([class*="text-amber-"]):not([class*="text-blue-"]):not([class*="text-indigo-"]):not([class*="text-rose-"]):not([class*="text-red-"]) {
   color: #cbd5e1;
   font-weight: 500;
+}
+
+/* Solid opaque modal surfaces so background tables never bleed through open modals */
+html:not(.dark) .modal-opaque-surface,
+html:not(.dark) .modal-opaque-surface .bg-white,
+.theme-light-aurora .modal-opaque-surface,
+.theme-light-aurora .modal-opaque-surface .bg-white {
+  background-color: #ffffff !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.dark .modal-opaque-surface,
+html.dark .modal-opaque-surface .dark\:bg-zinc-900 {
+  background-color: #18181b !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* 🌟 UNIVERSAL HIGH LEGIBILITY FOR ALL TABLE SUMMARY / FOOTER ROWS (سطرهای جمع جداول) */
@@ -1725,44 +1742,41 @@ tr.bg-sky-950 td,
 tr.bg-blue-900 td,
 tr.bg-blue-950 td,
 tr.bg-emerald-900 td,
-tr.bg-emerald-950 td,
-tr[class*="bg-slate-900"] td,
-tr[class*="bg-slate-950"] td,
-tr[class*="bg-indigo-900"] td,
-tr[class*="bg-indigo-950"] td,
-tr[class*="bg-sky-900"] td,
-tr[class*="bg-blue-900"] td,
-tr[class*="bg-emerald-900"] td {
+tr.bg-emerald-950 td {
   color: #ffffff !important;
   font-weight: 800 !important;
   opacity: 1 !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
-/* Accent highlight colors in summary footers */
+/* Accent highlight colors strictly in dark summary footers (never on regular tbody rows!) */
 tfoot .text-emerald-300,
-tfoot [class*="text-emerald-300"],
-tfoot [class*="text-emerald-400"],
-tr[class*="bg-"] td[class*="text-emerald-300"],
-tr[class*="bg-"] td[class*="text-emerald-400"] {
+tfoot .text-emerald-400,
+tr.bg-slate-900 td.text-emerald-300,
+tr.bg-slate-900 td.text-emerald-400,
+tr.bg-indigo-950 td.text-emerald-300,
+tr.bg-indigo-950 td.text-emerald-400,
+tr.bg-emerald-900 td.text-emerald-300,
+tr.bg-emerald-900 td.text-emerald-400 {
   color: #6ee7b7 !important;
   font-weight: 900 !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 tfoot .text-amber-300,
-tfoot [class*="text-amber-300"],
-tfoot [class*="text-amber-400"],
-tr[class*="bg-"] td[class*="text-amber-300"],
-tr[class*="bg-"] td[class*="text-amber-400"] {
+tfoot .text-amber-400,
+tr.bg-slate-900 td.text-amber-300,
+tr.bg-slate-900 td.text-amber-400,
+tr.bg-indigo-950 td.text-amber-300,
+tr.bg-indigo-950 td.text-amber-400 {
   color: #fcd34d !important;
   font-weight: 900 !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 tfoot .text-sky-300,
-tfoot [class*="text-sky-300"],
-tr[class*="bg-"] td[class*="text-sky-300"] {
+tr.bg-slate-900 td.text-sky-300,
+tr.bg-indigo-950 td.text-sky-300 {
   color: #7dd3fc !important;
   font-weight: 900 !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
