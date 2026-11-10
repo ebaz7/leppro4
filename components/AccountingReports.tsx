@@ -333,6 +333,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const [trazSortOrder, setTrazSortOrder] = useState<'asc' | 'desc'>('asc');
     const [excludedTrazCodes, setExcludedTrazCodes] = useState<string[]>([]);
     const [showOnlyExcluded, setShowOnlyExcluded] = useState(false);
+    const [trazFilterMode, setTrazFilterMode] = useState<'all_with_balance' | 'turnover_only'>('all_with_balance');
     
     // Live FIFO Aging and Overdue Days State
     const [trazAging, setTrazAging] = useState<Record<string, any>>(() => {
@@ -628,12 +629,13 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const parseTafsiliRaw = (raw: string) => {
         if (!raw) return { moein: '', code: '' };
         const parts = raw.split('-');
+        const personLayers = ['11', '51', '52', '53', '54', '55', '56', '57', '58', '59'];
         for (const part of parts) {
             const match = part.match(/^(\d+):(\d+)/);
             if (match) {
                 const group = match[1];
                 const code = match[2];
-                if (['11', '51', '52', '53', '54', '55'].includes(group) || group.startsWith('11') || group.startsWith('31')) {
+                if (personLayers.includes(group) || group.startsWith('11') || group.startsWith('31') || group.startsWith('51') || group.startsWith('52')) {
                     return {
                         moein: group,
                         code: code
@@ -925,11 +927,13 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     g.Field_009 as NationalId,
                     g.Field_015 as Mobile,
                     g.Field_036 as Sheba
-                FROM ACT_TBL_007 t7
-                LEFT JOIN GNR_TBL_001 g ON t7.Field_005 = g.Field_003
-                WHERE t7.Field_004 IN ('11', '51', '52', '53', '54', '55') 
+                FROM ACT_TBL_007 t7 WITH (NOLOCK)
+                LEFT JOIN GNR_TBL_001 g WITH (NOLOCK) ON t7.Field_005 = g.Field_003
+                WHERE t7.Field_004 IN ('11', '51', '52', '53', '54', '55', '56', '57', '58', '59') 
+                   OR g.Field_003 IS NOT NULL
                    OR t7.Field_003 LIKE '11%' 
                    OR t7.Field_003 LIKE '31%'
+                   OR t7.Field_003 LIKE '51%'
                 ORDER BY t7.Field_006 ASC
             `;
             const data = await runSayanQuery(sql);
@@ -947,61 +951,58 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const fetchTraz = async () => {
         setIsLoading(true);
         try {
-            // Ensure tafsilis (with Sayan categories from GNR_TBL_001) are loaded
-            let activeTafsilis = tafsilis;
-            if (!activeTafsilis || activeTafsilis.length === 0) {
-                activeTafsilis = await fetchTafsilis();
-            }
+            // Always refresh tafsilis (with Sayan categories from GNR_TBL_001) in real-time
+            // so any newly added or modified person in Sayan ERP is automatically loaded
+            const activeTafsilis = await fetchTafsilis();
 
-            let sql = '';
-            // If date filter is defined, query transactional tables with Sanad headers
-            if (dateFrom && dateTo) {
-                const gregFrom = jalaliToGregorianStr(dateFrom);
-                const gregTo = jalaliToGregorianStr(dateTo);
-                sql = `
-                    SELECT 
-                        t9.Field_015 as TafsiliRaw,
-                        SUM(CAST(t9.Field_009 AS FLOAT)) as TotalBed,
-                        SUM(CAST(t9.Field_010 AS FLOAT)) as TotalBes
-                    FROM ACT_TBL_009 t9
-                    LEFT JOIN ACT_TBL_008 t8 ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
-                    WHERE (
-                        t9.Field_015 LIKE '11:%' OR t9.Field_015 LIKE '%-11:%' OR
-                        t9.Field_015 LIKE '51:%' OR t9.Field_015 LIKE '%-51:%' OR
-                        t9.Field_015 LIKE '52:%' OR t9.Field_015 LIKE '%-52:%' OR
-                        t9.Field_015 LIKE '53:%' OR t9.Field_015 LIKE '%-53:%' OR
-                        t9.Field_015 LIKE '54:%' OR t9.Field_015 LIKE '%-54:%' OR
-                        t9.Field_015 LIKE '55:%' OR t9.Field_015 LIKE '%-55:%' OR
-                        t9.Field_015 LIKE '31:%' OR t9.Field_015 LIKE '%-31:%'
-                    )
-                      AND t9.Field_007 NOT IN ('102', '103', '107', '109', '114', '116', '117') 
-                      AND t9.Field_005 <> '9'
-                      AND t8.Field_008 >= '${gregFrom}T00:00:00.000Z' 
-                      AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'
-                    GROUP BY t9.Field_015
-                `;
-            } else {
-                // aggregate speeds
-                sql = `
-                    SELECT 
-                        t24.Field_010 as TafsiliRaw,
-                        SUM(CAST(t24.Field_006 AS FLOAT)) as TotalBed,
-                        SUM(CAST(t24.Field_007 AS FLOAT)) as TotalBes
-                    FROM ACT_TBL_024 t24
-                    WHERE (
-                        t24.Field_010 LIKE '11:%' OR t24.Field_010 LIKE '%-11:%' OR
-                        t24.Field_010 LIKE '51:%' OR t24.Field_010 LIKE '%-51:%' OR
-                        t24.Field_010 LIKE '52:%' OR t24.Field_010 LIKE '%-52:%' OR
-                        t24.Field_010 LIKE '53:%' OR t24.Field_010 LIKE '%-53:%' OR
-                        t24.Field_010 LIKE '54:%' OR t24.Field_010 LIKE '%-54:%' OR
-                        t24.Field_010 LIKE '55:%' OR t24.Field_010 LIKE '%-55:%' OR
-                        t24.Field_010 LIKE '31:%' OR t24.Field_010 LIKE '%-31:%'
-                    )
-                      AND t24.Field_005 NOT IN ('102', '103', '107', '109', '114', '116', '117')
-                      AND t24.Field_003 <> '9'
-                    GROUP BY t24.Field_010
-                `;
-            }
+            const activeYear = getActiveFiscalYearLabel();
+            // In Sayan ERP, PeriodCode for 1405 is '4', 1404 is '3', 1403 is '2'
+            const periodCode = (activeYear && activeYear >= 1402) ? String(activeYear - 1401) : '4';
+
+            const gregFrom = dateFrom ? jalaliToGregorianStr(dateFrom) : '';
+            const gregTo = dateTo ? jalaliToGregorianStr(dateTo) : '';
+
+            // Sayan ERP standard: A person's balance (مانده حساب) is the cumulative sum of all vouchers
+            // from the beginning of the active fiscal year up to the selected end date (dateTo).
+            // Concurrently, we calculate PeriodBed and PeriodBes strictly between dateFrom and dateTo
+            // so that 1-day slices (e.g. 1405/08/17 to 1405/08/17) show both the exact account balance
+            // and the specific day's turnover without filtering out any person!
+            const dateToFilter = gregTo ? `AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'` : '';
+            const periodBedExpr = (gregFrom && gregTo) 
+                ? `SUM(CASE WHEN t8.Field_008 >= '${gregFrom}T00:00:00.000Z' AND t8.Field_008 <= '${gregTo}T23:59:59.000Z' THEN CAST(t9.Field_009 AS FLOAT) ELSE 0 END)`
+                : `SUM(CAST(t9.Field_009 AS FLOAT))`;
+            const periodBesExpr = (gregFrom && gregTo)
+                ? `SUM(CASE WHEN t8.Field_008 >= '${gregFrom}T00:00:00.000Z' AND t8.Field_008 <= '${gregTo}T23:59:59.000Z' THEN CAST(t9.Field_010 AS FLOAT) ELSE 0 END)`
+                : `SUM(CAST(t9.Field_010 AS FLOAT))`;
+
+            const sql = `
+                SELECT 
+                    t9.Field_015 as TafsiliRaw,
+                    SUM(CAST(t9.Field_009 AS FLOAT)) as TotalBed,
+                    SUM(CAST(t9.Field_010 AS FLOAT)) as TotalBes,
+                    ${periodBedExpr} as PeriodBed,
+                    ${periodBesExpr} as PeriodBes
+                FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                WHERE t9.Field_003 = '${periodCode}'
+                  AND ISNULL(t8.Field_009, 0) <> 4
+                  AND t9.Field_005 <> '9'
+                  ${dateToFilter}
+                  AND (
+                      t9.Field_015 LIKE '11:%' OR t9.Field_015 LIKE '%-11:%' OR
+                      t9.Field_015 LIKE '51:%' OR t9.Field_015 LIKE '%-51:%' OR
+                      t9.Field_015 LIKE '52:%' OR t9.Field_015 LIKE '%-52:%' OR
+                      t9.Field_015 LIKE '53:%' OR t9.Field_015 LIKE '%-53:%' OR
+                      t9.Field_015 LIKE '54:%' OR t9.Field_015 LIKE '%-54:%' OR
+                      t9.Field_015 LIKE '55:%' OR t9.Field_015 LIKE '%-55:%' OR
+                      t9.Field_015 LIKE '56:%' OR t9.Field_015 LIKE '%-56:%' OR
+                      t9.Field_015 LIKE '57:%' OR t9.Field_015 LIKE '%-57:%' OR
+                      t9.Field_015 LIKE '58:%' OR t9.Field_015 LIKE '%-58:%' OR
+                      t9.Field_015 LIKE '59:%' OR t9.Field_015 LIKE '%-59:%' OR
+                      t9.Field_015 LIKE '31:%' OR t9.Field_015 LIKE '%-31:%'
+                  )
+                GROUP BY t9.Field_015
+            `;
             
             const rawData = await runSayanQuery(sql);
             
@@ -1012,7 +1013,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 const code = parsed.code;
                 if (!code) return;
                 
-                const tafsili = (activeTafsilis || []).find((t: any) => t.Code === code || t.TafsiliCode === code || t.PersonCode === code);
+                const tafsili = (activeTafsilis || []).find((t: any) => 
+                    t.Code === code || 
+                    t.TafsiliCode === code || 
+                    t.PersonCode === code ||
+                    (code.length > 2 && (t.Code === code.substring(2) || t.PersonCode === code.substring(2)))
+                );
                 const name = tafsili ? tafsili.Name : `کد اشخاص ${code}`;
                 const moein = parsed.moein || (tafsili?.TafsiliGroup ? String(tafsili.TafsiliGroup) : (code.startsWith('11') ? '11' : (code.startsWith('31') ? '31' : '')));
                 const categories = tafsili?.Categories || '';
@@ -1020,12 +1026,16 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 const tafsiliGroup = tafsili?.TafsiliGroup || '';
                 const bed = parseFloat(row.TotalBed || 0);
                 const bes = parseFloat(row.TotalBes || 0);
+                const periodBed = parseFloat(row.PeriodBed || 0);
+                const periodBes = parseFloat(row.PeriodBes || 0);
                 
                 if (groupedMap.has(code)) {
                     const existing = groupedMap.get(code);
                     existing.bed += bed;
                     existing.bes += bes;
                     existing.balance = existing.bed - existing.bes;
+                    existing.periodBed += periodBed;
+                    existing.periodBes += periodBes;
                     if (!existing.categories && categories) existing.categories = categories;
                     if (!existing.personCode && personCode) existing.personCode = personCode;
                     if (!existing.tafsiliGroup && tafsiliGroup) existing.tafsiliGroup = tafsiliGroup;
@@ -1040,12 +1050,14 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         tafsiliGroup,
                         bed,
                         bes,
-                        balance: bed - bes
+                        balance: bed - bes,
+                        periodBed,
+                        periodBes
                     });
                 }
             });
             
-            const mapped = Array.from(groupedMap.values()).filter((r: any) => r.balance !== 0);
+            const mapped = Array.from(groupedMap.values()).filter((r: any) => r.balance !== 0 || r.periodBed !== 0 || r.periodBes !== 0);
 
             setTrazData(mapped);
         } catch (err: any) {
@@ -1177,7 +1189,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     // Helper: Determine Sayan ERP Layer & Category Info for any account
     const getSayanCategoryInfo = (item: any): { code: '11' | '12' | '13' | '14' | '15' | '16'; label: string; priority: number; categories: string[] } => {
         const codeStr = String(item.code || item.Code || '').trim();
-        const taf = (tafsilis || []).find((t: any) => t.Code === codeStr || t.PersonCode === codeStr || (item.personCode && t.PersonCode === item.personCode));
+        const taf = (tafsilis || []).find((t: any) => 
+            t.Code === codeStr || 
+            t.PersonCode === codeStr || 
+            (item.personCode && t.PersonCode === item.personCode) ||
+            (codeStr.length > 2 && (t.Code === codeStr.substring(2) || t.PersonCode === codeStr.substring(2)))
+        );
         const categoriesRaw = String(item.categories || taf?.Categories || '').trim();
         const tafsiliGroup = String(item.tafsiliGroup || taf?.TafsiliGroup || item.moein || '').trim();
         const nameStr = String(item.name || taf?.Name || '').trim();
@@ -1349,6 +1366,11 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                   item.code.includes(searchLower);
             
             if (!matchesSearch) return false;
+
+            // Optional: filter only parties that had turnover in this specific date slice
+            if (trazFilterMode === 'turnover_only' && (item.periodBed === 0 && item.periodBes === 0)) {
+                return false;
+            }
 
             // 4. Sayan Layer / Categories Filter (11 تامین، 12 مشتری، 13 پرسنل، 14 سهامدار، 15 سایر، 16 همه)
             const catInfo = getSayanCategoryInfo(item);
@@ -1878,34 +1900,36 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const gregFrom = jalaliToGregorianStr(dateFrom);
             const gregTo = jalaliToGregorianStr(dateTo);
             
-            const selectedInfo = tafsilis.find(t => t.Code === codeToUse);
-            const shortTafsiliCode = selectedInfo ? selectedInfo.TafsiliCode : '';
-            
-            let tafsiliFilter = `(
-                t9.Field_015 LIKE '%:${codeToUse}%' OR 
-                t9.Field_014 LIKE '%:${codeToUse}%' OR
-                t9.Field_015 LIKE '%:${codeToUse}' OR 
-                t9.Field_014 LIKE '%:${codeToUse}'
-            )`;
-            
-            if (shortTafsiliCode) {
-                const code31 = '31' + shortTafsiliCode;
-                tafsiliFilter = `(
-                    t9.Field_015 LIKE '%:${codeToUse}%' OR 
-                    t9.Field_014 LIKE '%:${codeToUse}%' OR
-                    t9.Field_015 LIKE '%:${codeToUse}' OR 
-                    t9.Field_014 LIKE '%:${codeToUse}' OR
-                    t9.Field_015 LIKE '%:${shortTafsiliCode}%' OR 
-                    t9.Field_014 LIKE '%:${shortTafsiliCode}%' OR
-                    t9.Field_015 LIKE '%:${shortTafsiliCode}' OR 
-                    t9.Field_014 LIKE '%:${shortTafsiliCode}' OR
-                    t9.Field_015 LIKE '%:${code31}%' OR 
-                    t9.Field_014 LIKE '%:${code31}%' OR
-                    t9.Field_015 LIKE '%:${code31}' OR 
-                    t9.Field_014 LIKE '%:${code31}'
-                )`;
-            }
+            const activeYear = getActiveFiscalYearLabel();
+            const periodCode = (activeYear && activeYear >= 1402) ? String(activeYear - 1401) : '4';
+            const selectedInfo = tafsilis.find(t => t.Code === codeToUse || t.TafsiliCode === codeToUse);
+            const shortTafsiliCode = selectedInfo ? selectedInfo.TafsiliCode : (codeToUse.length > 2 ? codeToUse.replace(/^0+/, '') : codeToUse);
+            const rawShort = codeToUse.replace(/^[0-9]{2}/, '');
+            const candidateCodes = Array.from(new Set([
+                codeToUse,
+                rawShort,
+                shortTafsiliCode,
+                shortTafsiliCode ? '11' + shortTafsiliCode : '',
+                shortTafsiliCode ? '31' + shortTafsiliCode : '',
+                shortTafsiliCode ? '51' + shortTafsiliCode : '',
+                shortTafsiliCode ? '52' + shortTafsiliCode : '',
+            ].filter(c => c && c.length >= 2)));
 
+            const tafsiliConditions = candidateCodes.map(c => `(
+                t9.Field_015 LIKE '%:${c}%' OR 
+                t9.Field_014 LIKE '%:${c}%' OR
+                t9.Field_015 LIKE '%:${c}' OR 
+                t9.Field_014 LIKE '%:${c}' OR
+                t9.Field_015 LIKE '%-${c}%' OR
+                t9.Field_014 LIKE '%-${c}%' OR
+                t9.Field_015 LIKE '%-${c}' OR
+                t9.Field_014 LIKE '%-${c}'
+            )`).join(' OR ');
+
+            const tafsiliFilter = `(${tafsiliConditions})`;
+            const periodFilter = periodCode ? `AND t9.Field_003 = '${periodCode}'` : '';
+
+            // 1. Fetch detailed statement transactions within date range
             const sql = `
                 SELECT 
                     t9.Field_004 as SanadNo,
@@ -1917,22 +1941,46 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     t9.Field_006 as MoeinParent,
                     t9.Field_007 as MoeinCode,
                     m3.Field_006 as MoeinName
-                FROM ACT_TBL_009 t9
-                LEFT JOIN ACT_TBL_008 t8 ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
-                LEFT JOIN ACT_TBL_003 m3 ON t9.Field_005 = m3.Field_003 AND t9.Field_006 = m3.Field_004 AND t9.Field_007 = m3.Field_005
-                WHERE ${tafsiliFilter} 
-                  AND (t9.Field_015 LIKE '11%' OR t9.Field_015 LIKE '%-11%' OR t9.Field_015 LIKE '31%' OR t9.Field_015 LIKE '%-31%')
-                  AND t9.Field_015 NOT LIKE '%-12%'
-                  AND t9.Field_015 NOT LIKE '%-13%'
-                  AND t9.Field_007 NOT IN ('102', '103', '107', '109', '114', '116', '117')
+                FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                LEFT JOIN ACT_TBL_003 m3 WITH (NOLOCK) ON t9.Field_005 = m3.Field_003 AND t9.Field_006 = m3.Field_004 AND t9.Field_007 = m3.Field_005
+                WHERE (${tafsiliFilter}) 
+                  ${periodFilter}
+                  AND ISNULL(t8.Field_009, 0) <> 4
                   AND t9.Field_005 <> '9'
                   AND t8.Field_008 >= '${gregFrom}T00:00:00.000Z'
                   AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'
                 ORDER BY t8.Field_008 ASC, CAST(t9.Field_001 AS INT) ASC
             `;
             const data = await runSayanQuery(sql);
-            
-            let balanceAccumulator = 0;
+
+            // 2. Query prior balance before start date (مانده از قبل / نقل از گذشته)
+            let priorBed = 0;
+            let priorBes = 0;
+            try {
+                const prevBalanceSql = `
+                    SELECT 
+                        SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as PriorBed,
+                        SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as PriorBes
+                    FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                    LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                    WHERE (${tafsiliFilter})
+                      ${periodFilter}
+                      AND ISNULL(t8.Field_009, 0) <> 4
+                      AND t9.Field_005 <> '9'
+                      AND t8.Field_008 < '${gregFrom}T00:00:00.000Z'
+                `;
+                const priorRes = await runSayanQuery(prevBalanceSql);
+                if (priorRes && priorRes.length > 0) {
+                    priorBed = parseFloat(priorRes[0].PriorBed || 0);
+                    priorBes = parseFloat(priorRes[0].PriorBes || 0);
+                }
+            } catch (err) {
+                console.warn('Failed to fetch prior balance for statement:', err);
+            }
+
+            const priorBalance = priorBed - priorBes;
+            let balanceAccumulator = priorBalance;
             const processed = data.map((row: any) => {
                 const bed = parseFloat(row.Bed || 0);
                 const bes = parseFloat(row.Bes || 0);
@@ -1944,33 +1992,27 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     balance: balanceAccumulator
                 };
             });
+
+            if (priorBalance !== 0 || priorBed !== 0 || priorBes !== 0) {
+                processed.unshift({
+                    SanadNo: 'نقل از قبل',
+                    Bed: priorBed,
+                    Bes: priorBes,
+                    Description: 'مانده از قبل (نقل از گذشته تا ابتدای بازه)',
+                    Date: `${gregFrom}T00:00:00.000Z`,
+                    MoeinGroup: '',
+                    MoeinParent: '',
+                    MoeinCode: '',
+                    MoeinName: 'مانده ابتدای بازه',
+                    bed: priorBed,
+                    bes: priorBes,
+                    balance: priorBalance
+                });
+            }
             setStatementData(processed);
 
             // Fetch guarantee and post-dated cheques associated with this person
-            let chequeFilter = `(
-                t9.Field_015 LIKE '%:${codeToUse}%' OR 
-                t9.Field_014 LIKE '%:${codeToUse}%' OR
-                t9.Field_015 LIKE '%:${codeToUse}' OR 
-                t9.Field_014 LIKE '%:${codeToUse}'
-            ) AND (t9.Field_015 LIKE '%-12%' OR t9.Field_015 LIKE '%-13%' OR t9.Field_005 = '9' OR t9.Field_007 IN ('102', '103'))`;
-
-            if (shortTafsiliCode) {
-                const code31 = '31' + shortTafsiliCode;
-                chequeFilter = `(
-                    t9.Field_015 LIKE '%:${codeToUse}%' OR 
-                    t9.Field_014 LIKE '%:${codeToUse}%' OR
-                    t9.Field_015 LIKE '%:${codeToUse}' OR 
-                    t9.Field_014 LIKE '%:${codeToUse}' OR
-                    t9.Field_015 LIKE '%:${shortTafsiliCode}%' OR 
-                    t9.Field_014 LIKE '%:${shortTafsiliCode}%' OR
-                    t9.Field_015 LIKE '%:${shortTafsiliCode}' OR 
-                    t9.Field_014 LIKE '%:${shortTafsiliCode}' OR
-                    t9.Field_015 LIKE '%:${code31}%' OR 
-                    t9.Field_014 LIKE '%:${code31}%' OR
-                    t9.Field_015 LIKE '%:${code31}' OR 
-                    t9.Field_014 LIKE '%:${code31}'
-                ) AND (t9.Field_015 LIKE '%-12%' OR t9.Field_015 LIKE '%-13%' OR t9.Field_005 = '9' OR t9.Field_007 IN ('102', '103'))`;
-            }
+            const chequeFilter = `(${tafsiliFilter}) AND (t9.Field_015 LIKE '%-12%' OR t9.Field_015 LIKE '%-13%' OR t9.Field_005 = '9' OR t9.Field_007 IN ('102', '103'))`;
 
             const chequeSql = `
                 SELECT 
@@ -1983,10 +2025,11 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     t9.Field_006 as MoeinParent,
                     t9.Field_007 as MoeinCode,
                     m3.Field_006 as MoeinName
-                FROM ACT_TBL_009 t9
-                LEFT JOIN ACT_TBL_008 t8 ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
-                LEFT JOIN ACT_TBL_003 m3 ON t9.Field_005 = m3.Field_003 AND t9.Field_006 = m3.Field_004 AND t9.Field_007 = m3.Field_005
+                FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                LEFT JOIN ACT_TBL_003 m3 WITH (NOLOCK) ON t9.Field_005 = m3.Field_003 AND t9.Field_006 = m3.Field_004 AND t9.Field_007 = m3.Field_005
                 WHERE ${chequeFilter}
+                  ${periodFilter}
                   AND t8.Field_008 >= '${gregFrom}T00:00:00.000Z'
                   AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'
                 ORDER BY t8.Field_008 ASC, CAST(t9.Field_001 AS INT) ASC
@@ -6271,6 +6314,16 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                             </div>
                             
                             <div className="flex flex-wrap items-center gap-2">
+                                <select 
+                                    className="border border-slate-300 rounded-lg py-2 px-3 text-xs bg-white font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-xs cursor-pointer"
+                                    value={trazFilterMode}
+                                    onChange={(e: any) => setTrazFilterMode(e.target.value)}
+                                    title="نحوه محاسبه و نمایش تراز در بازه زمانی"
+                                >
+                                    <option value="all_with_balance">📊 مانده تجمیعی تا تاریخ (استاندارد سایان ERP)</option>
+                                    <option value="turnover_only">⚡ فقط اشخاص دارای گردش در این بازه</option>
+                                </select>
+
                                 <select 
                                     className="border border-slate-300 rounded-lg py-2 px-3 text-xs bg-white font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-xs cursor-pointer"
                                     value={trazCategory}

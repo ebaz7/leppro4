@@ -303,8 +303,9 @@ export async function getPartyAgingFromSayan(code, balance = 0) {
     if (!code) return null;
     const cleanCode = String(code).trim();
 
+    const rawShort = cleanCode.replace(/^[0-9]{2}/, '');
     const sql = `
-        SELECT TOP 150 
+        SELECT TOP 200 
             t9.Field_004 as SanadNo,
             t8.Field_008 as Date,
             t9.Field_009 as Bed,
@@ -313,13 +314,17 @@ export async function getPartyAgingFromSayan(code, balance = 0) {
         FROM ACT_TBL_009 t9 WITH (NOLOCK)
         INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
         WHERE (t8.Field_004 = '4' OR t8.Field_004 = '3')
+          AND ISNULL(t8.Field_009, 0) <> 4
           AND (
-              t9.Field_015 LIKE '11:11' + '${cleanCode}' + '%' OR 
               t9.Field_015 LIKE '%:' + '${cleanCode}' + '%' OR
-              t9.Field_015 LIKE '31:31' + '${cleanCode}' + '%' OR
-              t9.Field_015 LIKE '51:51' + '${cleanCode}' + '%'
+              t9.Field_014 LIKE '%:' + '${cleanCode}' + '%' OR
+              t9.Field_015 LIKE '%:' + '${rawShort}' + '%' OR
+              t9.Field_014 LIKE '%:' + '${rawShort}' + '%' OR
+              t9.Field_015 LIKE '%-' + '${cleanCode}' + '%' OR
+              t9.Field_014 LIKE '%-' + '${cleanCode}' + '%' OR
+              t9.Field_015 LIKE '%-' + '${rawShort}' + '%' OR
+              t9.Field_014 LIKE '%-' + '${rawShort}' + '%'
           )
-          AND t9.Field_007 NOT IN ('102', '103', '107', '109', '114', '116', '117')
           AND t9.Field_005 <> '9'
         ORDER BY t8.Field_008 ASC
     `;

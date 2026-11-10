@@ -764,47 +764,54 @@ export const getCustomerBalancesData = async (db) => {
 
     if (db.settings?.sayanApiUrl) {
         try {
-            // 1. Fetch Tafsilis
+            // 1. Fetch Tafsilis across all layers
             const tafsiliSql = `
                 SELECT DISTINCT 
-                    Field_003 as Code, 
-                    Field_006 as Name, 
-                    Field_005 as TafsiliCode,
-                    Field_004 as MoeinGroup
-                FROM ACT_TBL_007 
-                WHERE Field_004 LIKE '11%' OR Field_004 LIKE '31%' OR Field_003 LIKE '11%' OR Field_003 LIKE '31%'
+                    RTRIM(LTRIM(Field_003)) as Code, 
+                    RTRIM(LTRIM(Field_006)) as Name, 
+                    RTRIM(LTRIM(Field_005)) as TafsiliCode,
+                    RTRIM(LTRIM(Field_004)) as MoeinGroup
+                FROM ACT_TBL_007 WITH (NOLOCK)
+                WHERE Field_004 IN ('11', '31', '51', '52', '53', '54', '55', '56', '57', '58', '59')
+                   OR Field_004 LIKE '11%' OR Field_004 LIKE '31%' OR Field_003 LIKE '11%' OR Field_003 LIKE '31%'
             `;
             const tafsilis = await runSayanQuery(db, tafsiliSql);
 
-            // 2. Fetch Traz
+            // 2. Fetch Traz from ACT_TBL_009 for active fiscal year
+            const activePeriodCode = db.settings?.sayanActivePeriodCode || '4';
             const trazSql = `
                 SELECT 
-                    t24.Field_010 as TafsiliRaw,
-                    SUM(CAST(t24.Field_006 AS FLOAT)) as TotalBed,
-                    SUM(CAST(t24.Field_007 AS FLOAT)) as TotalBes
-                FROM ACT_TBL_024 t24
-                WHERE (t24.Field_010 LIKE '11%' OR t24.Field_010 LIKE '%-11%' OR t24.Field_010 LIKE '31%' OR t24.Field_010 LIKE '%-31%') 
-                  AND t24.Field_010 NOT LIKE '%-12%'
-                  AND t24.Field_010 NOT LIKE '%-13%'
-                  AND t24.Field_005 NOT IN ('102', '103', '107', '109', '114', '116', '117')
-                  AND t24.Field_003 <> '9'
-                GROUP BY t24.Field_010
+                    ISNULL(t9.Field_015, t9.Field_014) as TafsiliRaw,
+                    SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as TotalBed,
+                    SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as TotalBes
+                FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                WHERE t9.Field_003 = '${activePeriodCode}'
+                  AND ISNULL(t8.Field_009, 0) <> 4
+                  AND t9.Field_005 <> '9'
+                  AND (t9.Field_015 IS NOT NULL OR t9.Field_014 IS NOT NULL)
+                GROUP BY ISNULL(t9.Field_015, t9.Field_014)
             `;
             const rawRows = await runSayanQuery(db, trazSql);
 
             // Helper to parse TafsiliRaw
             const parseTafsiliRaw = (raw) => {
                 if (!raw) return { moein: '', code: '' };
-                const parts = raw.split('-');
+                const str = String(raw).trim();
+                const parts = str.split('-');
                 for (const part of parts) {
-                    const match = part.match(/^(11\d*|31\d*):(\d+)/);
+                    const match = part.match(/^(\d{2}\d*):(\d+)/);
                     if (match) {
                         return { moein: match[1], code: match[2] };
                     }
                 }
-                const match = raw.match(/(11\d*|31\d*):(\d+)/);
+                const match = str.match(/(\d{2}\d*):(\d+)/);
                 if (match) {
                     return { moein: match[1], code: match[2] };
+                }
+                const digits = str.replace(/[^0-9]/g, '');
+                if (digits.length > 2) {
+                    return { moein: digits.slice(0, 2), code: digits.slice(2) };
                 }
                 return { moein: '', code: '' };
             };
@@ -816,7 +823,13 @@ export const getCustomerBalancesData = async (db) => {
                 const code = parsed.code;
                 if (!code) return;
                 
-                const tafsili = tafsilis.find(t => matchAccountCode(t.Code, code) || matchAccountCode(t.TafsiliCode, code));
+                const tafsili = tafsilis.find(t => 
+                    matchAccountCode(t.Code, code) || 
+                    matchAccountCode(t.TafsiliCode, code) ||
+                    (code.length > 2 && matchAccountCode(t.TafsiliCode, code.slice(2))) ||
+                    matchAccountCode(t.Code, '11' + code) ||
+                    matchAccountCode(t.Code, '31' + code)
+                );
                 const name = tafsili ? tafsili.Name : `کد اشخاص ${code}`;
                 const bed = parseFloat(row.TotalBed || 0);
                 const bes = parseFloat(row.TotalBes || 0);
@@ -2151,19 +2164,29 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                 let foundAny = false;
                 if (db.settings?.sayanApiUrl) {
                     try {
+                        const cleanCode = String(code).trim();
+                        const rawShort = cleanCode.replace(/^[0-9]{2}/, '');
                         const sql = `
                             SELECT 
                                 t07.Field_005 as accountCode,
                                 t07.Field_006 as name,
-                                SUM(CAST(t24.Field_006 AS FLOAT)) - SUM(CAST(t24.Field_007 AS FLOAT)) as balance
-                            FROM ACT_TBL_024 t24
-                            INNER JOIN ACT_TBL_007 t07 ON t24.Field_010 LIKE '%' + RTRIM(LTRIM(t07.Field_003)) + '%'
-                            WHERE (t07.Field_005 = '${code}' OR t07.Field_003 = '${code}' OR t07.Field_005 LIKE '%${code}' OR t07.Field_003 LIKE '%${code}')
-                              AND (t24.Field_010 LIKE '11%' OR t24.Field_010 LIKE '%-11%' OR t24.Field_010 LIKE '31%' OR t24.Field_010 LIKE '%-31%') 
-                              AND t24.Field_010 NOT LIKE '%-12%'
-                              AND t24.Field_010 NOT LIKE '%-13%'
-                              AND t24.Field_005 NOT IN ('102', '103', '107', '109', '114', '116', '117')
-                              AND t24.Field_003 <> '9'
+                                SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) - SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as balance
+                            FROM ACT_TBL_007 t07 WITH (NOLOCK)
+                            INNER JOIN ACT_TBL_009 t9 WITH (NOLOCK) ON (
+                                t9.Field_015 LIKE '%:' + RTRIM(LTRIM(t07.Field_003)) + '%' OR
+                                t9.Field_014 LIKE '%:' + RTRIM(LTRIM(t07.Field_003)) + '%' OR
+                                t9.Field_015 LIKE '%:' + RTRIM(LTRIM(t07.Field_005)) + '%' OR
+                                t9.Field_014 LIKE '%:' + RTRIM(LTRIM(t07.Field_005)) + '%' OR
+                                t9.Field_015 LIKE '%:' + '${cleanCode}' + '%' OR
+                                t9.Field_014 LIKE '%:' + '${cleanCode}' + '%' OR
+                                t9.Field_015 LIKE '%:' + '${rawShort}' + '%' OR
+                                t9.Field_014 LIKE '%:' + '${rawShort}' + '%'
+                            )
+                            INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                            WHERE (t07.Field_005 = '${cleanCode}' OR t07.Field_003 = '${cleanCode}' OR t07.Field_005 LIKE '%${cleanCode}' OR t07.Field_003 LIKE '%${cleanCode}' OR t07.Field_005 LIKE '%${rawShort}' OR t07.Field_003 LIKE '%${rawShort}')
+                              AND t9.Field_003 = '4'
+                              AND ISNULL(t8.Field_009, 0) <> 4
+                              AND t9.Field_005 <> '9'
                             GROUP BY t07.Field_005, t07.Field_006
                         `;
                         const res = await runSayanQuery(db, sql);
@@ -2243,15 +2266,16 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                         SELECT 
                             t07.Field_005 as accountCode,
                             t07.Field_006 as name,
-                            SUM(CAST(ISNULL(t24.Field_006, 0) AS FLOAT)) - SUM(CAST(ISNULL(t24.Field_007, 0) AS FLOAT)) as balance
-                        FROM ACT_TBL_007 t07
-                        LEFT JOIN ACT_TBL_024 t24 ON t24.Field_010 LIKE '%' + RTRIM(LTRIM(t07.Field_003)) + '%'
-                          AND (t24.Field_010 LIKE '11%' OR t24.Field_010 LIKE '%-11%' OR t24.Field_010 LIKE '31%' OR t24.Field_010 LIKE '%-31%') 
-                          AND t24.Field_010 NOT LIKE '%-12%'
-                          AND t24.Field_010 NOT LIKE '%-13%'
-                          AND t24.Field_005 NOT IN ('102', '103', '107', '109', '114', '116', '117')
-                          AND t24.Field_003 <> '9'
-                        WHERE (t07.Field_004 = '11' OR t07.Field_004 = '31')
+                            SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) - SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as balance
+                        FROM ACT_TBL_007 t07 WITH (NOLOCK)
+                        LEFT JOIN ACT_TBL_009 t9 WITH (NOLOCK) ON (
+                            t9.Field_015 LIKE '%:' + RTRIM(LTRIM(t07.Field_003)) + '%' OR
+                            t9.Field_014 LIKE '%:' + RTRIM(LTRIM(t07.Field_003)) + '%' OR
+                            t9.Field_015 LIKE '%:' + RTRIM(LTRIM(t07.Field_005)) + '%' OR
+                            t9.Field_014 LIKE '%:' + RTRIM(LTRIM(t07.Field_005)) + '%'
+                        ) AND t9.Field_003 = '4' AND t9.Field_005 <> '9'
+                        LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004 AND ISNULL(t8.Field_009, 0) <> 4
+                        WHERE (t07.Field_004 IN ('11', '31', '51', '52', '53', '54', '55', '56', '57', '58', '59') OR t07.Field_004 LIKE '11%')
                           AND (t07.Field_005 LIKE '%${query}%' OR t07.Field_006 LIKE N'%${query}%')
                         GROUP BY t07.Field_005, t07.Field_006
                     `;
@@ -4739,19 +4763,29 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
                     let foundAny = false;
                     if (db.settings?.sayanApiUrl) {
                         try {
+                            const cleanCode = String(code).trim();
+                            const rawShort = cleanCode.replace(/^[0-9]{2}/, '');
                             const sql = `
                                 SELECT 
                                     t07.Field_005 as accountCode,
                                     t07.Field_006 as name,
-                                    SUM(CAST(t24.Field_006 AS FLOAT)) - SUM(CAST(t24.Field_007 AS FLOAT)) as balance
-                                FROM ACT_TBL_024 t24
-                                INNER JOIN ACT_TBL_007 t07 ON t24.Field_010 LIKE '%' + RTRIM(LTRIM(t07.Field_003)) + '%'
-                                WHERE (t07.Field_005 = '${code}' OR t07.Field_003 = '${code}' OR t07.Field_005 LIKE '%${code}' OR t07.Field_003 LIKE '%${code}')
-                                  AND (t24.Field_010 LIKE '11%' OR t24.Field_010 LIKE '%-11%' OR t24.Field_010 LIKE '31%' OR t24.Field_010 LIKE '%-31%') 
-                                  AND t24.Field_010 NOT LIKE '%-12%'
-                                  AND t24.Field_010 NOT LIKE '%-13%'
-                                  AND t24.Field_005 NOT IN ('102', '103', '107', '109', '114', '116', '117')
-                                  AND t24.Field_003 <> '9'
+                                    SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) - SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as balance
+                                FROM ACT_TBL_007 t07 WITH (NOLOCK)
+                                INNER JOIN ACT_TBL_009 t9 WITH (NOLOCK) ON (
+                                    t9.Field_015 LIKE '%:' + RTRIM(LTRIM(t07.Field_003)) + '%' OR
+                                    t9.Field_014 LIKE '%:' + RTRIM(LTRIM(t07.Field_003)) + '%' OR
+                                    t9.Field_015 LIKE '%:' + RTRIM(LTRIM(t07.Field_005)) + '%' OR
+                                    t9.Field_014 LIKE '%:' + RTRIM(LTRIM(t07.Field_005)) + '%' OR
+                                    t9.Field_015 LIKE '%:' + '${cleanCode}' + '%' OR
+                                    t9.Field_014 LIKE '%:' + '${cleanCode}' + '%' OR
+                                    t9.Field_015 LIKE '%:' + '${rawShort}' + '%' OR
+                                    t9.Field_014 LIKE '%:' + '${rawShort}' + '%'
+                                )
+                                INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                                WHERE (t07.Field_005 = '${cleanCode}' OR t07.Field_003 = '${cleanCode}' OR t07.Field_005 LIKE '%${cleanCode}' OR t07.Field_003 LIKE '%${cleanCode}' OR t07.Field_005 LIKE '%${rawShort}' OR t07.Field_003 LIKE '%${rawShort}')
+                                  AND t9.Field_003 = '4'
+                                  AND ISNULL(t8.Field_009, 0) <> 4
+                                  AND t9.Field_005 <> '9'
                                 GROUP BY t07.Field_005, t07.Field_006
                             `;
                             const res = await runSayanQuery(db, sql);

@@ -2264,8 +2264,8 @@ app.post('/api/sayan-proxy', async (req, res) => {
     try {
         const db = getDb();
         const settings = db.settings || {};
-        let serverSayanBaseUrl = sanitizeSayanUrl(settings.sayanApiUrl || process.env.SAYAN_API_URL);
-        const serverSayanApiKey = settings.sayanApiKey || process.env.SAYAN_API_KEY;
+        let serverSayanBaseUrl = sanitizeSayanUrl(settings.sayanApiUrl || process.env.SAYAN_API_URL || 'http://80.210.31.176:5000/api/external/v1');
+        const serverSayanApiKey = settings.sayanApiKey || process.env.SAYAN_API_KEY || 's_gate_live_73f08a91b2c';
 
         if (!serverSayanBaseUrl || !serverSayanApiKey) {
             return res.status(400).json({ error: 'تنظیمات آدرس API و کلید امنیتی سایان در بخش تنظیمات سیستم وارد نشده است.' });
