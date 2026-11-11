@@ -302,8 +302,8 @@ async function querySayan(sql) {
 export async function getPartyAgingFromSayan(code, balance = 0) {
     if (!code) return null;
     const cleanCode = String(code).trim();
+    const altCode = cleanCode.startsWith('11') ? '11' + cleanCode : '';
 
-    const rawShort = cleanCode.replace(/^[0-9]{2}/, '');
     const sql = `
         SELECT TOP 200 
             t9.Field_004 as SanadNo,
@@ -315,17 +315,23 @@ export async function getPartyAgingFromSayan(code, balance = 0) {
         INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
         WHERE (t8.Field_004 = '4' OR t8.Field_004 = '3')
           AND ISNULL(t8.Field_009, 0) <> 4
-          AND (
-              t9.Field_015 LIKE '%:' + '${cleanCode}' + '%' OR
-              t9.Field_014 LIKE '%:' + '${cleanCode}' + '%' OR
-              t9.Field_015 LIKE '%:' + '${rawShort}' + '%' OR
-              t9.Field_014 LIKE '%:' + '${rawShort}' + '%' OR
-              t9.Field_015 LIKE '%-' + '${cleanCode}' + '%' OR
-              t9.Field_014 LIKE '%-' + '${cleanCode}' + '%' OR
-              t9.Field_015 LIKE '%-' + '${rawShort}' + '%' OR
-              t9.Field_014 LIKE '%-' + '${rawShort}' + '%'
-          )
           AND t9.Field_005 <> '9'
+          AND NOT (
+              (t9.Field_005 = '1' AND t9.Field_006 = '3' AND t9.Field_007 IN ('102', '103'))
+              OR t9.Field_015 LIKE '12:%'
+              OR t9.Field_015 LIKE '13:%'
+              OR t9.Field_015 LIKE '%-12:%'
+              OR t9.Field_015 LIKE '%-13:%'
+          )
+          AND (
+              RTRIM(LTRIM(t9.Field_015)) = '${cleanCode}' OR
+              RTRIM(LTRIM(t9.Field_014)) = '${cleanCode}' OR
+              RTRIM(LTRIM(t9.Field_015)) LIKE '%:${cleanCode}' OR
+              RTRIM(LTRIM(t9.Field_015)) LIKE '%:${cleanCode}-%' OR
+              RTRIM(LTRIM(t9.Field_014)) LIKE '%:${cleanCode}' OR
+              RTRIM(LTRIM(t9.Field_014)) LIKE '%:${cleanCode}-%'
+              ${altCode ? `OR RTRIM(LTRIM(t9.Field_015)) LIKE '%:${altCode}' OR RTRIM(LTRIM(t9.Field_015)) LIKE '%:${altCode}-%'` : ''}
+          )
         ORDER BY t8.Field_008 ASC
     `;
 

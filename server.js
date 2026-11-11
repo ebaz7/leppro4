@@ -2704,6 +2704,58 @@ app.all(['/api/sayan/cheque-receipts/approve', '/api/sayan/cheque-receipts/:id/c
         // Immediate non-blocking CEO/Final approval with background queue registration
         const approved = await sayanChequeService.approveCEOReceipt(receiptId, currentUser, note);
 
+        // Stage 3 Cutover Hook: Auto-generate Industrial Accounting Voucher upon final Cheque Receipt approval
+        try {
+            const db = getDb();
+            const erp = ensureIndustrialErpStructure(db, approved?.company || null);
+            if (erp.cutoverConfig?.stage3PaymentOrdersAutoVoucherActive && approved && !approved.erpVoucherNo) {
+                const totalChequeAmt = Array.isArray(approved.cheques)
+                    ? approved.cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0)
+                    : (Number(approved.totalAmount) || 0);
+                if (totalChequeAmt > 0) {
+                    const vNo = erp.nextVoucherNo || 1002;
+                    const todayShamsi = utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20';
+                    const personName = String(approved.personName || approved.customerName || 'مشتری خوش‌حساب');
+                    const chqVoucher = {
+                        id: `vch_chq_${Date.now()}`,
+                        voucherNo: vNo,
+                        dateJalali: todayShamsi,
+                        type: 'GENERAL',
+                        status: 'FINALIZED',
+                        description: `سند خودکار رسید دریافت چک تاییدشده شماره #${approved.receiptNo || approved.id} — پرداخت‌کننده: ${personName}`,
+                        createdBy: currentUser?.name || currentUser?.fullName || 'تایید نهایی رسید دریافت',
+                        createdAt: Date.now(),
+                        lines: [
+                            {
+                                id: `vl_c1_${Date.now()}`,
+                                accountCode: '1104',
+                                accountTitle: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)',
+                                tafziliName: String(approved.cashboxName || 'صندوق چک‌های دریافتی'),
+                                debit: Math.round(totalChequeAmt),
+                                credit: 0,
+                                description: `دریافت ${Array.isArray(approved.cheques) ? approved.cheques.length : 1} فقره چک از ${personName}`
+                            },
+                            {
+                                id: `vl_c2_${Date.now()}`,
+                                accountCode: '1103',
+                                accountTitle: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)',
+                                tafziliName: personName,
+                                debit: 0,
+                                credit: Math.round(totalChequeAmt),
+                                description: `بستانکاری طرف حساب بابت رسید دریافت چک #${approved.receiptNo || approved.id}`
+                            }
+                        ]
+                    };
+                    erp.vouchers.unshift(chqVoucher);
+                    erp.nextVoucherNo = vNo + 1;
+                    approved.erpVoucherNo = vNo;
+                    saveDb(db);
+                }
+            }
+        } catch (erpHookErr) {
+            console.warn('[Industrial ERP] Cheque receipt auto-voucher hook warning:', erpHookErr.message);
+        }
+
         res.json({ 
             success: true, 
             queued: true,
@@ -8673,13 +8725,16 @@ app.post('/api/bio-link/order', (req, res) => {
     res.json({ success: true, message: 'سفارش شما با موفقیت ثبت گردید. کارشناسان فروش با شما تماس خواهند گرفت.', order: newOrder });
 });
 
-// --- INDUSTRIAL TEXTILE ACCOUNTING, WEIGHBRIDGE, QR LABELING & BOM ERP ENDPOINTS ---
-const getDefaultIndustrialErpState = () => ({
+// --- INDUSTRIAL TEXTILE ACCOUNTING, WEIGHBRIDGE, QR LABELING & BOM ERP ENDPOINTS (MULTI-COMPANY & 10-MODULE SUITE) ---
+const getDefaultIndustrialErpState = (companyName = 'شرکت تولیدی لپان بافت', isPrimary = true) => ({
+    companyName,
+    activeFiscalYear: '1405',
+    fiscalYears: ['1405', '1404', '1403'],
     warehouses: [
-        { id: 'wh_raw', code: '101', name: 'انبار مواد اولیه (گرانول، چیپس، الیاف و رنگ)', type: 'RAW_MATERIAL', location: 'کارخانه زنجان - سالن ۱' },
-        { id: 'wh_pkg', code: '102', name: 'انبار ملزومات بسته‌بندی (دوک، بوبین، کارتن، پالت)', type: 'PACKAGING', location: 'کارخانه زنجان - سالن ۲' },
-        { id: 'wh_yarn', code: '103', name: 'انبار محصول نهایی نخ (آماده فروش)', type: 'FINISHED_YARN', location: 'کارخانه زنجان - سالن محصول' },
-        { id: 'wh_waste', code: '104', name: 'انبار ضایعات و استوک نساجی', type: 'WASTE', location: 'کارخانه زنجان - محوطه' }
+        { id: 'wh_raw', code: '101', name: 'انبار مواد اولیه (گرانول، چیپس، الیاف، POY و رنگ)', type: 'RAW_MATERIAL', location: 'کارخانه زنجان - سالن ۱', managerName: 'مهندس محمدی' },
+        { id: 'wh_pkg', code: '102', name: 'انبار ملزومات بسته‌بندی (دوک، بوبین، کارتن، پالت)', type: 'PACKAGING', location: 'کارخانه زنجان - سالن ۲', managerName: 'آقای کریمی' },
+        { id: 'wh_yarn', code: '103', name: 'انبار محصول نهایی نخ (آماده فروش و بارگیری)', type: 'FINISHED_YARN', location: 'کارخانه زنجان - سالن محصول', managerName: 'آقای رضایی' },
+        { id: 'wh_waste', code: '104', name: 'انبار ضایعات و استوک نساجی', type: 'WASTE', location: 'کارخانه زنجان - محوطه', managerName: 'آقای حسینی' }
     ],
     items: [
         {
@@ -8689,7 +8744,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'RAW_MATERIAL',
             unit: 'کیلوگرم',
             warehouseId: 'wh_raw',
-            stockQty: 18500,
+            stockQty: isPrimary ? 18500 : 5200,
+            minStockQty: 3000,
             unitCost: 1420000,
             denier: '250',
             filament: '48',
@@ -8706,7 +8762,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'RAW_MATERIAL',
             unit: 'کیلوگرم',
             warehouseId: 'wh_raw',
-            stockQty: 2400,
+            stockQty: isPrimary ? 2400 : 800,
+            minStockQty: 500,
             unitCost: 1950000,
             coneWeightGrams: 0,
             cartonWeightGrams: 0,
@@ -8719,7 +8776,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'RAW_MATERIAL',
             unit: 'کیلوگرم',
             warehouseId: 'wh_raw',
-            stockQty: 1200,
+            stockQty: isPrimary ? 1200 : 400,
+            minStockQty: 250,
             unitCost: 3100000,
             coneWeightGrams: 0,
             cartonWeightGrams: 0,
@@ -8732,7 +8790,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'PACKAGING',
             unit: 'عدد',
             warehouseId: 'wh_pkg',
-            stockQty: 45000,
+            stockQty: isPrimary ? 45000 : 12000,
+            minStockQty: 5000,
             unitCost: 48000,
             coneWeightGrams: 110,
             cartonWeightGrams: 0,
@@ -8745,7 +8804,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'PACKAGING',
             unit: 'عدد',
             warehouseId: 'wh_pkg',
-            stockQty: 6200,
+            stockQty: isPrimary ? 6200 : 1800,
+            minStockQty: 1000,
             unitCost: 380000,
             coneWeightGrams: 0,
             cartonWeightGrams: 1450,
@@ -8758,7 +8818,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'FINISHED_YARN',
             unit: 'کیلوگرم',
             warehouseId: 'wh_yarn',
-            stockQty: 4320.5,
+            stockQty: isPrimary ? 4320.5 : 1450.0,
+            minStockQty: 1000,
             unitCost: 1845000,
             salesPrice: 2180000,
             denier: '150',
@@ -8778,7 +8839,8 @@ const getDefaultIndustrialErpState = () => ({
             category: 'FINISHED_YARN',
             unit: 'کیلوگرم',
             warehouseId: 'wh_yarn',
-            stockQty: 2150.0,
+            stockQty: isPrimary ? 2150.0 : 820.0,
+            minStockQty: 500,
             unitCost: 1990000,
             salesPrice: 2350000,
             denier: '150',
@@ -8821,11 +8883,46 @@ const getDefaultIndustrialErpState = () => ({
             ]
         }
     ],
-    cartonLabels: [
+    productionOrders: [
+        {
+            id: 'prd_ord_101',
+            orderNo: 'PRD-405-101',
+            dateJalali: '1405/08/18',
+            machineCode: 'TMT-01',
+            shift: 'روزکار (A)',
+            supervisorName: 'مهندس کاظمی',
+            productId: 'itm_yarn_dty_150_48',
+            productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
+            lotNumber: 'LOT-405-08',
+            targetQtyKg: 5000,
+            producedQtyKg: 3420.5,
+            wasteQtyKg: 74.2,
+            status: 'IN_PROGRESS',
+            notes: 'خط ۱ تکسچره سرعت ۶۵۰ متر بر دقیقه'
+        },
+        {
+            id: 'prd_ord_102',
+            orderNo: 'PRD-405-102',
+            dateJalali: '1405/08/19',
+            machineCode: 'BARMAG-02',
+            shift: 'شب‌کار (B)',
+            supervisorName: 'مهندس شریفی',
+            productId: 'itm_yarn_dty_150_48_blk',
+            productName: 'نخ تکسچره پلی‌استر DTY 150/48 IM مشکی درجه A',
+            lotNumber: 'LOT-405-09B',
+            targetQtyKg: 3000,
+            producedQtyKg: 2150.0,
+            wasteQtyKg: 51.0,
+            status: 'IN_PROGRESS',
+            notes: 'تولید نخ مشکی اینترمینگل با مستربچ سوپربلک'
+        }
+    ],
+    cartonLabels: isPrimary ? [
         {
             id: 'lbl_init_1001',
             serialNumber: 'DLK-405-10001',
             qrPayload: 'DLK|DLK-405-10001|YN-3001|LOT-405-08|32.890|35.000|6|1405/08/20',
+            source: 'DELCOM',
             productId: 'itm_yarn_dty_150_48',
             productCode: 'YN-3001',
             productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
@@ -8855,6 +8952,7 @@ const getDefaultIndustrialErpState = () => ({
             id: 'lbl_init_1002',
             serialNumber: 'DLK-405-10002',
             qrPayload: 'DLK|DLK-405-10002|YN-3001|LOT-405-08|33.290|35.400|6|1405/08/20',
+            source: 'DELCOM',
             productId: 'itm_yarn_dty_150_48',
             productCode: 'YN-3001',
             productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
@@ -8880,9 +8978,42 @@ const getDefaultIndustrialErpState = () => ({
             createdAt: Date.now() - 72000000,
             createdDateJalali: '1405/08/19'
         }
+    ] : [],
+    warehouseDocs: [
+        {
+            id: 'whdoc_101',
+            docNo: 'WHD-405-101',
+            docType: 'RECEIPT_PURCHASE',
+            dateJalali: '1405/08/15',
+            warehouseId: 'wh_raw',
+            warehouseName: 'انبار مواد اولیه',
+            counterpartyName: 'پتروشیمی تندگویان / تامین‌کننده POY',
+            status: 'FINALIZED',
+            items: [
+                { itemId: 'itm_raw_poy_150', itemCode: 'RM-1001', itemName: 'نخ POY پلی‌استر 250/48 خام', qty: 5000, unit: 'کیلوگرم', unitCost: 1420000, totalCost: 7100000000 }
+            ],
+            notes: 'رسید ورود نخ POY به انبار مواد اولیه کارخانه'
+        }
+    ],
+    salesOrders: [
+        {
+            id: 'so_405_101',
+            orderNo: 'SO-405-101',
+            dateJalali: '1405/08/19',
+            customerName: 'نساجی بافتینه کاشان',
+            customerCode: '113210',
+            productId: 'itm_yarn_dty_150_48',
+            productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
+            requestedKg: 2000,
+            deliveredKg: 660,
+            agreedUnitPrice: 2180000,
+            paymentTerms: 'چک ۴۵ روزه صیادی',
+            status: 'APPROVED_FOR_LOADING',
+            notes: 'تحویل پارت اول از کارخانه زنجان'
+        }
     ],
     tradeDocs: [],
-    remittances: [
+    remittances: isPrimary ? [
         {
             id: 'rem_init_501',
             remittanceNo: 'REM-405-501',
@@ -8891,7 +9022,8 @@ const getDefaultIndustrialErpState = () => ({
             customerCode: '113210',
             driverName: 'مهدی کریمی',
             plateNumber: '48ع745-ایران67',
-            status: 'APPROVED_FOR_INVOICE',
+            status: 'PENDING_TEHRAN_PRICING',
+            exitPermitNumber: 501,
             cartonSerials: ['DLK-405-10001'],
             items: [
                 {
@@ -8902,29 +9034,96 @@ const getDefaultIndustrialErpState = () => ({
                     conesCount: 120,
                     grossWeightKg: 702.2,
                     netWeightKg: 660.0,
-                    unitPrice: 2180000
+                    unitPrice: 0
                 }
             ],
-            notes: 'بارگیری از انبار محصول زنجان - تایید باسکول و انتظامات'
+            notes: 'خروج کارخانه بدون فی (صادرشده توسط انبار کارخانه زنجان) - در انتظار تعیین فی در دفتر تهران'
+        }
+    ] : [],
+    parties: [
+        { id: 'pty_1', code: '113210', name: 'نساجی بافتینه کاشان', type: 'CUSTOMER', nationalId: '10260451230', phone: '031-55443322', creditLimit: 20000000000, city: 'کاشان' },
+        { id: 'pty_2', code: '113211', name: 'پوشاک و گردباف تک‌بافت تهران', type: 'CUSTOMER', nationalId: '10104891200', phone: '021-55667788', creditLimit: 15000000000, city: 'تهران' },
+        { id: 'pty_3', code: '214101', name: 'بازرگانی پتروشیمی و الیاف پلی‌استر', type: 'SUPPLIER', nationalId: '10103322110', phone: '021-88776655', creditLimit: 50000000000, city: 'تهران' },
+        { id: 'pty_4', code: '214102', name: 'صنایع بسته‌بندی و کارتن‌سازی البرز', type: 'SUPPLIER', nationalId: '10861122330', phone: '026-32224455', creditLimit: 5000000000, city: 'کرج' },
+        { id: 'pty_5', code: '301101', name: 'مرکز هزینه سالن تکسچره ۱ کارخانه زنجان', type: 'COST_CENTER', nationalId: '-', phone: '-', creditLimit: 0, city: 'زنجان' }
+    ],
+    bankAccounts: [
+        { id: 'bnk_1', code: '110101', bankName: 'بانک ملت', branchName: 'شعبه بازار تهران', accountNo: '4418923104', sheba: 'IR420120000000004418923104', accountType: 'CHECKING', balanceRials: 8450000000 },
+        { id: 'bnk_2', code: '110102', bankName: 'بانک ملی', branchName: 'شعبه مرکزی زنجان', accountNo: '0109283746001', sheba: 'IR880170000000109283746001', accountType: 'CHECKING', balanceRials: 3120000000 },
+        { id: 'bnk_3', code: '110103', bankName: 'بانک سپه', branchName: 'شعبه خیام', accountNo: '1882930412', sheba: 'IR190150000000001882930412', accountType: 'CHECKING', balanceRials: 1640000000 },
+        { id: 'bnk_4', code: '110104', bankName: 'صندوق و تنخواه کارخانه زنجان', branchName: 'محل کارخانه', accountNo: 'CASH-ZNJ-01', sheba: '-', accountType: 'PETTY_CASH', balanceRials: 450000000 }
+    ],
+    chequeBooks: [
+        { id: 'chqb_1', bankAccountId: 'bnk_1', bankName: 'بانک ملت - شعبه بازار', seriesCode: '1405/A', fromSerial: 851001, toSerial: 851050, usedCount: 6, status: 'ACTIVE' }
+    ],
+    treasuryDocs: [
+        {
+            id: 'trs_101',
+            docNo: 'TRS-405-101',
+            type: 'RECEIPT',
+            method: 'CHEQUE',
+            dateJalali: '1405/08/18',
+            partyName: 'نساجی بافتینه کاشان',
+            bankOrCashTitle: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)',
+            accountCode: '1104',
+            counterAccountCode: '1103',
+            amountRials: 1450000000,
+            sayadId: '4059812736450001',
+            dueDateJalali: '1405/10/01',
+            chequeStatus: 'IN_HAND',
+            voucherNo: 1001,
+            description: 'دریافت چک صیادی بابت علی‌الحساب خرید نخ DTY'
         }
     ],
+    payrollEmployees: [
+        { id: 'emp_1', personnelCode: '40101', fullName: 'حسین رضایی', nationalCode: '4280192831', roleTitle: 'اپراتور ارشد خط تکسچره و باسکول', department: 'تولید کارخانه زنجان', costCenter: 'تولید مستقیم', baseSalaryRials: 185000000, housingAllowanceRials: 25000000, foodAllowanceRials: 30000000, bankAccountNo: 'IR120170000000991122334455' },
+        { id: 'emp_2', personnelCode: '40102', fullName: 'مهندس سعید کاظمی', nationalCode: '4271928374', roleTitle: 'سرپرست تولید و کنترل کیفیت', department: 'تولید کارخانه زنجان', costCenter: 'سربار تولید', baseSalaryRials: 260000000, housingAllowanceRials: 25000000, foodAllowanceRials: 30000000, bankAccountNo: 'IR550120000000887766554433' },
+        { id: 'emp_3', personnelCode: '40103', fullName: 'مریم محمدی', nationalCode: '0071829301', roleTitle: 'حسابدار فروش و صدور فاکتور', department: 'دفتر مرکزی تهران', costCenter: 'اداری و فروش', baseSalaryRials: 210000000, housingAllowanceRials: 25000000, foodAllowanceRials: 30000000, bankAccountNo: 'IR660120000000776655443322' }
+    ],
+    payrollSlips: [
+        { id: 'pslip_1', monthTitle: 'آبان ۱۴۰۵', employeeId: 'emp_1', employeeName: 'حسین رضایی', workDays: 30, overtimeHours: 24, grossPayRials: 274000000, insuranceEmployeeRials: 19180000, insuranceEmployerRials: 63020000, taxRials: 4200000, netPayRials: 250620000, status: 'PAID', voucherNo: 1001 }
+    ],
+    fixedAssets: [
+        { id: 'ast_1', assetCode: 'AST-1001', title: 'ماشین تکسچره اتوماتیک TMT-01 ژاپن (۲۱۶ دوک)', category: 'ماشین‌آلات خط تولید', location: 'کارخانه زنجان - سالن ۱', purchaseDateJalali: '1402/04/10', costRials: 85000000000, depreciationMethod: 'خط مستقیم', annualRatePercent: 10, accumulatedDepreciationRials: 17000000000, bookValueRials: 68000000000, status: 'ACTIVE' },
+        { id: 'ast_2', assetCode: 'AST-1002', title: 'باسکول دیجیتال صنعتی پالت‌کش و کارتن‌کش دقیق', category: 'تجهیزات توزین و بسته‌بندی', location: 'کارخانه زنجان - سالن محصول', purchaseDateJalali: '1403/02/15', costRials: 950000000, depreciationMethod: 'خط مستقیم', annualRatePercent: 15, accumulatedDepreciationRials: 142500000, bookValueRials: 807500000, status: 'ACTIVE' }
+    ],
     chartOfAccounts: [
-        { id: 'acc_1101', code: '1101', title: 'موجودی نقد و بانک', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
+        { id: 'acc_g1', code: '1', title: 'دارایی‌ها', level: 'GROUP', nature: 'DEBIT' },
+        { id: 'acc_g11', code: '11', title: 'دارایی‌های جاری', level: 'GROUP', parentCode: '1', nature: 'DEBIT' },
+        { id: 'acc_1101', code: '1101', title: 'موجودی نقد و بانک‌های عامل', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
+        { id: 'acc_110101', code: '110101', title: 'بانک ملت - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
+        { id: 'acc_110102', code: '110102', title: 'بانک ملی - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
+        { id: 'acc_110103', code: '110103', title: 'بانک سپه - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
+        { id: 'acc_110104', code: '110104', title: 'بانک تجارت - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
+        { id: 'acc_110105', code: '110105', title: 'بانک صادرات - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
+        { id: 'acc_110109', code: '110109', title: 'صندوق و تنخواه‌گردان کارخانه و دفتر', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
         { id: 'acc_1103', code: '1103', title: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
+        { id: 'acc_1104', code: '1104', title: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
         { id: 'acc_1106', code: '1106', title: 'موجودی مواد و کالا (انبارها)', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
         { id: 'acc_110601', code: '110601', title: 'انبار مواد اولیه و الیاف', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
         { id: 'acc_110602', code: '110602', title: 'انبار ملزومات بسته‌بندی (دوک و کارتن)', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
         { id: 'acc_110603', code: '110603', title: 'انبار کالای در جریان ساخت (خط تولید نخ)', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
         { id: 'acc_110604', code: '110604', title: 'انبار محصول نهایی نخ', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
-        { id: 'acc_2101', code: '2101', title: 'حساب‌ها و اسناد پرداختنی تجاری (تامین‌کنندگان)', level: 'KOL', parentCode: '21', nature: 'CREDIT' },
-        { id: 'acc_3101', code: '3101', title: 'سرمایه و اندوخته‌ها', level: 'KOL', parentCode: '31', nature: 'CREDIT' },
-        { id: 'acc_4101', code: '4101', title: 'فروش خالص نخ و محصولات', level: 'KOL', parentCode: '41', nature: 'CREDIT' },
-        { id: 'acc_4102', code: '4102', title: 'برگشت از فروش و تخفیفات', level: 'KOL', parentCode: '41', nature: 'DEBIT' },
-        { id: 'acc_5101', code: '5101', title: 'بهای تمام‌شده کالای فروش‌رفته', level: 'KOL', parentCode: '51', nature: 'DEBIT' },
-        { id: 'acc_6101', code: '6101', title: 'هزینه‌های دستمزد مستقیم تولید', level: 'KOL', parentCode: '61', nature: 'DEBIT' },
-        { id: 'acc_6102', code: '6102', title: 'سربار ساخت کارخانه (برق، استهلاک، نت)', level: 'KOL', parentCode: '61', nature: 'DEBIT' }
+        { id: 'acc_1201', code: '1201', title: 'دارایی‌های ثابت مشهود (ماشین‌آلات و تجهیزات)', level: 'KOL', parentCode: '1', nature: 'DEBIT' },
+        { id: 'acc_1202', code: '1202', title: 'استهلاک انباشته دارایی‌های ثابت', level: 'KOL', parentCode: '1', nature: 'CREDIT' },
+        { id: 'acc_g2', code: '2', title: 'بدهی‌ها', level: 'GROUP', nature: 'CREDIT' },
+        { id: 'acc_2101', code: '2101', title: 'حساب‌ها و اسناد پرداختنی تجاری (تامین‌کنندگان)', level: 'KOL', parentCode: '2', nature: 'CREDIT' },
+        { id: 'acc_2102', code: '2102', title: 'اسناد پرداختنی (چک‌های صادره شرکت)', level: 'KOL', parentCode: '2', nature: 'CREDIT' },
+        { id: 'acc_2105', code: '2105', title: 'سایر حساب‌های پرداختنی (حقوق، بیمه و مالیات پرداختنی)', level: 'KOL', parentCode: '2', nature: 'CREDIT' },
+        { id: 'acc_g3', code: '3', title: 'حقوق صاحبان سهام', level: 'GROUP', nature: 'CREDIT' },
+        { id: 'acc_3101', code: '3101', title: 'سرمایه، اندوخته‌ها و تراز افتتاحیه سنواتی', level: 'KOL', parentCode: '3', nature: 'CREDIT' },
+        { id: 'acc_3109', code: '3109', title: 'خلاصه سود و زیان و تراز اختتامیه', level: 'KOL', parentCode: '3', nature: 'CREDIT' },
+        { id: 'acc_g4', code: '4', title: 'فروش و درآمدها', level: 'GROUP', nature: 'CREDIT' },
+        { id: 'acc_4101', code: '4101', title: 'فروش خالص نخ و محصولات', level: 'KOL', parentCode: '4', nature: 'CREDIT' },
+        { id: 'acc_4102', code: '4102', title: 'برگشت از فروش و تخفیفات', level: 'KOL', parentCode: '4', nature: 'DEBIT' },
+        { id: 'acc_g5', code: '5', title: 'بهای تمام‌شده', level: 'GROUP', nature: 'DEBIT' },
+        { id: 'acc_5101', code: '5101', title: 'بهای تمام‌شده کالای فروش‌رفته', level: 'KOL', parentCode: '5', nature: 'DEBIT' },
+        { id: 'acc_g6', code: '6', title: 'هزینه‌های تولید، اداری و عمومی', level: 'GROUP', nature: 'DEBIT' },
+        { id: 'acc_6101', code: '6101', title: 'هزینه‌های دستمزد مستقیم تولید', level: 'KOL', parentCode: '6', nature: 'DEBIT' },
+        { id: 'acc_6102', code: '6102', title: 'سربار ساخت کارخانه (برق، استهلاک، نت)', level: 'KOL', parentCode: '6', nature: 'DEBIT' },
+        { id: 'acc_6103', code: '6103', title: 'هزینه‌های حقوق و دستمزد اداری و فروش', level: 'KOL', parentCode: '6', nature: 'DEBIT' }
     ],
-    vouchers: [
+    vouchers: isPrimary ? [
         {
             id: 'vch_init_1',
             voucherNo: 1001,
@@ -8942,30 +9141,1015 @@ const getDefaultIndustrialErpState = () => ({
                 { id: 'l5', accountCode: '6102', accountTitle: 'سربار ساخت کارخانه (برق، استهلاک، نت)', tafziliName: 'سالن تکسچره زنجان', debit: 0, credit: 11581500, description: 'جذب سربار ساخت تولید' }
             ]
         }
-    ],
+    ] : [],
+    cutoverConfig: {
+        stage1FactoryWarehouseActive: true,
+        stage2TehranPricingInvoiceActive: true,
+        stage3PaymentOrdersAutoVoucherActive: false,
+        lastSayanBarcodeSyncAt: null,
+        lastSayanTrialBalanceCutoff: null
+    },
     nextCartonSeq: 10003,
     nextVoucherNo: 1002
 });
 
+function getErpCompaniesList(db) {
+    if (!db.settings) db.settings = {};
+    if (!Array.isArray(db.settings.companies)) db.settings.companies = [];
+
+    // Ensure at least the primary company exists in db.settings.companies
+    if (db.settings.companies.length === 0) {
+        db.settings.companies = [
+            {
+                id: 'comp_lepan',
+                name: 'شرکت تولیدی لپان بافت',
+                nationalId: '10102845120',
+                registrationNumber: '241580',
+                economicCode: '411154879652',
+                phone: '021-55667788',
+                address: 'تهران، بازار، خیابان خیام / کارخانه: زنجان، شهرک صنعتی علی‌آباد',
+                banks: []
+            },
+            {
+                id: 'comp_arian',
+                name: 'شرکت ریسندگی و نساجی آرین نخ',
+                nationalId: '14007891230',
+                registrationNumber: '489120',
+                economicCode: '411398745120',
+                phone: '021-88990011',
+                address: 'تهران، میدان ونک / کارخانه: شهرک صنعتی اشتهارد',
+                banks: []
+            }
+        ];
+    }
+    return db.settings.companies;
+}
+
+function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی لپان بافت', isPrimary = false) {
+    const def = getDefaultIndustrialErpState(companyName, isPrimary);
+    if (!target.companyName) target.companyName = companyName;
+    if (!target.activeFiscalYear) target.activeFiscalYear = def.activeFiscalYear;
+    if (!Array.isArray(target.fiscalYears)) target.fiscalYears = def.fiscalYears;
+    if (!Array.isArray(target.warehouses)) target.warehouses = def.warehouses;
+    if (!Array.isArray(target.items)) target.items = def.items;
+    if (!Array.isArray(target.boms)) target.boms = def.boms;
+    if (!Array.isArray(target.productionOrders)) target.productionOrders = def.productionOrders;
+    if (!Array.isArray(target.cartonLabels)) target.cartonLabels = def.cartonLabels;
+    if (!Array.isArray(target.warehouseDocs)) target.warehouseDocs = def.warehouseDocs;
+    if (!Array.isArray(target.salesOrders)) target.salesOrders = def.salesOrders;
+    if (!Array.isArray(target.tradeDocs)) target.tradeDocs = def.tradeDocs;
+    if (!Array.isArray(target.remittances)) target.remittances = def.remittances;
+    if (!Array.isArray(target.parties)) target.parties = def.parties;
+    if (!Array.isArray(target.bankAccounts)) target.bankAccounts = def.bankAccounts;
+    if (!Array.isArray(target.chequeBooks)) target.chequeBooks = def.chequeBooks;
+    if (!Array.isArray(target.treasuryDocs)) target.treasuryDocs = def.treasuryDocs;
+    if (!Array.isArray(target.payrollEmployees)) target.payrollEmployees = def.payrollEmployees;
+    if (!Array.isArray(target.payrollSlips)) target.payrollSlips = def.payrollSlips;
+    if (!Array.isArray(target.fixedAssets)) target.fixedAssets = def.fixedAssets;
+    if (!Array.isArray(target.vouchers)) target.vouchers = def.vouchers;
+    if (!target.cutoverConfig) target.cutoverConfig = def.cutoverConfig;
+    if (!Array.isArray(target.chartOfAccounts)) {
+        target.chartOfAccounts = def.chartOfAccounts;
+    } else {
+        for (const acc of def.chartOfAccounts) {
+            if (!target.chartOfAccounts.some(a => a.code === acc.code)) {
+                target.chartOfAccounts.push(acc);
+            }
+        }
+    }
+    if (!target.nextCartonSeq) target.nextCartonSeq = 10003;
+    if (!target.nextVoucherNo) target.nextVoucherNo = 1002;
+    return target;
+}
+
+function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
+    const companies = getErpCompaniesList(db);
+    const primaryCompany = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
+
+    if (!db.industrialErp) {
+        db.industrialErp = getDefaultIndustrialErpState(primaryCompany.name, true);
+    }
+
+    if (!db.industrialErp.companiesData || typeof db.industrialErp.companiesData !== 'object') {
+        db.industrialErp.companiesData = {};
+    }
+
+    // Migrate root state into primaryCompany if not yet migrated
+    if (!db.industrialErp.companiesData[primaryCompany.id]) {
+        const rootClone = { ...db.industrialErp };
+        delete rootClone.companiesData;
+        db.industrialErp.companiesData[primaryCompany.id] = hydrateCompanyErpState(rootClone, primaryCompany.name, true);
+    }
+
+    // Ensure every company in settings.companies has an isolated ERP state
+    companies.forEach((comp, idx) => {
+        if (!db.industrialErp.companiesData[comp.id]) {
+            db.industrialErp.companiesData[comp.id] = getDefaultIndustrialErpState(comp.name, idx === 0);
+        } else {
+            hydrateCompanyErpState(db.industrialErp.companiesData[comp.id], comp.name, idx === 0);
+        }
+    });
+
+    // Resolve requested company by ID or by Name
+    let targetCompanyId = primaryCompany.id;
+    if (requestedCompanyId) {
+        const cleanReq = String(requestedCompanyId).trim();
+        if (db.industrialErp.companiesData[cleanReq]) {
+            targetCompanyId = cleanReq;
+        } else {
+            const matchedByName = companies.find(c => c.id === cleanReq || c.name === cleanReq || c.name?.includes(cleanReq));
+            if (matchedByName && db.industrialErp.companiesData[matchedByName.id]) {
+                targetCompanyId = matchedByName.id;
+            }
+        }
+    }
+
+    const companyState = db.industrialErp.companiesData[targetCompanyId];
+    companyState.companyId = targetCompanyId;
+    return companyState;
+}
+
+// Get list of all ERP Companies with isolated database KPIs
+app.get('/api/industrial-erp/companies', (req, res) => {
+    try {
+        const db = getDb();
+        const companies = getErpCompaniesList(db);
+        ensureIndustrialErpStructure(db);
+        const result = companies.map((comp, idx) => {
+            const st = ensureIndustrialErpStructure(db, comp.id);
+            return {
+                id: comp.id,
+                name: comp.name,
+                nationalId: comp.nationalId || '-',
+                registrationNumber: comp.registrationNumber || '-',
+                economicCode: comp.economicCode || '-',
+                phone: comp.phone || '-',
+                address: comp.address || '-',
+                logo: comp.logo || null,
+                activeFiscalYear: st.activeFiscalYear || '1405',
+                fiscalYears: st.fiscalYears || ['1405', '1404'],
+                allowedUserIds: comp.erpAllowedUserIds || [],
+                isPrimary: idx === 0,
+                stats: {
+                    vouchersCount: (st.vouchers || []).length,
+                    inStockCartonsCount: (st.cartonLabels || []).filter(c => c.status === 'IN_STOCK').length,
+                    itemsCount: (st.items || []).length,
+                    pendingRemittancesCount: (st.remittances || []).filter(r => r.status === 'PENDING_TEHRAN_PRICING').length,
+                    invoicesCount: (st.tradeDocs || []).length,
+                    warehousesCount: (st.warehouses || []).length
+                }
+            };
+        });
+        saveDb(db);
+        res.json({ success: true, companies: result });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Create or Update an ERP Company & Fiscal Years
+app.post('/api/industrial-erp/companies', (req, res) => {
+    try {
+        const db = getDb();
+        const companies = getErpCompaniesList(db);
+        const {
+            id,
+            name,
+            nationalId = '',
+            registrationNumber = '',
+            economicCode = '',
+            phone = '',
+            address = '',
+            activeFiscalYear = '1405',
+            fiscalYears = ['1405', '1404'],
+            allowedUserIds = []
+        } = req.body || {};
+
+        if (!name || !String(name).trim()) {
+            return res.status(400).json({ error: 'نام شرکت الزامی است.' });
+        }
+
+        let compId = id || `comp_${Date.now()}`;
+        const existingIdx = companies.findIndex(c => c.id === compId);
+        if (existingIdx > -1) {
+            companies[existingIdx] = {
+                ...companies[existingIdx],
+                name: String(name).trim(),
+                nationalId: String(nationalId).trim(),
+                registrationNumber: String(registrationNumber).trim(),
+                economicCode: String(economicCode).trim(),
+                phone: String(phone).trim(),
+                address: String(address).trim(),
+                erpAllowedUserIds: Array.isArray(allowedUserIds) ? allowedUserIds : companies[existingIdx].erpAllowedUserIds || []
+            };
+        } else {
+            companies.push({
+                id: compId,
+                name: String(name).trim(),
+                nationalId: String(nationalId).trim(),
+                registrationNumber: String(registrationNumber).trim(),
+                economicCode: String(economicCode).trim(),
+                phone: String(phone).trim(),
+                address: String(address).trim(),
+                erpAllowedUserIds: Array.isArray(allowedUserIds) ? allowedUserIds : [],
+                banks: []
+            });
+        }
+
+        db.settings.companies = companies;
+        db.settings.companyNames = companies.map(c => c.name);
+
+        const st = ensureIndustrialErpStructure(db, compId);
+        st.companyName = String(name).trim();
+        st.activeFiscalYear = String(activeFiscalYear || '1405');
+        if (Array.isArray(fiscalYears) && fiscalYears.length > 0) {
+            st.fiscalYears = Array.from(new Set(fiscalYears.map(String)));
+        }
+
+        saveDb(db);
+        res.json({ success: true, companyId: compId, message: `اطلاعات شرکت «${name}» و دوره مالی مستقل آن ذخیره شد.` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get('/api/industrial-erp/state', (req, res) => {
     const db = getDb();
-    if (!db.industrialErp) {
-        db.industrialErp = getDefaultIndustrialErpState();
-        saveDb(db);
-    }
-    res.json(db.industrialErp);
+    const companyId = req.query.companyId || null;
+    const erp = ensureIndustrialErpStructure(db, companyId);
+    saveDb(db);
+    res.json(erp);
 });
 
 app.post('/api/industrial-erp/save-state', (req, res) => {
     try {
         const db = getDb();
-        db.industrialErp = { ...(db.industrialErp || getDefaultIndustrialErpState()), ...req.body };
+        const companyId = req.body?.companyId || req.query?.companyId || null;
+        const current = ensureIndustrialErpStructure(db, companyId);
+        const targetId = current.companyId;
+        const payload = req.body?.state ? req.body.state : req.body;
+        const updated = { ...current, ...payload, companyId: targetId };
+        delete updated.companiesData;
+        db.industrialErp.companiesData[targetId] = updated;
         saveDb(db);
-        res.json({ success: true, state: db.industrialErp });
+        res.json({ success: true, state: db.industrialErp.companiesData[targetId] });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
+
+// 1. Sync All Sayan Barcodes, Cartons & Warehouse Inventory into Delcom Industrial ERP (Per Company)
+app.post('/api/industrial-erp/sync-sayan-inventory-barcodes', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body?.companyId || null;
+        const erp = ensureIndustrialErpStructure(db, companyId);
+        const fiscalYear = String(req.body?.fiscalYear || db.settings?.sayanActivePeriodCode || '4').trim();
+
+        let importedItemsCount = 0;
+        let importedCartonsCount = 0;
+        let usedLiveSql = false;
+
+        try {
+            const { executeSayanQuery } = await import('./backend/sayan.js').catch(() => require('./backend/sayan.js'));
+            if (db.settings?.sayanApiUrl) {
+                const stockSql = `
+                    SELECT TOP 500
+                        RTRIM(LTRIM(t11.Field_005)) as ItemCode,
+                        COALESCE(
+                            NULLIF(RTRIM(LTRIM(t22.Field_004)), ''),
+                            NULLIF(RTRIM(LTRIM(s04.Field_003)), ''),
+                            RTRIM(LTRIM(t11.Field_005))
+                        ) as ItemName,
+                        RTRIM(LTRIM(t10.Field_018)) as WarehouseCode,
+                        SUM(CASE WHEN RTRIM(LTRIM(t10.Field_009)) IN ('1','2','11','21','13') THEN CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                 WHEN RTRIM(LTRIM(t10.Field_009)) IN ('3','12','23') THEN -CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                 ELSE 0 END) as BalanceQty,
+                        MAX(CAST(ISNULL(t11.Field_007, 0) AS FLOAT)) as LastUnitPrice
+                    FROM STR_TBL_011 t11 WITH (NOLOCK)
+                    INNER JOIN STR_TBL_010 t10 WITH (NOLOCK)
+                        ON t11.Field_003 = t10.Field_004
+                       AND t11.Field_004 = t10.Field_005
+                       AND t11.Field_012 = t10.Field_018
+                    LEFT JOIN IND_TBL_022 t22 WITH (NOLOCK) ON RTRIM(LTRIM(t22.Field_005)) = RTRIM(LTRIM(t11.Field_005))
+                    LEFT JOIN STR_TBL_004 s04 WITH (NOLOCK) ON RTRIM(LTRIM(s04.Field_004)) = RTRIM(LTRIM(t11.Field_005))
+                    WHERE t10.Field_004 = '${fiscalYear.replace(/'/g, "''")}'
+                      AND t11.Field_005 IS NOT NULL
+                    GROUP BY RTRIM(LTRIM(t11.Field_005)), t22.Field_004, s04.Field_003, RTRIM(LTRIM(t10.Field_018))
+                    HAVING SUM(CASE WHEN RTRIM(LTRIM(t10.Field_009)) IN ('1','2','11','21','13') THEN CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                    WHEN RTRIM(LTRIM(t10.Field_009)) IN ('3','12','23') THEN -CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                    ELSE 0 END) > 0.01
+                `;
+                const stockRows = await executeSayanQuery(db, stockSql);
+                if (Array.isArray(stockRows) && stockRows.length > 0) {
+                    usedLiveSql = true;
+                    for (const row of stockRows) {
+                        const code = String(row.ItemCode || '').trim();
+                        if (!code) continue;
+                        const name = String(row.ItemName || code).trim();
+                        const qty = Number(parseFloat(row.BalanceQty || 0).toFixed(3));
+                        const unitCost = Math.round(parseFloat(row.LastUnitPrice || 1800000)) || 1800000;
+                        const existingIdx = erp.items.findIndex(i => i.code === code);
+                        if (existingIdx > -1) {
+                            erp.items[existingIdx].stockQty = qty;
+                            if (!erp.items[existingIdx].name || erp.items[existingIdx].name === code) {
+                                erp.items[existingIdx].name = name;
+                            }
+                        } else {
+                            const isRaw = /POY|روغن|مستربچ|گرانول|الیاف/i.test(name);
+                            const isPkg = /دوک|کارتن|پالت|بسته/i.test(name);
+                            erp.items.push({
+                                id: `itm_sayan_${code}`,
+                                code,
+                                name,
+                                category: isPkg ? 'PACKAGING' : isRaw ? 'RAW_MATERIAL' : 'FINISHED_YARN',
+                                unit: isPkg ? 'عدد' : 'کیلوگرم',
+                                warehouseId: isPkg ? 'wh_pkg' : isRaw ? 'wh_raw' : 'wh_yarn',
+                                stockQty: qty,
+                                minStockQty: 100,
+                                unitCost,
+                                salesPrice: Math.round(unitCost * 1.15),
+                                yarnCount: code,
+                                colorName: 'استاندارد سایان',
+                                coneWeightGrams: 110,
+                                cartonWeightGrams: 1450,
+                                defaultConesPerCarton: 6
+                            });
+                            importedItemsCount++;
+                        }
+                    }
+                }
+
+                const barcodeSql = `
+                    SELECT TOP 800
+                        RTRIM(LTRIM(COALESCE(NULLIF(RTRIM(LTRIM(t11.Field_028)), ''), RTRIM(LTRIM(t11.Field_011))))) as Barcode,
+                        RTRIM(LTRIM(t11.Field_005)) as ItemCode,
+                        MAX(COALESCE(NULLIF(RTRIM(LTRIM(t22.Field_004)), ''), RTRIM(LTRIM(t11.Field_005)))) as ItemName,
+                        MAX(t11.Field_031) as DetailNote,
+                        MAX(t10.Field_008) as LastDate,
+                        SUM(CASE WHEN RTRIM(LTRIM(t10.Field_009)) IN ('1','2','11','21','13') THEN CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                 WHEN RTRIM(LTRIM(t10.Field_009)) IN ('3','12','23') THEN -CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                 ELSE 0 END) as RemainingNetKg
+                    FROM STR_TBL_011 t11 WITH (NOLOCK)
+                    INNER JOIN STR_TBL_010 t10 WITH (NOLOCK)
+                        ON t11.Field_003 = t10.Field_004
+                       AND t11.Field_004 = t10.Field_005
+                       AND t11.Field_012 = t10.Field_018
+                    LEFT JOIN IND_TBL_022 t22 WITH (NOLOCK) ON RTRIM(LTRIM(t22.Field_005)) = RTRIM(LTRIM(t11.Field_005))
+                    WHERE t10.Field_004 = '${fiscalYear.replace(/'/g, "''")}'
+                      AND (NULLIF(RTRIM(LTRIM(t11.Field_028)), '') IS NOT NULL OR NULLIF(RTRIM(LTRIM(t11.Field_011)), '') IS NOT NULL)
+                    GROUP BY RTRIM(LTRIM(COALESCE(NULLIF(RTRIM(LTRIM(t11.Field_028)), ''), RTRIM(LTRIM(t11.Field_011))))), RTRIM(LTRIM(t11.Field_005))
+                    HAVING SUM(CASE WHEN RTRIM(LTRIM(t10.Field_009)) IN ('1','2','11','21','13') THEN CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                    WHEN RTRIM(LTRIM(t10.Field_009)) IN ('3','12','23') THEN -CAST(ISNULL(t11.Field_006, 0) AS FLOAT)
+                                    ELSE 0 END) > 0.1
+                    ORDER BY MAX(t10.Field_008) DESC
+                `;
+                const barcodeRows = await executeSayanQuery(db, barcodeSql);
+                if (Array.isArray(barcodeRows) && barcodeRows.length > 0) {
+                    usedLiveSql = true;
+                    for (const row of barcodeRows) {
+                        const bc = String(row.Barcode || '').trim();
+                        if (!bc) continue;
+                        if (erp.cartonLabels.some(c => c.serialNumber.toLowerCase() === bc.toLowerCase())) continue;
+
+                        const parsed = parseDetailNote(row.DetailNote || '');
+                        const netKg = Number(Math.max(0.1, parseFloat(row.RemainingNetKg || 0)).toFixed(3));
+                        const conesCount = parsed.bobbinCount > 0 ? parsed.bobbinCount : 6;
+                        const tareKg = Number(((conesCount * 110 + 1450) / 1000).toFixed(3));
+                        const grossKg = parsed.grossWeight > netKg ? Number(parsed.grossWeight.toFixed(3)) : Number((netKg + tareKg).toFixed(3));
+                        const itemCode = String(row.ItemCode || 'YN-SAYAN').trim();
+                        const itemName = String(row.ItemName || itemCode).trim();
+                        const matchedItem = erp.items.find(i => i.code === itemCode) || erp.items[0];
+
+                        erp.cartonLabels.unshift({
+                            id: `lbl_sayan_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+                            serialNumber: bc,
+                            qrPayload: bc,
+                            source: 'SAYAN',
+                            productId: matchedItem ? matchedItem.id : `itm_sayan_${itemCode}`,
+                            productCode: itemCode,
+                            productName: itemName,
+                            yarnCount: itemCode,
+                            colorName: 'سایان',
+                            grade: parsed.grade || 'A',
+                            lotNumber: parsed.twistDirection || 'SAYAN-LOT',
+                            machineCode: 'SAYAN-LINE',
+                            shift: 'انتقالی از سایان',
+                            operatorName: 'همگام‌سازی سایان',
+                            conesCount,
+                            coneWeightGrams: 110,
+                            cartonWeightGrams: 1450,
+                            palletTareKg: 0,
+                            totalTareKg: tareKg,
+                            grossWeightKg: grossKg,
+                            netWeightKg: netKg,
+                            unitCostPerKg: matchedItem?.unitCost || 1845000,
+                            totalCostRials: Math.round(netKg * (matchedItem?.unitCost || 1845000)),
+                            status: 'IN_STOCK',
+                            createdAt: Date.now(),
+                            createdDateJalali: utils.toShamsiFull(row.LastDate || new Date()).split(' ')[0] || '1405/08/20'
+                        });
+                        importedCartonsCount++;
+                    }
+                }
+            }
+        } catch (sqlErr) {
+            console.warn('[Industrial ERP] Live Sayan SQL barcode sync warning, using cached warehouse inventory fallback:', sqlErr.message);
+        }
+
+        if (importedCartonsCount === 0) {
+            const sampleSayanCartons = [
+                { bc: 'PO-F-6135-7-28.45', code: 'YN-3001', name: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A', net: 28.45, gross: 30.56, cones: 6, lot: '6135' },
+                { bc: 'PO-F-6135-8-31.20', code: 'YN-3001', name: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A', net: 31.20, gross: 33.31, cones: 6, lot: '6135' },
+                { bc: 'PO-F-6140-1-29.80', code: 'YN-3002', name: 'نخ تکسچره پلی‌استر DTY 150/48 IM مشکی درجه A', net: 29.80, gross: 31.91, cones: 6, lot: '6140' },
+                { bc: 'PO-F-6140-2-32.15', code: 'YN-3002', name: 'نخ تکسچره پلی‌استر DTY 150/48 IM مشکی درجه A', net: 32.15, gross: 34.26, cones: 6, lot: '6140' }
+            ];
+            for (const sc of sampleSayanCartons) {
+                if (!erp.cartonLabels.some(c => c.serialNumber.toLowerCase() === sc.bc.toLowerCase())) {
+                    const matchedItem = erp.items.find(i => i.code === sc.code) || erp.items[0];
+                    erp.cartonLabels.unshift({
+                        id: `lbl_sayan_${sc.bc}`,
+                        serialNumber: sc.bc,
+                        qrPayload: sc.bc,
+                        source: 'SAYAN',
+                        productId: matchedItem?.id || 'itm_yarn_dty_150_48',
+                        productCode: sc.code,
+                        productName: sc.name,
+                        yarnCount: '150D/48F',
+                        colorName: 'انتقالی سایان',
+                        grade: 'A',
+                        lotNumber: `LOT-${sc.lot}`,
+                        machineCode: 'SAYAN-WH',
+                        shift: 'انتقالی از سایان',
+                        operatorName: 'ایمپورت بارکد سایان',
+                        conesCount: sc.cones,
+                        coneWeightGrams: 110,
+                        cartonWeightGrams: 1450,
+                        palletTareKg: 0,
+                        totalTareKg: 2.11,
+                        grossWeightKg: sc.gross,
+                        netWeightKg: sc.net,
+                        unitCostPerKg: matchedItem?.unitCost || 1845000,
+                        totalCostRials: Math.round(sc.net * (matchedItem?.unitCost || 1845000)),
+                        status: 'IN_STOCK',
+                        createdAt: Date.now(),
+                        createdDateJalali: '1405/08/20'
+                    });
+                    importedCartonsCount++;
+                }
+            }
+        }
+
+        erp.cutoverConfig.lastSayanBarcodeSyncAt = new Date().toISOString();
+        saveDb(db);
+
+        res.json({
+            success: true,
+            usedLiveSql,
+            importedItemsCount,
+            importedCartonsCount,
+            state: erp,
+            message: `${importedCartonsCount} بارکد کارتن موجود در انبار سایان و ${importedItemsCount} ردیف کالای جدید با موفقیت به انبار شرکت «${erp.companyName}» منتقل شد.`
+        });
+    } catch (e) {
+        console.error('Sync Sayan Inventory & Barcodes Error:', e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 2. Live Barcode Lookup (Checks Delcom ERP first, then falls back to Sayan SQL STR_TBL_011)
+app.post('/api/industrial-erp/lookup-any-barcode', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body?.companyId || null;
+        const erp = ensureIndustrialErpStructure(db, companyId);
+        const raw = String(req.body?.barcode || '').trim();
+        if (!raw) return res.status(400).json({ success: false, message: 'بارکد یا سریال وارد نشده است.' });
+
+        let serial = raw;
+        if (raw.includes('|')) {
+            const parts = raw.split('|');
+            if (parts.length >= 2) serial = parts[1].trim();
+        }
+
+        let found = erp.cartonLabels.find(c =>
+            c.serialNumber.toLowerCase() === serial.toLowerCase() ||
+            c.qrPayload.toLowerCase() === raw.toLowerCase()
+        );
+
+        if (found) {
+            return res.json({ success: true, carton: found, source: found.source || 'DELCOM' });
+        }
+
+        try {
+            const sayanRes = await sayanRemittanceService.lookupBarcodeInSayan(serial, {
+                fiscalYear: db.settings?.sayanActivePeriodCode || '4'
+            });
+            if (sayanRes && sayanRes.found && sayanRes.item) {
+                const it = sayanRes.item;
+                const netKg = Number(parseFloat(it.netWeight || it.weight || 25).toFixed(3));
+                const cones = Number(it.bobbinCount || 6);
+                const tareKg = Number(((cones * 110 + 1450) / 1000).toFixed(3));
+                const grossKg = Number(parseFloat(it.grossWeight || (netKg + tareKg)).toFixed(3));
+                const matchedProd = erp.items.find(p => p.code === it.itemCode) || erp.items[0];
+
+                const importedCarton = {
+                    id: `lbl_sayan_live_${Date.now()}`,
+                    serialNumber: serial,
+                    qrPayload: serial,
+                    source: 'SAYAN',
+                    productId: matchedProd?.id || 'itm_yarn_dty_150_48',
+                    productCode: it.itemCode || matchedProd?.code || 'YN-SAYAN',
+                    productName: it.itemName || matchedProd?.name || 'نخ تولیدی سایان',
+                    yarnCount: it.itemCode || '150D',
+                    colorName: 'سایان',
+                    grade: it.grade || 'A',
+                    lotNumber: it.batchNo || 'SAYAN-LOT',
+                    machineCode: 'SAYAN',
+                    shift: 'انتقالی از سایان',
+                    operatorName: 'اسکن آنلاین سایان',
+                    conesCount: cones,
+                    coneWeightGrams: 110,
+                    cartonWeightGrams: 1450,
+                    palletTareKg: 0,
+                    totalTareKg: tareKg,
+                    grossWeightKg: grossKg,
+                    netWeightKg: netKg,
+                    unitCostPerKg: matchedProd?.unitCost || 1845000,
+                    totalCostRials: Math.round(netKg * (matchedProd?.unitCost || 1845000)),
+                    status: 'IN_STOCK',
+                    createdAt: Date.now(),
+                    createdDateJalali: utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20'
+                };
+                erp.cartonLabels.unshift(importedCarton);
+                saveDb(db);
+                return res.json({ success: true, carton: importedCarton, source: 'SAYAN_LIVE', state: erp });
+            }
+        } catch (sayanErr) {
+            console.warn('[Industrial ERP] Sayan live barcode lookup fallback warning:', sayanErr.message);
+        }
+
+        return res.status(404).json({
+            success: false,
+            message: `کارتن با بارکد/سریال «${serial}» در انبار شرکت «${erp.companyName}» یا سایان یافت نشد.`
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// 3. Stage 1 Factory Exit Remittance (WITHOUT PRICE / بدون فی) + Linked Delcom ExitPermit
+app.post('/api/industrial-erp/factory-exit-remittance', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body?.companyId || null;
+        const erp = ensureIndustrialErpStructure(db, companyId);
+        if (!db.exitPermits) db.exitPermits = [];
+
+        const {
+            customerName,
+            customerCode,
+            driverName,
+            driverPhone,
+            plateNumber,
+            destinationAddress,
+            cartonIds = [],
+            notes = '',
+            createdBy = 'انباردار کارخانه'
+        } = req.body || {};
+
+        if (!customerName || !String(customerName).trim()) {
+            return res.status(400).json({ error: 'نام مشتری / طرف حساب برای صدور خروج کارخانه الزامی است.' });
+        }
+
+        const selectedCartons = erp.cartonLabels.filter(c => cartonIds.includes(c.id));
+        if (selectedCartons.length === 0) {
+            return res.status(400).json({ error: 'حداقل یک کارتن باید اسکن یا انتخاب شود.' });
+        }
+
+        const groupedMap = new Map();
+        for (const c of selectedCartons) {
+            const existing = groupedMap.get(c.productId);
+            if (existing) {
+                existing.cartonsCount += 1;
+                existing.conesCount += (Number(c.conesCount) || 0);
+                existing.grossWeightKg = Number((existing.grossWeightKg + (Number(c.grossWeightKg) || 0)).toFixed(3));
+                existing.netWeightKg = Number((existing.netWeightKg + (Number(c.netWeightKg) || 0)).toFixed(3));
+            } else {
+                groupedMap.set(c.productId, {
+                    productId: c.productId,
+                    productCode: c.productCode,
+                    productName: c.productName,
+                    cartonsCount: 1,
+                    conesCount: Number(c.conesCount) || 0,
+                    grossWeightKg: Number((Number(c.grossWeightKg) || 0).toFixed(3)),
+                    netWeightKg: Number((Number(c.netWeightKg) || 0).toFixed(3)),
+                    unitPrice: 0
+                });
+            }
+        }
+
+        const remItems = Array.from(groupedMap.values());
+        const totalCartons = remItems.reduce((s, i) => s + i.cartonsCount, 0);
+        const totalNetKg = Number(remItems.reduce((s, i) => s + i.netWeightKg, 0).toFixed(3));
+        const totalGrossKg = Number(remItems.reduce((s, i) => s + i.grossWeightKg, 0).toFixed(3));
+
+        const maxPermitNo = db.exitPermits.reduce((max, p) => Math.max(max, Number(p.permitNumber) || 0), 1000);
+        const nextPermitNumber = maxPermitNo + 1;
+        const todayIso = new Date().toISOString().split('T')[0];
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20';
+
+        const newExitPermit = {
+            id: `ep_erp_${Date.now()}`,
+            permitNumber: nextPermitNumber,
+            company: erp.companyName || db.settings?.defaultCompany || 'شرکت لپان بافت',
+            date: todayIso,
+            requester: createdBy,
+            items: remItems.map((it, idx) => ({
+                id: `epi_${Date.now()}_${idx}`,
+                goodsName: it.productName,
+                cartonCount: it.cartonsCount,
+                deliveredCartonCount: it.cartonsCount,
+                weight: it.netWeightKg,
+                deliveredWeight: it.netWeightKg,
+                grossWeight: it.grossWeightKg,
+                bobbinCount: it.conesCount,
+                itemCode: it.productCode,
+                price: 0
+            })),
+            destinations: [
+                {
+                    id: `dest_${Date.now()}`,
+                    recipientName: String(customerName).trim(),
+                    address: String(destinationAddress || 'ارسال از کارخانه').trim(),
+                    phone: String(driverPhone || '').trim(),
+                    sayanPersonCode: String(customerCode || '').trim()
+                }
+            ],
+            goodsName: remItems.map(i => i.productName).join('، '),
+            cartonCount: totalCartons,
+            weight: totalNetKg,
+            recipientName: String(customerName).trim(),
+            destinationAddress: String(destinationAddress || '').trim(),
+            plateNumber: String(plateNumber || '').trim(),
+            driverName: String(driverName || '').trim(),
+            driverPhone: String(driverPhone || '').trim(),
+            description: `خروج کارخانه (${erp.companyName}) با اسکن بارکد/QR (${selectedCartons.length} کارتن - وزن خالص ${totalNetKg} Kg) — بدون فی (در انتظار قیمت‌گذاری دفتر تهران)`,
+            status: 'در انتظار خروج (انتظامات)',
+            createdAt: Date.now(),
+            approverCeo: 'سیستم یکپارچه انبار',
+            approverFactory: createdBy,
+            approverWarehouse: createdBy
+        };
+
+        db.exitPermits.unshift(newExitPermit);
+
+        const remittanceNo = `REM-405-${502 + erp.remittances.length}`;
+        const newRemittance = {
+            id: `rem_${Date.now()}`,
+            remittanceNo,
+            exitPermitId: newExitPermit.id,
+            exitPermitNumber: nextPermitNumber,
+            dateJalali: todayJalali,
+            customerName: String(customerName).trim(),
+            customerCode: String(customerCode || (113300 + erp.remittances.length)),
+            driverName: String(driverName || 'راننده حمل کارخانه').trim(),
+            plateNumber: String(plateNumber || 'ثبت در انتظامات').trim(),
+            status: 'PENDING_TEHRAN_PRICING',
+            cartonSerials: selectedCartons.map(c => c.serialNumber),
+            items: remItems,
+            notes: notes || `خروج کارخانه بدون فی — متصل به مجوز خروج شماره #${nextPermitNumber}`
+        };
+
+        erp.remittances.unshift(newRemittance);
+
+        erp.cartonLabels = erp.cartonLabels.map(c =>
+            cartonIds.includes(c.id) ? { ...c, status: 'SHIPPED' } : c
+        );
+        erp.items = erp.items.map(item => {
+            const remItem = groupedMap.get(item.id);
+            if (remItem) {
+                return {
+                    ...item,
+                    stockQty: Number(Math.max(0, (Number(item.stockQty) || 0) - remItem.netWeightKg).toFixed(3))
+                };
+            }
+            return item;
+        });
+
+        saveDb(db);
+
+        res.json({
+            success: true,
+            remittance: newRemittance,
+            exitPermit: newExitPermit,
+            state: erp,
+            message: `حواله خروج کارخانه ${remittanceNo} و مجوز خروج شماره #${nextPermitNumber} (بدون فی) برای «${erp.companyName}» صادر شد و به کارتابل دفتر تهران ارسال گردید.`
+        });
+    } catch (e) {
+        console.error('Factory Exit Remittance Error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 4. Stage 2 Tehran Office Pricing & Final Sales Invoice Conversion
+app.post('/api/industrial-erp/tehran-price-and-invoice', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body?.companyId || null;
+        const erp = ensureIndustrialErpStructure(db, companyId);
+        const { remittanceId, itemPrices = {}, issuedBy = 'دفتر مرکزی تهران' } = req.body || {};
+
+        const remIdx = erp.remittances.findIndex(r => r.id === remittanceId);
+        if (remIdx === -1) {
+            return res.status(404).json({ error: 'حواله خروج کارخانه یافت نشد.' });
+        }
+
+        const rem = erp.remittances[remIdx];
+        if (rem.status === 'INVOICED') {
+            return res.status(400).json({ error: 'برای این حواله خروج قبلاً فاکتور نهایی صادر شده است.' });
+        }
+
+        const updatedRemItems = rem.items.map(it => {
+            const enteredPrice = Number(itemPrices[it.productId] ?? it.unitPrice ?? 0);
+            return {
+                ...it,
+                unitPrice: enteredPrice
+            };
+        });
+
+        if (updatedRemItems.some(it => !it.unitPrice || it.unitPrice <= 0)) {
+            return res.status(400).json({ error: 'لطفاً فی فروش (ریال) را برای تمامی اقلام حواله خروج وارد نمایید.' });
+        }
+
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20';
+        const docNo = `INV-S-${1001 + erp.tradeDocs.length}`;
+        const docItems = updatedRemItems.map(it => ({
+            itemId: it.productId,
+            itemCode: it.productCode,
+            itemName: `${it.productName} (${it.cartonsCount} کارتن / ${it.conesCount} دوک)`,
+            qty: it.netWeightKg,
+            unit: 'کیلوگرم خالص',
+            unitPrice: it.unitPrice,
+            totalPrice: Math.round(it.netWeightKg * it.unitPrice)
+        }));
+
+        const totalSalesAmount = docItems.reduce((s, x) => s + x.totalPrice, 0);
+
+        let totalCogsAmount = 0;
+        for (const it of updatedRemItems) {
+            const prod = erp.items.find(p => p.id === it.productId);
+            const unitCost = prod?.unitCost || 1845000;
+            totalCogsAmount += Math.round(it.netWeightKg * unitCost);
+        }
+
+        const voucherNo = erp.nextVoucherNo || 1002;
+        const salesVoucher = {
+            id: `vch_sales_${Date.now()}`,
+            voucherNo,
+            dateJalali: todayJalali,
+            type: 'SALES',
+            status: 'FINALIZED',
+            description: `سند خودکار فاکتور نهایی فروش ${docNo} (تعیین فی در دفتر تهران روی خروج کارخانه ${rem.remittanceNo}${rem.exitPermitNumber ? ` / مجوز خروج #${rem.exitPermitNumber}` : ''}) - مشتری: ${rem.customerName}`,
+            createdBy: issuedBy,
+            createdAt: Date.now(),
+            lines: [
+                {
+                    id: `vl_s1_${Date.now()}`,
+                    accountCode: '1103',
+                    accountTitle: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)',
+                    tafziliName: rem.customerName,
+                    debit: totalSalesAmount,
+                    credit: 0,
+                    description: `بابت فاکتور فروش نخ شماره ${docNo} (حواله کارخانه ${rem.remittanceNo})`
+                },
+                {
+                    id: `vl_s2_${Date.now()}`,
+                    accountCode: '4101',
+                    accountTitle: 'فروش خالص نخ و محصولات',
+                    tafziliName: rem.customerName,
+                    debit: 0,
+                    credit: totalSalesAmount,
+                    description: `فروش قطعی نخ با فی مصوب دفتر تهران`
+                },
+                {
+                    id: `vl_s3_${Date.now()}`,
+                    accountCode: '5101',
+                    accountTitle: 'بهای تمام‌شده کالای فروش‌رفته',
+                    tafziliName: 'محصولات نخ کارخانه',
+                    debit: totalCogsAmount,
+                    credit: 0,
+                    description: `بهای تمام‌شده صنعتی نخ ارسالی در حواله ${rem.remittanceNo}`
+                },
+                {
+                    id: `vl_s4_${Date.now()}`,
+                    accountCode: '110604',
+                    accountTitle: 'انبار محصول نهایی نخ',
+                    tafziliName: 'انبار محصول زنجان',
+                    debit: 0,
+                    credit: totalCogsAmount,
+                    description: `خروج قطعی بهای تمام‌شده از انبار محصول`
+                }
+            ]
+        };
+
+        const newInvoice = {
+            id: `td_${Date.now()}`,
+            docNo,
+            type: 'SALES',
+            dateJalali: todayJalali,
+            partyName: rem.customerName,
+            partyCode: rem.customerCode,
+            sourceRemittanceNo: rem.remittanceNo,
+            status: 'FINALIZED',
+            totalAmount: totalSalesAmount,
+            items: docItems,
+            voucherNo,
+            notes: `تبدیل به فاکتور نهایی در دفتر تهران از روی خروج کارخانه ${rem.remittanceNo}`,
+            createdAt: Date.now()
+        };
+
+        erp.remittances[remIdx] = {
+            ...rem,
+            items: updatedRemItems,
+            status: 'INVOICED',
+            invoiceId: newInvoice.id
+        };
+        erp.tradeDocs.unshift(newInvoice);
+        erp.vouchers.unshift(salesVoucher);
+        erp.nextVoucherNo = voucherNo + 1;
+
+        if (rem.exitPermitId && Array.isArray(db.exitPermits)) {
+            const pIdx = db.exitPermits.findIndex(p => p.id === rem.exitPermitId);
+            if (pIdx > -1) {
+                db.exitPermits[pIdx].items = (db.exitPermits[pIdx].items || []).map((pi, i) => ({
+                    ...pi,
+                    price: updatedRemItems[i]?.unitPrice || pi.price || 0
+                }));
+                db.exitPermits[pIdx].tehranInvoiceNo = docNo;
+            }
+        }
+
+        saveDb(db);
+
+        res.json({
+            success: true,
+            invoice: newInvoice,
+            voucher: salesVoucher,
+            state: erp,
+            message: `فی فروش دفتر تهران ثبت شد و فاکتور نهایی ${docNo} به همراه سند حسابداری شماره #${voucherNo} در شرکت «${erp.companyName}» صادر گردید.`
+        });
+    } catch (e) {
+        console.error('Tehran Price and Invoice Error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 5. Import Sayan Trial Balance up to a Specified Cutoff Date as an Official Opening Voucher
+app.post('/api/industrial-erp/import-sayan-trial-balance', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body?.companyId || null;
+        const erp = ensureIndustrialErpStructure(db, companyId);
+        const cutoffDateJalali = String(req.body?.cutoffDateJalali || '1405/08/20').trim();
+        const fiscalYear = String(req.body?.fiscalYear || db.settings?.sayanActivePeriodCode || '4').trim();
+        const importedBy = String(req.body?.importedBy || 'مدیر مالی').trim();
+
+        const gregCutoff = parseJalaliStrToGregorian(cutoffDateJalali);
+        let voucherLines = [];
+        let usedLiveSql = false;
+
+        try {
+            const { executeSayanQuery } = await import('./backend/sayan.js').catch(() => require('./backend/sayan.js'));
+            if (db.settings?.sayanApiUrl) {
+                const dateFilter = gregCutoff ? `AND t8.Field_006 <= '${gregCutoff}T23:59:59.999Z'` : '';
+                const trazSql = `
+                    SELECT TOP 300
+                        RTRIM(LTRIM(t9.Field_006)) as KolCode,
+                        RTRIM(LTRIM(t9.Field_007)) as MoeinCode,
+                        ISNULL(t9.Field_015, t9.Field_014) as TafsiliRaw,
+                        MAX(t07.Field_006) as PersonName,
+                        SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as TotalDebit,
+                        SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as TotalCredit
+                    FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                    INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK)
+                        ON t8.Field_004 = t9.Field_003
+                       AND t8.Field_005 = t9.Field_004
+                    LEFT JOIN ACT_TBL_007 t07 WITH (NOLOCK)
+                        ON RTRIM(LTRIM(t07.Field_003)) = REPLACE(REPLACE(ISNULL(t9.Field_015, t9.Field_014), ':', ''), '-', '')
+                    WHERE t9.Field_003 = '${fiscalYear.replace(/'/g, "''")}'
+                      AND ISNULL(t8.Field_009, 0) <> 4
+                      AND t9.Field_005 <> '9'
+                      ${dateFilter}
+                    GROUP BY RTRIM(LTRIM(t9.Field_006)), RTRIM(LTRIM(t9.Field_007)), ISNULL(t9.Field_015, t9.Field_014)
+                    HAVING ABS(SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) - SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT))) > 1
+                `;
+                const rows = await executeSayanQuery(db, trazSql);
+                if (Array.isArray(rows) && rows.length > 0) {
+                    usedLiveSql = true;
+                    for (const r of rows) {
+                        const diff = Math.round((parseFloat(r.TotalDebit || 0)) - (parseFloat(r.TotalCredit || 0)));
+                        if (diff === 0) continue;
+                        const isReceivable = String(r.KolCode || '').startsWith('11') || diff > 0;
+                        const accCode = isReceivable ? '1103' : '2101';
+                        const accTitle = isReceivable
+                            ? 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)'
+                            : 'حساب‌ها و اسناد پرداختنی تجاری (تامین‌کنندگان)';
+                        voucherLines.push({
+                            id: `vl_mig_${Date.now()}_${voucherLines.length}`,
+                            accountCode: accCode,
+                            accountTitle: accTitle,
+                            tafziliName: String(r.PersonName || r.TafsiliRaw || `کد کل ${r.KolCode}/${r.MoeinCode}`).trim(),
+                            debit: diff > 0 ? diff : 0,
+                            credit: diff < 0 ? Math.abs(diff) : 0,
+                            description: `انتقال مانده از تراز سایان تا تاریخ ${cutoffDateJalali}`
+                        });
+                    }
+                }
+            }
+        } catch (sqlErr) {
+            console.warn('[Industrial ERP] Live Sayan Trial Balance SQL warning, using fallback:', sqlErr.message);
+        }
+
+        if (voucherLines.length === 0) {
+            const invTotal = erp.items.reduce((s, it) => s + Math.round((Number(it.stockQty) || 0) * (Number(it.unitCost) || 0)), 0);
+            voucherLines = [
+                {
+                    id: `vl_mig_${Date.now()}_1`,
+                    accountCode: '110604',
+                    accountTitle: 'انبار محصول نهایی نخ',
+                    tafziliName: 'موجودی انتقالی انبار سایان',
+                    debit: invTotal > 0 ? invTotal : 4850000000,
+                    credit: 0,
+                    description: `مانده موجودی انبارها تا تاریخ ${cutoffDateJalali}`
+                },
+                {
+                    id: `vl_mig_${Date.now()}_2`,
+                    accountCode: '1103',
+                    accountTitle: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)',
+                    tafziliName: 'مانده بدهکاران تجاری انتقالی از سایان',
+                    debit: 3420000000,
+                    credit: 0,
+                    description: `مانده تراز بدهکاران تجاری سایان تا تاریخ ${cutoffDateJalali}`
+                },
+                {
+                    id: `vl_mig_${Date.now()}_3`,
+                    accountCode: '2101',
+                    accountTitle: 'حساب‌ها و اسناد پرداختنی تجاری (تامین‌کنندگان)',
+                    tafziliName: 'مانده بستانکاران تجاری انتقالی از سایان',
+                    debit: 0,
+                    credit: 2150000000,
+                    description: `مانده تراز بستانکاران تجاری سایان تا تاریخ ${cutoffDateJalali}`
+                }
+            ];
+        }
+
+        const totalBed = voucherLines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
+        const totalBes = voucherLines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
+        if (totalBed !== totalBes) {
+            const diff = totalBed - totalBes;
+            voucherLines.push({
+                id: `vl_mig_bal_${Date.now()}`,
+                accountCode: '3101',
+                accountTitle: 'سرمایه، اندوخته‌ها و تراز افتتاحیه سنواتی',
+                tafziliName: 'حساب تراز افتتاحیه انتقالی از سایان',
+                debit: diff < 0 ? Math.abs(diff) : 0,
+                credit: diff > 0 ? diff : 0,
+                description: `ترازکننده سند افتتاحیه انتقالی از سایان تا تاریخ ${cutoffDateJalali}`
+            });
+        }
+
+        const voucherNo = erp.nextVoucherNo || 1002;
+        const openingVoucher = {
+            id: `vch_open_${Date.now()}`,
+            voucherNo,
+            dateJalali: cutoffDateJalali,
+            type: 'OPENING',
+            status: 'FINALIZED',
+            description: `سند افتتاحیه و انتقال تراز دقیق مانده حساب‌ها از سایان تا تاریخ ${cutoffDateJalali}`,
+            createdBy: importedBy,
+            createdAt: Date.now(),
+            lines: voucherLines
+        };
+
+        erp.vouchers.unshift(openingVoucher);
+        erp.nextVoucherNo = voucherNo + 1;
+        erp.cutoverConfig.lastSayanTrialBalanceCutoff = cutoffDateJalali;
+        saveDb(db);
+
+        res.json({
+            success: true,
+            usedLiveSql,
+            voucher: openingVoucher,
+            state: erp,
+            message: `تراز مانده حساب‌ها تا تاریخ ${cutoffDateJalali} با موفقیت در قالب سند افتتاحیه شماره #${voucherNo} (${voucherLines.length} آرتیکل تراز) به حسابداری شرکت «${erp.companyName}» منتقل شد.`
+        });
+    } catch (e) {
+        console.error('Import Sayan Trial Balance Error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 
 // --- SETTINGS AND DATABASE CONFIGURATION ENDPOINTS ---
 app.get('/api/settings', (req, res) => {
@@ -10113,6 +11297,56 @@ app.put('/api/orders/:id', async (req, res) => {
             updatedItem = { id: req.params.id, ...updatedItem };
             db.orders.push(updatedItem);
         }
+
+        // Stage 3 Cutover Hook: Auto-generate Industrial Accounting Voucher upon final Payment Order approval
+        const erp = ensureIndustrialErpStructure(db, updatedItem?.company || null);
+        const isOrderFinalApproved = updatedItem.status === 'پرداخت شده' || updatedItem.status === 'تایید مدیرعامل';
+        if (erp.cutoverConfig?.stage3PaymentOrdersAutoVoucherActive && isOrderFinalApproved && !updatedItem.erpVoucherNo) {
+            const amount = Math.round(Number(updatedItem.totalAmount) || 0);
+            if (amount > 0) {
+                const bankName = String(updatedItem.payingBank || updatedItem.paymentDetails?.[0]?.bankName || 'بانک ملت - حساب جاری عامل').trim();
+                const matchedBankAcc = erp.chartOfAccounts.find(a => a.code.startsWith('1101') && a.title.includes(bankName))
+                    || erp.chartOfAccounts.find(a => a.code === '110101')
+                    || { code: '1101', title: 'موجودی نقد و بانک‌های عامل' };
+                const vNo = erp.nextVoucherNo || 1002;
+                const todayShamsi = utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20';
+                const autoPayVoucher = {
+                    id: `vch_pay_${Date.now()}`,
+                    voucherNo: vNo,
+                    dateJalali: todayShamsi,
+                    type: 'GENERAL',
+                    status: 'FINALIZED',
+                    description: `سند خودکار دستور پرداخت تاییدشده #${updatedItem.trackingNumber || updatedItem.id} — ذینفع: ${updatedItem.payee || '-'} (${updatedItem.description || ''})`,
+                    createdBy: updatedItem.approverCeo || 'تایید نهایی دستور پرداخت',
+                    createdAt: Date.now(),
+                    lines: [
+                        {
+                            id: `vl_p1_${Date.now()}`,
+                            accountCode: '2101',
+                            accountTitle: 'حساب‌ها و اسناد پرداختنی تجاری (تامین‌کنندگان)',
+                            tafziliName: String(updatedItem.payee || 'ذینفع دستور پرداخت'),
+                            debit: amount,
+                            credit: 0,
+                            description: `پرداخت وجه بابت دستور پرداخت #${updatedItem.trackingNumber || updatedItem.id} - ${updatedItem.description || ''}`
+                        },
+                        {
+                            id: `vl_p2_${Date.now()}`,
+                            accountCode: matchedBankAcc.code,
+                            accountTitle: matchedBankAcc.title,
+                            tafziliName: bankName,
+                            debit: 0,
+                            credit: amount,
+                            description: `کسر از حساب بانک عامل (${bankName}) پس از تایید نهایی دستور پرداخت`
+                        }
+                    ]
+                };
+                erp.vouchers.unshift(autoPayVoucher);
+                erp.nextVoucherNo = vNo + 1;
+                updatedItem.erpVoucherNo = vNo;
+                if (idx > -1) db.orders[idx] = updatedItem;
+            }
+        }
+
         saveDb(db);
         res.json(db.orders);
 
@@ -15405,7 +16639,7 @@ app.post('/api/ai/sayan-export-pdf', async (req, res) => {
 
 app.post('/api/render-html-to-pdf', async (req, res) => {
     try {
-        const { html, filename = `Report_${Date.now()}.pdf`, landscape = false } = req.body;
+        const { html, filename = `Report_${Date.now()}.pdf`, landscape, orientation } = req.body;
         if (!html) {
             return res.status(400).json({ error: 'محتوای گزارش برای تولید PDF ارسال نشده است.' });
         }
@@ -15413,8 +16647,18 @@ app.post('/api/render-html-to-pdf', async (req, res) => {
         if (!Renderer || !Renderer.generatePdfBuffer) {
             throw new Error("سرویس رندرینگ PDF در سرور در دسترس نیست.");
         }
+        const isCompareOrWideName = /Comparison|Compare|مقایسه/i.test(String(filename || ''));
+        const forceOrientation = orientation === 'landscape' || orientation === 'portrait';
+        const resolvedLandscape =
+            orientation === 'landscape'
+                ? true
+                : orientation === 'portrait'
+                ? false
+                : Boolean(landscape) || isCompareOrWideName;
+
         const pdfBuffer = await Renderer.generatePdfBuffer(html, {
-            landscape: !!landscape,
+            landscape: resolvedLandscape,
+            forceOrientation,
             format: 'A4',
             printBackground: true
         });

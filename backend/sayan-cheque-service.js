@@ -1646,21 +1646,30 @@ export const registerChequeReceiptInSayan = async (receiptId, currentUser, force
     const noteText = record.description ? record.description.replace(/'/g, "''") : '';
     const headerDescription = `جزء: 1 | شخص: ${personCode} | کد فرعی:  | توضیحات: ${noteText}`;
 
-    // 2.5. Fetch actual person name
+    // 2.5. Fetch actual person name and exact TafsiliCode (Field_003) from ACT_TBL_007
     let personName = String(record.personName || '').trim();
-    if (!personName) {
-        try {
-            const pRes = await executeSayanQuery(`SELECT TOP 1 Field_006 as PersonName FROM ACT_TBL_007 WHERE Field_004 = '11' AND Field_005 = '${personCode}'`);
-            if (pRes[0]?.PersonName) {
-                personName = pRes[0].PersonName;
-            }
-        } catch (pErr) {
-            console.warn('Could not query ACT_TBL_007 for PersonName:', pErr.message);
+    let resolvedTafsiliFromDb = '';
+    try {
+        const pRes = await executeSayanQuery(`
+            SELECT TOP 1 
+                RTRIM(LTRIM(Field_003)) as TafsiliCode,
+                RTRIM(LTRIM(Field_006)) as PersonName 
+            FROM ACT_TBL_007 WITH (NOLOCK)
+            WHERE Field_004 = '11' 
+              AND (RTRIM(LTRIM(Field_005)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '11${personCode}')
+        `);
+        if (pRes[0]?.TafsiliCode) {
+            resolvedTafsiliFromDb = String(pRes[0].TafsiliCode).trim();
         }
+        if (!personName && pRes[0]?.PersonName) {
+            personName = pRes[0].PersonName;
+        }
+    } catch (pErr) {
+        console.warn('Could not query ACT_TBL_007 for PersonName/TafsiliCode:', pErr.message);
     }
     personName = personName.replace(/'/g, "''");
 
-    const personTafsili = (personCode.length >= 6 && personCode.startsWith('11')) ? personCode : `11${personCode}`;
+    const personTafsili = resolvedTafsiliFromDb || ((personCode.length >= 5 && personCode.startsWith('11')) ? personCode : `11${personCode}`);
     const rawCashboxNumber = cashboxCode.replace(/[^0-9]/g, '');
     const cashboxTafsili = rawCashboxNumber.startsWith('12') ? rawCashboxNumber : `12${rawCashboxNumber}`;
 
@@ -1922,10 +1931,19 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
             const totalAmount = Number(doc.TotalAmount) || 0;
             const rawDate = doc.DocDate ? doc.DocDate.split('T')[0] : new Date().toISOString().split('T')[0];
 
-            // Fetch person name
+            // Fetch person name & exact TafsiliCode from ACT_TBL_007
             let personName = '';
+            let resolvedTafsiliFromDb = '';
             try {
-                const pRes = await executeSayanQuery(`SELECT TOP 1 Field_006 as PersonName FROM ACT_TBL_007 WHERE Field_004 = '11' AND Field_005 = '${personCode}'`);
+                const pRes = await executeSayanQuery(`
+                    SELECT TOP 1 
+                        RTRIM(LTRIM(Field_003)) as TafsiliCode,
+                        RTRIM(LTRIM(Field_006)) as PersonName 
+                    FROM ACT_TBL_007 WITH (NOLOCK)
+                    WHERE Field_004 = '11' 
+                      AND (RTRIM(LTRIM(Field_005)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '11${personCode}')
+                `);
+                if (pRes[0]?.TafsiliCode) resolvedTafsiliFromDb = String(pRes[0].TafsiliCode).trim();
                 if (pRes[0]?.PersonName) personName = pRes[0].PersonName;
             } catch (e) {}
             personName = (personName || `شخص ${personCode}`).replace(/'/g, "''");
@@ -1967,7 +1985,7 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
             const maxActRes = await executeSayanQuery(`SELECT MAX(CAST(Field_005 as bigint)) as MaxActNo FROM ACT_TBL_008 WHERE Field_004 = '${fy}'`);
             const actDocNo = (Number(maxActRes[0]?.MaxActNo) || 0) + 1;
 
-            const personTafsili = (personCode.length >= 6 && personCode.startsWith('11')) ? personCode : `11${personCode}`;
+            const personTafsili = resolvedTafsiliFromDb || ((personCode.length >= 5 && personCode.startsWith('11')) ? personCode : `11${personCode}`);
 
             const sqlChunks = [
                 "EXEC(",

@@ -24,6 +24,7 @@ import { downloadAndOpenFile, saveImageToGallery, checkFileExists, isFileMarkedS
 import { openSendToChat } from '../services/chatShareService';
 import { getCachedAsset } from '../utils/assetCache';
 import { getDisplayFileName } from '../utils/fileNameUtils';
+import { printPdfOrImageInPage } from '../utils/pdfGenerator';
 
 export interface FileViewerProps {
   isOpen: boolean;
@@ -171,31 +172,16 @@ export const FileViewerModal: React.FC<FileViewerProps> = ({
     }
   };
 
+  const pdfIframeRef = React.useRef<HTMLIFrameElement | null>(null);
+
   const handlePrint = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (detectedType === 'image') {
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-        printWindow.document.write(`
-          <html>
-            <head>
-              <title>${fileName}</title>
-              <style>
-                body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #fff; }
-                img { max-width: 100%; max-height: 100vh; object-fit: contain; }
-              </style>
-            </head>
-            <body>
-              <img src="${previewUrl || resolvedUrl}" onload="window.print();window.close();" />
-            </body>
-          </html>
-        `);
-        printWindow.document.close();
-      }
-    } else {
-      // For PDF or other files, open in new tab for printing
-      window.open(previewUrl || resolvedUrl, '_blank');
-    }
+    printPdfOrImageInPage(
+      previewUrl || resolvedUrl,
+      detectedType === 'image' ? 'image' : 'pdf',
+      fileName || 'document',
+      pdfIframeRef.current
+    );
   };
 
   const modalElement = (
@@ -398,6 +384,7 @@ export const FileViewerModal: React.FC<FileViewerProps> = ({
               </a>
             </div>
             <iframe 
+              ref={pdfIframeRef}
               src={`${previewUrl || resolvedUrl}#toolbar=1&navpanes=1`} 
               className="w-full flex-1 border-0"
               title={fileName}

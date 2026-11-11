@@ -111,6 +111,29 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
 
+  // Prevent default Electron window titles and blank menu bars on any child popups
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        autoHideMenuBar: true,
+        title: 'دلکام - سامانه مالی و بازرگانی',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          webSecurity: false
+        }
+      }
+    };
+  });
+
+  mainWindow.webContents.on('did-create-window', (childWindow) => {
+    try {
+      childWindow.setMenuBarVisibility(false);
+      childWindow.setTitle('دلکام - چاپ و پیش‌نمایش');
+    } catch (_) {}
+  });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });

@@ -1062,24 +1062,75 @@ export const generatePdfBuffer = async (html, options = {}) => {
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
-    let finalHtml = html;
-    if (!html.includes("@font-face") && fontFaceRule) {
-      finalHtml = html.replace(
-        "<head>",
-        `<head><style>${fontFaceRule} body { font-family: 'Vazirmatn' !important; }</style>`,
-      );
-    } else if (!html.includes("<head>")) {
-      finalHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${BASE_STYLE}</style></head><body>${html}</body></html>`;
+    let finalHtml = String(html || '');
+
+    // Auto-detect whether this HTML document is Landscape unless explicitly forced
+    let isLandscape = Boolean(options.landscape);
+    if (!options.forceOrientation && !isLandscape) {
+      if (
+        /size\s*:\s*(?:A4\s+)?landscape/i.test(finalHtml) ||
+        /Comparison|Compare|مقایسه‌ای|مقایسه فروش|مقایسه تولید|kpi-grid-6/i.test(finalHtml)
+      ) {
+        isLandscape = true;
+      } else {
+        const theadMatch = finalHtml.match(/<thead[\s\S]*?<\/thead>/i) || finalHtml.match(/<tr[\s\S]*?<\/tr>/i);
+        if (theadMatch) {
+          const firstRowMatch = theadMatch[0].match(/<tr[\s\S]*?<\/tr>/i);
+          const rowHtml = firstRowMatch ? firstRowMatch[0] : theadMatch[0];
+          const thMatches = rowHtml.match(/<th\b/gi);
+          if (thMatches && thMatches.length >= 7) {
+            isLandscape = true;
+          }
+        }
+      }
     }
+
+    const pageOrientationCss = `<style>@page { size: A4 ${isLandscape ? 'landscape' : 'portrait'}; margin: ${isLandscape ? '6mm 7mm' : '7mm 8mm'}; } table { width: 100% !important; max-width: 100% !important; border-collapse: collapse; }</style>`;
+
+    if (!finalHtml.includes("@font-face") && fontFaceRule) {
+      finalHtml = finalHtml.replace(
+        "<head>",
+        `<head><style>${fontFaceRule} body { font-family: 'Vazirmatn', Tahoma, sans-serif !important; }</style>${pageOrientationCss}`,
+      );
+    } else if (finalHtml.includes("</head>")) {
+      finalHtml = finalHtml.replace("</head>", `${pageOrientationCss}</head>`);
+    } else if (!finalHtml.includes("<head>")) {
+      finalHtml = `<!DOCTYPE html><html dir="rtl" lang="fa"><head><meta charset="UTF-8"><style>${BASE_STYLE}</style>${pageOrientationCss}</head><body>${finalHtml}</body></html>`;
+    }
+
+    const targetViewportWidth = isLandscape ? 1123 : 794;
+    const targetViewportHeight = isLandscape ? 794 : 1123;
+    await page.setViewport({ width: targetViewportWidth, height: targetViewportHeight });
 
     await page.setContent(finalHtml, {
       waitUntil: "networkidle0",
       timeout: 90000,
     });
+
+    // Auto-fit wide tables so no columns are ever cut off on the left
+    const autoDetectedWide = await page.evaluate((vw) => {
+      const body = document.body;
+      const htmlEl = document.documentElement;
+      if (!body) return false;
+      const maxScrollW = Math.max(body.scrollWidth || 0, htmlEl ? htmlEl.scrollWidth || 0 : 0);
+      if (maxScrollW > vw + 12) {
+        const ratio = Math.max(0.62, (vw - 16) / maxScrollW);
+        body.style.zoom = String(ratio);
+        return maxScrollW > 900;
+      }
+      return false;
+    }, targetViewportWidth);
+
+    if (!options.forceOrientation && autoDetectedWide) {
+      isLandscape = true;
+    }
+
+    const { forceOrientation, ...cleanOptions } = options;
     const pdfOptions = {
       format: "A4",
       printBackground: true,
-      ...options,
+      ...cleanOptions,
+      landscape: isLandscape,
       timeout: 90000,
     };
     const pdf = Buffer.from(await page.pdf(pdfOptions));

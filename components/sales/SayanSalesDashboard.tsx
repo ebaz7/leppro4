@@ -17,6 +17,7 @@ import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
 import { getServerHost, apiCall } from '../../services/apiService';
+import { printHtmlInPage, PdfOrientationSetting } from '../../utils/pdfGenerator';
 import { AiSayanReportModal } from '../AiSayanReportModal';
 import { SmartBotRecipientPicker } from '../SmartBotRecipientPicker';
 
@@ -248,6 +249,9 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState<boolean>(false);
   const [customerFilterSearchQuery, setCustomerFilterSearchQuery] = useState<string>('');
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  // PDF & Print Orientation Setting ('auto' | 'landscape' | 'portrait')
+  const [pdfOrientationMode, setPdfOrientationMode] = useState<PdfOrientationSetting>('auto');
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1189,8 +1193,11 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
     const filterSummary = selectedCustomer !== 'all' ? ('خریدار: ' + selectedCustomer) : '';
     const searchSummary = searchQuery ? ('جستجو: ' + searchQuery) : '';
 
+    const isLandscape = pdfOrientationMode === 'landscape' || (pdfOrientationMode === 'auto' && (compareMode || activeTab === 'items' || activeTab === 'invoices'));
+    const orientation: 'portrait' | 'landscape' = isLandscape ? 'landscape' : 'portrait';
+
     const commonPrintStyles = `
-      @page { margin: 7mm 8mm; }
+      @page { size: A4 ${isLandscape ? 'landscape' : 'portrait'}; margin: ${isLandscape ? '6mm 7mm' : '7mm 8mm'}; }
       * {
         box-sizing: border-box;
         -webkit-print-color-adjust: exact !important;
@@ -1198,7 +1205,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
       }
       body {
         font-family: Tahoma, Vazirmatn, Arial, sans-serif;
-        padding: 8px;
+        padding: 6px;
         margin: 0;
         background: #ffffff;
         color: #000000 !important;
@@ -1207,8 +1214,8 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
       }
       .header {
         border-bottom: 2.5px solid #000000;
-        padding-bottom: 10px;
-        margin-bottom: 12px;
+        padding-bottom: 8px;
+        margin-bottom: 10px;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -1216,54 +1223,56 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
       .kpi-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
-        gap: 8px;
-        margin-bottom: 12px;
+        gap: 6px;
+        margin-bottom: 10px;
       }
       .kpi-grid-6 {
         display: grid;
         grid-template-columns: repeat(6, 1fr);
-        gap: 8px;
-        margin-bottom: 12px;
+        gap: 6px;
+        margin-bottom: 10px;
       }
       .kpi-card {
         border: 1.5px solid #000000;
-        padding: 7px 8px;
+        padding: 6px 7px;
         border-radius: 6px;
         background: #f8fafc;
         text-align: center;
       }
       .kpi-title {
-        font-size: 10px;
+        font-size: ${isLandscape ? '9.5px' : '10px'};
         color: #000000 !important;
         font-weight: 900;
       }
       .kpi-val {
-        font-size: 12.5px;
+        font-size: ${isLandscape ? '11.5px' : '12.5px'};
         font-weight: 900;
         color: #000000 !important;
-        margin-top: 3px;
+        margin-top: 2px;
         font-family: Tahoma, monospace;
       }
       table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 8px;
-        font-size: 10.5px;
+        margin-top: 6px;
+        font-size: ${isLandscape ? '9.5px' : '10.5px'};
         border: 2px solid #000000;
         color: #000000 !important;
+        table-layout: auto;
       }
       th, td {
         border: 1.2px solid #000000 !important;
-        padding: 5px 6px;
+        padding: ${isLandscape ? '3.5px 4.5px' : '5px 6px'};
         text-align: center;
         color: #000000 !important;
         font-weight: 700;
+        white-space: nowrap;
       }
       th {
         background-color: #e2e8f0 !important;
         color: #000000 !important;
         font-weight: 900 !important;
-        font-size: 10.5px;
+        font-size: ${isLandscape ? '9.5px' : '10.5px'};
         border-bottom: 2px solid #000000 !important;
       }
       tr:nth-child(even) td {
@@ -1271,7 +1280,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
       }
       .total td {
         font-weight: 900 !important;
-        font-size: 11px;
+        font-size: ${isLandscape ? '10px' : '11px'};
         background: #e2e8f0 !important;
         color: #000000 !important;
         border-top: 2px solid #000000 !important;
@@ -1282,19 +1291,19 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
     const buildHeaderHtml = (headerTitle: string, extraNote: string = '') => `
       <div class="header">
         <div style="flex: 1; text-align: right;">
-          <h1 style="font-size: 16px; margin: 0 0 6px 0; font-weight: 900; color: #000000;">${headerTitle}</h1>
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-            <span style="background-color: #e2e8f0; color: #000000; border: 1.5px solid #000000; padding: 3px 10px; border-radius: 6px; font-weight: 900; font-size: 11px; display: inline-block;">
+          <h1 style="font-size: ${isLandscape ? '14px' : '16px'}; margin: 0 0 4px 0; font-weight: 900; color: #000000;">${headerTitle}</h1>
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+            <span style="background-color: #e2e8f0; color: #000000; border: 1.5px solid #000000; padding: 2px 8px; border-radius: 6px; font-weight: 900; font-size: 10px; display: inline-block;">
               بازه زمانی گزارش: از ${dateFrom} تا ${dateTo}
             </span>
-            ${extraNote ? `<span style="background-color: #ffffff; color: #000000; padding: 3px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 900; border: 1.2px solid #000000;">${extraNote}</span>` : ''}
-            ${filterSummary ? `<span style="background-color: #ffffff; color: #000000; padding: 3px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 900; border: 1.2px solid #000000;">${filterSummary}</span>` : ''}
-            ${searchSummary ? `<span style="background-color: #ffffff; color: #000000; padding: 3px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 900; border: 1.2px solid #000000;">${searchSummary}</span>` : ''}
+            ${extraNote ? `<span style="background-color: #ffffff; color: #000000; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 900; border: 1.2px solid #000000;">${extraNote}</span>` : ''}
+            ${filterSummary ? `<span style="background-color: #ffffff; color: #000000; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 900; border: 1.2px solid #000000;">${filterSummary}</span>` : ''}
+            ${searchSummary ? `<span style="background-color: #ffffff; color: #000000; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 900; border: 1.2px solid #000000;">${searchSummary}</span>` : ''}
           </div>
         </div>
-        <div style="text-align: left; font-size: 10px; color: #000000; font-weight: 800; line-height: 1.6; border-right: 2px solid #000000; padding-right: 12px; margin-right: 12px;">
+        <div style="text-align: left; font-size: 9.5px; color: #000000; font-weight: 800; line-height: 1.5; border-right: 2px solid #000000; padding-right: 10px; margin-right: 10px;">
           <div>زمان چاپ گزارش: <strong style="color: #000000; font-weight: 900;">${printDateStr}</strong> - ${printTimeStr}</div>
-          <div style="font-size: 9.5px; color: #000000; font-weight: 800; margin-top: 2px;">سامانه جامع سایان ERP</div>
+          <div style="font-size: 9px; color: #000000; font-weight: 800; margin-top: 2px;">سامانه جامع سایان ERP</div>
         </div>
       </div>
     `;
@@ -1313,7 +1322,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
         '<table><thead><tr><th style="width: 35px;">#</th><th style="text-align: right;">نام گروه اصلی کالا</th><th>وزن خالص (ک‌گ)</th><th>فروش خالص (ریال)</th><th>فی میانگین (ریال/ک‌گ)</th><th>سهم %</th></tr></thead><tbody>' +
         processedMetrics.categoryList.map((cat, idx) => '<tr><td>' + (idx + 1) + '</td><td style="text-align: right; font-weight: 900;">' + cat.name + '</td><td>' + formatWeight(cat.netWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(cat.netAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(cat.netFee || (cat.netWgt > 0 ? cat.netAmt / cat.netWgt : 0)) + '</td><td>' + cat.sharePct.toFixed(1) + '%</td></tr>').join('') +
         '<tr class="total"><td colspan="2" style="text-align: right;">جمع کل</td><td>' + formatWeight(processedMetrics.rangeNetWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(processedMetrics.rangeNetAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(processedMetrics.rangeNetFee) + '</td><td>100%</td></tr></tbody></table></body></html>';
-      return { htmlContent, title, filename };
+      return { htmlContent, title, filename, orientation };
     }
 
     if (activeTab === 'items') {
@@ -1339,7 +1348,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
           return '<tr><td>' + (idx + 1) + '</td><td style="font-family: Tahoma, monospace; font-weight: 900;">' + (item.itemCode || '-') + '</td><td style="text-align: right; font-weight: 900;">' + item.itemName + '</td><td style="font-weight: 800;">' + (item.majorCategory || '-') + '</td><td>' + (item.netQty || 0).toLocaleString('fa-IR') + '</td><td>' + formatWeight(itemWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(item.netAmt || 0) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(itemFee) + '</td></tr>';
         }).join('') +
         '<tr class="total"><td colspan="4" style="text-align: right;">جمع کل اقلام</td><td>' + totQty.toLocaleString('fa-IR') + '</td><td>' + formatWeight(totWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(totAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(avgFee) + '</td></tr></tbody></table></body></html>';
-      return { htmlContent, title, filename };
+      return { htmlContent, title, filename, orientation };
     }
 
     if (activeTab === 'invoices') {
@@ -1363,7 +1372,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
           return '<tr><td>' + (idx + 1) + '</td><td style="font-weight: 900; font-family: Tahoma, monospace;">' + inv.invoiceNum + '</td><td style="font-family: Tahoma, monospace; font-weight: 800;">' + (inv.date || inv.invoiceDate || '-') + '</td><td style="text-align: right; font-weight: 900;">' + (inv.customerName || 'مشتری متفرقه') + '</td><td style="font-weight: 800;">' + (inv.city || '-') + '</td><td>' + formatWeight(inv.netWgt || 0) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(rowFee) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(inv.netAmt || 0) + '</td></tr>';
         }).join('') +
         '<tr class="total"><td colspan="5" style="text-align: right;">جمع کل فاکتورها</td><td>' + formatWeight(totWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(avgInvFee) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(totAmt) + '</td></tr></tbody></table></body></html>';
-      return { htmlContent, title, filename };
+      return { htmlContent, title, filename, orientation };
     }
 
     if (activeTab === 'customers') {
@@ -1386,7 +1395,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
         '<table><thead><tr><th style="width: 32px;">#</th><th style="text-align: right;">نام خریدار / مشتری</th><th>تعداد فاکتور</th><th>وزن خرید (ک‌گ)</th><th>ارزش کل خرید (ریال)</th><th>فی میانگین (ریال/ک‌گ)</th></tr></thead><tbody>' +
         custs.map((c: any, idx) => '<tr><td>' + (idx + 1) + '</td><td style="text-align: right; font-weight: 900;">' + c.customerName + '</td><td>' + c.invoiceCount + '</td><td>' + formatWeight(c.netWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(c.netAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(c.netFee || c.avgFee || (c.netWgt > 0 ? c.netAmt / c.netWgt : 0)) + '</td></tr>').join('') +
         '<tr class="total"><td colspan="2" style="text-align: right;">جمع کل مشتریان</td><td>' + totInvoices.toLocaleString('fa-IR') + '</td><td>' + formatWeight(totWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(totAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(avgFee) + '</td></tr></tbody></table></body></html>';
-      return { htmlContent, title, filename };
+      return { htmlContent, title, filename, orientation };
     }
 
     if (compareMode && comparisonMetrics) {
@@ -1415,7 +1424,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
           return '<tr><td>' + (idx + 1) + '</td><td style="text-align: right; font-weight: 900;">' + (r.itemName || r.catName || 'سایر') + '</td><td>' + formatWeight(r.netWgtA) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(r.netAmtA) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(feeA) + '</td><td>' + formatWeight(r.netWgtB) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(r.netAmtB) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(feeB) + '</td><td>' + wPct + '%</td><td>' + aPct + '%</td><td>' + fPct + '%</td></tr>';
         }).join('') +
         '<tr class="total"><td colspan="2" style="text-align: right;">جمع کل</td><td>' + formatWeight(comparisonMetrics.netWgtA) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(comparisonMetrics.netAmtA) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(comparisonMetrics.avgFeeA) + '</td><td>' + formatWeight(comparisonMetrics.netWgtB) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(comparisonMetrics.netAmtB) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(comparisonMetrics.avgFeeB) + '</td><td>' + comparisonMetrics.wgtGrowthPct.toFixed(1) + '%</td><td>' + comparisonMetrics.amtGrowthPct.toFixed(1) + '%</td><td>' + comparisonMetrics.feeGrowthPct.toFixed(1) + '%</td></tr></tbody></table></body></html>';
-      return { htmlContent: docHtml, title, filename };
+      return { htmlContent: docHtml, title, filename, orientation };
     }
 
     const title = 'داشبورد مدیریتی و خلاصه فروش سایان ERP';
@@ -1424,12 +1433,12 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
     const docHtml = '<html dir="rtl" lang="fa"><head><meta charset="utf-8"><title>' + title + ' (' + dateFrom + ' تا ' + dateTo + ')</title><style>' + commonPrintStyles + '</style></head><body>' +
       buildHeaderHtml(title) +
       '<div class="kpi-grid"><div class="kpi-card"><div class="kpi-title">فروش خالص بازه</div><div class="kpi-val">' + formatMoney(processedMetrics.rangeNetAmt) + ' ریال</div></div><div class="kpi-card"><div class="kpi-title">وزن خالص بازه</div><div class="kpi-val">' + formatWeight(processedMetrics.rangeNetWgt) + ' ک‌گ</div></div><div class="kpi-card"><div class="kpi-title">فی میانگین کل</div><div class="kpi-val">' + formatMoney(processedMetrics.rangeNetFee) + ' ریال/ک‌گ</div></div><div class="kpi-card"><div class="kpi-title">تعداد فاکتورها</div><div class="kpi-val">' + processedMetrics.invoiceCount + ' عدد</div></div></div><h2 style="font-size: 13px; font-weight: 900; color: #000000; margin: 12px 0 6px 0;">جدول عملکرد گروههای اصلی کالا (15 گروه)</h2><table><thead><tr><th>ردیف</th><th style="text-align: right;">نام گروه اصلی</th><th>وزن خالص (ک‌گ)</th><th>فروش خالص (ریال)</th><th>فی میانگین (ریال/ک‌گ)</th><th>سهم %</th></tr></thead><tbody>' + processedMetrics.categoryList.map((cat, idx) => '<tr><td>' + (idx + 1) + '</td><td style="text-align: right; font-weight: 900;">' + cat.name + '</td><td>' + formatWeight(cat.netWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(cat.netAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace; font-weight: 900;">' + formatMoney(cat.netFee || (cat.netWgt > 0 ? cat.netAmt / cat.netWgt : 0)) + '</td><td>' + cat.sharePct.toFixed(1) + '%</td></tr>').join('') + '<tr class="total"><td colspan="2" style="text-align: right;">جمع کل</td><td>' + formatWeight(processedMetrics.rangeNetWgt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(processedMetrics.rangeNetAmt) + '</td><td style="text-align: left; font-family: Tahoma, monospace;">' + formatMoney(processedMetrics.rangeNetFee) + '</td><td>100%</td></tr></tbody></table></body></html>';
-    return { htmlContent: docHtml, title, filename };
+    return { htmlContent: docHtml, title, filename, orientation };
   };
 
-    const handleShareCurrentTabToChat = () => {
+  const handleShareCurrentTabToChat = () => {
     if (!onShareToChat) return;
-    const { htmlContent, title, filename } = getHtmlForCurrentTab();
+    const { htmlContent, title, filename, orientation } = getHtmlForCurrentTab();
     const customGenerator = async () => {
       let filterNote = selectedCustomer !== "all" ? (" (خریدار: " + selectedCustomer + ")") : "";
       let searchNote = searchQuery ? (" (جستجو: " + searchQuery + ")") : "";
@@ -1438,23 +1447,14 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
 • مجموع وزن خالص: ${formatWeight(processedMetrics.rangeNetWgt)} کیلوگرم
 • فی میانگین کل: ${formatMoney(processedMetrics.rangeNetFee)} ریال/کیلوگرم
 📄 فایل PDF تفکیکی گزارش پیوست گردید.`;
-      return { htmlContent, pdfFilename: filename, defaultMsg };
+      return { htmlContent, pdfFilename: filename, defaultMsg, orientation };
     };
     onShareToChat(customGenerator, title);
   };
 
   const handlePrint = () => {
-    const { htmlContent } = getHtmlForCurrentTab();
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      printWindow.document.write(htmlContent);
-      printWindow.document.close();
-      printWindow.focus();
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
-    }
+    const { htmlContent, filename, orientation } = getHtmlForCurrentTab();
+    printHtmlInPage(htmlContent, orientation, filename);
   };
   // ----------------------------------------------------------------------
   // DOWNLOAD COMPARATIVE PDF
@@ -2070,11 +2070,45 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
               <span>خروجی CSV</span>
             </button>
 
+            {/* Orientation Pill Selector */}
+            <div className="flex items-center bg-white/10 border border-white/20 rounded-xl p-0.5 text-xs text-white">
+              <button
+                type="button"
+                onClick={() => setPdfOrientationMode('auto')}
+                className={`px-2 py-1 rounded-lg text-[10.5px] font-bold transition-all ${
+                  pdfOrientationMode === 'auto' ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-200 hover:text-white'
+                }`}
+                title="چیدمان خودکار (هوشمند بر اساس عرض جدول)"
+              >
+                ⚡ خودکار
+              </button>
+              <button
+                type="button"
+                onClick={() => setPdfOrientationMode('landscape')}
+                className={`px-2 py-1 rounded-lg text-[10.5px] font-bold transition-all ${
+                  pdfOrientationMode === 'landscape' ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-200 hover:text-white'
+                }`}
+                title="چیدمان افقی (Landscape - مناسب جدول‌های عریض مقایسه‌ای)"
+              >
+                ↔️ افقی
+              </button>
+              <button
+                type="button"
+                onClick={() => setPdfOrientationMode('portrait')}
+                className={`px-2 py-1 rounded-lg text-[10.5px] font-bold transition-all ${
+                  pdfOrientationMode === 'portrait' ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-200 hover:text-white'
+                }`}
+                title="چیدمان عمودی (Portrait)"
+              >
+                ↕️ عمودی
+              </button>
+            </div>
+
             <button
               onClick={handlePrint}
-              className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 border border-white/20 backdrop-blur-md transition-all cursor-pointer"
+              className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs rounded-xl flex items-center gap-1.5 border border-white/20 backdrop-blur-md shadow-md transition-all cursor-pointer"
             >
-              <Printer className="w-4 h-4 text-blue-300" />
+              <Printer className="w-4 h-4 text-blue-200" />
               <span>چاپ / PDF</span>
             </button>
 

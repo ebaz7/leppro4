@@ -250,21 +250,29 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     };
 
     const getActiveFiscalYearLabel = () => {
+        const today = new Date();
+        const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
         if (settings?.fiscalYears && Array.isArray(settings.fiscalYears)) {
             const found = settings.fiscalYears.find((y: any) => y.id === settings.activeFiscalYearId);
             if (found && found.label) {
                 const match = found.label.match(/\d+/);
-                if (match) return parseInt(match[0], 10);
+                if (match) {
+                    const parsedYear = parseInt(match[0], 10);
+                    // Prevent legacy hardcoded 'fy_1404' default from overriding live Sayan year 1405 unless user explicitly picked it
+                    if (parsedYear === 1404 && jToday.jy === 1405 && settings.activeFiscalYearId === 'fy_1404') {
+                        return jToday.jy;
+                    }
+                    return parsedYear;
+                }
             }
         }
-        const today = new Date();
-        const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
         return jToday.jy;
     };
 
     const getDefaultEndDate = (activeYear: number, jToday: any) => {
         if (jToday.jy > activeYear) {
-            return `${activeYear}/12/29`;
+            const endDay = jalaali.isLeapJalaaliYear(activeYear) ? '30' : '29';
+            return `${activeYear}/12/${endDay}`;
         } else if (jToday.jy < activeYear) {
             return `${activeYear}/01/01`;
         } else {
@@ -273,20 +281,30 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     };
 
     const getInitialDateRange = () => {
+        const today = new Date();
+        const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
+        const activeYear = getActiveFiscalYearLabel();
+        const todayStr = getDefaultEndDate(activeYear, jToday);
+
         try {
             const savedFrom = typeof window !== 'undefined' ? localStorage.getItem('sayan_default_date_from') : null;
             const savedTo = typeof window !== 'undefined' ? localStorage.getItem('sayan_default_date_to') : null;
-            if (savedFrom && savedTo && /^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(savedFrom) && /^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(savedTo)) {
+            const savedOn = typeof window !== 'undefined' ? localStorage.getItem('sayan_default_date_saved_on') : null;
+            // Only use saved custom range if it was explicitly saved today and matches the active fiscal year
+            if (
+                savedFrom &&
+                savedTo &&
+                savedOn === todayStr &&
+                /^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(savedFrom) &&
+                /^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(savedTo) &&
+                savedTo.startsWith(String(activeYear))
+            ) {
                 return { from: savedFrom, to: savedTo };
             }
         } catch {}
 
-        const today = new Date();
-        const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
-        const activeYear = getActiveFiscalYearLabel();
-
         const from = `${activeYear}/01/01`;
-        const to = getDefaultEndDate(activeYear, jToday);
+        const to = todayStr;
         return { from, to };
     };
 
@@ -626,15 +644,41 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         }
     };
 
+    const normalizePersianText = (s: string) => {
+        if (!s) return '';
+        return String(s)
+            .replace(/[\u200c\u00a0]/g, ' ')
+            .replace(/ي/g, 'ی')
+            .replace(/ك/g, 'ک')
+            .replace(/[\u0622\u0623\u0625]/g, 'ا')
+            .replace(/\s+/g, ' ')
+            .trim();
+    };
+
+    const resolveSayanPeriodCode = (dTo?: string, dFrom?: string) => {
+        const targetTo = dTo || dateTo;
+        const targetFrom = dFrom || dateFrom;
+        const parsedTo = targetTo ? parseShamsiParts(targetTo) : null;
+        const parsedFrom = targetFrom ? parseShamsiParts(targetFrom) : null;
+        const year = (parsedTo && parsedTo.jy >= 1402)
+            ? parsedTo.jy
+            : ((parsedFrom && parsedFrom.jy >= 1402) ? parsedFrom.jy : getActiveFiscalYearLabel());
+        return (year && year >= 1402) ? String(year - 1401) : '4';
+    };
+
     const parseTafsiliRaw = (raw: string) => {
         if (!raw) return { moein: '', code: '' };
-        const parts = raw.split('-');
-        const personLayers = ['11', '51', '52', '53', '54', '55', '56', '57', '58', '59'];
+        const str = String(raw).trim();
+        const parts = str.split('-');
+        const personLayers = ['11', '31', '51', '52', '53', '54', '55', '56', '57', '58', '59', '14', '15', '16'];
+        // Check first segment primarily (since in Sayan person accounts have the person at Level 1)
         for (const part of parts) {
-            const match = part.match(/^(\d+):(\d+)/);
+            const match = part.trim().match(/^(\d+):(\d+)/);
             if (match) {
                 const group = match[1];
                 const code = match[2];
+                // Never treat a cashbox (12) or bank (13) tafsili segment as a person code
+                if (group === '12' || group === '13') continue;
                 if (personLayers.includes(group) || group.startsWith('11') || group.startsWith('31') || group.startsWith('51') || group.startsWith('52')) {
                     return {
                         moein: group,
@@ -643,33 +687,42 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 }
             }
         }
-        const match = raw.match(/(\d+):(\d+)/);
-        if (match) {
+        const match = str.match(/^(\d+):(\d+)/);
+        if (match && match[1] !== '12' && match[1] !== '13') {
             return {
                 moein: match[1],
                 code: match[2]
             };
         }
+        if (/^\d+$/.test(str)) {
+            return { moein: str.startsWith('11') ? '11' : (str.startsWith('31') ? '31' : ''), code: str };
+        }
         return { moein: '', code: '' };
     };
 
     useEffect(() => {
-        // Initialize / sync date range based on active fiscal year or persistent user selection
+        // Initialize / sync date range based on active fiscal year across Windows Desktop, Web, and Mobile
         const today = new Date();
         const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
         const activeYear = getActiveFiscalYearLabel();
+        const todayStr = getDefaultEndDate(activeYear, jToday);
         
         const savedFrom = localStorage.getItem('sayan_default_date_from');
         const savedTo = localStorage.getItem('sayan_default_date_to');
+        const savedOn = localStorage.getItem('sayan_default_date_saved_on');
         
-        // Use user's saved date if valid; otherwise default cleanly to active fiscal year range
-        let initialFrom = savedFrom;
-        let initialTo = savedTo;
-        if (!initialFrom || !/^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(initialFrom)) {
-            initialFrom = `${activeYear}/01/01`;
-        }
-        if (!initialTo || !/^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(initialTo)) {
-            initialTo = getDefaultEndDate(activeYear, jToday);
+        let initialFrom = `${activeYear}/01/01`;
+        let initialTo = todayStr;
+        if (
+            savedFrom &&
+            savedTo &&
+            savedOn === todayStr &&
+            /^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(savedFrom) &&
+            /^\d{2,4}\/\d{1,2}\/\d{1,2}$/.test(savedTo) &&
+            savedTo.startsWith(String(activeYear))
+        ) {
+            initialFrom = savedFrom;
+            initialTo = savedTo;
         }
         
         setDateFrom(initialFrom);
@@ -761,13 +814,14 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             toast.success(`بازه زمانی به فصل جاری (${quarterName}: ${startStr} تا ${endStr}) تغییر یافت.`);
         } else if (mode === 'default') {
             const activeYear = getActiveFiscalYearLabel();
-            const savedFrom = localStorage.getItem('sayan_default_date_from');
-            const savedTo = localStorage.getItem('sayan_default_date_to');
-            const initialFrom = savedFrom || `${activeYear}/01/01`;
-            const initialTo = savedTo || getDefaultEndDate(activeYear, jToday);
+            const initialFrom = `${activeYear}/01/01`;
+            const initialTo = getDefaultEndDate(activeYear, jToday);
+            localStorage.removeItem('sayan_default_date_from');
+            localStorage.removeItem('sayan_default_date_to');
+            localStorage.removeItem('sayan_default_date_saved_on');
             setDateFrom(initialFrom);
             setDateTo(initialTo);
-            toast.success(`بازه زمانی به حالت پیش‌فرض بازنشانی شد.`);
+            toast.success(`بازه زمانی به سال مالی جاری (${initialFrom} تا ${initialTo}) بازنشانی شد.`);
         }
     };
 
@@ -776,9 +830,14 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             toast.error('بازه معتبری برای ذخیره پیش‌فرض وجود ندارد.');
             return;
         }
+        const today = new Date();
+        const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
+        const activeYear = getActiveFiscalYearLabel();
+        const todayStr = getDefaultEndDate(activeYear, jToday);
         localStorage.setItem('sayan_default_date_from', dateFrom);
         localStorage.setItem('sayan_default_date_to', dateTo);
-        toast.success(`بازه ${dateFrom} تا ${dateTo} با موفقیت به عنوان پیش‌فرض ثبت گردید.`);
+        localStorage.setItem('sayan_default_date_saved_on', todayStr);
+        toast.success(`بازه ${dateFrom} تا ${dateTo} با موفقیت به عنوان پیش‌فرض امروز ثبت گردید.`);
     };
 
     const formatMoney = (val: number) => new Intl.NumberFormat('fa-IR').format(Math.round(Math.abs(val)));
@@ -919,17 +978,17 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         try {
             const sql = `
                 SELECT 
-                    t7.Field_003 as Code, 
-                    t7.Field_006 as Name, 
-                    t7.Field_005 as PersonCode,
-                    t7.Field_004 as TafsiliGroup,
-                    g.Field_032 as Categories,
-                    g.Field_009 as NationalId,
-                    g.Field_015 as Mobile,
-                    g.Field_036 as Sheba
+                    RTRIM(LTRIM(t7.Field_003)) as Code, 
+                    RTRIM(LTRIM(t7.Field_006)) as Name, 
+                    RTRIM(LTRIM(t7.Field_005)) as PersonCode,
+                    RTRIM(LTRIM(t7.Field_004)) as TafsiliGroup,
+                    RTRIM(LTRIM(g.Field_032)) as Categories,
+                    RTRIM(LTRIM(g.Field_009)) as NationalId,
+                    RTRIM(LTRIM(g.Field_015)) as Mobile,
+                    RTRIM(LTRIM(g.Field_036)) as Sheba
                 FROM ACT_TBL_007 t7 WITH (NOLOCK)
-                LEFT JOIN GNR_TBL_001 g WITH (NOLOCK) ON t7.Field_005 = g.Field_003
-                WHERE t7.Field_004 IN ('11', '51', '52', '53', '54', '55', '56', '57', '58', '59') 
+                LEFT JOIN GNR_TBL_001 g WITH (NOLOCK) ON RTRIM(LTRIM(t7.Field_005)) = RTRIM(LTRIM(g.Field_003))
+                WHERE t7.Field_004 IN ('11', '31', '51', '52', '53', '54', '55', '56', '57', '58', '59') 
                    OR g.Field_003 IS NOT NULL
                    OR t7.Field_003 LIKE '11%' 
                    OR t7.Field_003 LIKE '31%'
@@ -951,26 +1010,33 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     const fetchTraz = async () => {
         setIsLoading(true);
         try {
-            const activeYear = getActiveFiscalYearLabel();
-            // In Sayan ERP, PeriodCode for 1405 is '4', 1404 is '3', 1403 is '2'
-            const periodCode = (activeYear && activeYear >= 1402) ? String(activeYear - 1401) : '4';
+            const periodCode = resolveSayanPeriodCode(dateTo, dateFrom);
 
             const gregFrom = dateFrom ? jalaliToGregorianStr(dateFrom) : '';
             const gregTo = dateTo ? jalaliToGregorianStr(dateTo) : '';
 
-            const dateToFilter = gregTo ? `AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'` : '';
-            const periodBedExpr = (gregFrom && gregTo) 
-                ? `SUM(CASE WHEN t8.Field_008 >= '${gregFrom}T00:00:00.000Z' AND t8.Field_008 <= '${gregTo}T23:59:59.000Z' THEN CAST(t9.Field_009 AS FLOAT) ELSE 0 END)`
-                : `SUM(CAST(t9.Field_009 AS FLOAT))`;
-            const periodBesExpr = (gregFrom && gregTo)
-                ? `SUM(CASE WHEN t8.Field_008 >= '${gregFrom}T00:00:00.000Z' AND t8.Field_008 <= '${gregTo}T23:59:59.000Z' THEN CAST(t9.Field_010 AS FLOAT) ELSE 0 END)`
-                : `SUM(CAST(t9.Field_010 AS FLOAT))`;
+            // Check if dateTo is today or end of fiscal year: if so, do not cut off same-year vouchers due to SQL Server time/timezone
+            const today = new Date();
+            const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
+            const todayShamsiStr = `${jToday.jy}/${String(jToday.jm).padStart(2, '0')}/${String(jToday.jd).padStart(2, '0')}`;
+            const isHistoricalCutoff = Boolean(gregTo && dateTo && dateTo < todayShamsiStr && !dateTo.endsWith('/12/29') && !dateTo.endsWith('/12/30'));
 
+            const dateToFilter = isHistoricalCutoff ? `AND CAST(t8.Field_008 AS DATE) <= '${gregTo}'` : '';
+            const periodBedExpr = (gregFrom && gregTo) 
+                ? `SUM(CASE WHEN CAST(t8.Field_008 AS DATE) >= '${gregFrom}' AND CAST(t8.Field_008 AS DATE) <= '${gregTo}' THEN CAST(ISNULL(t9.Field_009, 0) AS FLOAT) ELSE 0 END)`
+                : `SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT))`;
+            const periodBesExpr = (gregFrom && gregTo)
+                ? `SUM(CASE WHEN CAST(t8.Field_008 AS DATE) >= '${gregFrom}' AND CAST(t8.Field_008 AS DATE) <= '${gregTo}' THEN CAST(ISNULL(t9.Field_010, 0) AS FLOAT) ELSE 0 END)`
+                : `SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT))`;
+
+            // IMPORTANT: Exclude Cashbox (12:) and Bank (13:) Cheque Vault subledger legs (Moein 102/103)
+            // When a customer gives a cheque, Sayan credits Moein 101 (11:person) and debits Moein 102 (11:person-12:cashbox).
+            // Including Moein 102/103 or -12:/-13: rows would add the cashbox's debit back to the customer, canceling out their payment!
             const sql = `
                 SELECT 
-                    t9.Field_015 as TafsiliRaw,
-                    SUM(CAST(t9.Field_009 AS FLOAT)) as TotalBed,
-                    SUM(CAST(t9.Field_010 AS FLOAT)) as TotalBes,
+                    ISNULL(NULLIF(RTRIM(LTRIM(t9.Field_015)), ''), RTRIM(LTRIM(t9.Field_014))) as TafsiliRaw,
+                    SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as TotalBed,
+                    SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as TotalBes,
                     ${periodBedExpr} as PeriodBed,
                     ${periodBesExpr} as PeriodBes
                 FROM ACT_TBL_009 t9 WITH (NOLOCK)
@@ -978,6 +1044,13 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 WHERE t9.Field_003 = '${periodCode}'
                   AND ISNULL(t8.Field_009, 0) <> 4
                   AND t9.Field_005 <> '9'
+                  AND NOT (
+                      (t9.Field_005 = '1' AND t9.Field_006 = '3' AND t9.Field_007 IN ('102', '103'))
+                      OR t9.Field_015 LIKE '12:%'
+                      OR t9.Field_015 LIKE '13:%'
+                      OR t9.Field_015 LIKE '%-12:%'
+                      OR t9.Field_015 LIKE '%-13:%'
+                  )
                   ${dateToFilter}
                   AND (
                       t9.Field_015 LIKE '11:%' OR t9.Field_015 LIKE '%-11:%' OR
@@ -990,9 +1063,10 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                       t9.Field_015 LIKE '57:%' OR t9.Field_015 LIKE '%-57:%' OR
                       t9.Field_015 LIKE '58:%' OR t9.Field_015 LIKE '%-58:%' OR
                       t9.Field_015 LIKE '59:%' OR t9.Field_015 LIKE '%-59:%' OR
-                      t9.Field_015 LIKE '31:%' OR t9.Field_015 LIKE '%-31:%'
+                      t9.Field_015 LIKE '31:%' OR t9.Field_015 LIKE '%-31:%' OR
+                      t9.Field_014 LIKE '11%' OR t9.Field_014 LIKE '31%' OR t9.Field_014 LIKE '51%'
                   )
-                GROUP BY t9.Field_015
+                GROUP BY ISNULL(NULLIF(RTRIM(LTRIM(t9.Field_015)), ''), RTRIM(LTRIM(t9.Field_014)))
             `;
 
             // Run both Sayan queries in parallel to cut network latency in half
@@ -1001,53 +1075,84 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 runSayanQuery(sql)
             ]);
 
-            // Build O(1) lookup map for tafsilis to avoid 4M+ linear .find() scans
+            // Build O(1) lookup map for tafsilis (including PersonCode & 11+PersonCode aliases like 1025 / 11025 / 111025 for ولی مهدویان)
             const tafMap = new Map<string, any>();
+            const personCodePrimaryMap = new Map<string, any>();
             (activeTafsilis || []).forEach((t: any) => {
-                if (t.Code) tafMap.set(String(t.Code).trim(), t);
-                if (t.TafsiliCode) tafMap.set(String(t.TafsiliCode).trim(), t);
-                if (t.PersonCode && !tafMap.has(String(t.PersonCode).trim())) {
-                    tafMap.set(String(t.PersonCode).trim(), t);
+                const c = String(t.Code || '').trim();
+                const pCode = String(t.PersonCode || '').trim();
+                if (c) {
+                    // Prefer group '11' as the canonical primary tafsili record when a person has multiple records
+                    if (!tafMap.has(c) || String(t.TafsiliGroup || '').trim() === '11') {
+                        tafMap.set(c, t);
+                    }
+                }
+                if (pCode) {
+                    if (!personCodePrimaryMap.has(pCode) || String(t.TafsiliGroup || '').trim() === '11') {
+                        personCodePrimaryMap.set(pCode, t);
+                    }
                 }
             });
+            personCodePrimaryMap.forEach((t, pCode) => {
+                if (!tafMap.has(pCode)) tafMap.set(pCode, t);
+                if (!tafMap.has('11' + pCode)) tafMap.set('11' + pCode, t);
+                const c = String(t.Code || '').trim();
+                if (c && !tafMap.has('11' + c)) tafMap.set('11' + c, t);
+            });
 
-            // Map Sayan codes to names and group them by unique customer code to prevent any duplicates
+            // Map Sayan codes to canonical person records so split codes (e.g., 11025 and 111025 for ولی مهدویان) are unified 100%
             const groupedMap = new Map<string, any>();
             rawData.forEach((row: any) => {
                 const parsed = parseTafsiliRaw(row.TafsiliRaw);
-                const code = parsed.code;
-                if (!code) return;
+                const rawCode = String(parsed.code || '').trim();
+                if (!rawCode) return;
 
-                const tafsili = tafMap.get(code) || (code.length > 2 ? tafMap.get(code.substring(2)) : undefined);
-                const name = tafsili ? tafsili.Name : `کد اشخاص ${code}`;
-                const moein = parsed.moein || (tafsili?.TafsiliGroup ? String(tafsili.TafsiliGroup) : (code.startsWith('11') ? '11' : (code.startsWith('31') ? '31' : '')));
+                const tafsili =
+                    tafMap.get(rawCode) ||
+                    (rawCode.length > 2 ? tafMap.get(rawCode.substring(2)) : undefined) ||
+                    (rawCode.startsWith('1111') ? tafMap.get(rawCode.substring(2)) : undefined);
+
+                // Canonical code ensures all vouchers of the same person sum into a single unified balance
+                const canonicalCode = tafsili && tafsili.Code ? String(tafsili.Code).trim() : rawCode;
+                const name = tafsili ? String(tafsili.Name || '').trim() : `کد اشخاص ${canonicalCode}`;
+                const moein = parsed.moein || (tafsili?.TafsiliGroup ? String(tafsili.TafsiliGroup) : (canonicalCode.startsWith('11') ? '11' : (canonicalCode.startsWith('31') ? '31' : '')));
                 const categories = tafsili?.Categories || '';
-                const personCode = tafsili?.PersonCode || '';
-                const tafsiliGroup = tafsili?.TafsiliGroup || '';
+                const personCode = tafsili?.PersonCode ? String(tafsili.PersonCode).trim() : '';
+                const tafsiliGroup = tafsili?.TafsiliGroup ? String(tafsili.TafsiliGroup).trim() : '';
                 const bed = parseFloat(row.TotalBed || 0);
                 const bes = parseFloat(row.TotalBes || 0);
                 const periodBed = parseFloat(row.PeriodBed || 0);
                 const periodBes = parseFloat(row.PeriodBes || 0);
                 
-                if (groupedMap.has(code)) {
-                    const existing = groupedMap.get(code);
+                if (groupedMap.has(canonicalCode)) {
+                    const existing = groupedMap.get(canonicalCode);
                     existing.bed += bed;
                     existing.bes += bes;
                     existing.balance = existing.bed - existing.bes;
                     existing.periodBed += periodBed;
                     existing.periodBes += periodBes;
+                    if (!existing.relatedCodes.includes(rawCode)) existing.relatedCodes.push(rawCode);
+                    if (personCode && !existing.relatedCodes.includes(personCode)) existing.relatedCodes.push(personCode);
                     if (!existing.categories && categories) existing.categories = categories;
                     if (!existing.personCode && personCode) existing.personCode = personCode;
                     if (!existing.tafsiliGroup && tafsiliGroup) existing.tafsiliGroup = tafsiliGroup;
                     if (!existing.moein && moein) existing.moein = moein;
                 } else {
-                    groupedMap.set(code, {
-                        code,
+                    const relatedCodes = Array.from(new Set([
+                        canonicalCode,
+                        rawCode,
+                        personCode,
+                        personCode ? '11' + personCode : '',
+                        canonicalCode.startsWith('11') ? '11' + canonicalCode : ''
+                    ].filter(Boolean)));
+                    groupedMap.set(canonicalCode, {
+                        code: canonicalCode,
                         name,
                         moein,
                         categories,
                         personCode,
                         tafsiliGroup,
+                        relatedCodes,
                         bed,
                         bes,
                         balance: bed - bes,
@@ -1057,7 +1162,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 }
             });
             
-            const mapped = Array.from(groupedMap.values()).filter((r: any) => r.balance !== 0 || r.periodBed !== 0 || r.periodBes !== 0);
+            const mapped = Array.from(groupedMap.values()).filter((r: any) => Math.abs(r.balance) >= 1 || r.periodBed !== 0 || r.periodBes !== 0);
 
             setTrazData(mapped);
         } catch (err: any) {
@@ -1898,7 +2003,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
     // TAB 2: DETAILED STATEMENT (صورتحساب ریز تراکنش‌ها)
     // ==========================================
     const fetchStatement = async (tafsiliCodeOverride?: string) => {
-        const codeToUse = tafsiliCodeOverride || selectedTafsili;
+        const codeToUse = String(tafsiliCodeOverride || selectedTafsili || '').trim();
         if (!codeToUse) {
             toast.error('لطفاً ابتدا شخص مورد نظر را انتخاب کنید');
             return;
@@ -1908,34 +2013,77 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const gregFrom = jalaliToGregorianStr(dateFrom);
             const gregTo = jalaliToGregorianStr(dateTo);
             
-            const activeYear = getActiveFiscalYearLabel();
-            const periodCode = (activeYear && activeYear >= 1402) ? String(activeYear - 1401) : '4';
-            const selectedInfo = tafsilis.find(t => t.Code === codeToUse || t.TafsiliCode === codeToUse);
-            const shortTafsiliCode = selectedInfo ? selectedInfo.TafsiliCode : (codeToUse.length > 2 ? codeToUse.replace(/^0+/, '') : codeToUse);
-            const rawShort = codeToUse.replace(/^[0-9]{2}/, '');
+            const periodCode = resolveSayanPeriodCode(dateTo, dateFrom);
+            const trazItem = trazData.find(r => String(r.code).trim() === codeToUse);
+            const selectedInfo = tafsilis.find(t => String(t.Code || '').trim() === codeToUse || String(t.PersonCode || '').trim() === codeToUse);
+            const personCode = String(selectedInfo?.PersonCode || trazItem?.personCode || '').trim();
+            const targetNormName = normalizePersianText(selectedInfo?.Name || trazItem?.name || '');
+
+            // Gather all valid tafsili codes belonging to this exact person (e.g. 11025, 111025, 1025 for ولی مهدویان)
+            const siblingCodes: string[] = [];
+            if (Array.isArray(trazItem?.relatedCodes)) {
+                siblingCodes.push(...trazItem.relatedCodes);
+            }
+            tafsilis.forEach(t => {
+                const tc = String(t.Code || '').trim();
+                const tp = String(t.PersonCode || '').trim();
+                const tn = normalizePersianText(t.Name || '');
+                if (
+                    tc === codeToUse ||
+                    (personCode && (tp === personCode || tc === personCode)) ||
+                    (targetNormName && targetNormName.length >= 3 && tn === targetNormName)
+                ) {
+                    if (tc) siblingCodes.push(tc);
+                    if (tp) {
+                        siblingCodes.push('11' + tp);
+                        if (tp.length >= 4) siblingCodes.push(tp);
+                    }
+                    if (tc.startsWith('11')) {
+                        siblingCodes.push('11' + tc);
+                    }
+                }
+            });
+
             const candidateCodes = Array.from(new Set([
                 codeToUse,
-                rawShort,
-                shortTafsiliCode,
-                shortTafsiliCode ? '11' + shortTafsiliCode : '',
-                shortTafsiliCode ? '31' + shortTafsiliCode : '',
-                shortTafsiliCode ? '51' + shortTafsiliCode : '',
-                shortTafsiliCode ? '52' + shortTafsiliCode : '',
-            ].filter(c => c && c.length >= 2)));
+                personCode ? '11' + personCode : '',
+                codeToUse.startsWith('11') ? '11' + codeToUse : '',
+                ...(personCode && personCode.length >= 4 ? [personCode] : []),
+                ...siblingCodes
+            ].map(c => String(c || '').trim()).filter(c => c.length >= 3)));
 
+            // CRITICAL: Match exact token boundaries in Field_015 / Field_014 (NO trailing '%' wildcard that would bleed into longer codes!)
             const tafsiliConditions = candidateCodes.map(c => `(
-                t9.Field_015 LIKE '%:${c}%' OR 
-                t9.Field_014 LIKE '%:${c}%' OR
-                t9.Field_015 LIKE '%:${c}' OR 
-                t9.Field_014 LIKE '%:${c}' OR
-                t9.Field_015 LIKE '%-${c}%' OR
-                t9.Field_014 LIKE '%-${c}%' OR
-                t9.Field_015 LIKE '%-${c}' OR
-                t9.Field_014 LIKE '%-${c}'
+                RTRIM(LTRIM(t9.Field_015)) = '${c}' OR
+                RTRIM(LTRIM(t9.Field_014)) = '${c}' OR
+                RTRIM(LTRIM(t9.Field_015)) LIKE '%:${c}' OR 
+                RTRIM(LTRIM(t9.Field_015)) LIKE '%:${c}-%' OR
+                RTRIM(LTRIM(t9.Field_014)) LIKE '%:${c}' OR 
+                RTRIM(LTRIM(t9.Field_014)) LIKE '%:${c}-%'
             )`).join(' OR ');
 
             const tafsiliFilter = `(${tafsiliConditions})`;
             const periodFilter = periodCode ? `AND t9.Field_003 = '${periodCode}'` : '';
+
+            // Check if dateTo is today or end of fiscal year
+            const today = new Date();
+            const jToday = jalaali.toJalaali(today.getFullYear(), today.getMonth() + 1, today.getDate());
+            const todayShamsiStr = `${jToday.jy}/${String(jToday.jm).padStart(2, '0')}/${String(jToday.jd).padStart(2, '0')}`;
+            const isHistoricalCutoff = Boolean(gregTo && dateTo && dateTo < todayShamsiStr && !dateTo.endsWith('/12/29') && !dateTo.endsWith('/12/30'));
+            const dateToSqlFilter = isHistoricalCutoff ? `AND CAST(t8.Field_008 AS DATE) <= '${gregTo}'` : '';
+            const isStartOfYear = Boolean(dateFrom && dateFrom.endsWith('/01/01'));
+            const dateFromSqlFilter = (!isStartOfYear && gregFrom) ? `AND CAST(t8.Field_008 AS DATE) >= '${gregFrom}'` : '';
+
+            // Exclude Cashbox (12:) and Bank (13:) Cheque Vault subledger legs (Moein 102/103) from main statement so balance matches Traz & Sayan 100%
+            const nonChequeVaultFilter = `
+                AND NOT (
+                    (t9.Field_005 = '1' AND t9.Field_006 = '3' AND t9.Field_007 IN ('102', '103'))
+                    OR t9.Field_015 LIKE '12:%'
+                    OR t9.Field_015 LIKE '13:%'
+                    OR t9.Field_015 LIKE '%-12:%'
+                    OR t9.Field_015 LIKE '%-13:%'
+                )
+            `;
 
             // 1. Fetch detailed statement transactions within date range
             const sql = `
@@ -1950,41 +2098,45 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     t9.Field_007 as MoeinCode,
                     m3.Field_006 as MoeinName
                 FROM ACT_TBL_009 t9 WITH (NOLOCK)
-                LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
                 LEFT JOIN ACT_TBL_003 m3 WITH (NOLOCK) ON t9.Field_005 = m3.Field_003 AND t9.Field_006 = m3.Field_004 AND t9.Field_007 = m3.Field_005
                 WHERE (${tafsiliFilter}) 
                   ${periodFilter}
                   AND ISNULL(t8.Field_009, 0) <> 4
                   AND t9.Field_005 <> '9'
-                  AND t8.Field_008 >= '${gregFrom}T00:00:00.000Z'
-                  AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'
-                ORDER BY t8.Field_008 ASC, CAST(t9.Field_001 AS INT) ASC
+                  ${nonChequeVaultFilter}
+                  ${dateFromSqlFilter}
+                  ${dateToSqlFilter}
+                ORDER BY t8.Field_008 ASC, CAST(t9.Field_004 AS INT) ASC, CAST(t9.Field_001 AS INT) ASC
             `;
             const data = await runSayanQuery(sql);
 
-            // 2. Query prior balance before start date (مانده از قبل / نقل از گذشته)
+            // 2. Query prior balance before start date (مانده از قبل / نقل از گذشته) when start date is after 01/01
             let priorBed = 0;
             let priorBes = 0;
-            try {
-                const prevBalanceSql = `
-                    SELECT 
-                        SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as PriorBed,
-                        SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as PriorBes
-                    FROM ACT_TBL_009 t9 WITH (NOLOCK)
-                    LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
-                    WHERE (${tafsiliFilter})
-                      ${periodFilter}
-                      AND ISNULL(t8.Field_009, 0) <> 4
-                      AND t9.Field_005 <> '9'
-                      AND t8.Field_008 < '${gregFrom}T00:00:00.000Z'
-                `;
-                const priorRes = await runSayanQuery(prevBalanceSql);
-                if (priorRes && priorRes.length > 0) {
-                    priorBed = parseFloat(priorRes[0].PriorBed || 0);
-                    priorBes = parseFloat(priorRes[0].PriorBes || 0);
+            if (!isStartOfYear && gregFrom) {
+                try {
+                    const prevBalanceSql = `
+                        SELECT 
+                            SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as PriorBed,
+                            SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as PriorBes
+                        FROM ACT_TBL_009 t9 WITH (NOLOCK)
+                        INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                        WHERE (${tafsiliFilter})
+                          ${periodFilter}
+                          AND ISNULL(t8.Field_009, 0) <> 4
+                          AND t9.Field_005 <> '9'
+                          ${nonChequeVaultFilter}
+                          AND CAST(t8.Field_008 AS DATE) < '${gregFrom}'
+                    `;
+                    const priorRes = await runSayanQuery(prevBalanceSql);
+                    if (priorRes && priorRes.length > 0) {
+                        priorBed = parseFloat(priorRes[0].PriorBed || 0);
+                        priorBes = parseFloat(priorRes[0].PriorBes || 0);
+                    }
+                } catch (err) {
+                    console.warn('Failed to fetch prior balance for statement:', err);
                 }
-            } catch (err) {
-                console.warn('Failed to fetch prior balance for statement:', err);
             }
 
             const priorBalance = priorBed - priorBes;
@@ -2019,8 +2171,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             }
             setStatementData(processed);
 
-            // Fetch guarantee and post-dated cheques associated with this person
-            const chequeFilter = `(${tafsiliFilter}) AND (t9.Field_015 LIKE '%-12%' OR t9.Field_015 LIKE '%-13%' OR t9.Field_005 = '9' OR t9.Field_007 IN ('102', '103'))`;
+            // Fetch guarantee and post-dated cheques in vault associated with this person
+            const chequeFilter = `(${tafsiliFilter}) AND (t9.Field_015 LIKE '%-12%' OR t9.Field_015 LIKE '%-13%' OR t9.Field_005 = '9' OR (t9.Field_005 = '1' AND t9.Field_006 = '3' AND t9.Field_007 IN ('102', '103')))`;
 
             const chequeSql = `
                 SELECT 
@@ -2034,12 +2186,13 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                     t9.Field_007 as MoeinCode,
                     m3.Field_006 as MoeinName
                 FROM ACT_TBL_009 t9 WITH (NOLOCK)
-                LEFT JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
+                INNER JOIN ACT_TBL_008 t8 WITH (NOLOCK) ON t8.Field_004 = t9.Field_003 AND t8.Field_005 = t9.Field_004
                 LEFT JOIN ACT_TBL_003 m3 WITH (NOLOCK) ON t9.Field_005 = m3.Field_003 AND t9.Field_006 = m3.Field_004 AND t9.Field_007 = m3.Field_005
                 WHERE ${chequeFilter}
                   ${periodFilter}
-                  AND t8.Field_008 >= '${gregFrom}T00:00:00.000Z'
-                  AND t8.Field_008 <= '${gregTo}T23:59:59.000Z'
+                  AND ISNULL(t8.Field_009, 0) <> 4
+                  ${dateFromSqlFilter}
+                  ${dateToSqlFilter}
                 ORDER BY t8.Field_008 ASC, CAST(t9.Field_001 AS INT) ASC
             `;
             const rawChequeData = await runSayanQuery(chequeSql);

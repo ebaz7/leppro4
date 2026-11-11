@@ -777,11 +777,11 @@ export const getCustomerBalancesData = async (db) => {
             `;
             const tafsilis = await runSayanQuery(db, tafsiliSql);
 
-            // 2. Fetch Traz from ACT_TBL_009 for active fiscal year
+            // 2. Fetch Traz from ACT_TBL_009 for active fiscal year (excluding cashbox/bank cheque vault legs Moein 102/103)
             const activePeriodCode = db.settings?.sayanActivePeriodCode || '4';
             const trazSql = `
                 SELECT 
-                    ISNULL(t9.Field_015, t9.Field_014) as TafsiliRaw,
+                    ISNULL(NULLIF(RTRIM(LTRIM(t9.Field_015)), ''), RTRIM(LTRIM(t9.Field_014))) as TafsiliRaw,
                     SUM(CAST(ISNULL(t9.Field_009, 0) AS FLOAT)) as TotalBed,
                     SUM(CAST(ISNULL(t9.Field_010, 0) AS FLOAT)) as TotalBes
                 FROM ACT_TBL_009 t9 WITH (NOLOCK)
@@ -789,8 +789,15 @@ export const getCustomerBalancesData = async (db) => {
                 WHERE t9.Field_003 = '${activePeriodCode}'
                   AND ISNULL(t8.Field_009, 0) <> 4
                   AND t9.Field_005 <> '9'
+                  AND NOT (
+                      (t9.Field_005 = '1' AND t9.Field_006 = '3' AND t9.Field_007 IN ('102', '103'))
+                      OR t9.Field_015 LIKE '12:%'
+                      OR t9.Field_015 LIKE '13:%'
+                      OR t9.Field_015 LIKE '%-12:%'
+                      OR t9.Field_015 LIKE '%-13:%'
+                  )
                   AND (t9.Field_015 IS NOT NULL OR t9.Field_014 IS NOT NULL)
-                GROUP BY ISNULL(t9.Field_015, t9.Field_014)
+                GROUP BY ISNULL(NULLIF(RTRIM(LTRIM(t9.Field_015)), ''), RTRIM(LTRIM(t9.Field_014)))
             `;
             const rawRows = await runSayanQuery(db, trazSql);
 
@@ -800,48 +807,50 @@ export const getCustomerBalancesData = async (db) => {
                 const str = String(raw).trim();
                 const parts = str.split('-');
                 for (const part of parts) {
-                    const match = part.match(/^(\d{2}\d*):(\d+)/);
-                    if (match) {
+                    const match = part.trim().match(/^(\d{2}\d*):(\d+)/);
+                    if (match && match[1] !== '12' && match[1] !== '13') {
                         return { moein: match[1], code: match[2] };
                     }
                 }
                 const match = str.match(/(\d{2}\d*):(\d+)/);
-                if (match) {
+                if (match && match[1] !== '12' && match[1] !== '13') {
                     return { moein: match[1], code: match[2] };
                 }
                 const digits = str.replace(/[^0-9]/g, '');
                 if (digits.length > 2) {
-                    return { moein: digits.slice(0, 2), code: digits.slice(2) };
+                    return { moein: digits.slice(0, 2), code: digits };
                 }
                 return { moein: '', code: '' };
             };
 
-            // 3. Map and group
+            // 3. Map and group by canonical tafsili code
             const groupedMap = new Map();
             rawRows.forEach((row) => {
                 const parsed = parseTafsiliRaw(row.TafsiliRaw);
-                const code = parsed.code;
-                if (!code) return;
+                const rawCode = String(parsed.code || '').trim();
+                if (!rawCode) return;
                 
                 const tafsili = tafsilis.find(t => 
-                    matchAccountCode(t.Code, code) || 
-                    matchAccountCode(t.TafsiliCode, code) ||
-                    (code.length > 2 && matchAccountCode(t.TafsiliCode, code.slice(2))) ||
-                    matchAccountCode(t.Code, '11' + code) ||
-                    matchAccountCode(t.Code, '31' + code)
+                    matchAccountCode(t.Code, rawCode) || 
+                    matchAccountCode(t.TafsiliCode, rawCode) ||
+                    (rawCode.length > 2 && matchAccountCode(t.TafsiliCode, rawCode.slice(2))) ||
+                    (rawCode.length > 2 && matchAccountCode(t.Code, rawCode.slice(2))) ||
+                    matchAccountCode(t.Code, '11' + rawCode) ||
+                    matchAccountCode(t.Code, '31' + rawCode)
                 );
-                const name = tafsili ? tafsili.Name : `کد اشخاص ${code}`;
+                const canonicalCode = tafsili && tafsili.Code ? String(tafsili.Code).trim() : rawCode;
+                const name = tafsili ? tafsili.Name : `کد اشخاص ${canonicalCode}`;
                 const bed = parseFloat(row.TotalBed || 0);
                 const bes = parseFloat(row.TotalBes || 0);
                 
-                if (groupedMap.has(code)) {
-                    const existing = groupedMap.get(code);
+                if (groupedMap.has(canonicalCode)) {
+                    const existing = groupedMap.get(canonicalCode);
                     existing.bed += bed;
                     existing.bes += bes;
                     existing.balance = existing.bed - existing.bes;
                 } else {
-                    groupedMap.set(code, {
-                        accountCode: code,
+                    groupedMap.set(canonicalCode, {
+                        accountCode: canonicalCode,
                         name,
                         bed,
                         bes,

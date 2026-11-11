@@ -23,7 +23,7 @@ import { generateUUID } from '../constants';
 import { getUsers, getCurrentUser } from '../services/authService';
 import { getGroups, sendMessage, uploadFileChunked } from '../services/storageService';
 import { getEffectiveApiUrl } from '../services/apiService';
-import { generatePdfFromHtml } from '../utils/pdfGenerator';
+import { generatePdfFromHtml, detectHtmlOrientation, PdfOrientationSetting } from '../utils/pdfGenerator';
 import { ChatGroup, ChatMessage, User } from '../types';
 
 export type TrazScope = 'current' | 'both' | 'bed' | 'bes';
@@ -41,6 +41,7 @@ interface ReportShareToChatModalProps {
     pdfFilename: string;
     defaultMsg: string;
     prebuiltUrl?: string;
+    orientation?: 'portrait' | 'landscape';
   }>;
   initialScope?: TrazScope;
   onGoToChat?: (target: { type: 'private' | 'group' | 'task_group' | 'system', id: string }) => void;
@@ -64,13 +65,16 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
   const [isUpdatingMessage, setIsUpdatingMessage] = useState(false);
   const [showNoteEditor, setShowNoteEditor] = useState(false);
 
+  const [orientationMode, setOrientationMode] = useState<PdfOrientationSetting>('auto');
+  const [detectedOrientation, setDetectedOrientation] = useState<'portrait' | 'landscape'>('portrait');
+
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<ChatGroup[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [sendingTargetId, setSendingTargetId] = useState<string | null>(null);
   const [successTargetIds, setSuccessTargetIds] = useState<Set<string>>(new Set());
 
-  // Cache generated attachments per scope so multiple sends don't re-render or re-upload
+  // Cache generated attachments per scope + orientation so user can switch orientation or send multiple
   const attachmentCacheRef = useRef<Record<string, { fileName: string; url: string; defaultMsg: string }>>({});
 
   const currentUser = getCurrentUser();
@@ -84,6 +88,7 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
     setSendingTargetId(null);
     setSearchQuery('');
     setScope(initialScope);
+    setOrientationMode('auto');
     setShowNoteEditor(false);
 
     const loadData = async () => {
@@ -105,7 +110,7 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
     loadData();
   }, [isOpen, initialScope]);
 
-  // Update default message when scope changes
+  // Update default message & auto-detect orientation when scope changes
   useEffect(() => {
     if (!isOpen) return;
 
@@ -114,16 +119,19 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
 
     const updateDefaultText = async () => {
       try {
+        const cacheKey = `${scope}_${orientationMode}`;
         // If cached, use cached message
-        if (attachmentCacheRef.current[scope]) {
-          if (isMounted) setCustomMessage(attachmentCacheRef.current[scope].defaultMsg);
+        if (attachmentCacheRef.current[cacheKey]) {
+          if (isMounted) setCustomMessage(attachmentCacheRef.current[cacheKey].defaultMsg);
           return;
         }
 
         // Preview default text quickly
         const res = await onGenerateReport(scope);
-        if (isMounted && res.defaultMsg) {
-          setCustomMessage(res.defaultMsg);
+        if (isMounted) {
+          if (res.defaultMsg) setCustomMessage(res.defaultMsg);
+          const autoOrientation = res.orientation || detectHtmlOrientation(res.htmlContent || '', res.pdfFilename);
+          setDetectedOrientation(autoOrientation);
         }
       } catch (err) {
         console.error('Error preloading message:', err);
@@ -137,15 +145,18 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, scope, onGenerateReport]);
+  }, [isOpen, scope, orientationMode, onGenerateReport]);
 
   if (!isOpen) return null;
 
   const formattedDateRange = dateRangeText || (dateRange?.from || dateRange?.to ? `${dateRange.from || 'ابتدا'} تا ${dateRange.to || 'امروز'}` : undefined);
 
+  const effectiveOrientation = orientationMode === 'auto' ? detectedOrientation : orientationMode;
+
   const getOrGenerateAttachment = async (currentScope: TrazScope) => {
-    if (attachmentCacheRef.current[currentScope]) {
-      return attachmentCacheRef.current[currentScope];
+    const cacheKey = `${currentScope}_${orientationMode}_${effectiveOrientation}`;
+    if (attachmentCacheRef.current[cacheKey]) {
+      return attachmentCacheRef.current[cacheKey];
     }
 
     const reportRes = await onGenerateReport(currentScope);
@@ -163,7 +174,8 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
             body: JSON.stringify({
               html: reportRes.htmlContent,
               filename: reportRes.pdfFilename,
-              landscape: false
+              landscape: effectiveOrientation === 'landscape',
+              orientation: effectiveOrientation
             })
           });
           if (res.ok) {
@@ -182,7 +194,7 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
       if (!finalUrl) {
         let pdfBlob = reportRes.blob;
         if (!pdfBlob && reportRes.htmlContent) {
-          pdfBlob = await generatePdfFromHtml(reportRes.htmlContent, reportRes.pdfFilename) as Blob;
+          pdfBlob = await generatePdfFromHtml(reportRes.htmlContent, reportRes.pdfFilename, { orientation: effectiveOrientation }) as Blob;
         }
 
         if (!pdfBlob) {
@@ -202,7 +214,7 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
       defaultMsg: reportRes.defaultMsg
     };
 
-    attachmentCacheRef.current[currentScope] = cached;
+    attachmentCacheRef.current[cacheKey] = cached;
     return cached;
   };
 
@@ -353,6 +365,50 @@ export const ReportShareToChatModal: React.FC<ReportShareToChatModalProps> = ({
             </div>
           </div>
         )}
+
+        {/* Section 1.5: PDF Page Orientation Controls (Landscape / Portrait / Auto) */}
+        <div className="px-3 py-2 bg-slate-50 dark:bg-zinc-950/60 border-b border-slate-200 dark:border-zinc-800 shrink-0 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300 text-[11px] font-bold">
+            <Sparkles size={13} className="text-indigo-500" />
+            <span>جهت چیدمان PDF:</span>
+          </div>
+          <div className="flex items-center gap-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 p-0.5 rounded-xl text-[11px]">
+            <button
+              type="button"
+              onClick={() => setOrientationMode('auto')}
+              title={`تشخیص هوشمند (حال‌حاضر: ${detectedOrientation === 'landscape' ? 'افقی' : 'عمودی'})`}
+              className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                orientationMode === 'auto'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              ⚡ خودکار ({detectedOrientation === 'landscape' ? 'افقی' : 'عمودی'})
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrientationMode('landscape')}
+              className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                orientationMode === 'landscape'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              ↔️ افقی
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrientationMode('portrait')}
+              className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                orientationMode === 'portrait'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              ↕️ عمودی
+            </button>
+          </div>
+        </div>
 
         {/* Section 2: Compact Caption / Note */}
         <div className="px-3 py-2 bg-slate-50 dark:bg-zinc-950/40 border-b border-slate-100 dark:border-zinc-800 shrink-0">
