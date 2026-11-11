@@ -87,6 +87,28 @@ export interface User {
   canViewSayanWarehouseWidget?: boolean;
   googleLinkedEmail?: string;
   googleLinkedAt?: number;
+  // --- دسترسی‌های مستقل حسابداری صنعتی، توزین باسکول، لیبل‌زنی و بهای تمام‌شده نساجی ---
+  canAccessIndustrialErp?: boolean;
+  canErpViewWarehouse?: boolean;
+  canErpManageMasterData?: boolean;
+  canErpWeighAndLabel?: boolean;
+  canErpCancelLabel?: boolean;
+  canErpManageBom?: boolean;
+  canErpCalculateCost?: boolean;
+  canErpViewCostPrice?: boolean;
+  canErpViewFinancialAmounts?: boolean;
+  canErpCreatePurchase?: boolean;
+  canErpApprovePurchase?: boolean;
+  canErpCreateSalesFromRemittance?: boolean;
+  canErpApproveSales?: boolean;
+  canErpManageReturns?: boolean;
+  canErpManageChartOfAccounts?: boolean;
+  canErpCreateVoucher?: boolean;
+  canErpEditVoucher?: boolean;
+  canErpApproveVoucher?: boolean;
+  canErpDeleteVoucher?: boolean;
+  canErpViewLedgersAndTraz?: boolean;
+  canErpSyncWithSayan?: boolean;
 }
 
 export interface WorkstationWindow {
@@ -251,6 +273,28 @@ export interface RolePermissions {
   canAccessChequeReceipts?: boolean;
   canAccessDigitalCard?: boolean;
   canManageDigitalCard?: boolean;
+  // --- دسترسی‌های مستقل حسابداری صنعتی، توزین باسکول، لیبل‌زنی و بهای تمام‌شده نساجی ---
+  canAccessIndustrialErp?: boolean;
+  canErpViewWarehouse?: boolean;
+  canErpManageMasterData?: boolean;
+  canErpWeighAndLabel?: boolean;
+  canErpCancelLabel?: boolean;
+  canErpManageBom?: boolean;
+  canErpCalculateCost?: boolean;
+  canErpViewCostPrice?: boolean;
+  canErpViewFinancialAmounts?: boolean;
+  canErpCreatePurchase?: boolean;
+  canErpApprovePurchase?: boolean;
+  canErpCreateSalesFromRemittance?: boolean;
+  canErpApproveSales?: boolean;
+  canErpManageReturns?: boolean;
+  canErpManageChartOfAccounts?: boolean;
+  canErpCreateVoucher?: boolean;
+  canErpEditVoucher?: boolean;
+  canErpApproveVoucher?: boolean;
+  canErpDeleteVoucher?: boolean;
+  canErpViewLedgersAndTraz?: boolean;
+  canErpSyncWithSayan?: boolean;
   [key: string]: boolean | undefined;
 }
 

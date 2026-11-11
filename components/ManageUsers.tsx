@@ -68,6 +68,27 @@ const ManageUsers: React.FC = () => {
     canAccessSecretariat: false,
     secretariatAllowedCompanies: [] as string[],
     canManageSecretariatSettings: false,
+    canAccessIndustrialErp: false,
+    canErpViewWarehouse: false,
+    canErpManageMasterData: false,
+    canErpWeighAndLabel: false,
+    canErpCancelLabel: false,
+    canErpManageBom: false,
+    canErpCalculateCost: false,
+    canErpViewCostPrice: false,
+    canErpViewFinancialAmounts: false,
+    canErpCreatePurchase: false,
+    canErpApprovePurchase: false,
+    canErpCreateSalesFromRemittance: false,
+    canErpApproveSales: false,
+    canErpManageReturns: false,
+    canErpManageChartOfAccounts: false,
+    canErpCreateVoucher: false,
+    canErpEditVoucher: false,
+    canErpApproveVoucher: false,
+    canErpDeleteVoucher: false,
+    canErpViewLedgersAndTraz: false,
+    canErpSyncWithSayan: false,
     avatar: '', 
     signatureUrl: '', 
     telegramChatId: '', 
@@ -177,6 +198,27 @@ const ManageUsers: React.FC = () => {
       canAccessSecretariat: user.canAccessSecretariat || false,
       canManageSecretariatSettings: user.canManageSecretariatSettings || false,
       secretariatAllowedCompanies: user.secretariatAllowedCompanies || [],
+      canAccessIndustrialErp: user.canAccessIndustrialErp || false,
+      canErpViewWarehouse: user.canErpViewWarehouse || false,
+      canErpManageMasterData: user.canErpManageMasterData || false,
+      canErpWeighAndLabel: user.canErpWeighAndLabel || false,
+      canErpCancelLabel: user.canErpCancelLabel || false,
+      canErpManageBom: user.canErpManageBom || false,
+      canErpCalculateCost: user.canErpCalculateCost || false,
+      canErpViewCostPrice: user.canErpViewCostPrice || false,
+      canErpViewFinancialAmounts: user.canErpViewFinancialAmounts || false,
+      canErpCreatePurchase: user.canErpCreatePurchase || false,
+      canErpApprovePurchase: user.canErpApprovePurchase || false,
+      canErpCreateSalesFromRemittance: user.canErpCreateSalesFromRemittance || false,
+      canErpApproveSales: user.canErpApproveSales || false,
+      canErpManageReturns: user.canErpManageReturns || false,
+      canErpManageChartOfAccounts: user.canErpManageChartOfAccounts || false,
+      canErpCreateVoucher: user.canErpCreateVoucher || false,
+      canErpEditVoucher: user.canErpEditVoucher || false,
+      canErpApproveVoucher: user.canErpApproveVoucher || false,
+      canErpDeleteVoucher: user.canErpDeleteVoucher || false,
+      canErpViewLedgersAndTraz: user.canErpViewLedgersAndTraz || false,
+      canErpSyncWithSayan: user.canErpSyncWithSayan || false,
       avatar: user.avatar || '', 
       signatureUrl: user.signatureUrl || '',
       telegramChatId: user.telegramChatId || '', 
@@ -1061,6 +1103,201 @@ const ManageUsers: React.FC = () => {
                               <span>تایید نهایی و ثبت در سایان (توسط کاربران مجاز به عنوان جایگزین مدیرعامل)</span>
                             </label>
                           </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* CARD 5: Industrial Textile Accounting, Weighbridge, QR Labeling & Costing ERP */}
+                    <div className="lg:col-span-2 p-5 bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/60 dark:from-emerald-950/30 dark:via-gray-900 dark:to-teal-950/20 rounded-3xl border-2 border-emerald-300 dark:border-emerald-800/80 shadow-sm space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-200 dark:border-emerald-800 pb-3">
+                        <div className="flex items-center gap-2 text-emerald-950 dark:text-emerald-200 font-black text-sm">
+                          <Factory size={19} className="text-emerald-600" />
+                          <span>سامانه مستقل حسابداری صنعتی، توزین باسکول، لیبل QR، فرمول نخ (BOM) و بهای تمام‌شده</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData({
+                                ...formData,
+                                canAccessIndustrialErp: true,
+                                canErpViewWarehouse: true,
+                                canErpManageMasterData: true,
+                                canErpWeighAndLabel: true,
+                                canErpCancelLabel: true,
+                                canErpManageBom: true,
+                                canErpCalculateCost: true,
+                                canErpViewCostPrice: true,
+                                canErpViewFinancialAmounts: true,
+                                canErpCreatePurchase: true,
+                                canErpApprovePurchase: true,
+                                canErpCreateSalesFromRemittance: true,
+                                canErpApproveSales: true,
+                                canErpManageReturns: true,
+                                canErpManageChartOfAccounts: true,
+                                canErpCreateVoucher: true,
+                                canErpEditVoucher: true,
+                                canErpApproveVoucher: true,
+                                canErpDeleteVoucher: true,
+                                canErpViewLedgersAndTraz: true,
+                                canErpSyncWithSayan: true
+                              });
+                            }}
+                            className="text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1 rounded-xl transition-colors cursor-pointer"
+                          >
+                            انتخاب همه مجوزهای صنعتی
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData({
+                                ...formData,
+                                canAccessIndustrialErp: false,
+                                canErpViewWarehouse: false,
+                                canErpManageMasterData: false,
+                                canErpWeighAndLabel: false,
+                                canErpCancelLabel: false,
+                                canErpManageBom: false,
+                                canErpCalculateCost: false,
+                                canErpViewCostPrice: false,
+                                canErpViewFinancialAmounts: false,
+                                canErpCreatePurchase: false,
+                                canErpApprovePurchase: false,
+                                canErpCreateSalesFromRemittance: false,
+                                canErpApproveSales: false,
+                                canErpManageReturns: false,
+                                canErpManageChartOfAccounts: false,
+                                canErpCreateVoucher: false,
+                                canErpEditVoucher: false,
+                                canErpApproveVoucher: false,
+                                canErpDeleteVoucher: false,
+                                canErpViewLedgersAndTraz: false,
+                                canErpSyncWithSayan: false
+                              });
+                            }}
+                            className="text-[11px] bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 text-gray-700 dark:text-gray-300 font-bold px-3 py-1 rounded-xl transition-colors cursor-pointer"
+                          >
+                            لغو همه
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Master Toggle & Confidentiality Shield */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <label className="flex items-center gap-2.5 text-xs text-emerald-950 dark:text-emerald-100 bg-emerald-100/80 dark:bg-emerald-900/50 p-3 rounded-2xl border-2 border-emerald-400 dark:border-emerald-700 cursor-pointer font-black">
+                          <input type="checkbox" checked={formData.canAccessIndustrialErp} onChange={e => setFormData({...formData, canAccessIndustrialErp: e.target.checked})} className="w-4 h-4 text-emerald-600 rounded" />
+                          <span>ورود به ماژول حسابداری صنعتی و باسکول</span>
+                        </label>
+                        <label className="flex items-center gap-2.5 text-xs text-amber-950 dark:text-amber-100 bg-amber-100/80 dark:bg-amber-900/40 p-3 rounded-2xl border-2 border-amber-400 dark:border-amber-700 cursor-pointer font-black">
+                          <input type="checkbox" checked={formData.canErpViewFinancialAmounts} onChange={e => setFormData({...formData, canErpViewFinancialAmounts: e.target.checked})} className="w-4 h-4 text-amber-600 rounded" />
+                          <span>مجوز رویت مبالغ ریالی و قیمت‌های خرید/فروش</span>
+                        </label>
+                        <label className="flex items-center gap-2.5 text-xs text-rose-950 dark:text-rose-100 bg-rose-100/80 dark:bg-rose-900/40 p-3 rounded-2xl border-2 border-rose-400 dark:border-rose-700 cursor-pointer font-black">
+                          <input type="checkbox" checked={formData.canErpViewCostPrice} onChange={e => setFormData({...formData, canErpViewCostPrice: e.target.checked})} className="w-4 h-4 text-rose-600 rounded" />
+                          <span>مجوز محرمانه رویت بهای تمام‌شده نخ و سربار</span>
+                        </label>
+                      </div>
+
+                      {/* Detailed Sub-Module Matrix */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                        {/* 1. Warehouse, Weighbridge & QR Label */}
+                        <div className="p-3 bg-white/90 dark:bg-gray-800/90 rounded-2xl border border-emerald-200 dark:border-gray-700 space-y-2">
+                          <div className="text-xs font-black text-emerald-800 dark:text-emerald-300 border-b pb-1.5">
+                            ۱. انبار، باسکول و لیبل QR
+                          </div>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpViewWarehouse} onChange={e => setFormData({...formData, canErpViewWarehouse: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-emerald-600 rounded" />
+                            <span>مشاهده موجودی انبارها و کارتن‌ها</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpManageMasterData} onChange={e => setFormData({...formData, canErpManageMasterData: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-emerald-600 rounded" />
+                            <span>تعریف کالا، وزن دوک/کارتن و انبار</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer font-bold">
+                            <input type="checkbox" checked={formData.canErpWeighAndLabel} onChange={e => setFormData({...formData, canErpWeighAndLabel: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-emerald-600 rounded" />
+                            <span>توزین روی باسکول و چاپ لیبل QR</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-rose-700 dark:text-rose-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpCancelLabel} onChange={e => setFormData({...formData, canErpCancelLabel: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-rose-600 rounded" />
+                            <span>ابطال یا اصلاح لیبل کارتن تولیدی</span>
+                          </label>
+                        </div>
+
+                        {/* 2. BOM & Cost Accounting */}
+                        <div className="p-3 bg-white/90 dark:bg-gray-800/90 rounded-2xl border border-indigo-200 dark:border-gray-700 space-y-2">
+                          <div className="text-xs font-black text-indigo-800 dark:text-indigo-300 border-b pb-1.5">
+                            ۲. فرمول تولید (BOM) و بهای تمام‌شده
+                          </div>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpManageBom} onChange={e => setFormData({...formData, canErpManageBom: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                            <span>تعریف و ویرایش فرمول تولید نخ (BOM)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpCalculateCost} onChange={e => setFormData({...formData, canErpCalculateCost: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                            <span>ثبت دستمزد/سربار و محاسبه بهای تمام‌شده</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpSyncWithSayan} onChange={e => setFormData({...formData, canErpSyncWithSayan: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                            <span>مدیریت سینک اختیاری با سایان</span>
+                          </label>
+                        </div>
+
+                        {/* 3. Purchasing, Sales & Returns */}
+                        <div className="p-3 bg-white/90 dark:bg-gray-800/90 rounded-2xl border border-sky-200 dark:border-gray-700 space-y-2">
+                          <div className="text-xs font-black text-sky-800 dark:text-sky-300 border-b pb-1.5">
+                            ۳. خرید، فروش از حواله و مرجوعی
+                          </div>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpCreatePurchase} onChange={e => setFormData({...formData, canErpCreatePurchase: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-sky-600 rounded" />
+                            <span>ثبت فاکتور خرید مواد اولیه</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpApprovePurchase} onChange={e => setFormData({...formData, canErpApprovePurchase: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-sky-600 rounded" />
+                            <span>تایید نهایی فاکتورهای خرید</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer font-bold">
+                            <input type="checkbox" checked={formData.canErpCreateSalesFromRemittance} onChange={e => setFormData({...formData, canErpCreateSalesFromRemittance: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-sky-600 rounded" />
+                            <span>صدور فاکتور فروش از روی حواله خروج</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpApproveSales} onChange={e => setFormData({...formData, canErpApproveSales: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-sky-600 rounded" />
+                            <span>تایید نهایی فاکتور فروش</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-amber-800 dark:text-amber-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpManageReturns} onChange={e => setFormData({...formData, canErpManageReturns: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-amber-600 rounded" />
+                            <span>ثبت مرجوعی خرید و برگشت از فروش</span>
+                          </label>
+                        </div>
+
+                        {/* 4. Financial Accounting & Vouchers */}
+                        <div className="p-3 bg-white/90 dark:bg-gray-800/90 rounded-2xl border border-purple-200 dark:border-gray-700 space-y-2">
+                          <div className="text-xs font-black text-purple-800 dark:text-purple-300 border-b pb-1.5">
+                            ۴. اسناد مالی، سرفصل‌ها و تراز
+                          </div>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpManageChartOfAccounts} onChange={e => setFormData({...formData, canErpManageChartOfAccounts: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-purple-600 rounded" />
+                            <span>مدیریت درختواره حساب‌ها (کل/معین/تفصیل)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer font-bold">
+                            <input type="checkbox" checked={formData.canErpCreateVoucher} onChange={e => setFormData({...formData, canErpCreateVoucher: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-purple-600 rounded" />
+                            <span>ثبت سند حسابداری (دستی و اتوماتیک)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpEditVoucher} onChange={e => setFormData({...formData, canErpEditVoucher: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-purple-600 rounded" />
+                            <span>ویرایش اسناد حسابداری موقت</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-emerald-800 dark:text-emerald-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpApproveVoucher} onChange={e => setFormData({...formData, canErpApproveVoucher: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-emerald-600 rounded" />
+                            <span>تایید و قطعی‌سازی اسناد مالی</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-rose-700 dark:text-rose-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpDeleteVoucher} onChange={e => setFormData({...formData, canErpDeleteVoucher: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-rose-600 rounded" />
+                            <span>حذف اسناد حسابداری</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-indigo-800 dark:text-indigo-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpViewLedgersAndTraz} onChange={e => setFormData({...formData, canErpViewLedgersAndTraz: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                            <span>مشاهده دفاتر کل، معین و تراز آزمایشی</span>
+                          </label>
                         </div>
                       </div>
                     </div>

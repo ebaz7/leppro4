@@ -236,7 +236,12 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
                 canViewSayan: true, canViewSayanTraz: true, canViewSayanSales: true, canViewSayanProduction: true, canViewSayanProdReturns: true, canViewSayanCheques: true, canViewSayanRemittances: true, canViewSayanWarehouseOverview: true, canViewSayanWarehouseWidget: true,
                 canAccessSayanRegistrations: true, canSayanPreInvoices: true,
                 canSayanRegisterCheque: true, canSayanEditReceipt: true, canSayanApproveAccounting: true, canSayanApproveCeo: true, canSayanDeleteReceipt: true,
-                canAccessChequeReceipts: true
+                canAccessChequeReceipts: true,
+                canAccessIndustrialErp: true, canErpViewWarehouse: true, canErpManageMasterData: true, canErpWeighAndLabel: true, canErpCancelLabel: true,
+                canErpManageBom: true, canErpCalculateCost: true, canErpViewCostPrice: true, canErpViewFinancialAmounts: true,
+                canErpCreatePurchase: true, canErpApprovePurchase: true, canErpCreateSalesFromRemittance: true, canErpApproveSales: true, canErpManageReturns: true,
+                canErpManageChartOfAccounts: true, canErpCreateVoucher: true, canErpEditVoucher: true, canErpApproveVoucher: true, canErpDeleteVoucher: true,
+                canErpViewLedgersAndTraz: true, canErpSyncWithSayan: true
             };
         }
 
@@ -276,7 +281,12 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
             // Purchase-specific permissions hardwired for administrator:
             canView: true, canCreate: true, canApproveTechnical: true, canApproveFactory: true, canApproveCEO: true,
             canManageProformas: true, canSelectProforma: true, canRegisterEntry: true, canCheckQC: true,
-            canApproveFactoryFinal: true, canWarehouseFinalize: true, canCommercialFinalize: true
+            canApproveFactoryFinal: true, canWarehouseFinalize: true, canCommercialFinalize: true,
+            canAccessIndustrialErp: true, canErpViewWarehouse: true, canErpManageMasterData: true, canErpWeighAndLabel: true, canErpCancelLabel: true,
+            canErpManageBom: true, canErpCalculateCost: true, canErpViewCostPrice: true, canErpViewFinancialAmounts: true,
+            canErpCreatePurchase: true, canErpApprovePurchase: true, canErpCreateSalesFromRemittance: true, canErpApproveSales: true, canErpManageReturns: true,
+            canErpManageChartOfAccounts: true, canErpCreateVoucher: true, canErpEditVoucher: true, canErpApproveVoucher: true, canErpDeleteVoucher: true,
+            canErpViewLedgersAndTraz: true, canErpSyncWithSayan: true
         };
     }
 
@@ -595,6 +605,39 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
         }
         if (userObject.canManageSecretariatSettings !== undefined) {
             perms.canManageSecretariatSettings = userObject.canManageSecretariatSettings;
+        }
+        // --- Industrial ERP Granular User Overrides ---
+        const erpKeys: (keyof User)[] = [
+            'canAccessIndustrialErp',
+            'canErpViewWarehouse',
+            'canErpManageMasterData',
+            'canErpWeighAndLabel',
+            'canErpCancelLabel',
+            'canErpManageBom',
+            'canErpCalculateCost',
+            'canErpViewCostPrice',
+            'canErpViewFinancialAmounts',
+            'canErpCreatePurchase',
+            'canErpApprovePurchase',
+            'canErpCreateSalesFromRemittance',
+            'canErpApproveSales',
+            'canErpManageReturns',
+            'canErpManageChartOfAccounts',
+            'canErpCreateVoucher',
+            'canErpEditVoucher',
+            'canErpApproveVoucher',
+            'canErpDeleteVoucher',
+            'canErpViewLedgersAndTraz',
+            'canErpSyncWithSayan'
+        ];
+        for (const k of erpKeys) {
+            if ((userObject as any)[k] !== undefined) {
+                (perms as any)[k] = Boolean((userObject as any)[k]);
+            }
+        }
+        // Auto-grant module entry if any sub-permission is explicitly granted to the user
+        if (erpKeys.some(k => k !== 'canAccessIndustrialErp' && Boolean((perms as any)[k]))) {
+            perms.canAccessIndustrialErp = true;
         }
     }
 

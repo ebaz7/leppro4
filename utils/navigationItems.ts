@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BadgePlus, Receipt, ArrowLeftRight, Truck, ScrollText, 
   ClipboardCheck, Warehouse, BarChart3, FileCheck2, ShieldCheck, CalendarDays, 
   ShoppingCart, FolderArchive, Banknote, MessagesSquare, BookOpen, Globe, 
-  Wallet, Boxes, Handshake, Headset, UserCog, Settings, QrCode
+  Wallet, Boxes, Handshake, Headset, UserCog, Settings, QrCode, Scale
 } from 'lucide-react';
 import { User, UserRole, SystemSettings } from '../types';
 import { getRolePermissions, hasPermission } from '../services/authService';
@@ -25,6 +25,7 @@ export const ALL_NAVIGATION_ITEMS: Record<string, AppNavItem> = {
   'manage-invoices': { id: 'manage-invoices', label: 'مدیریت فاکتورها', icon: ScrollText, desc: 'کارتابل و بررسی فاکتورهای فروش' },
   'manage-exit': { id: 'manage-exit', label: 'سوابق خروج', icon: ClipboardCheck, desc: 'کارتابل و سوابق خروج کالا' },
   'warehouse': { id: 'warehouse', label: 'مدیریت انبار', icon: Warehouse, desc: 'موجودی انبار، بیجک و ورود/خروج کالا' },
+  'industrial-erp': { id: 'industrial-erp', label: 'حسابداری صنعتی و باسکول', icon: Scale, desc: 'انبار، توزین باسکول، لیبل QR، فرمول نخ (BOM)، خرید، فروش و اسناد مالی' },
   'sayan': { id: 'sayan', label: 'گزارشات سایان', icon: BarChart3, desc: 'تراز، فروش، تولید و چک‌ها' },
   'sayan-operations': { id: 'sayan-operations', label: 'ثبت‌های سایان', icon: FileCheck2, desc: 'پیش‌فاکتور، دریافت چک و اسناد معلق' },
   'security': { id: 'security', label: 'انتظامات', icon: ShieldCheck, desc: 'حراست، تردد و ثبت ورود/خروج' },
@@ -160,7 +161,19 @@ export const getAppNavItems = (currentUser: User | null, settings: SystemSetting
   if (canCreateExit) items.push(ALL_NAVIGATION_ITEMS['create-exit']);
   if (canViewInvoices) items.push(ALL_NAVIGATION_ITEMS['manage-invoices']);
   if (canViewExit) items.push(ALL_NAVIGATION_ITEMS['manage-exit']);
+  const canSeeIndustrialErp = currentUser.role === UserRole.ADMIN ||
+    perms.canAccessIndustrialErp === true ||
+    perms.canErpViewWarehouse === true ||
+    perms.canErpWeighAndLabel === true ||
+    perms.canErpManageBom === true ||
+    perms.canErpCreatePurchase === true ||
+    perms.canErpCreateSalesFromRemittance === true ||
+    perms.canErpCreateVoucher === true ||
+    perms.canErpViewLedgersAndTraz === true ||
+    (currentUser as any).canAccessIndustrialErp === true;
+
   if (canManageWarehouse) items.push(ALL_NAVIGATION_ITEMS['warehouse']);
+  if (canSeeIndustrialErp) items.push(ALL_NAVIGATION_ITEMS['industrial-erp']);
   if (canSeeSayan) items.push(ALL_NAVIGATION_ITEMS['sayan']);
   if (canSeeSayanOps) items.push(ALL_NAVIGATION_ITEMS['sayan-operations']);
   if (canSeeSecurity) items.push(ALL_NAVIGATION_ITEMS['security']);

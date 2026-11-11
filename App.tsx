@@ -39,6 +39,7 @@ import { WorkstationFloatingWindow } from './components/WorkstationFloatingWindo
 import { SplitViewDragOverlay } from './components/SplitViewDragOverlay';
 import { FloatingCalculator } from './components/FloatingCalculator';
 import { DigitalCardModule } from './components/DigitalCardModule';
+import { IndustrialAccountingErpModule } from './components/IndustrialAccountingErpModule';
 import { PublicBioPage } from './components/PublicBioPage';
 import { PublicCustomerSurveyPage } from './components/PublicCustomerSurveyPage';
 import { AppNavItem, getAppNavItems, getSidebarLabel } from './utils/navigationItems';
@@ -2148,6 +2149,8 @@ function App() {
         return <div className="page-transition w-full"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="EXIT" /></ErrorBoundary></div>;
       case 'warehouse':
         return <div className="page-transition w-full"><WarehouseModule currentUser={currentUser} settings={settings} initialTab={warehouseInitialTab} financialYear={financialYear} /></div>;
+      case 'industrial-erp':
+        return <div className="page-transition w-full"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>;
       case 'trade':
         return <div className="page-transition w-full"><TradeModule currentUser={currentUser} /></div>;
       case 'balances':
@@ -2394,6 +2397,7 @@ function App() {
                     {activeTab === 'manage-invoices' && <div className="page-transition flex flex-col flex-1 min-h-0"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="INVOICE" /></ErrorBoundary></div>}
                     {activeTab === 'manage-exit' && <div className="page-transition flex flex-col flex-1 min-h-0"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="EXIT" /></ErrorBoundary></div>}
                     {activeTab === 'warehouse' && <div className="page-transition flex flex-col flex-1 min-h-0"><WarehouseModule currentUser={currentUser} settings={settings} initialTab={warehouseInitialTab} financialYear={financialYear} /></div>}
+                    {activeTab === 'industrial-erp' && <div className="page-transition flex flex-col flex-1 min-h-0"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>}
                     {activeTab === 'trade' && <div className="page-transition flex flex-col flex-1 min-h-0"><TradeModule currentUser={currentUser} /></div>}
                     {activeTab === 'balances' && <div className="page-transition flex flex-col flex-1 min-h-0"><CustomerBalanceModule currentUser={currentUser} /></div>}
                     {activeTab === 'sales' && <div className="page-transition flex flex-col flex-1 min-h-0"><SalesCRMModule /></div>}
