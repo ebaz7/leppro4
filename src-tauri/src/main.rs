@@ -485,7 +485,7 @@ fn main() {
                             rgba: icon_rgba.to_vec(),
                             width: 64,
                             height: 64,
-                        })
+                        })?
                         .build()
                         .expect("failed to spawn main window")
                 }
