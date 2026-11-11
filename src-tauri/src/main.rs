@@ -412,6 +412,42 @@ fn get_or_create_config(handle: &tauri::AppHandle) -> ClientConfig {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    {
+        // 1. Explicitly assign AppUserModelID so Windows Taskbar, Shell and Task Manager recognize the application identity
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
+        }
+        use std::os::windows::ffi::OsStrExt;
+        let app_id_wide: Vec<u16> = std::ffi::OsStr::new("ir.dlkam.desktop.app")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let _ = SetCurrentProcessExplicitAppUserModelID(app_id_wide.as_ptr());
+        }
+
+        // 2. Configure Edge WebView2 browser switches to drastically reduce RAM & CPU usage:
+        // - Limit renderers to 1 process
+        // - Limit V8 JavaScript heap to 256MB with aggressive optimize_for_size GC
+        // - Disable non-essential background Chromium modules (Translate, Autofill, OptimizationHints)
+        // - Disable shader disk cache to keep GPU process lightweight
+        // - Enable Windows 11 EcoQoS (Efficiency Mode) for background helper processes
+        let browser_args = "--app-name=Dlkam \
+                            --renderer-process-limit=1 \
+                            --js-flags=\"--max-old-space-size=256 --optimize_for_size\" \
+                            --disable-features=Translate,OptimizationHints,MediaRouter,CalculateNativeWinOcclusion,InterestFeedContentSuggestions,AutofillServerCommunication,CertificateTransparencyComponentUpdater \
+                            --disable-background-networking \
+                            --disable-component-update \
+                            --disable-domain-reliability \
+                            --disable-breakpad \
+                            --disable-gpu-shader-disk-cache \
+                            --enable-features=UseEcoQoSForBackgroundProcess";
+
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", browser_args);
+    }
+
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.app_handle();
@@ -431,6 +467,7 @@ fn main() {
 
             // Window title using pure ASCII escape for "دلکام" to avoid any encoding/quote bugs on Windows
             let window_title = "\u{062F}\u{0644}\u{06A9}\u{0627}\u{0645}";
+            let icon_rgba = include_bytes!("../icons/icon-64x64.rgba");
 
             let win = match app.get_window("main") {
                 Some(w) => w,
@@ -444,13 +481,17 @@ fn main() {
                         .fullscreen(false)
                         .decorations(true)
                         .center()
+                        .icon(tauri::Icon::Rgba {
+                            rgba: icon_rgba.to_vec(),
+                            width: 64,
+                            height: 64,
+                        })
                         .build()
                         .expect("failed to spawn main window")
                 }
             };
 
             let _ = win.set_title(window_title);
-            let icon_rgba = include_bytes!("../icons/icon-64x64.rgba");
             let _ = win.set_icon(tauri::Icon::Rgba {
                 rgba: icon_rgba.to_vec(),
                 width: 64,
@@ -464,6 +505,9 @@ fn main() {
                         "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
                     );
                 }
+                if let tauri::WindowEvent::Destroyed = event {
+                    std::process::exit(0);
+                }
             });
             let _ = win.maximize();
             let _ = win.show();
@@ -472,6 +516,12 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 let _ = win_clone.maximize();
+                let _ = win_clone.set_title(window_title);
+                let _ = win_clone.set_icon(tauri::Icon::Rgba {
+                    rgba: icon_rgba.to_vec(),
+                    width: 64,
+                    height: 64,
+                });
                 tokio::time::sleep(std::time::Duration::from_millis(350)).await;
                 let _ = win_clone.maximize();
             });
