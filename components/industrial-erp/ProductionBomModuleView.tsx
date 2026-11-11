@@ -19,7 +19,12 @@ import {
   Filter,
   Check,
   X,
-  AlertCircle
+  AlertCircle,
+  Calculator,
+  Copy,
+  Sliders,
+  Package,
+  Boxes
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -59,31 +64,14 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   showToast,
   openSubViewTab
 }) => {
-  // Production lines fallback
+  // Production lines (Clean/Raw from ERP state)
   const lines: ErpProductionLine[] = useMemo(() => {
-    if (erpState.productionLines && erpState.productionLines.length > 0) {
-      return erpState.productionLines;
-    }
-    return [
-      { id: 'pl_01', code: 'PL-01', name: 'خط تکسچره ۱ (TMT-01)', machineType: 'تکسچرایزینگ ۲۱۶ چشمه', supervisorName: 'مهندس اکبری', isActive: true, notes: 'خط تولید فعال نخ DTY' },
-      { id: 'pl_02', code: 'PL-02', name: 'خط تکسچره ۲ (TMT-02)', machineType: 'تکسچرایزینگ ۲۴۰ چشمه', supervisorName: 'مهندس مرادی', isActive: true, notes: 'تولید نخ پلی‌استر سفید' },
-      { id: 'pl_03', code: 'PL-03', name: 'خط تابندگی ۱ (Barmag)', machineType: 'تابندگی TFO', supervisorName: 'مهندس حیدری', isActive: true, notes: 'تولید نخ تابیده' },
-      { id: 'pl_04', code: 'PL-04', name: 'خط وایندر و بسته‌بندی', machineType: 'وایندر دقیق', supervisorName: 'مهندس کریمی', isActive: true, notes: 'بسته‌بندی و سلفون‌کشی' }
-    ];
+    return erpState.productionLines || [];
   }, [erpState.productionLines]);
 
-  // Commodity groups fallback
+  // Commodity groups (Clean/Raw from ERP state)
   const groups: ErpCommodityGroup[] = useMemo(() => {
-    if (erpState.commodityGroups && erpState.commodityGroups.length > 0) {
-      return erpState.commodityGroups;
-    }
-    return [
-      { id: 'grp_dty', code: 'GRP-01', name: 'نخ‌های تکسچره پلی‌استر (DTY)', description: 'نخ‌های فیلامنت متراکم و پفکی' },
-      { id: 'grp_poy', code: 'GRP-02', name: 'نخ‌های ممتد اولیه (POY)', description: 'مواد اولیه خط تکسچرایزینگ' },
-      { id: 'grp_fdy', code: 'GRP-03', name: 'نخ‌های کاملاً کشیده شده (FDY)', description: 'نخ‌های براق و مات صنعتی' },
-      { id: 'grp_pack', code: 'GRP-04', name: 'ملزومات بسته‌بندی کارتن و دوک', description: 'کارتن خالی، نایلون، دوک مقوایی و پلاستیکی' },
-      { id: 'grp_waste', code: 'GRP-05', name: 'ضایعات خطوط تولید', description: 'ضایعات نخ، تلو، الیاف بازیافتی' }
-    ];
+    return erpState.commodityGroups || [];
   }, [erpState.commodityGroups]);
 
   // Filter yarn items for production
@@ -461,25 +449,186 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   }, [vouchersList, archiveSearch]);
 
   // -------------------------------------------------------------
-  // TAB 5: BOM CALCULATION (PRESERVED)
+  // TAB 5: COMPREHENSIVE BOM MANAGEMENT & COST ENGINE
   // -------------------------------------------------------------
   const finishedYarns = useMemo(() => erpState.items.filter(i => i.category === 'FINISHED_YARN'), [erpState.items]);
-  const [selectedBomProductId, setSelectedBomProductId] = useState<string>(finishedYarns[0]?.id || 'itm_yarn_150_w');
-  const [bomWastePercent, setBomWastePercent] = useState<number>(2.5);
-  const [bomLaborPerKg, setBomLaborPerKg] = useState<number>(145000);
-  const [bomOverheadPerKg, setBomOverheadPerKg] = useState<number>(105000);
-  const [bomComponents, setBomComponents] = useState<ErpBomComponent[]>([]);
+  const allBoms = useMemo(() => erpState.boms || [], [erpState.boms]);
+  
+  const [bomSearch, setBomSearch] = useState<string>('');
+  const [bomProductFilter, setBomProductFilter] = useState<string>('ALL');
+  const [showAddEditBomModal, setShowAddEditBomModal] = useState<boolean>(false);
+  const [editingBom, setEditingBom] = useState<Partial<ErpBom> | null>(null);
+  const [showSimulationModal, setShowSimulationModal] = useState<boolean>(false);
+  const [simulationBom, setSimulationBom] = useState<ErpBom | null>(null);
+  const [simulationBatchQtyKg, setSimulationBatchQtyKg] = useState<number>(5000);
 
-  useEffect(() => {
-    const existingBom = erpState.boms?.find(b => b.finishedItemId === selectedBomProductId) || erpState.boms?.[0];
-    if (existingBom) {
-      setSelectedBomProductId(existingBom.finishedItemId);
-      setBomWastePercent(existingBom.wastePercent);
-      setBomLaborPerKg(existingBom.directLaborPerKg);
-      setBomOverheadPerKg(existingBom.factoryOverheadPerKg);
-      setBomComponents(existingBom.components);
+  // Filtered BOMs list
+  const filteredBoms = useMemo(() => {
+    return allBoms.filter(b => {
+      const matchSearch =
+        !bomSearch.trim() ||
+        (b.code || '').toLowerCase().includes(bomSearch.toLowerCase()) ||
+        (b.title || '').toLowerCase().includes(bomSearch.toLowerCase()) ||
+        (b.finishedItemName || '').toLowerCase().includes(bomSearch.toLowerCase());
+      const matchProduct =
+        bomProductFilter === 'ALL' || b.finishedItemId === bomProductFilter;
+      return matchSearch && matchProduct;
+    });
+  }, [allBoms, bomSearch, bomProductFilter]);
+
+  const handleOpenAddBom = () => {
+    const defaultProduct = finishedYarns[0];
+    const newBom: Partial<ErpBom> = {
+      code: `BOM-${String(allBoms.length + 1).padStart(3, '0')}`,
+      title: defaultProduct ? `فرمول استاندارد تولید ${defaultProduct.name}` : 'فرمول ساخت نخ تکسچره',
+      finishedItemId: defaultProduct?.id || '',
+      finishedItemCode: defaultProduct?.code || '',
+      finishedItemName: defaultProduct?.name || '',
+      version: 'V1.0',
+      wastePercent: 2.5,
+      directLaborPerKg: 155000,
+      factoryOverheadPerKg: 185000,
+      status: 'ACTIVE',
+      components: [
+        {
+          id: `cmp_${Date.now()}_1`,
+          itemName: 'نخ اولیه POY پلی‌استر',
+          category: 'RAW_MATERIAL',
+          qtyPerKgOutput: 1.025,
+          unit: 'کیلوگرم',
+          unitCostRials: 780000,
+          wastePercent: 2.5,
+          totalCostRials: 799500
+        },
+        {
+          id: `cmp_${Date.now()}_2`,
+          itemName: 'روغن تکسچرایزینگ (Spin Finish)',
+          category: 'CHEMICAL',
+          qtyPerKgOutput: 0.025,
+          unit: 'کیلوگرم',
+          unitCostRials: 1200000,
+          wastePercent: 0,
+          totalCostRials: 30000
+        },
+        {
+          id: `cmp_${Date.now()}_3`,
+          itemName: 'ملزومات بسته‌بندی (کارتن، دوک، نایلون و تسمه)',
+          category: 'PACKAGING',
+          qtyPerKgOutput: 0.043,
+          unit: 'ست کارتن',
+          unitCostRials: 650000,
+          wastePercent: 0,
+          totalCostRials: 27950
+        }
+      ]
+    };
+    setEditingBom(newBom);
+    setShowAddEditBomModal(true);
+  };
+
+  const handleOpenEditBom = (bom: ErpBom) => {
+    setEditingBom(JSON.parse(JSON.stringify(bom)));
+    setShowAddEditBomModal(true);
+  };
+
+  const handleDuplicateBom = async (sourceBom: ErpBom) => {
+    const newBom: ErpBom = {
+      ...sourceBom,
+      id: `bom_${Date.now()}`,
+      code: `${sourceBom.code || 'BOM'}-V2`,
+      title: `${sourceBom.title || sourceBom.finishedItemName} (نسخه کپی)`,
+      version: 'V2.0',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    const nextBoms = [...allBoms, newBom];
+    await persistErpState({ ...erpState, boms: nextBoms }, 'نسخه جدید فرمول ساخت با موفقیت ایجاد گردید');
+  };
+
+  const handleDeleteBom = async (bomId: string) => {
+    if (!confirm('آیا از حذف این فرمول ساخت اطمینان دارید؟')) return;
+    const nextBoms = allBoms.filter(b => b.id !== bomId);
+    await persistErpState({ ...erpState, boms: nextBoms }, 'فرمول ساخت با موفقیت حذف گردید');
+  };
+
+  const handleAddComponentToEditingBom = () => {
+    if (!editingBom) return;
+    const newComp: ErpBomComponent = {
+      id: `cmp_${Date.now()}`,
+      itemName: '',
+      category: 'RAW_MATERIAL',
+      qtyPerKgOutput: 1,
+      unit: 'کیلوگرم',
+      unitCostRials: 0,
+      wastePercent: 0,
+      totalCostRials: 0
+    };
+    setEditingBom({
+      ...editingBom,
+      components: [...(editingBom.components || []), newComp]
+    });
+  };
+
+  const handleUpdateComponentInEditingBom = (idx: number, updates: Partial<ErpBomComponent>) => {
+    if (!editingBom || !editingBom.components) return;
+    const nextComps = [...editingBom.components];
+    const target = { ...nextComps[idx], ...updates };
+    const qty = Number(target.qtyPerKgOutput || 0);
+    const unitCost = Number(target.unitCostRials || 0);
+    target.totalCostRials = Math.round(qty * unitCost);
+    nextComps[idx] = target;
+    setEditingBom({ ...editingBom, components: nextComps });
+  };
+
+  const handleRemoveComponentFromEditingBom = (idx: number) => {
+    if (!editingBom || !editingBom.components) return;
+    const nextComps = editingBom.components.filter((_, i) => i !== idx);
+    setEditingBom({ ...editingBom, components: nextComps });
+  };
+
+  const handleSaveBom = async () => {
+    if (!editingBom?.title?.trim() || !editingBom?.code?.trim()) {
+      showToast?.('error', 'لطفاً کد و عنوان فرمول ساخت (BOM) را وارد نمایید');
+      return;
     }
-  }, [selectedBomProductId, erpState.boms]);
+    const comps = editingBom.components || [];
+    const totalMaterialsCost = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
+    const labor = Number(editingBom.directLaborPerKg || 0);
+    const overhead = Number(editingBom.factoryOverheadPerKg || 0);
+    const totalCostPerKg = totalMaterialsCost + labor + overhead;
+
+    const selProduct = erpState.items.find(i => i.id === editingBom.finishedItemId);
+
+    const savedBom: ErpBom = {
+      id: editingBom.id || `bom_${Date.now()}`,
+      code: editingBom.code.trim(),
+      title: editingBom.title.trim(),
+      finishedItemId: editingBom.finishedItemId || '',
+      finishedItemCode: selProduct?.code || editingBom.finishedItemCode || '',
+      finishedItemName: selProduct?.name || editingBom.finishedItemName || 'نخ تولیدی',
+      version: editingBom.version || 'V1.0',
+      wastePercent: Number(editingBom.wastePercent || 0),
+      directLaborPerKg: labor,
+      factoryOverheadPerKg: overhead,
+      components: comps,
+      totalRawMaterialsCostPerKg: totalMaterialsCost,
+      totalCostPerKg: totalCostPerKg,
+      status: (editingBom.status as any) || 'ACTIVE',
+      updatedAt: Date.now(),
+      createdAt: editingBom.createdAt || Date.now(),
+      createdBy: currentUser?.fullName || 'مدیر فنی',
+      notes: editingBom.notes || ''
+    };
+
+    const exists = allBoms.some(b => b.id === savedBom.id);
+    const nextBoms = exists
+      ? allBoms.map(b => (b.id === savedBom.id ? savedBom : b))
+      : [...allBoms, savedBom];
+
+    await persistErpState({ ...erpState, boms: nextBoms }, 'فرمول ساخت (BOM) با موفقیت در دیتابیس ذخیره شد');
+    setShowAddEditBomModal(false);
+    setEditingBom(null);
+  };
 
   // Print helper
   const handlePrintElement = (id: string) => {
@@ -538,47 +687,71 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {lines.map(line => (
-              <div key={line.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800">
-                      {line.code}
-                    </span>
-                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${line.isActive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                      {line.isActive ? 'فعال در خط' : 'غیرفعال'}
-                    </span>
-                  </div>
-                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{line.name}</h3>
-                  <div className="text-xs text-slate-500 space-y-1 mb-3">
-                    <div>نوع تکنولوژی: <span className="font-bold text-slate-700 dark:text-slate-300">{line.machineType || '—'}</span></div>
-                    <div>سرپرست: <span className="font-bold text-slate-700 dark:text-slate-300">{line.supervisorName || '—'}</span></div>
-                    {line.notes && <div className="text-[11px] text-slate-400">{line.notes}</div>}
-                  </div>
-                </div>
-                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
-                  <button
-                    onClick={() => {
-                      setLineForm(line);
-                      setShowAddLineModal(true);
-                    }}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors"
-                    title="ویرایش"
-                  >
-                    <Edit2 size={15} />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteLine(line.id)}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 transition-colors"
-                    title="حذف"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
+          {lines.length === 0 ? (
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 p-10 text-center space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800 flex items-center justify-center mx-auto">
+                <Factory size={28} />
               </div>
-            ))}
-          </div>
+              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                هیچ خط تولیدی برای این شرکت تعریف نشده است
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                دیتابیس در وضعیت کاملاً خام قرار دارد. جهت شروع عملیات ثبت توزین و رهگیری کارتن‌ها، اولین خط تولید کارخانه را اضافه فرمایید.
+              </p>
+              <button
+                onClick={() => {
+                  setLineForm({ code: 'PL-01', name: '', machineType: '', supervisorName: currentUser?.fullName || '', isActive: true, notes: '' });
+                  setShowAddLineModal(true);
+                }}
+                className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>تعریف اولین خط تولید</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {lines.map(line => (
+                <div key={line.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800">
+                        {line.code}
+                      </span>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${line.isActive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                        {line.isActive ? 'فعال در خط' : 'غیرفعال'}
+                      </span>
+                    </div>
+                    <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{line.name}</h3>
+                    <div className="text-xs text-slate-500 space-y-1 mb-3">
+                      <div>نوع تکنولوژی: <span className="font-bold text-slate-700 dark:text-slate-300">{line.machineType || '—'}</span></div>
+                      <div>سرپرست: <span className="font-bold text-slate-700 dark:text-slate-300">{line.supervisorName || '—'}</span></div>
+                      {line.notes && <div className="text-[11px] text-slate-400">{line.notes}</div>}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      onClick={() => {
+                        setLineForm(line);
+                        setShowAddLineModal(true);
+                      }}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors"
+                      title="ویرایش"
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteLine(line.id)}
+                      className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 transition-colors"
+                      title="حذف"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -732,6 +905,35 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 </div>
 
                 {/* Step 1 & 2: Line & Commodity Selection */}
+                {(lines.length === 0 || yarnItems.length === 0) && (
+                  <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 p-3 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle size={16} className="text-amber-600 shrink-0" />
+                      <span>دیتابیس در وضعیت خام اولیه قرار دارد. برای شروع توزین، ابتدا خط تولید و کالا را تعریف فرمایید.</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {lines.length === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => openSubViewTab?.('prd_lines')}
+                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] cursor-pointer"
+                        >
+                          + تعریف خط تولید
+                        </button>
+                      )}
+                      {yarnItems.length === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => openSubViewTab?.('prd_items')}
+                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] cursor-pointer"
+                        >
+                          + تعریف کالا
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                   <div>
                     <label className="font-black text-slate-700 dark:text-slate-300 block mb-1">
@@ -742,11 +944,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       onChange={e => setSelectedLineId(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      {lines.map(line => (
-                        <option key={line.id} value={line.id}>
-                          {line.code} — {line.name} ({line.machineType})
-                        </option>
-                      ))}
+                      {lines.length === 0 ? (
+                        <option value="">(هیچ خط تولیدی تعریف نشده است - محیط خام)</option>
+                      ) : (
+                        lines.map(line => (
+                          <option key={line.id} value={line.id}>
+                            {line.code} — {line.name} ({line.machineType})
+                          </option>
+                        ))
+                      )}
                     </select>
                   </div>
 
@@ -759,11 +965,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       onChange={e => setSelectedItemId(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      {yarnItems.map(item => (
-                        <option key={item.id} value={item.id}>
-                          {item.code} — {item.name} ({item.yarnCount} {item.colorName})
-                        </option>
-                      ))}
+                      {yarnItems.length === 0 ? (
+                        <option value="">(هیچ کالایی تعریف نشده است - محیط خام)</option>
+                      ) : (
+                        yarnItems.map(item => (
+                          <option key={item.id} value={item.id}>
+                            {item.code} — {item.name} ({item.yarnCount} {item.colorName})
+                          </option>
+                        ))
+                      )}
                     </select>
                   </div>
                 </div>
@@ -1130,78 +1340,206 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       {/* --------------------------------------------------------------------------------- */}
       {activeSubView === 'prd_bom' && (
         <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
-            <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+          {/* Top BOM Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div>
               <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-orange-600" />
-                مهندسی فرمول تولید نخ (BOM)، ضایعات فرمول و محاسبه بهای تمام‌شده هر کیلوگرم
+                مهندسی فرمول‌های ساخت و تولید (BOM) و آنالیز بهای تمام‌شده
               </h2>
-              <p className="text-xs text-slate-500 mt-1">تخصیص مواد اولیه POY، روغن تکسچرایزینگ، ملزومات و بهای تمام‌شده</p>
+              <p className="text-xs text-slate-500 mt-1">
+                تعریف ساختار محصول، تخصیص مواد اولیه (POY)، روغن اسپین فینیش، کارتن و دوک، ضایعات استاندارد و سربار کارخانه
+              </p>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-              <div>
-                <label className="font-bold block mb-1">محصول نهایی نخ</label>
-                <select
-                  value={selectedBomProductId}
-                  onChange={e => setSelectedBomProductId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
-                >
-                  {finishedYarns.map(y => (
-                    <option key={y.id} value={y.id}>
-                      {y.code} — {y.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="font-bold block mb-1">درصد ضایعات فرمول (%)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={bomWastePercent}
-                  onChange={e => setBomWastePercent(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-              <div>
-                <label className="font-bold block mb-1">دستمزد مستقیم هر کیلو (ریال)</label>
-                <input
-                  type="number"
-                  value={bomLaborPerKg}
-                  onChange={e => setBomLaborPerKg(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-              <div>
-                <label className="font-bold block mb-1">سربار کارخانه هر کیلو (ریال)</label>
-                <input
-                  type="number"
-                  value={bomOverheadPerKg}
-                  onChange={e => setBomOverheadPerKg(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <h4 className="text-xs font-black text-slate-700 dark:text-slate-300 mb-2">اجزای مصرفی در ۱ کیلوگرم نخ خروجی:</h4>
-              <div className="bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl space-y-2 text-xs">
-                <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-slate-700">
-                  <span className="font-bold">نخ اولیه POY پلی‌استر (با احتساب {bomWastePercent}% ضایعات)</span>
-                  <span className="font-mono font-black text-orange-600">{(1 * (1 + bomWastePercent / 100)).toFixed(3)} Kg</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-slate-200 dark:border-slate-700">
-                  <span className="font-bold">روغن تکسچرایزینگ (Spin Finish)</span>
-                  <span className="font-mono font-bold">0.025 Kg</span>
-                </div>
-                <div className="flex justify-between items-center py-1">
-                  <span className="font-bold">سهم ملزومات بسته‌بندی (کارتن، دوک، نایلون و تسمه)</span>
-                  <span className="font-mono font-bold">0.043 کارتن</span>
-                </div>
-              </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const targetBom = filteredBoms[0] || allBoms[0];
+                  if (targetBom) {
+                    setSimulationBom(targetBom);
+                    setShowSimulationModal(true);
+                  } else {
+                    showToast?.('error', 'ابتدا باید حداقل یک فرمول ساخت (BOM) تعریف نمایید');
+                  }
+                }}
+                className="px-3.5 py-2 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="شبیه‌سازی سفارش تولید و محاسبه مواد مورد نیاز"
+              >
+                <Calculator size={15} />
+                <span>شبیه‌سازی بچ تولید</span>
+              </button>
+              <button
+                onClick={handleOpenAddBom}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>تعریف فرمول ساخت جدید (BOM)</span>
+              </button>
             </div>
           </div>
+
+          {/* Search & Filter Bar */}
+          <div className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 w-full sm:w-auto flex-1">
+              <div className="relative flex-1 sm:max-w-xs">
+                <Search size={14} className="absolute right-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="جستجو در کد، عنوان فرمول یا نام کالا..."
+                  value={bomSearch}
+                  onChange={e => setBomSearch(e.target.value)}
+                  className="w-full pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                />
+              </div>
+
+              {finishedYarns.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <Filter size={13} className="text-slate-400 shrink-0" />
+                  <select
+                    value={bomProductFilter}
+                    onChange={e => setBomProductFilter(e.target.value)}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                  >
+                    <option value="ALL">تمام محصولات نهایی</option>
+                    {finishedYarns.map(y => (
+                      <option key={y.id} value={y.id}>{y.code} — {y.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div className="text-slate-400 text-[11px] font-bold">
+              تعداد فرمول‌ها: <span className="font-mono text-slate-700 dark:text-slate-200">{filteredBoms.length}</span> از <span className="font-mono text-slate-700 dark:text-slate-200">{allBoms.length}</span>
+            </div>
+          </div>
+
+          {/* BOM Table / Empty State */}
+          {allBoms.length === 0 ? (
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 p-10 text-center space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800 flex items-center justify-center mx-auto">
+                <Sparkles size={28} />
+              </div>
+              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                هیچ فرمول ساختی (BOM) برای این شرکت ثبت نشده است
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                دیتابیس در وضعیت کاملاً خام قرار دارد. می‌توانید با کلیک بر روی دکمه زیر، اولین فرمول تولید و ساختار مواد اولیه و ملزومات بسته‌بندی کارخانه خود را تعریف فرمایید.
+              </p>
+              <button
+                onClick={handleOpenAddBom}
+                className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>تعریف اولین فرمول ساخت (BOM)</span>
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="p-3">کد فرمول</th>
+                      <th className="p-3">عنوان فرمول ساخت</th>
+                      <th className="p-3">محصول نهایی نخ</th>
+                      <th className="p-3 text-center">نسخه</th>
+                      <th className="p-3 text-center">تعداد اقلام</th>
+                      <th className="p-3 text-center">ضایعات (%)</th>
+                      <th className="p-3 text-center">بهای مواد (ریال)</th>
+                      <th className="p-3 text-center">دستمزد مستقیم</th>
+                      <th className="p-3 text-center">سربار ساخت</th>
+                      <th className="p-3 text-center font-black text-emerald-600">بهای تمام‌شده هر کیلو</th>
+                      <th className="p-3 text-center">وضعیت</th>
+                      <th className="p-3 text-center">عملیات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredBoms.map(bom => {
+                      const totalMat = (bom.components || []).reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
+                      const labor = bom.directLaborPerKg || 0;
+                      const overhead = bom.factoryOverheadPerKg || 0;
+                      const grandTotal = totalMat + labor + overhead;
+
+                      return (
+                        <tr key={bom.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                          <td className="p-3 font-mono font-bold text-orange-600">{bom.code}</td>
+                          <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{bom.title}</td>
+                          <td className="p-3">
+                            <span className="font-bold text-slate-700 dark:text-slate-300 block">{bom.finishedItemName}</span>
+                            {bom.finishedItemCode && (
+                              <span className="font-mono text-[10px] text-slate-400">{bom.finishedItemCode}</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold">
+                            <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px]">{bom.version || 'V1.0'}</span>
+                          </td>
+                          <td className="p-3 text-center font-bold">
+                            {(bom.components || []).length} قلم
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold text-amber-600">
+                            {bom.wastePercent}%
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold text-slate-700 dark:text-slate-300" dir="ltr">
+                            {totalMat.toLocaleString()}
+                          </td>
+                          <td className="p-3 text-center font-mono text-slate-500" dir="ltr">
+                            {labor.toLocaleString()}
+                          </td>
+                          <td className="p-3 text-center font-mono text-slate-500" dir="ltr">
+                            {overhead.toLocaleString()}
+                          </td>
+                          <td className="p-3 text-center font-mono font-black text-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/20" dir="ltr">
+                            {grandTotal.toLocaleString()} ریال
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${bom.status === 'ACTIVE' || !bom.status ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                              {bom.status === 'ACTIVE' || !bom.status ? 'فرمول فعال' : 'پیش‌نویس'}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => {
+                                  setSimulationBom(bom);
+                                  setShowSimulationModal(true);
+                                }}
+                                className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors"
+                                title="شبیه‌سازی بچ تولید بر اساس این فرمول"
+                              >
+                                <Calculator size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDuplicateBom(bom)}
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                title="تکثیر / نسخه کپی"
+                              >
+                                <Copy size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditBom(bom)}
+                                className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors"
+                                title="ویرایش فرمول و اقلام"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBom(bom.id)}
+                                className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-slate-800 transition-colors"
+                                title="حذف فرمول"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1644,6 +1982,528 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               >
                 <Printer size={15} />
                 چاپ لیبل
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT BOM (FORMULA & COST ENGINE) */}
+      {/* --------------------------------------------------------------------------------- */}
+      {showAddEditBomModal && editingBom && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-4xl w-full p-6 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 flex items-center justify-center border border-orange-200 dark:border-orange-800">
+                  <Sparkles size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                    {editingBom.id ? 'ویرایش فرمول ساخت و آنالیز بهای تمام‌شده (BOM)' : 'تعریف فرمول ساخت جدید (BOM)'}
+                  </h3>
+                  <p className="text-xs text-slate-400">تنظیم مصرف مواد اولیه، ضایعات استاندارد، سربار کارخانه و ملزومات بسته‌بندی</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowAddEditBomModal(false);
+                  setEditingBom(null);
+                }}
+                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Basic Info Fields */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+              <div className="sm:col-span-1">
+                <label className="font-bold block mb-1">کد فرمول *</label>
+                <input
+                  type="text"
+                  value={editingBom.code || ''}
+                  onChange={e => setEditingBom({ ...editingBom, code: e.target.value })}
+                  placeholder="مثال: BOM-001"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="font-bold block mb-1">عنوان فرمول ساخت *</label>
+                <input
+                  type="text"
+                  value={editingBom.title || ''}
+                  onChange={e => setEditingBom({ ...editingBom, title: e.target.value })}
+                  placeholder="مثال: فرمول استاندارد نخ تکسچره DTY 150/48"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="font-bold block mb-1">محصول نهایی نخ</label>
+                {finishedYarns.length > 0 ? (
+                  <select
+                    value={editingBom.finishedItemId || ''}
+                    onChange={e => {
+                      const sel = finishedYarns.find(y => y.id === e.target.value);
+                      setEditingBom({
+                        ...editingBom,
+                        finishedItemId: e.target.value,
+                        finishedItemName: sel?.name || '',
+                        finishedItemCode: sel?.code || ''
+                      });
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  >
+                    <option value="">-- انتخاب محصول نهایی --</option>
+                    {finishedYarns.map(y => (
+                      <option key={y.id} value={y.id}>{y.code} — {y.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={editingBom.finishedItemName || ''}
+                    onChange={e => setEditingBom({ ...editingBom, finishedItemName: e.target.value })}
+                    placeholder="نام محصول تولیدی (مثال: نخ DTY 150/48)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  />
+                )}
+              </div>
+
+              <div className="sm:col-span-1">
+                <label className="font-bold block mb-1">نسخه</label>
+                <input
+                  type="text"
+                  value={editingBom.version || 'V1.0'}
+                  onChange={e => setEditingBom({ ...editingBom, version: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="font-bold block mb-1">ضایعات استاندارد (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={editingBom.wastePercent ?? 2.5}
+                  onChange={e => setEditingBom({ ...editingBom, wastePercent: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-amber-600"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="font-bold block mb-1">دستمزد مستقیم هر کیلو (ریال)</label>
+                <input
+                  type="number"
+                  value={editingBom.directLaborPerKg ?? 0}
+                  onChange={e => setEditingBom({ ...editingBom, directLaborPerKg: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="font-bold block mb-1">سربار کارخانه هر کیلو (ریال)</label>
+                <input
+                  type="number"
+                  value={editingBom.factoryOverheadPerKg ?? 0}
+                  onChange={e => setEditingBom({ ...editingBom, factoryOverheadPerKg: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Components Table */}
+            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-black text-slate-800 dark:text-slate-100">
+                    اقلام و ملزومات مصرفی در ۱ کیلوگرم نخ نهایی خروجی:
+                  </h4>
+                  <p className="text-[11px] text-slate-400">مقدار مصرف استاندارد و نرخ خرید هر قلم را مشخص نمایید</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddComponentToEditingBom}
+                  className="px-3 py-1.5 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800 text-xs font-black flex items-center gap-1 hover:bg-orange-100 cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>افزودن قلم به فرمول</span>
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="p-2.5 text-center w-10">ردیف</th>
+                      <th className="p-2.5 w-44">دسته‌بندی قلم</th>
+                      <th className="p-2.5">شرح قلم مصرفی</th>
+                      <th className="p-2.5 text-center w-24">واحد</th>
+                      <th className="p-2.5 text-center w-28">مقدار در ۱ کیلو</th>
+                      <th className="p-2.5 text-center w-32">نرخ واحد (ریال)</th>
+                      <th className="p-2.5 text-center w-36">بهای جزء (ریال)</th>
+                      <th className="p-2.5 text-center w-12">حذف</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {(editingBom.components || []).map((comp, idx) => {
+                      const totalPart = Math.round((comp.qtyPerKgOutput || 0) * (comp.unitCostRials || 0));
+                      return (
+                        <tr key={comp.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                          <td className="p-2 text-center font-mono text-slate-400">{idx + 1}</td>
+                          <td className="p-2">
+                            <select
+                              value={comp.category}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { category: e.target.value as any })}
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[11px]"
+                            >
+                              <option value="RAW_MATERIAL">نخ خام / POY</option>
+                              <option value="PACKAGING">ملزومات بسته‌بندی</option>
+                              <option value="CHEMICAL">روغن و شیمیایی</option>
+                              <option value="AUXILIARY">سایر اقلام کمکی</option>
+                            </select>
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={comp.itemName}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { itemName: e.target.value })}
+                              placeholder="مثال: نخ POY پلی‌استر سفید"
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={comp.unit}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { unit: e.target.value })}
+                              placeholder="کیلوگرم"
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-bold text-[11px]"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              step="0.001"
+                              value={comp.qtyPerKgOutput}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { qtyPerKgOutput: parseFloat(e.target.value) || 0 })}
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
+                            />
+                          </td>
+                          <td className="p-2">
+                            <input
+                              type="number"
+                              value={comp.unitCostRials || 0}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { unitCostRials: parseFloat(e.target.value) || 0 })}
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
+                            />
+                          </td>
+                          <td className="p-2 text-center font-mono font-black text-slate-700 dark:text-slate-200" dir="ltr">
+                            {totalPart.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveComponentFromEditingBom(idx)}
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {(editingBom.components || []).length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="p-6 text-center text-slate-400 font-bold">
+                          هنوز هیچ قلمی به این فرمول افزوده نشده است. دکمه «افزودن قلم به فرمول» را بزنید.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Live Cost Calculation Engine Bar */}
+            {(() => {
+              const comps = editingBom.components || [];
+              const totalMaterialsCost = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
+              const labor = Number(editingBom.directLaborPerKg || 0);
+              const overhead = Number(editingBom.factoryOverheadPerKg || 0);
+              const totalCostPerKg = totalMaterialsCost + labor + overhead;
+
+              return (
+                <div className="bg-gradient-to-l from-slate-900 via-indigo-950 to-slate-900 text-white p-4 rounded-2xl border border-indigo-500/20 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">مجموع بهای مواد اولیه:</span>
+                    <strong className="font-mono font-black text-sm text-amber-300" dir="ltr">{totalMaterialsCost.toLocaleString()} ریال</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">دستمزد مستقیم هر کیلو:</span>
+                    <strong className="font-mono font-black text-sm text-blue-300" dir="ltr">{labor.toLocaleString()} ریال</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">سربار ساخت هر کیلو:</span>
+                    <strong className="font-mono font-black text-sm text-purple-300" dir="ltr">{overhead.toLocaleString()} ریال</strong>
+                  </div>
+                  <div className="bg-emerald-500/20 p-2 rounded-xl border border-emerald-400/30">
+                    <span className="text-emerald-300 block text-[10px] font-bold">بهای تمام‌شده کل هر کیلو:</span>
+                    <strong className="font-mono font-black text-base text-emerald-400" dir="ltr">{totalCostPerKg.toLocaleString()} ریال</strong>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Notes */}
+            <div>
+              <label className="font-bold text-xs block mb-1">یادداشت‌ها و مشخصات فنی فرمول</label>
+              <textarea
+                value={editingBom.notes || ''}
+                onChange={e => setEditingBom({ ...editingBom, notes: e.target.value })}
+                placeholder="توضیحات تکمیلی، استاندارد آزمایشگاهی، رطوبت مجاز و..."
+                rows={2}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+              />
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddEditBomModal(false);
+                  setEditingBom(null);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBom}
+                className="px-6 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black shadow-md flex items-center gap-1.5 cursor-pointer"
+              >
+                <CheckCircle2 size={15} />
+                <span>ذخیره رسمی فرمول ساخت (BOM)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: BOM BATCH SIMULATION & REQUIREMENTS CALCULATOR */}
+      {/* --------------------------------------------------------------------------------- */}
+      {showSimulationModal && simulationBom && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-3xl w-full p-6 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 flex items-center justify-center border border-indigo-200 dark:border-indigo-800">
+                  <Calculator size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                    شبیه‌سازی سفارش تولید و محاسبه مواد مورد نیاز (BOM Calculator)
+                  </h3>
+                  <p className="text-xs text-slate-400">محاسبه دقیق اقلام مصرفی، بهای تمام‌شده و ضایعات بر اساس وزن تولید هدف</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowSimulationModal(false);
+                  setSimulationBom(null);
+                }}
+                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Inputs: Select BOM & Batch Target Kg */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-slate-50 dark:bg-slate-800/40 p-4 rounded-2xl border border-slate-100 dark:border-slate-800">
+              <div>
+                <label className="font-bold block mb-1">فرمول ساخت انتخابی:</label>
+                <select
+                  value={simulationBom.id}
+                  onChange={e => {
+                    const sel = allBoms.find(b => b.id === e.target.value);
+                    if (sel) setSimulationBom(sel);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold"
+                >
+                  {allBoms.map(b => (
+                    <option key={b.id} value={b.id}>{b.code} — {b.title}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="font-bold block mb-1">حجم کل سفارش تولید (کیلوگرم نخ خالص):</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    step="100"
+                    value={simulationBatchQtyKg}
+                    onChange={e => setSimulationBatchQtyKg(Math.max(1, parseFloat(e.target.value) || 0))}
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-black text-indigo-600 text-sm"
+                  />
+                  <div className="flex gap-1">
+                    {[1000, 5000, 10000, 25000].map(val => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setSimulationBatchQtyKg(val)}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-bold border ${simulationBatchQtyKg === val ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 border-slate-200 text-slate-600'}`}
+                      >
+                        {(val / 1000)}t
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Simulation Results Printable Card */}
+            <div id="bom-simulation-ticket" className="space-y-4">
+              {(() => {
+                const comps = simulationBom.components || [];
+                const batchKg = simulationBatchQtyKg;
+                const totalMatPerKg = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
+                const laborPerKg = simulationBom.directLaborPerKg || 0;
+                const overheadPerKg = simulationBom.factoryOverheadPerKg || 0;
+                const costPerKg = totalMatPerKg + laborPerKg + overheadPerKg;
+
+                const batchMaterialsCost = totalMatPerKg * batchKg;
+                const batchLaborCost = laborPerKg * batchKg;
+                const batchOverheadCost = overheadPerKg * batchKg;
+                const batchTotalCost = costPerKg * batchKg;
+
+                return (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-800">
+                        <span className="text-slate-400 block text-[10px]">تولید نخ خالص هدف:</span>
+                        <strong className="font-mono font-black text-sm text-slate-800 dark:text-slate-100" dir="ltr">{batchKg.toLocaleString()} Kg</strong>
+                      </div>
+                      <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30">
+                        <span className="text-amber-700 dark:text-amber-400 block text-[10px]">ضایعات استاندارد:</span>
+                        <strong className="font-mono font-black text-sm text-amber-700 dark:text-amber-300" dir="ltr">
+                          {((batchKg * (simulationBom.wastePercent || 0)) / 100).toFixed(1)} Kg ({simulationBom.wastePercent}%)
+                        </strong>
+                      </div>
+                      <div className="p-3 rounded-2xl bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/30">
+                        <span className="text-blue-700 dark:text-blue-400 block text-[10px]">بهای تمام‌شده هر کیلو:</span>
+                        <strong className="font-mono font-black text-sm text-blue-700 dark:text-blue-300" dir="ltr">{costPerKg.toLocaleString()} ریال</strong>
+                      </div>
+                      <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                        <span className="text-emerald-700 dark:text-emerald-300 block text-[10px] font-bold">کل بهای تمام‌شده سفارش:</span>
+                        <strong className="font-mono font-black text-sm text-emerald-600" dir="ltr">{batchTotalCost.toLocaleString()} ریال</strong>
+                      </div>
+                    </div>
+
+                    {/* Breakdown Table */}
+                    <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                          <tr>
+                            <th className="p-2.5 text-center">ردیف</th>
+                            <th className="p-2.5">قلم مصرفی</th>
+                            <th className="p-2.5 text-center">دسته‌بندی</th>
+                            <th className="p-2.5 text-center">سهم در ۱ کیلو</th>
+                            <th className="p-2.5 text-center font-black text-indigo-600">کل مقدار مورد نیاز در بچ</th>
+                            <th className="p-2.5 text-center">نرخ واحد (ریال)</th>
+                            <th className="p-2.5 text-center font-black text-emerald-600">مجموع هزینه قلم (ریال)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {comps.map((comp, idx) => {
+                            const reqQty = Number(((comp.qtyPerKgOutput || 0) * batchKg).toFixed(3));
+                            const reqCost = Math.round(reqQty * (comp.unitCostRials || 0));
+
+                            return (
+                              <tr key={comp.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                                <td className="p-2.5 text-center font-mono text-slate-400">{idx + 1}</td>
+                                <td className="p-2.5 font-bold text-slate-800 dark:text-slate-200">{comp.itemName}</td>
+                                <td className="p-2.5 text-center text-[10px] text-slate-500">
+                                  {comp.category === 'RAW_MATERIAL' && 'مواد اولیه'}
+                                  {comp.category === 'PACKAGING' && 'ملزومات بسته‌بندی'}
+                                  {comp.category === 'CHEMICAL' && 'روغن و مواد شیمیایی'}
+                                  {comp.category === 'AUXILIARY' && 'اقلام کمکی'}
+                                </td>
+                                <td className="p-2.5 text-center font-mono" dir="ltr">
+                                  {comp.qtyPerKgOutput} {comp.unit}
+                                </td>
+                                <td className="p-2.5 text-center font-mono font-black text-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20" dir="ltr">
+                                  {reqQty.toLocaleString()} {comp.unit}
+                                </td>
+                                <td className="p-2.5 text-center font-mono text-slate-500" dir="ltr">
+                                  {(comp.unitCostRials || 0).toLocaleString()}
+                                </td>
+                                <td className="p-2.5 text-center font-mono font-bold text-slate-800 dark:text-slate-200" dir="ltr">
+                                  {reqCost.toLocaleString()}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot className="bg-slate-50 dark:bg-slate-800 font-bold border-t border-slate-200 dark:border-slate-800">
+                          <tr>
+                            <td colSpan={6} className="p-2.5 text-left font-black">مجموع بهای کل مواد اولیه بچ:</td>
+                            <td className="p-2.5 text-center font-mono font-black text-emerald-600" dir="ltr">
+                              {batchMaterialsCost.toLocaleString()} ریال
+                            </td>
+                          </tr>
+                          <tr>
+                            <td colSpan={6} className="p-2.5 text-left">مجموع هزینه دستمزد مستقیم بچ:</td>
+                            <td className="p-2.5 text-center font-mono" dir="ltr">
+                              {batchLaborCost.toLocaleString()} ریال
+                            </td>
+                          </tr>
+                          <tr>
+                            <td colSpan={6} className="p-2.5 text-left">مجموع هزینه سربار ساخت بچ:</td>
+                            <td className="p-2.5 text-center font-mono" dir="ltr">
+                              {batchOverheadCost.toLocaleString()} ریال
+                            </td>
+                          </tr>
+                          <tr className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-black">
+                            <td colSpan={6} className="p-3 text-left text-sm">جمع کل برآورد بهای تمام‌شده تولید این سفارش:</td>
+                            <td className="p-3 text-center font-mono text-base" dir="ltr">
+                              {batchTotalCost.toLocaleString()} ریال
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => handlePrintElement('bom-simulation-ticket')}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-xs font-black text-slate-700 dark:text-slate-300 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Printer size={15} />
+                <span>چاپ کارنامه مواد و برآورد بهای سفارش</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSimulationModal(false);
+                  setSimulationBom(null);
+                }}
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black cursor-pointer shadow-sm"
+              >
+                بستن پنجره شبیه‌سازی
               </button>
             </div>
           </div>

@@ -87,22 +87,37 @@ export interface ErpItem {
 
 export interface ErpBomComponent {
   id: string;
-  itemId: string;
+  itemId?: string;
+  itemCode?: string;
   itemName: string;
-  category: 'RAW_MATERIAL' | 'PACKAGING';
+  category: 'RAW_MATERIAL' | 'PACKAGING' | 'CHEMICAL' | 'AUXILIARY';
   qtyPerKgOutput: number;
   unit: string;
+  unitCostRials?: number;
+  wastePercent?: number;
+  totalCostRials?: number;
+  notes?: string;
 }
 
 export interface ErpBom {
   id: string;
+  code?: string;
+  title?: string;
   finishedItemId: string;
+  finishedItemCode?: string;
   finishedItemName: string;
   version: string;
   wastePercent: number;
   directLaborPerKg: number;
   factoryOverheadPerKg: number;
   components: ErpBomComponent[];
+  totalRawMaterialsCostPerKg?: number;
+  totalCostPerKg?: number;
+  status?: 'ACTIVE' | 'DRAFT' | 'ARCHIVED';
+  updatedAt?: number;
+  createdAt?: number;
+  createdBy?: string;
+  notes?: string;
 }
 
 export interface ErpProductionOrder {

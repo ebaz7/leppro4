@@ -65,29 +65,14 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
   showToast,
   openSubViewTab
 }) => {
-  // Warehouses fallback
+  // Warehouses (Clean/Raw from ERP state)
   const warehouses: ErpWarehouse[] = useMemo(() => {
-    if (erpState.warehouses && erpState.warehouses.length > 0) {
-      return erpState.warehouses;
-    }
-    return [
-      { id: 'wh_finished', code: 'WH-01', name: 'انبار محصول نخ کارخانه', type: 'FINISHED_YARN', location: 'سالن اصلی کارخانه', managerName: 'مرتضی احمدی', assignedGroupIds: ['grp_dty', 'grp_fdy'] },
-      { id: 'wh_temp_line', code: 'WH-02', name: 'انبار موقت پای خط تولید', type: 'GENERAL', location: 'انتهای سالن تکسچرایزینگ', managerName: 'علی رضایی', assignedGroupIds: ['grp_dty'] },
-      { id: 'wh_tehran', code: 'WH-03', name: 'انبار مرکزی تهران (شوروم)', type: 'FINISHED_YARN', location: 'تهران - بازار بزرگ', managerName: 'حسین محمدی', assignedGroupIds: ['grp_dty', 'grp_fdy'] },
-      { id: 'wh_raw', code: 'WH-04', name: 'انبار مواد اولیه (POY و کارتن)', type: 'RAW_MATERIAL', location: 'انبار سوله شمالی', managerName: 'جعفر صالحی', assignedGroupIds: ['grp_poy', 'grp_pack'] },
-      { id: 'wh_waste', code: 'WH-05', name: 'انبار ضایعات و بازیافت', type: 'WASTE', location: 'محوطه باز کارخانه', managerName: 'رضا حسینی', assignedGroupIds: ['grp_waste'] }
-    ];
+    return erpState.warehouses || [];
   }, [erpState.warehouses]);
 
-  // Commodity groups
+  // Commodity groups (Clean/Raw from ERP state)
   const groups: ErpCommodityGroup[] = useMemo(() => {
-    return erpState.commodityGroups || [
-      { id: 'grp_dty', code: 'GRP-01', name: 'نخ‌های تکسچره پلی‌استر (DTY)' },
-      { id: 'grp_poy', code: 'GRP-02', name: 'نخ‌های ممتد اولیه (POY)' },
-      { id: 'grp_fdy', code: 'GRP-03', name: 'نخ‌های کاملاً کشیده شده (FDY)' },
-      { id: 'grp_pack', code: 'GRP-04', name: 'ملزومات بسته‌بندی کارتن و دوک' },
-      { id: 'grp_waste', code: 'GRP-05', name: 'ضایعات خطوط تولید' }
-    ];
+    return erpState.commodityGroups || [];
   }, [erpState.commodityGroups]);
 
   // Warehouse documents
@@ -720,62 +705,86 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {warehouses.map(w => {
-              const inStockCount = allCartons.filter(c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || !c.status)).length;
-              const totalKg = allCartons
-                .filter(c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || !c.status))
-                .reduce((sum, c) => sum + c.netWeightKg, 0);
+          {warehouses.length === 0 ? (
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 p-10 text-center space-y-3">
+              <div className="w-14 h-14 rounded-2xl bg-teal-50 dark:bg-teal-950/40 text-teal-600 border border-teal-200 dark:border-teal-800 flex items-center justify-center mx-auto">
+                <WhIcon size={28} />
+              </div>
+              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                هیچ انباری برای این شرکت تعریف نشده است
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                دیتابیس در وضعیت کاملاً خام قرار دارد. جهت ثبت رسیدها و حواله‌های انبار، ابتدا اولین انبار کارخانه را تعریف فرمایید.
+              </p>
+              <button
+                onClick={() => {
+                  setWhForm({ code: 'WH-01', name: 'انبار مرکزی محصول', type: 'FINISHED_YARN', location: 'سوله شماره ۱', managerName: currentUser?.fullName || '', assignedGroupIds: [] });
+                  setShowAddWhModal(true);
+                }}
+                className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>تعریف اولین انبار</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {warehouses.map(w => {
+                const inStockCount = allCartons.filter(c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || !c.status)).length;
+                const totalKg = allCartons
+                  .filter(c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || !c.status))
+                  .reduce((sum, c) => sum + c.netWeightKg, 0);
 
-              return (
-                <div key={w.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-between space-y-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-teal-50 dark:bg-teal-950/40 text-teal-600 border border-teal-200 dark:border-teal-800">
-                        {w.code}
-                      </span>
-                      <span className="text-[11px] font-bold text-slate-400">
-                        مسئول: <strong className="text-slate-700 dark:text-slate-300">{w.managerName || '—'}</strong>
-                      </span>
-                    </div>
-                    <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{w.name}</h3>
-                    <p className="text-xs text-slate-500 mb-2">موقعیت: {w.location || '—'}</p>
-
-                    {/* Stock quick badge */}
-                    <div className="bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-                      <div>
-                        <span className="text-slate-400 block text-[10px]">کارتن‌های موجود:</span>
-                        <strong className="font-bold text-slate-800 dark:text-slate-200">{inStockCount} کارتن</strong>
+                return (
+                  <div key={w.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-teal-50 dark:bg-teal-950/40 text-teal-600 border border-teal-200 dark:border-teal-800">
+                          {w.code}
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-400">
+                          مسئول: <strong className="text-slate-700 dark:text-slate-300">{w.managerName || '—'}</strong>
+                        </span>
                       </div>
-                      <div className="text-left">
-                        <span className="text-slate-400 block text-[10px]">موجودی خالص:</span>
-                        <strong className="font-mono font-black text-emerald-600" dir="ltr">{totalKg.toFixed(2)} Kg</strong>
+                      <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{w.name}</h3>
+                      <p className="text-xs text-slate-500 mb-2">موقعیت: {w.location || '—'}</p>
+
+                      {/* Stock quick badge */}
+                      <div className="bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                        <div>
+                          <span className="text-slate-400 block text-[10px]">کارتن‌های موجود:</span>
+                          <strong className="font-bold text-slate-800 dark:text-slate-200">{inStockCount} کارتن</strong>
+                        </div>
+                        <div className="text-left">
+                          <span className="text-slate-400 block text-[10px]">موجودی خالص:</span>
+                          <strong className="font-mono font-black text-emerald-600" dir="ltr">{totalKg.toFixed(2)} Kg</strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Assigned commodity groups */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <span className="text-[10px] text-slate-400 block mb-1">گروه‌های کالایی مجاز در این انبار:</span>
+                      <div className="flex flex-wrap gap-1">
+                        {w.assignedGroupIds && w.assignedGroupIds.length > 0 ? (
+                          w.assignedGroupIds.map(gid => {
+                            const grp = groups.find(g => g.id === gid);
+                            return (
+                              <span key={gid} className="px-2 py-0.5 rounded-lg bg-teal-50 dark:bg-teal-950/30 text-teal-700 dark:text-teal-300 text-[10px] font-bold">
+                                {grp?.name || gid}
+                              </span>
+                            );
+                          })
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-bold">تمام گروه‌های کالایی مجازند</span>
+                        )}
                       </div>
                     </div>
                   </div>
-
-                  {/* Assigned commodity groups */}
-                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                    <span className="text-[10px] text-slate-400 block mb-1">گروه‌های کالایی مجاز در این انبار:</span>
-                    <div className="flex flex-wrap gap-1">
-                      {w.assignedGroupIds && w.assignedGroupIds.length > 0 ? (
-                        w.assignedGroupIds.map(gid => {
-                          const grp = groups.find(g => g.id === gid);
-                          return (
-                            <span key={gid} className="px-2 py-0.5 rounded-lg bg-teal-50 dark:bg-teal-950/30 text-teal-700 dark:text-teal-300 text-[10px] font-bold">
-                              {grp?.name || gid}
-                            </span>
-                          );
-                        })
-                      ) : (
-                        <span className="text-[10px] text-slate-400 font-bold">تمام گروه‌های کالایی مجازند</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

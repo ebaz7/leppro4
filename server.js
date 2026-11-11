@@ -8726,431 +8726,68 @@ app.post('/api/bio-link/order', (req, res) => {
 });
 
 // --- INDUSTRIAL TEXTILE ACCOUNTING, WEIGHBRIDGE, QR LABELING & BOM ERP ENDPOINTS (MULTI-COMPANY & 10-MODULE SUITE) ---
-const getDefaultIndustrialErpState = (companyName = 'شرکت تولیدی لپان بافت', isPrimary = true) => ({
+const getDefaultIndustrialErpState = (companyName = 'شرکت تولیدی', isPrimary = false) => ({
     companyName,
     activeFiscalYear: '1405',
     fiscalYears: ['1405', '1404', '1403'],
-    warehouses: [
-        { id: 'wh_raw', code: '101', name: 'انبار مواد اولیه (گرانول، چیپس، الیاف، POY و رنگ)', type: 'RAW_MATERIAL', location: 'کارخانه زنجان - سالن ۱', managerName: 'مهندس محمدی' },
-        { id: 'wh_pkg', code: '102', name: 'انبار ملزومات بسته‌بندی (دوک، بوبین، کارتن، پالت)', type: 'PACKAGING', location: 'کارخانه زنجان - سالن ۲', managerName: 'آقای کریمی' },
-        { id: 'wh_yarn', code: '103', name: 'انبار محصول نهایی نخ (آماده فروش و بارگیری)', type: 'FINISHED_YARN', location: 'کارخانه زنجان - سالن محصول', managerName: 'آقای رضایی' },
-        { id: 'wh_waste', code: '104', name: 'انبار ضایعات و استوک نساجی', type: 'WASTE', location: 'کارخانه زنجان - محوطه', managerName: 'آقای حسینی' }
-    ],
-    items: [
-        {
-            id: 'itm_raw_poy_150',
-            code: 'RM-1001',
-            name: 'نخ POY پلی‌استر 250/48 خام',
-            category: 'RAW_MATERIAL',
-            unit: 'کیلوگرم',
-            warehouseId: 'wh_raw',
-            stockQty: isPrimary ? 18500 : 5200,
-            minStockQty: 3000,
-            unitCost: 1420000,
-            denier: '250',
-            filament: '48',
-            yarnCount: '250D/48F',
-            colorName: 'خام (Raw White)',
-            coneWeightGrams: 0,
-            cartonWeightGrams: 0,
-            defaultConesPerCarton: 0
-        },
-        {
-            id: 'itm_raw_oil',
-            code: 'RM-1002',
-            name: 'روغن کنینگ نساجی (Coning Oil)',
-            category: 'RAW_MATERIAL',
-            unit: 'کیلوگرم',
-            warehouseId: 'wh_raw',
-            stockQty: isPrimary ? 2400 : 800,
-            minStockQty: 500,
-            unitCost: 1950000,
-            coneWeightGrams: 0,
-            cartonWeightGrams: 0,
-            defaultConesPerCarton: 0
-        },
-        {
-            id: 'itm_raw_masterbatch',
-            code: 'RM-1003',
-            name: 'مستربچ مشکی نساجی سوپر بلک',
-            category: 'RAW_MATERIAL',
-            unit: 'کیلوگرم',
-            warehouseId: 'wh_raw',
-            stockQty: isPrimary ? 1200 : 400,
-            minStockQty: 250,
-            unitCost: 3100000,
-            coneWeightGrams: 0,
-            cartonWeightGrams: 0,
-            defaultConesPerCarton: 0
-        },
-        {
-            id: 'itm_pkg_cone_110',
-            code: 'PK-2001',
-            name: 'دوک مقوایی استاندارد (۱۱۰ گرم)',
-            category: 'PACKAGING',
-            unit: 'عدد',
-            warehouseId: 'wh_pkg',
-            stockQty: isPrimary ? 45000 : 12000,
-            minStockQty: 5000,
-            unitCost: 48000,
-            coneWeightGrams: 110,
-            cartonWeightGrams: 0,
-            defaultConesPerCarton: 0
-        },
-        {
-            id: 'itm_pkg_carton_std',
-            code: 'PK-2002',
-            name: 'کارتن ۵ لایه صادراتی نخ (۱۴۵۰ گرم به همراه لفاف)',
-            category: 'PACKAGING',
-            unit: 'عدد',
-            warehouseId: 'wh_pkg',
-            stockQty: isPrimary ? 6200 : 1800,
-            minStockQty: 1000,
-            unitCost: 380000,
-            coneWeightGrams: 0,
-            cartonWeightGrams: 1450,
-            defaultConesPerCarton: 6
-        },
-        {
-            id: 'itm_yarn_dty_150_48',
-            code: 'YN-3001',
-            name: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-            category: 'FINISHED_YARN',
-            unit: 'کیلوگرم',
-            warehouseId: 'wh_yarn',
-            stockQty: isPrimary ? 4320.5 : 1450.0,
-            minStockQty: 1000,
-            unitCost: 1845000,
-            salesPrice: 2180000,
-            denier: '150',
-            filament: '48',
-            yarnCount: '150D/48F NIM',
-            colorName: 'سفید (Raw White)',
-            coneWeightGrams: 110,
-            cartonWeightGrams: 1450,
-            defaultConesPerCarton: 6,
-            coneItemId: 'itm_pkg_cone_110',
-            cartonItemId: 'itm_pkg_carton_std'
-        },
-        {
-            id: 'itm_yarn_dty_150_48_blk',
-            code: 'YN-3002',
-            name: 'نخ تکسچره پلی‌استر DTY 150/48 IM مشکی درجه A',
-            category: 'FINISHED_YARN',
-            unit: 'کیلوگرم',
-            warehouseId: 'wh_yarn',
-            stockQty: isPrimary ? 2150.0 : 820.0,
-            minStockQty: 500,
-            unitCost: 1990000,
-            salesPrice: 2350000,
-            denier: '150',
-            filament: '48',
-            yarnCount: '150D/48F IM',
-            colorName: 'مشکی (Black)',
-            coneWeightGrams: 110,
-            cartonWeightGrams: 1450,
-            defaultConesPerCarton: 6,
-            coneItemId: 'itm_pkg_cone_110',
-            cartonItemId: 'itm_pkg_carton_std'
-        }
-    ],
-    boms: [
-        {
-            id: 'bom_dty_150_48',
-            finishedItemId: 'itm_yarn_dty_150_48',
-            finishedItemName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-            version: 'v1.0',
-            wastePercent: 2.2,
-            directLaborPerKg: 145000,
-            factoryOverheadPerKg: 175000,
-            components: [
-                { id: 'c1', itemId: 'itm_raw_poy_150', itemName: 'نخ POY پلی‌استر 250/48 خام', qtyPerKgOutput: 0.985, unit: 'کیلوگرم' },
-                { id: 'c2', itemId: 'itm_raw_oil', itemName: 'روغن کنینگ نساجی (Coning Oil)', qtyPerKgOutput: 0.025, unit: 'کیلوگرم' }
-            ]
-        },
-        {
-            id: 'bom_dty_150_48_blk',
-            finishedItemId: 'itm_yarn_dty_150_48_blk',
-            finishedItemName: 'نخ تکسچره پلی‌استر DTY 150/48 IM مشکی درجه A',
-            version: 'v1.0',
-            wastePercent: 2.5,
-            directLaborPerKg: 155000,
-            factoryOverheadPerKg: 185000,
-            components: [
-                { id: 'c3', itemId: 'itm_raw_poy_150', itemName: 'نخ POY پلی‌استر 250/48 خام', qtyPerKgOutput: 0.96, unit: 'کیلوگرم' },
-                { id: 'c4', itemId: 'itm_raw_masterbatch', itemName: 'مستربچ مشکی نساجی سوپر بلک', qtyPerKgOutput: 0.03, unit: 'کیلوگرم' },
-                { id: 'c5', itemId: 'itm_raw_oil', itemName: 'روغن کنینگ نساجی (Coning Oil)', qtyPerKgOutput: 0.025, unit: 'کیلوگرم' }
-            ]
-        }
-    ],
-    productionOrders: [
-        {
-            id: 'prd_ord_101',
-            orderNo: 'PRD-405-101',
-            dateJalali: '1405/08/18',
-            machineCode: 'TMT-01',
-            shift: 'روزکار (A)',
-            supervisorName: 'مهندس کاظمی',
-            productId: 'itm_yarn_dty_150_48',
-            productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-            lotNumber: 'LOT-405-08',
-            targetQtyKg: 5000,
-            producedQtyKg: 3420.5,
-            wasteQtyKg: 74.2,
-            status: 'IN_PROGRESS',
-            notes: 'خط ۱ تکسچره سرعت ۶۵۰ متر بر دقیقه'
-        },
-        {
-            id: 'prd_ord_102',
-            orderNo: 'PRD-405-102',
-            dateJalali: '1405/08/19',
-            machineCode: 'BARMAG-02',
-            shift: 'شب‌کار (B)',
-            supervisorName: 'مهندس شریفی',
-            productId: 'itm_yarn_dty_150_48_blk',
-            productName: 'نخ تکسچره پلی‌استر DTY 150/48 IM مشکی درجه A',
-            lotNumber: 'LOT-405-09B',
-            targetQtyKg: 3000,
-            producedQtyKg: 2150.0,
-            wasteQtyKg: 51.0,
-            status: 'IN_PROGRESS',
-            notes: 'تولید نخ مشکی اینترمینگل با مستربچ سوپربلک'
-        }
-    ],
-    cartonLabels: isPrimary ? [
-        {
-            id: 'lbl_init_1001',
-            serialNumber: 'DLK-405-10001',
-            qrPayload: 'DLK|DLK-405-10001|YN-3001|LOT-405-08|32.890|35.000|6|1405/08/20',
-            source: 'DELCOM',
-            productId: 'itm_yarn_dty_150_48',
-            productCode: 'YN-3001',
-            productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-            denier: '150',
-            filament: '48',
-            yarnCount: '150D/48F NIM',
-            colorName: 'سفید (Raw White)',
-            grade: 'A',
-            lotNumber: 'LOT-405-08',
-            machineCode: 'TMT-01',
-            shift: 'روزکار (A)',
-            operatorName: 'حسین رضایی',
-            conesCount: 6,
-            coneWeightGrams: 110,
-            cartonWeightGrams: 1450,
-            palletTareKg: 0,
-            totalTareKg: 2.11,
-            grossWeightKg: 35.0,
-            netWeightKg: 32.89,
-            unitCostPerKg: 1845000,
-            totalCostRials: 60682050,
-            status: 'IN_STOCK',
-            createdAt: Date.now() - 86400000,
-            createdDateJalali: '1405/08/19'
-        },
-        {
-            id: 'lbl_init_1002',
-            serialNumber: 'DLK-405-10002',
-            qrPayload: 'DLK|DLK-405-10002|YN-3001|LOT-405-08|33.290|35.400|6|1405/08/20',
-            source: 'DELCOM',
-            productId: 'itm_yarn_dty_150_48',
-            productCode: 'YN-3001',
-            productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-            denier: '150',
-            filament: '48',
-            yarnCount: '150D/48F NIM',
-            colorName: 'سفید (Raw White)',
-            grade: 'A',
-            lotNumber: 'LOT-405-08',
-            machineCode: 'TMT-01',
-            shift: 'روزکار (A)',
-            operatorName: 'حسین رضایی',
-            conesCount: 6,
-            coneWeightGrams: 110,
-            cartonWeightGrams: 1450,
-            palletTareKg: 0,
-            totalTareKg: 2.11,
-            grossWeightKg: 35.4,
-            netWeightKg: 33.29,
-            unitCostPerKg: 1845000,
-            totalCostRials: 61420050,
-            status: 'IN_STOCK',
-            createdAt: Date.now() - 72000000,
-            createdDateJalali: '1405/08/19'
-        }
-    ] : [],
-    warehouseDocs: [
-        {
-            id: 'whdoc_101',
-            docNo: 'WHD-405-101',
-            docType: 'RECEIPT_PURCHASE',
-            dateJalali: '1405/08/15',
-            warehouseId: 'wh_raw',
-            warehouseName: 'انبار مواد اولیه',
-            counterpartyName: 'پتروشیمی تندگویان / تامین‌کننده POY',
-            status: 'FINALIZED',
-            items: [
-                { itemId: 'itm_raw_poy_150', itemCode: 'RM-1001', itemName: 'نخ POY پلی‌استر 250/48 خام', qty: 5000, unit: 'کیلوگرم', unitCost: 1420000, totalCost: 7100000000 }
-            ],
-            notes: 'رسید ورود نخ POY به انبار مواد اولیه کارخانه'
-        }
-    ],
-    salesOrders: [
-        {
-            id: 'so_405_101',
-            orderNo: 'SO-405-101',
-            dateJalali: '1405/08/19',
-            customerName: 'نساجی بافتینه کاشان',
-            customerCode: '113210',
-            productId: 'itm_yarn_dty_150_48',
-            productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-            requestedKg: 2000,
-            deliveredKg: 660,
-            agreedUnitPrice: 2180000,
-            paymentTerms: 'چک ۴۵ روزه صیادی',
-            status: 'APPROVED_FOR_LOADING',
-            notes: 'تحویل پارت اول از کارخانه زنجان'
-        }
-    ],
+    productionLines: [],
+    commodityGroups: [],
+    warehouses: [],
+    items: [],
+    boms: [],
+    productionOrders: [],
+    cartonLabels: [],
+    productionVouchers: [],
+    warehouseDocuments: [],
+    warehouseDocs: [],
+    salesOrders: [],
+    remittances: [],
     tradeDocs: [],
-    remittances: isPrimary ? [
-        {
-            id: 'rem_init_501',
-            remittanceNo: 'REM-405-501',
-            dateJalali: '1405/08/20',
-            customerName: 'نساجی بافتینه کاشان',
-            customerCode: '113210',
-            driverName: 'مهدی کریمی',
-            plateNumber: '48ع745-ایران67',
-            status: 'PENDING_TEHRAN_PRICING',
-            exitPermitNumber: 501,
-            cartonSerials: ['DLK-405-10001'],
-            items: [
-                {
-                    productId: 'itm_yarn_dty_150_48',
-                    productCode: 'YN-3001',
-                    productName: 'نخ تکسچره پلی‌استر DTY 150/48 NIM سفید درجه A',
-                    cartonsCount: 20,
-                    conesCount: 120,
-                    grossWeightKg: 702.2,
-                    netWeightKg: 660.0,
-                    unitPrice: 0
-                }
-            ],
-            notes: 'خروج کارخانه بدون فی (صادرشده توسط انبار کارخانه زنجان) - در انتظار تعیین فی در دفتر تهران'
-        }
-    ] : [],
-    parties: [
-        { id: 'pty_1', code: '113210', name: 'نساجی بافتینه کاشان', type: 'CUSTOMER', nationalId: '10260451230', phone: '031-55443322', creditLimit: 20000000000, city: 'کاشان' },
-        { id: 'pty_2', code: '113211', name: 'پوشاک و گردباف تک‌بافت تهران', type: 'CUSTOMER', nationalId: '10104891200', phone: '021-55667788', creditLimit: 15000000000, city: 'تهران' },
-        { id: 'pty_3', code: '214101', name: 'بازرگانی پتروشیمی و الیاف پلی‌استر', type: 'SUPPLIER', nationalId: '10103322110', phone: '021-88776655', creditLimit: 50000000000, city: 'تهران' },
-        { id: 'pty_4', code: '214102', name: 'صنایع بسته‌بندی و کارتن‌سازی البرز', type: 'SUPPLIER', nationalId: '10861122330', phone: '026-32224455', creditLimit: 5000000000, city: 'کرج' },
-        { id: 'pty_5', code: '301101', name: 'مرکز هزینه سالن تکسچره ۱ کارخانه زنجان', type: 'COST_CENTER', nationalId: '-', phone: '-', creditLimit: 0, city: 'زنجان' }
-    ],
-    bankAccounts: [
-        { id: 'bnk_1', code: '110101', bankName: 'بانک ملت', branchName: 'شعبه بازار تهران', accountNo: '4418923104', sheba: 'IR420120000000004418923104', accountType: 'CHECKING', balanceRials: 8450000000 },
-        { id: 'bnk_2', code: '110102', bankName: 'بانک ملی', branchName: 'شعبه مرکزی زنجان', accountNo: '0109283746001', sheba: 'IR880170000000109283746001', accountType: 'CHECKING', balanceRials: 3120000000 },
-        { id: 'bnk_3', code: '110103', bankName: 'بانک سپه', branchName: 'شعبه خیام', accountNo: '1882930412', sheba: 'IR190150000000001882930412', accountType: 'CHECKING', balanceRials: 1640000000 },
-        { id: 'bnk_4', code: '110104', bankName: 'صندوق و تنخواه کارخانه زنجان', branchName: 'محل کارخانه', accountNo: 'CASH-ZNJ-01', sheba: '-', accountType: 'PETTY_CASH', balanceRials: 450000000 }
-    ],
-    chequeBooks: [
-        { id: 'chqb_1', bankAccountId: 'bnk_1', bankName: 'بانک ملت - شعبه بازار', seriesCode: '1405/A', fromSerial: 851001, toSerial: 851050, usedCount: 6, status: 'ACTIVE' }
-    ],
-    treasuryDocs: [
-        {
-            id: 'trs_101',
-            docNo: 'TRS-405-101',
-            type: 'RECEIPT',
-            method: 'CHEQUE',
-            dateJalali: '1405/08/18',
-            partyName: 'نساجی بافتینه کاشان',
-            bankOrCashTitle: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)',
-            accountCode: '1104',
-            counterAccountCode: '1103',
-            amountRials: 1450000000,
-            sayadId: '4059812736450001',
-            dueDateJalali: '1405/10/01',
-            chequeStatus: 'IN_HAND',
-            voucherNo: 1001,
-            description: 'دریافت چک صیادی بابت علی‌الحساب خرید نخ DTY'
-        }
-    ],
-    payrollEmployees: [
-        { id: 'emp_1', personnelCode: '40101', fullName: 'حسین رضایی', nationalCode: '4280192831', roleTitle: 'اپراتور ارشد خط تکسچره و باسکول', department: 'تولید کارخانه زنجان', costCenter: 'تولید مستقیم', baseSalaryRials: 185000000, housingAllowanceRials: 25000000, foodAllowanceRials: 30000000, bankAccountNo: 'IR120170000000991122334455' },
-        { id: 'emp_2', personnelCode: '40102', fullName: 'مهندس سعید کاظمی', nationalCode: '4271928374', roleTitle: 'سرپرست تولید و کنترل کیفیت', department: 'تولید کارخانه زنجان', costCenter: 'سربار تولید', baseSalaryRials: 260000000, housingAllowanceRials: 25000000, foodAllowanceRials: 30000000, bankAccountNo: 'IR550120000000887766554433' },
-        { id: 'emp_3', personnelCode: '40103', fullName: 'مریم محمدی', nationalCode: '0071829301', roleTitle: 'حسابدار فروش و صدور فاکتور', department: 'دفتر مرکزی تهران', costCenter: 'اداری و فروش', baseSalaryRials: 210000000, housingAllowanceRials: 25000000, foodAllowanceRials: 30000000, bankAccountNo: 'IR660120000000776655443322' }
-    ],
-    payrollSlips: [
-        { id: 'pslip_1', monthTitle: 'آبان ۱۴۰۵', employeeId: 'emp_1', employeeName: 'حسین رضایی', workDays: 30, overtimeHours: 24, grossPayRials: 274000000, insuranceEmployeeRials: 19180000, insuranceEmployerRials: 63020000, taxRials: 4200000, netPayRials: 250620000, status: 'PAID', voucherNo: 1001 }
-    ],
-    fixedAssets: [
-        { id: 'ast_1', assetCode: 'AST-1001', title: 'ماشین تکسچره اتوماتیک TMT-01 ژاپن (۲۱۶ دوک)', category: 'ماشین‌آلات خط تولید', location: 'کارخانه زنجان - سالن ۱', purchaseDateJalali: '1402/04/10', costRials: 85000000000, depreciationMethod: 'خط مستقیم', annualRatePercent: 10, accumulatedDepreciationRials: 17000000000, bookValueRials: 68000000000, status: 'ACTIVE' },
-        { id: 'ast_2', assetCode: 'AST-1002', title: 'باسکول دیجیتال صنعتی پالت‌کش و کارتن‌کش دقیق', category: 'تجهیزات توزین و بسته‌بندی', location: 'کارخانه زنجان - سالن محصول', purchaseDateJalali: '1403/02/15', costRials: 950000000, depreciationMethod: 'خط مستقیم', annualRatePercent: 15, accumulatedDepreciationRials: 142500000, bookValueRials: 807500000, status: 'ACTIVE' }
-    ],
+    parties: [],
+    bankAccounts: [],
+    chequeBooks: [],
+    treasuryDocs: [],
+    payrollEmployees: [],
+    payrollSlips: [],
+    fixedAssets: [],
     chartOfAccounts: [
-        { id: 'acc_g1', code: '1', title: 'دارایی‌ها', level: 'GROUP', nature: 'DEBIT' },
-        { id: 'acc_g11', code: '11', title: 'دارایی‌های جاری', level: 'GROUP', parentCode: '1', nature: 'DEBIT' },
-        { id: 'acc_1101', code: '1101', title: 'موجودی نقد و بانک‌های عامل', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
-        { id: 'acc_110101', code: '110101', title: 'بانک ملت - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
-        { id: 'acc_110102', code: '110102', title: 'بانک ملی - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
-        { id: 'acc_110103', code: '110103', title: 'بانک سپه - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
-        { id: 'acc_110104', code: '110104', title: 'بانک تجارت - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
-        { id: 'acc_110105', code: '110105', title: 'بانک صادرات - حساب جاری عامل', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
-        { id: 'acc_110109', code: '110109', title: 'صندوق و تنخواه‌گردان کارخانه و دفتر', level: 'MOEIN', parentCode: '1101', nature: 'DEBIT' },
-        { id: 'acc_1103', code: '1103', title: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
-        { id: 'acc_1104', code: '1104', title: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
-        { id: 'acc_1106', code: '1106', title: 'موجودی مواد و کالا (انبارها)', level: 'KOL', parentCode: '11', nature: 'DEBIT' },
-        { id: 'acc_110601', code: '110601', title: 'انبار مواد اولیه و الیاف', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
-        { id: 'acc_110602', code: '110602', title: 'انبار ملزومات بسته‌بندی (دوک و کارتن)', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
-        { id: 'acc_110603', code: '110603', title: 'انبار کالای در جریان ساخت (خط تولید نخ)', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
-        { id: 'acc_110604', code: '110604', title: 'انبار محصول نهایی نخ', level: 'MOEIN', parentCode: '1106', nature: 'DEBIT' },
-        { id: 'acc_1201', code: '1201', title: 'دارایی‌های ثابت مشهود (ماشین‌آلات و تجهیزات)', level: 'KOL', parentCode: '1', nature: 'DEBIT' },
-        { id: 'acc_1202', code: '1202', title: 'استهلاک انباشته دارایی‌های ثابت', level: 'KOL', parentCode: '1', nature: 'CREDIT' },
-        { id: 'acc_g2', code: '2', title: 'بدهی‌ها', level: 'GROUP', nature: 'CREDIT' },
-        { id: 'acc_2101', code: '2101', title: 'حساب‌ها و اسناد پرداختنی تجاری (تامین‌کنندگان)', level: 'KOL', parentCode: '2', nature: 'CREDIT' },
-        { id: 'acc_2102', code: '2102', title: 'اسناد پرداختنی (چک‌های صادره شرکت)', level: 'KOL', parentCode: '2', nature: 'CREDIT' },
-        { id: 'acc_2105', code: '2105', title: 'سایر حساب‌های پرداختنی (حقوق، بیمه و مالیات پرداختنی)', level: 'KOL', parentCode: '2', nature: 'CREDIT' },
-        { id: 'acc_g3', code: '3', title: 'حقوق صاحبان سهام', level: 'GROUP', nature: 'CREDIT' },
-        { id: 'acc_3101', code: '3101', title: 'سرمایه، اندوخته‌ها و تراز افتتاحیه سنواتی', level: 'KOL', parentCode: '3', nature: 'CREDIT' },
-        { id: 'acc_3109', code: '3109', title: 'خلاصه سود و زیان و تراز اختتامیه', level: 'KOL', parentCode: '3', nature: 'CREDIT' },
-        { id: 'acc_g4', code: '4', title: 'فروش و درآمدها', level: 'GROUP', nature: 'CREDIT' },
-        { id: 'acc_4101', code: '4101', title: 'فروش خالص نخ و محصولات', level: 'KOL', parentCode: '4', nature: 'CREDIT' },
-        { id: 'acc_4102', code: '4102', title: 'برگشت از فروش و تخفیفات', level: 'KOL', parentCode: '4', nature: 'DEBIT' },
-        { id: 'acc_g5', code: '5', title: 'بهای تمام‌شده', level: 'GROUP', nature: 'DEBIT' },
-        { id: 'acc_5101', code: '5101', title: 'بهای تمام‌شده کالای فروش‌رفته', level: 'KOL', parentCode: '5', nature: 'DEBIT' },
-        { id: 'acc_g6', code: '6', title: 'هزینه‌های تولید، اداری و عمومی', level: 'GROUP', nature: 'DEBIT' },
-        { id: 'acc_6101', code: '6101', title: 'هزینه‌های دستمزد مستقیم تولید', level: 'KOL', parentCode: '6', nature: 'DEBIT' },
-        { id: 'acc_6102', code: '6102', title: 'سربار ساخت کارخانه (برق، استهلاک، نت)', level: 'KOL', parentCode: '6', nature: 'DEBIT' },
-        { id: 'acc_6103', code: '6103', title: 'هزینه‌های حقوق و دستمزد اداری و فروش', level: 'KOL', parentCode: '6', nature: 'DEBIT' }
+        { id: 'acc_10', code: '10', title: 'دارایی‌های جاری', level: 'KOL', nature: 'DEBIT' },
+        { id: 'acc_1101', code: '1101', title: 'موجودی نقد و بانک‌ها', level: 'MOEIN', parentCode: '10', nature: 'DEBIT' },
+        { id: 'acc_1102', code: '1102', title: 'حساب‌ها و اسناد دریافتنی تجاری', level: 'MOEIN', parentCode: '10', nature: 'DEBIT' },
+        { id: 'acc_1103', code: '1103', title: 'موجودی مواد و کالا', level: 'MOEIN', parentCode: '10', nature: 'DEBIT' },
+        { id: 'acc_1104', code: '1104', title: 'پیش‌پرداخت‌ها و سفارشات', level: 'MOEIN', parentCode: '10', nature: 'DEBIT' },
+        { id: 'acc_12', code: '12', title: 'دارایی‌های غیرجاری (ثابت)', level: 'KOL', nature: 'DEBIT' },
+        { id: 'acc_1201', code: '1201', title: 'ماشین‌آلات و تجهیزات تولید', level: 'MOEIN', parentCode: '12', nature: 'DEBIT' },
+        { id: 'acc_20', code: '20', title: 'بدهی‌های جاری', level: 'KOL', nature: 'CREDIT' },
+        { id: 'acc_2101', code: '2101', title: 'حساب‌ها و اسناد پرداختنی تجاری', level: 'MOEIN', parentCode: '20', nature: 'CREDIT' },
+        { id: 'acc_2102', code: '2102', title: 'سایر حساب‌های پرداختنی و ذخایر', level: 'MOEIN', parentCode: '20', nature: 'CREDIT' },
+        { id: 'acc_30', code: '30', title: 'حقوق صاحبان سهام و سرمایه', level: 'KOL', nature: 'CREDIT' },
+        { id: 'acc_3101', code: '3101', title: 'سرمایه ثبت‌شده شرکت', level: 'MOEIN', parentCode: '30', nature: 'CREDIT' },
+        { id: 'acc_3102', code: '3102', title: 'سود (زیان) انباشته', level: 'MOEIN', parentCode: '30', nature: 'BOTH' },
+        { id: 'acc_50', code: '50', title: 'درآمدها و فروش', level: 'KOL', nature: 'CREDIT' },
+        { id: 'acc_5101', code: '5101', title: 'فروش ناخالص محصولات تولیدی', level: 'MOEIN', parentCode: '50', nature: 'CREDIT' },
+        { id: 'acc_5102', code: '5102', title: 'برگشت از فروش و تخفیفات', level: 'MOEIN', parentCode: '50', nature: 'DEBIT' },
+        { id: 'acc_60', code: '60', title: 'بهای تمام‌شده کالای فروش‌رفته', level: 'KOL', nature: 'DEBIT' },
+        { id: 'acc_6101', code: '6101', title: 'مواد اولیه مستقیم مصرفی', level: 'MOEIN', parentCode: '60', nature: 'DEBIT' },
+        { id: 'acc_6102', code: '6102', title: 'دستمزد مستقیم خطوط تولید', level: 'MOEIN', parentCode: '60', nature: 'DEBIT' },
+        { id: 'acc_6103', code: '6103', title: 'سربار ساخت و تولید کارخانه', level: 'MOEIN', parentCode: '60', nature: 'DEBIT' },
+        { id: 'acc_70', code: '70', title: 'هزینه‌های اداری، عمومی و فروش', level: 'KOL', nature: 'DEBIT' }
     ],
-    vouchers: isPrimary ? [
-        {
-            id: 'vch_init_1',
-            voucherNo: 1001,
-            dateJalali: '1405/08/19',
-            type: 'PRODUCTION',
-            status: 'FINALIZED',
-            description: 'سند خودکار تولید کارتن نخ DLK-405-10001 و DLK-405-10002 و کسر مواد اولیه طبق BOM',
-            createdBy: 'سیستم اتوماتیک تولید',
-            createdAt: Date.now() - 70000000,
-            lines: [
-                { id: 'l1', accountCode: '110604', accountTitle: 'انبار محصول نهایی نخ', tafziliName: 'نخ DTY 150/48 سفید', debit: 122102100, credit: 0, description: 'ورود ۲ کارتن نخ تولیدی (۶۶.۱۸ کیلوگرم خالص)' },
-                { id: 'l2', accountCode: '110601', accountTitle: 'انبار مواد اولیه و الیاف', tafziliName: 'POY و روغن کنینگ', debit: 0, credit: 98422500, description: 'مصرف مواد اولیه و ضایعات طبق فرمول تولید' },
-                { id: 'l3', accountCode: '110602', accountTitle: 'انبار ملزومات بسته‌بندی (دوک و کارتن)', tafziliName: 'دوک ۱۱۰ گرمی و کارتن صادراتی', debit: 0, credit: 2502000, description: 'مصرف ۱۲ عدد دوک و ۲ عدد کارتن' },
-                { id: 'l4', accountCode: '6101', accountTitle: 'هزینه‌های دستمزد مستقیم تولید', tafziliName: 'سالن تکسچره زنجان', debit: 0, credit: 9596100, description: 'جذب دستمزد مستقیم تولید' },
-                { id: 'l5', accountCode: '6102', accountTitle: 'سربار ساخت کارخانه (برق، استهلاک، نت)', tafziliName: 'سالن تکسچره زنجان', debit: 0, credit: 11581500, description: 'جذب سربار ساخت تولید' }
-            ]
-        }
-    ] : [],
+    vouchers: [],
+    nextCartonSeq: 10001,
+    nextVoucherNo: 1,
     cutoverConfig: {
         stage1FactoryWarehouseActive: true,
         stage2TehranPricingInvoiceActive: true,
         stage3PaymentOrdersAutoVoucherActive: false,
         lastSayanBarcodeSyncAt: null,
-        lastSayanTrialBalanceCutoff: null
-    },
-    nextCartonSeq: 10003,
-    nextVoucherNo: 1002
+        lastSayanBarcodeSyncCount: 0,
+        lastTrialBalanceCutoffDate: '1405/08/20',
+        lastTrialBalanceImportAt: null,
+        defaultPaymentBankAccountCode: '110101',
+        defaultReceivableAccountCode: '110201',
+        defaultPayableAccountCode: '210101'
+    }
 });
 
 function getErpCompaniesList(db) {
@@ -9484,6 +9121,69 @@ app.post('/api/industrial-erp/companies', (req, res) => {
 
         saveDb(db);
         res.json({ success: true, companyId: compId, message: `اطلاعات شرکت «${name}» و دوره مالی مستقل آن ذخیره شد.` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Clean / Raw reset of ERP company data without touching main DB
+app.post('/api/industrial-erp/clear-company-data', (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body && req.body.companyId;
+        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است' });
+        const compList = getErpCompaniesList(db);
+        const comp = compList.find(c => c.id === companyId) || { name: 'شرکت انتخابی' };
+        const freshState = getDefaultIndustrialErpState(comp.name, false);
+        freshState.companyId = companyId;
+        if (!db.industrialErp) db.industrialErp = {};
+        if (!db.industrialErp.companiesData) db.industrialErp.companiesData = {};
+        db.industrialErp.companiesData[companyId] = freshState;
+        saveDb(db);
+        res.json({ success: true, message: 'داده‌های حسابداری و انبار شرکت با موفقیت خام و صفر گردید. دیتابیس اصلی نرم‌افزار کاملاً دست‌نخورده باقی ماند.', state: freshState });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Send Backup to Bale & Telegram bots
+app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body && req.body.companyId;
+        const compList = getErpCompaniesList(db);
+        const comp = compList.find(c => c.id === companyId) || { name: 'سیستم جامع ERP' };
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
+        const dbBackup = await createDbOnlyBackupZip(timestamp);
+        const reasonText = 'پشتیبان‌گیری دستی حسابداری و انبار شرکت ' + comp.name;
+        const botResult = await sendBackupToBots(
+            dbBackup.filePath,
+            dbBackup.filename,
+            reasonText,
+            true
+        );
+        res.json({
+            success: true,
+            message: 'نسخه پشتیبان دیتابیس تهیه شد و با موفقیت به بات ارسال گردید.',
+            filename: dbBackup.filename,
+            botResult: botResult
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Download JSON backup of ERP company state
+app.get('/api/industrial-erp/download-backup', (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.query.companyId;
+        const erp = ensureIndustrialErpStructure(db, companyId);
+        const compName = (erp.companyName || 'ERP').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const filename = 'ERP_Backup_' + compName + '_' + Date.now() + '.json';
+        res.setHeader('Content-Disposition', 'attachment; filename=' + filename);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.send(JSON.stringify(erp, null, 2));
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

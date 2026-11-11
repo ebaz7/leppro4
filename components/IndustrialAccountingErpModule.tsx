@@ -24,7 +24,10 @@ import {
   LogOut,
   X,
   Unlock,
-  Layers
+  Layers,
+  Download,
+  Bot,
+  Trash2
 } from 'lucide-react';
 import { apiCall } from '../services/apiService';
 import { getSettings } from '../services/storageService';
@@ -180,6 +183,62 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   const [cutoffDateInput, setCutoffDateInput] = useState<string>('1405/08/20');
   const [syncingBarcodes, setSyncingBarcodes] = useState<boolean>(false);
   const [importingTrialBalance, setImportingTrialBalance] = useState<boolean>(false);
+  const [backingUpToBot, setBackingUpToBot] = useState<boolean>(false);
+  const [clearingData, setClearingData] = useState<boolean>(false);
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
+
+  const handleBackupToBot = async () => {
+    if (!selectedCompany) return;
+    setBackingUpToBot(true);
+    try {
+      const res = await apiCall<{ success: boolean; message: string; filename?: string; botResult?: any }>(
+        '/api/industrial-erp/backup-to-bot',
+        'POST',
+        { companyId: selectedCompany.id }
+      );
+      if (res && res.success) {
+        showToast('success', `بکاپ دیتابیس حسابداری و انبار با موفقیت ایجاد و به بات ارسال گردید (${res.filename || ''})`);
+      } else {
+        showToast('error', res?.message || 'خطا در ارسال فایل پشتیبان به بات');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'خطا در برقراری ارتباط با سرور پشتیبان‌گیری');
+    } finally {
+      setBackingUpToBot(false);
+    }
+  };
+
+  const handleDownloadBackup = () => {
+    if (!selectedCompany) return;
+    window.open(`/api/industrial-erp/download-backup?companyId=${selectedCompany.id}`, '_blank');
+    showToast('success', 'فایل JSON پشتیبان اختصاصی شرکت دانلود شد');
+  };
+
+  const handleClearCompanyData = async () => {
+    if (!selectedCompany) return;
+    setClearingData(true);
+    try {
+      const res = await apiCall<{ success: boolean; message: string; state: IndustrialErpState }>(
+        '/api/industrial-erp/clear-company-data',
+        'POST',
+        { companyId: selectedCompany.id }
+      );
+      if (res && res.success && res.state) {
+        setErpState(res.state);
+        try {
+          localStorage.removeItem(`delcom_erp_state_${selectedCompany.id}`);
+        } catch {}
+        setShowClearConfirmModal(false);
+        showToast('success', res.message || 'داده‌های شرکت خام و صفر گردید. دیتابیس اصلی برنامه کاملاً سالم و دست‌نخورده است.');
+      } else {
+        showToast('error', 'خطا در خام‌سازی داده‌های شرکت');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'خطا در پردازش درخواست');
+    } finally {
+      setClearingData(false);
+    }
+  };
 
   // Granular Access Matrix
   const userAny = currentUser as any;
@@ -841,6 +900,37 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             <span className="hidden sm:inline">⇄ سوییچ به سایدبار اصلی برنامه</span>
           </button>
 
+          {/* Backup to Telegram & Bale Bots */}
+          <button
+            onClick={handleBackupToBot}
+            disabled={backingUpToBot}
+            className="px-2.5 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+            title="تهیه و ارسال آنی بکاپ دیتابیس حسابداری و انبار به ربات‌های بله و تلگرام"
+          >
+            <Bot size={13} className={backingUpToBot ? 'animate-spin' : ''} />
+            <span className="hidden md:inline">ارسال بکاپ به بات</span>
+          </button>
+
+          {/* Download JSON Backup */}
+          <button
+            onClick={handleDownloadBackup}
+            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+            title="دانلود فایل پشتیبان داده‌های این شرکت"
+          >
+            <Download size={13} />
+            <span className="hidden md:inline">دانلود بکاپ</span>
+          </button>
+
+          {/* Clear / Raw Company Data */}
+          <button
+            onClick={() => setShowClearConfirmModal(true)}
+            className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+            title="خام‌سازی داده‌های این شرکت بدون دست‌خوردن دیتابیس اصلی نرم‌افزار"
+          >
+            <Trash2 size={13} />
+            <span className="hidden lg:inline">خام‌سازی شرکت</span>
+          </button>
+
           <button
             onClick={handleSyncSayanBarcodes}
             disabled={syncingBarcodes}
@@ -1115,6 +1205,55 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           </div>
         </main>
       </div>
+
+      {/* MODAL: CLEAR COMPANY DEMO/SAMPLE DATA (RAW INITIALIZATION) */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-500 shrink-0">
+                <Trash2 size={24} />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                  خام‌سازی داده‌های شرکت «{selectedCompany.name}»
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  آیا اطمینان دارید که می‌خواهید داده‌های این شرکت در ماژول حسابداری و انبار به حالت کاملاً خام و اولیه بازگردد؟
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-emerald-50 dark:bg-emerald-950/30 p-3.5 rounded-2xl border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 space-y-1">
+              <div className="font-black flex items-center gap-1.5">
+                <CheckCircle2 size={15} />
+                تضمین عدم دست‌خوردن دیتابیس اصلی نرم‌افزار:
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                این عملیات <strong>فقط اقلام، خطوط، انبارها، فرمول‌های ساخت و اسناد همین شرکت</strong> را صفر و خام می‌کند. دیتابیس اصلی نرم‌افزار (سفارشات، کاربران، چت‌ها، مجوزهای خروج و تنظیمات کلی) کاملاً محفوظ و دست‌نخورده باقی می‌ماند.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                onClick={() => setShowClearConfirmModal(false)}
+                disabled={clearingData}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                onClick={handleClearCompanyData}
+                disabled={clearingData}
+                className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-sm disabled:opacity-50"
+              >
+                <Trash2 size={14} className={clearingData ? 'animate-spin' : ''} />
+                <span>{clearingData ? 'در حال پاکسازی...' : 'بله، داده‌های این شرکت خام شود'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
