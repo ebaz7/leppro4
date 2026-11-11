@@ -34,6 +34,23 @@ export interface ErpCompanySummary {
   };
 }
 
+export interface ErpProductionLine {
+  id: string;
+  code: string;
+  name: string;
+  machineType: string;
+  supervisorName: string;
+  isActive: boolean;
+  notes?: string;
+}
+
+export interface ErpCommodityGroup {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+}
+
 export interface ErpWarehouse {
   id: string;
   code: string;
@@ -41,6 +58,8 @@ export interface ErpWarehouse {
   type: 'RAW_MATERIAL' | 'PACKAGING' | 'FINISHED_YARN' | 'WASTE' | 'GENERAL';
   location: string;
   managerName?: string;
+  assignedGroupIds?: string[];
+  assignedItemIds?: string[];
 }
 
 export interface ErpItem {
@@ -48,6 +67,8 @@ export interface ErpItem {
   code: string;
   name: string;
   category: 'RAW_MATERIAL' | 'PACKAGING' | 'FINISHED_YARN' | 'WASTE';
+  groupId?: string;
+  groupName?: string;
   unit: string;
   warehouseId: string;
   stockQty: number;
@@ -58,6 +79,7 @@ export interface ErpItem {
   ply?: string;
   colorCode?: string;
   colorName?: string;
+  grade?: 'A' | 'B' | 'C';
   coneWeightGrams: number;
   cartonWeightGrams: number;
   defaultConesPerCarton: number;
@@ -99,9 +121,22 @@ export interface ErpProductionOrder {
   status: 'IN_PROGRESS' | 'COMPLETED' | 'HALTED';
 }
 
+export interface ErpCartonHistoryEvent {
+  id: string;
+  stage: 'PRODUCTION_WEIGHING' | 'WAREHOUSE_RECEIPT' | 'INTER_WH_TRANSFER' | 'INTER_WH_RECEIPT' | 'SALES_REMITTANCE' | 'SALES_RETURN';
+  title: string;
+  dateJalali: string;
+  timeExact: string;
+  actor: string;
+  details: string;
+  docNo?: string;
+  archiveCode?: string;
+}
+
 export interface ErpCartonLabel {
   id: string;
   serialNumber: string;
+  referenceCode: string; // e.g. DLK-405-10023
   qrPayload: string;
   productId: string;
   productCode: string;
@@ -124,9 +159,73 @@ export interface ErpCartonLabel {
   status: 'IN_STOCK' | 'REMITTED' | 'SOLD' | 'RETURNED' | 'VOID';
   createdAt: number;
   createdDateJalali: string;
+  createdTimeExact?: string;
   createdBy: string;
+  productionLineId?: string;
+  productionLineName?: string;
+  productionVoucherNo?: string;
+  productionArchiveCode?: string;
   remittanceId?: string;
   sourceSystem?: 'DELKAM' | 'SAYAN';
+  history?: ErpCartonHistoryEvent[];
+}
+
+export interface ErpProductionVoucher {
+  id: string;
+  voucherNo: string;
+  archiveCode: string;
+  dateJalali: string;
+  timeExact: string;
+  lineId: string;
+  lineName: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  cartonsCount: number;
+  totalGrossWeightKg: number;
+  totalTareKg: number;
+  totalNetWeightKg: number;
+  operatorName: string;
+  cartonIds: string[];
+  status: 'PENDING_WAREHOUSE_DELIVERY' | 'DELIVERED_TO_WAREHOUSE';
+  deliveredWarehouseId?: string;
+  deliveredWarehouseName?: string;
+  deliveredDocNo?: string;
+  notes?: string;
+}
+
+export type ErpWarehouseDocType =
+  | 'RECEIPT_PRODUCTION'
+  | 'SALES_REMITTANCE'
+  | 'INTER_WH_TRANSFER'
+  | 'INTER_WH_RECEIPT'
+  | 'SALES_RETURN';
+
+export interface ErpWarehouseDocument {
+  id: string;
+  docNo: string;
+  archiveCode: string;
+  docType: ErpWarehouseDocType;
+  dateJalali: string;
+  timeExact: string;
+  sourceWarehouseId?: string;
+  sourceWarehouseName?: string;
+  targetWarehouseId?: string;
+  targetWarehouseName?: string;
+  partyName?: string;
+  partyCode?: string;
+  driverName?: string;
+  plateNumber?: string;
+  productionVoucherId?: string;
+  referenceDocId?: string;
+  cartonIds: string[];
+  cartonsCount: number;
+  totalGrossWeightKg: number;
+  totalNetWeightKg: number;
+  status: 'COMPLETED' | 'PENDING_RECEIPT';
+  receiverUserName?: string;
+  createdBy: string;
+  notes?: string;
 }
 
 export interface ErpWarehouseDoc {
@@ -371,6 +470,10 @@ export interface IndustrialErpState {
   companyId?: string;
   companyName?: string;
   activeFiscalYear?: string;
+  productionLines?: ErpProductionLine[];
+  commodityGroups?: ErpCommodityGroup[];
+  productionVouchers?: ErpProductionVoucher[];
+  warehouseDocuments?: ErpWarehouseDocument[];
   warehouses: ErpWarehouse[];
   items: ErpItem[];
   boms: ErpBom[];
@@ -426,17 +529,28 @@ export type ErpSubViewId =
   | 'com_purchases'
   | 'com_returns'
   | 'wh_warehouses'
+  | 'wh_receipt_production'
+  | 'wh_sales_remittance'
+  | 'wh_inter_remittance'
+  | 'wh_inter_receipt'
+  | 'wh_sales_return'
+  | 'wh_archive'
+  | 'wh_stock_report'
+  | 'wh_kardex'
+  | 'wh_tracking'
   | 'wh_items'
   | 'wh_weighbridge'
   | 'wh_exit_remittance'
   | 'wh_receipt_issue'
   | 'wh_cartable'
   | 'wh_stocktaking'
-  | 'wh_kardex'
   | 'wacc_pricing'
   | 'wacc_riali_kardex'
-  | 'prd_bom'
+  | 'prd_lines'
+  | 'prd_items'
   | 'prd_line_perf'
+  | 'prd_archive'
+  | 'prd_bom'
   | 'pay_employees'
   | 'pay_slips'
   | 'ast_management'
@@ -457,6 +571,62 @@ export interface ErpSidebarCategory {
 }
 
 export const ERP_SIDEBAR_TREE: ErpSidebarCategory[] = [
+  {
+    id: 'PRODUCTION',
+    title: 'برنامه‌ریزی و تولید',
+    icon: Factory,
+    color: 'text-orange-600',
+    groups: [
+      {
+        groupTitle: 'تعاریف پایه تولید',
+        items: [
+          { id: 'prd_lines', label: 'تعریف خطوط تولید' },
+          { id: 'prd_items', label: 'تعریف کالاها و گروه‌ها' },
+          { id: 'prd_bom', label: 'تعریف فرمول تولید (BOM)' }
+        ]
+      },
+      {
+        groupTitle: 'عملکرد خط و باسکول',
+        items: [
+          { id: 'prd_line_perf', label: 'عملکرد خط تولید و توزین باسکول (چاپ لیبل)' },
+          { id: 'prd_archive', label: 'بایگانی تولید' }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'WAREHOUSE',
+    title: 'انبارداری',
+    icon: Boxes,
+    color: 'text-teal-600',
+    groups: [
+      {
+        groupTitle: 'تعاریف و تخصیص انبار',
+        items: [
+          { id: 'wh_warehouses', label: 'تعریف انبارها و تخصیص کالا و گروه' }
+        ]
+      },
+      {
+        groupTitle: 'اسناد و عملیات انبار',
+        items: [
+          { id: 'wh_receipt_production', label: 'رسید تحویل کالا از تولید' },
+          { id: 'wh_sales_remittance', label: 'حواله فروش (خروج بدون فی)' },
+          { id: 'wh_inter_remittance', label: 'حواله بین انبار (انتقال)' },
+          { id: 'wh_inter_receipt', label: 'رسید حواله بین انبار (تایید ورود)' },
+          { id: 'wh_sales_return', label: 'رسید مرجوعی از فروش' },
+          { id: 'wh_archive', label: 'بایگانی اسناد انبار' }
+        ]
+      },
+      {
+        groupTitle: 'گزارش و رهگیری',
+        items: [
+          { id: 'wh_stock_report', label: 'گزارش انبار' },
+          { id: 'wh_kardex', label: 'کاردکس کالا' },
+          { id: 'wh_tracking', label: 'رهگیری جامع کارتن با کد ارجاع / بارکد' }
+        ]
+      }
+    ]
+  },
   {
     id: 'FINANCE',
     title: 'مالی و حسابداری',
@@ -543,47 +713,6 @@ export const ERP_SIDEBAR_TREE: ErpSidebarCategory[] = [
     ]
   },
   {
-    id: 'WAREHOUSE',
-    title: 'انبارداری',
-    icon: Boxes,
-    color: 'text-teal-600',
-    groups: [
-      {
-        groupTitle: 'اطلاعات انبارها و کالاها',
-        items: [
-          { id: 'wh_warehouses', label: 'مدیریت انبارها و تخصیص انبار' },
-          { id: 'wh_items', label: 'تعریف سرفصل کالاها و وزن دوک/کارتن' }
-        ]
-      },
-      {
-        groupTitle: 'عملیات روزانه و بایگانی اسناد',
-        items: [
-          { id: 'wh_exit_remittance', label: 'صدور حواله خروج کارخانه (اسکن بارکد - بدون فی)' },
-          { id: 'wh_receipt_issue', label: 'صدور و ویرایش سند انبار (رسید/حواله)' },
-          { id: 'wh_cartable', label: 'کارتابل اسناد انبار + بیجک‌های انتظامات دلکام' }
-        ]
-      },
-      {
-        groupTitle: 'ابزارهای کاربردی و باسکول',
-        items: [
-          { id: 'wh_weighbridge', label: 'توزین باسکول، محاسبه خالص و چاپ بارکد/QR' }
-        ]
-      },
-      {
-        groupTitle: 'کنترل موجودی و انبارگردانی',
-        items: [
-          { id: 'wh_stocktaking', label: 'کنترل موجودی، شمارش کالا و انبارگردانی' }
-        ]
-      },
-      {
-        groupTitle: 'مرور و گزارشات انبار',
-        items: [
-          { id: 'wh_kardex', label: 'مرور گردش کالاها و گزارشات کاردکس' }
-        ]
-      }
-    ]
-  },
-  {
     id: 'WAREHOUSE_ACC',
     title: 'حسابداری انبار',
     icon: Calculator,
@@ -594,21 +723,6 @@ export const ERP_SIDEBAR_TREE: ErpSidebarCategory[] = [
         items: [
           { id: 'wacc_pricing', label: 'قیمت‌گذاری اسناد انبار (میانگین موزون)' },
           { id: 'wacc_riali_kardex', label: 'کاردکس ریالی-تعدادی و صدور سند انبار' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'PRODUCTION',
-    title: 'برنامه‌ریزی و تولید',
-    icon: Factory,
-    color: 'text-orange-600',
-    groups: [
-      {
-        groupTitle: 'مهندسی تولید و بهای تمام‌شده نخ',
-        items: [
-          { id: 'prd_bom', label: 'تعریف فرمول‌های تولید (BOM) و ضایعات' },
-          { id: 'prd_line_perf', label: 'عملکرد خط تولید، حکم کار و راندمان ماشین‌آلات' }
         ]
       }
     ]
@@ -660,6 +774,29 @@ export const ERP_SIDEBAR_TREE: ErpSidebarCategory[] = [
 ];
 
 export const SUBVIEW_TITLES: Record<ErpSubViewId, string> = {
+  prd_lines: 'تعریف خطوط تولید',
+  prd_items: 'تعریف گروه‌ها و کالاهای تولیدی',
+  prd_line_perf: 'عملکرد خط تولید (توزین باسکول و چاپ لیبل کارتن)',
+  prd_archive: 'بایگانی تولید',
+  prd_bom: 'تعریف فرمول‌های تولید (BOM)',
+  wh_warehouses: 'تعریف انبارها و تخصیص کالا و گروه',
+  wh_receipt_production: 'رسید تحویل کالا از تولید',
+  wh_sales_remittance: 'حواله فروش کارخانه (خروج بدون فی)',
+  wh_inter_remittance: 'حواله بین انبار (انتقال)',
+  wh_inter_receipt: 'رسید حواله بین انبار (تایید ورود مقصد)',
+  wh_sales_return: 'رسید مرجوعی از فروش',
+  wh_archive: 'بایگانی اسناد انبار',
+  wh_stock_report: 'گزارش موجودی انبار',
+  wh_kardex: 'کاردکس کالا و گردش انبار',
+  wh_tracking: 'رهگیری جامع کارتن با کد ارجاع / بارکد',
+  wh_items: 'تعریف سرفصل کالاها و وزن دوک/کارتن',
+  wh_weighbridge: 'توزین باسکول، محاسبه خالص و چاپ بارکد/QR',
+  wh_exit_remittance: 'حواله خروج کارخانه (اسکن بارکد - بدون فی)',
+  wh_receipt_issue: 'صدور و ویرایش سند انبار (رسید/حواله)',
+  wh_cartable: 'کارتابل اسناد انبار و بیجک‌های دلکام',
+  wh_stocktaking: 'کنترل موجودی و انبارگردانی',
+  wacc_pricing: 'قیمت‌گذاری اسناد انبار (میانگین موزون)',
+  wacc_riali_kardex: 'کاردکس ریالی-تعدادی انبار',
   fin_chart: 'درختواره حساب‌ها (کل / معین)',
   fin_tafsili: 'معرفی تفصیلی‌های شناور و اشخاص',
   fin_voucher_new: 'صدور و ویرایش سند حسابداری',
@@ -678,18 +815,6 @@ export const SUBVIEW_TITLES: Record<ErpSubViewId, string> = {
   com_sales: 'صدور فاکتور فروش قطعی',
   com_purchases: 'صدور فاکتور خرید مواد و ملزومات',
   com_returns: 'برگشت از فروش / برگشت از خرید',
-  wh_warehouses: 'مدیریت انبارها و تخصیص انبار',
-  wh_items: 'تعریف سرفصل کالاها و وزن دوک/کارتن',
-  wh_weighbridge: 'توزین باسکول، محاسبه خالص و چاپ بارکد/QR',
-  wh_exit_remittance: 'حواله خروج کارخانه (اسکن بارکد - بدون فی)',
-  wh_receipt_issue: 'صدور و ویرایش سند انبار (رسید/حواله)',
-  wh_cartable: 'کارتابل اسناد انبار و بیجک‌های دلکام',
-  wh_stocktaking: 'کنترل موجودی و انبارگردانی',
-  wh_kardex: 'مرور گردش کالاها و گزارشات کاردکس',
-  wacc_pricing: 'قیمت‌گذاری اسناد انبار (میانگین موزون)',
-  wacc_riali_kardex: 'کاردکس ریالی-تعدادی انبار',
-  prd_bom: 'تعریف فرمول‌های تولید (BOM) و ضایعات',
-  prd_line_perf: 'عملکرد خط تولید و راندمان ماشین‌آلات',
   pay_employees: 'پرونده پرسنل و مراکز هزینه',
   pay_slips: 'محاسبه فیش حقوقی و سند حقوق',
   ast_management: 'دارایی ثابت، اموال و محاسبه استهلاک',
@@ -708,5 +833,17 @@ export function getTodayJalali(): string {
       .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
   } catch {
     return '1405/08/20';
+  }
+}
+
+export function getExactTimeNow(): string {
+  try {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  } catch {
+    return '14:30:00';
   }
 }

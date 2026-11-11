@@ -9386,7 +9386,10 @@ app.get('/api/industrial-erp/companies', (req, res) => {
             : null;
         const defaultFyLabel = activeFyObj?.label || '1405';
 
-        const result = companies.map((comp, idx) => {
+        const filteredCompanies = companies.filter(comp => comp.isAccountingEnabled !== false);
+        const targetList = filteredCompanies.length > 0 ? filteredCompanies : companies.slice(0, 1);
+
+        const result = targetList.map((comp, idx) => {
             const st = ensureIndustrialErpStructure(db, comp.id);
             return {
                 id: comp.id,
@@ -9397,6 +9400,7 @@ app.get('/api/industrial-erp/companies', (req, res) => {
                 phone: comp.phone || '-',
                 address: comp.address || '-',
                 logo: comp.logo || null,
+                isAccountingEnabled: comp.isAccountingEnabled !== false,
                 banks: Array.isArray(comp.banks) ? comp.banks : [],
                 activeFiscalYear: st.activeFiscalYear || defaultFyLabel,
                 fiscalYears: st.fiscalYears || ['1405', '1404'],

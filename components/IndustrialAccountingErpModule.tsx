@@ -45,6 +45,7 @@ import { ProductionBomModuleView } from './industrial-erp/ProductionBomModuleVie
 import { TreasuryBankingModuleView } from './industrial-erp/TreasuryBankingModuleView';
 import { FinancialAccountingModuleView } from './industrial-erp/FinancialAccountingModuleView';
 import { PayrollAssetsMasterModuleView } from './industrial-erp/PayrollAssetsMasterModuleView';
+import { createDefaultIndustrialErpState } from './industrial-erp/defaultState';
 
 // Re-export types so any external imports remain 100% backward-compatible
 export * from './industrial-erp/types';
@@ -101,6 +102,24 @@ const makeStableCompanyId = (nameStr: string) => {
   return 'comp_' + Math.abs(hash).toString(36);
 };
 
+const getCachedCompanyErpState = (companyId: string, companyName: string): IndustrialErpState => {
+  try {
+    const raw = localStorage.getItem(`delcom_erp_state_${companyId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        return {
+          ...createDefaultIndustrialErpState(companyId, companyName),
+          ...parsed,
+          companyId,
+          companyName: parsed.companyName || companyName
+        };
+      }
+    }
+  } catch {}
+  return createDefaultIndustrialErpState(companyId, companyName);
+};
+
 export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModuleProps> = ({
   currentUser,
   settings,
@@ -108,7 +127,16 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 }) => {
   // Multi-Company State (Synced 100% with Settings companies just like Secretariat)
   const [companies, setCompanies] = useState<ErpCompanySummary[]>([]);
-  const [selectedCompany, setSelectedCompany] = useState<ErpCompanySummary | null>(null);
+  const [selectedCompany, setSelectedCompany] = useState<ErpCompanySummary | null>(() => {
+    try {
+      const raw = localStorage.getItem('delcom_erp_selected_company');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.id && parsed.name) return parsed;
+      }
+    } catch {}
+    return null;
+  });
   const [showNewCompanyModal, setShowNewCompanyModal] = useState(false);
   const [newCompanyForm, setNewCompanyForm] = useState({
     name: '',
@@ -121,19 +149,30 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   });
 
   // Standalone ERP Shell Navigation State
-  const [expandedCategory, setExpandedCategory] = useState<ErpMainCategoryId>('WAREHOUSE');
-  const [activeSubView, setActiveSubView] = useState<ErpSubViewId>('wh_weighbridge');
+  const [expandedCategory, setExpandedCategory] = useState<ErpMainCategoryId>('PRODUCTION');
+  const [activeSubView, setActiveSubView] = useState<ErpSubViewId>('prd_line_perf');
   const [openTabs, setOpenTabs] = useState<ErpSubViewId[]>([
-    'wh_weighbridge',
-    'wh_exit_remittance',
-    'com_tehran_pricing',
-    'fin_trial_balance'
+    'prd_line_perf',
+    'wh_sales_remittance',
+    'wh_tracking',
+    'prd_archive'
   ]);
   const [isErpFullScreen, setIsErpFullScreen] = useState<boolean>(false);
 
-  // Selected Company ERP Database State
-  const [erpState, setErpState] = useState<IndustrialErpState | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  // Selected Company ERP Database State (Offline-first: 0ms Instant Hydration)
+  const [erpState, setErpState] = useState<IndustrialErpState | null>(() => {
+    try {
+      const raw = localStorage.getItem('delcom_erp_selected_company');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.id && parsed.name) {
+          return getCachedCompanyErpState(parsed.id, parsed.name);
+        }
+      }
+    } catch {}
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(false);
   const [, setSaving] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -164,10 +203,14 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   };
 
   const openSubViewTab = (subId: ErpSubViewId) => {
-    setActiveSubView(subId);
-    setOpenTabs(prev => (prev.includes(subId) ? prev : [...prev, subId]));
+    let targetId = subId;
+    if (subId === 'wh_weighbridge') targetId = 'prd_line_perf';
+    if (subId === 'wh_exit_remittance') targetId = 'wh_sales_remittance';
+
+    setActiveSubView(targetId);
+    setOpenTabs(prev => (prev.includes(targetId) ? prev : [...prev, targetId]));
     const parentCat = ERP_SIDEBAR_TREE.find(cat =>
-      cat.groups.some(g => g.items.some(it => it.id === subId))
+      cat.groups.some(g => g.items.some(it => it.id === targetId))
     );
     if (parentCat) {
       setExpandedCategory(parentCat.id);
@@ -234,7 +277,27 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
   const fetchCompaniesList = async () => {
     try {
-      setLoading(true);
+      // 1. Instant local render from available settings
+      const effectiveSettings = settings || {};
+      const localComps = extractSettingsCompanies(effectiveSettings);
+      if (localComps.length > 0) {
+        setCompanies(prev => prev.length === 0 ? localComps.map((sc: any) => ({
+          id: sc.id || makeStableCompanyId(sc.name),
+          name: sc.name,
+          logo: sc.logo || undefined,
+          registrationNumber: sc.registrationNumber || '-',
+          nationalId: sc.nationalId || '-',
+          economicCode: sc.economicCode || '-',
+          address: sc.address || '-',
+          phone: sc.phone || '-',
+          activeFiscalYear: financialYear || '1405',
+          fiscalYears: ['1405', '1404'],
+          allowedUserIds: sc.erpAllowedUserIds || [],
+          stats: undefined
+        })) : prev);
+      }
+
+      // 2. Fetch fresh settings & ERP companies asynchronously
       const [erpRes, freshSettings] = await Promise.all([
         apiCall<any>('/industrial-erp/companies').catch(() => null),
         getSettings().catch(() => null)
@@ -246,8 +309,8 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         ? erpRes.companies
         : [];
 
-      const effectiveSettings = freshSettings || settings || {};
-      const settingsComps = extractSettingsCompanies(effectiveSettings);
+      const latestSettings = freshSettings || settings || {};
+      const settingsComps = extractSettingsCompanies(latestSettings);
 
       if (settingsComps.length > 0) {
         const syncedList: ErpCompanySummary[] = settingsComps.map((sc: any) => {
@@ -274,26 +337,40 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         setCompanies(erpList);
       }
     } catch {
-      showToast('error', 'خطا در دریافت لیست شرکت‌ها از تنظیمات');
+      // Quietly ignore network failures in offline intranet environment
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchCompanyErpState = async (companyId: string) => {
+  const handleSelectCompany = (comp: ErpCompanySummary) => {
+    setSelectedCompany(comp);
     try {
-      setLoading(true);
-      const data = await apiCall<IndustrialErpState>(
-        `/industrial-erp/state?companyId=${encodeURIComponent(companyId)}`
-      );
-      if (data && Array.isArray(data.items)) {
-        setErpState(data);
-      }
-    } catch {
-      showToast('error', 'خطا در بارگذاری اطلاعات حسابداری شرکت انتخاب‌شده');
-    } finally {
-      setLoading(false);
-    }
+      localStorage.setItem('delcom_erp_selected_company', JSON.stringify(comp));
+      localStorage.setItem('delcom_erp_last_selected_company_id', comp.id);
+      localStorage.setItem('delcom_erp_last_selected_company_name', comp.name);
+    } catch {}
+
+    // 1. Instant 0ms offline hydration - NEVER show a blocking spinner
+    const local = getCachedCompanyErpState(comp.id, comp.name);
+    setErpState(local);
+    setLoading(false);
+
+    // 2. Non-blocking silent background update from local/central server
+    apiCall<IndustrialErpState>(
+      `/industrial-erp/state?companyId=${encodeURIComponent(comp.id)}`
+    )
+      .then(serverData => {
+        if (serverData && Array.isArray(serverData.items) && serverData.items.length > 0) {
+          setErpState(serverData);
+          try {
+            localStorage.setItem(`delcom_erp_state_${comp.id}`, JSON.stringify(serverData));
+          } catch {}
+        }
+      })
+      .catch(() => {
+        // Intranet / Offline mode: server unavailable or offline, keep local state smoothly
+      });
   };
 
   useEffect(() => {
@@ -302,15 +379,40 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
   useEffect(() => {
     if (selectedCompany) {
-      fetchCompanyErpState(selectedCompany.id);
-    } else {
-      setErpState(null);
+      if (!erpState || erpState.companyId !== selectedCompany.id) {
+        const local = getCachedCompanyErpState(selectedCompany.id, selectedCompany.name);
+        setErpState(local);
+      }
+      setLoading(false);
+
+      // Non-blocking background sync
+      apiCall<IndustrialErpState>(
+        `/industrial-erp/state?companyId=${encodeURIComponent(selectedCompany.id)}`
+      )
+        .then(serverData => {
+          if (serverData && Array.isArray(serverData.items) && serverData.items.length > 0) {
+            setErpState(serverData);
+            try {
+              localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(serverData));
+            } catch {}
+          }
+        })
+        .catch(() => {
+          // Intranet / Offline safe
+        });
     }
-  }, [selectedCompany]);
+  }, [selectedCompany?.id]);
 
   const persistErpState = async (nextState: IndustrialErpState, successToast?: string) => {
     if (!selectedCompany) return;
+    // 1. Immediate memory update
     setErpState(nextState);
+    // 2. Immediate local storage persistence (Never lose data even with no network)
+    try {
+      localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(nextState));
+    } catch {}
+
+    // 3. Background server save
     try {
       setSaving(true);
       await apiCall('/industrial-erp/save-state', 'POST', {
@@ -320,7 +422,10 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       if (successToast) showToast('success', successToast);
       fetchCompaniesList();
     } catch {
-      showToast('error', 'خطا در ذخیره‌سازی اطلاعات شرکت در سرور');
+      // Offline fallback
+      if (successToast) {
+        showToast('success', `${successToast} (ذخیره در حافظه محلی آفلاین)`);
+      }
     } finally {
       setSaving(false);
     }
@@ -466,18 +571,14 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
               className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5 border border-white/20 cursor-pointer"
               title="بروزرسانی لیست شرکت‌ها از تنظیمات"
             >
-              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+              <RefreshCw size={15} />
               <span>بروزرسانی از تنظیمات</span>
             </button>
           </div>
         </div>
 
-        {loading ? (
-          <div className="p-12 text-center text-slate-500 font-bold text-sm">
-            در حال بارگذاری فهرست شرکت‌های تعریف‌شده در تنظیمات سیستم...
-          </div>
-        ) : visibleCompanies.length === 0 ? (
-          <div className="bg-white dark:bg-slate-900 text-center p-10 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-500">
+        {visibleCompanies.length === 0 ? (
+          <div className="bg-white dark:bg-slate-900 text-center p-10 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-500 font-bold">
             هیچ شرکتی در بخش تنظیمات سیستم تعریف نشده است. لطفاً ابتدا شرکت‌ها را در بخش «تنظیمات عمومی سیستم» تعریف نمایید.
           </div>
         ) : (
@@ -485,7 +586,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             {visibleCompanies.map(comp => (
               <div
                 key={comp.id}
-                onClick={() => setSelectedCompany(comp)}
+                onClick={() => handleSelectCompany(comp)}
                 className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 flex flex-col justify-between cursor-pointer shadow-sm hover:shadow-xl hover:border-indigo-400 transition-all duration-200 relative group overflow-hidden"
               >
                 <div className="absolute top-0 right-0 h-1.5 w-full bg-gradient-to-l from-indigo-600 to-emerald-500" />
@@ -646,31 +747,28 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     );
   }
 
-  if (loading || !erpState) {
-    return (
-      <div className="p-12 flex flex-col items-center justify-center gap-3 text-slate-500">
-        <RefreshCw className="animate-spin text-indigo-600" size={32} />
-        <p className="font-bold text-sm">در حال بارگذاری محیط حسابداری و انبار «{selectedCompany.name}»...</p>
-      </div>
-    );
-  }
-
   // ============================================================================
   // STEP 2: FULL STANDALONE ENTERPRISE ERP WORKSPACE WITH DEDICATED RIGHT SIDEBAR
   // ============================================================================
+  // Effective ERP state is guaranteed to exist immediately via offline cache or default blueprint
+  const currentErpState: IndustrialErpState =
+    erpState && erpState.companyId === selectedCompany.id
+      ? erpState
+      : getCachedCompanyErpState(selectedCompany.id, selectedCompany.name);
+
   const quickRibbonShortcuts: { id: ErpSubViewId; label: string; icon: any; color: string }[] = [
-    { id: 'wh_exit_remittance', label: 'صدور سند انبار (خروج بدون فی)', icon: Truck, color: 'text-amber-600 bg-amber-50 border-amber-200' },
-    { id: 'trs_doc_new', label: 'صدور سند خزانه', icon: Landmark, color: 'text-blue-600 bg-blue-50 border-blue-200' },
-    { id: 'wh_stocktaking', label: 'کنترل موجودی و انبارگردانی', icon: Boxes, color: 'text-teal-600 bg-teal-50 border-teal-200' },
-    { id: 'trs_chequebooks', label: 'معرفی دسته‌چک‌ها', icon: CreditCard, color: 'text-purple-600 bg-purple-50 border-purple-200' },
-    { id: 'trs_archive', label: 'بایگانی خزانه + دستور پرداخت دلکام', icon: FolderKanban, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
-    { id: 'ord_new', label: 'صدور سند سفارشات', icon: ClipboardList, color: 'text-rose-600 bg-rose-50 border-rose-200' },
-    { id: 'wh_kardex', label: 'مرور گردش کالاها', icon: ArrowLeftRight, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
-    { id: 'prd_bom', label: 'تعریف فرمول‌های تولید', icon: Factory, color: 'text-orange-600 bg-orange-50 border-orange-200' },
-    { id: 'prd_line_perf', label: 'عملکرد خط تولید', icon: Cpu, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-    { id: 'wh_items', label: 'تعریف سرفصل کالاها', icon: Package, color: 'text-slate-700 bg-slate-100 border-slate-300' },
-    { id: 'wh_weighbridge', label: 'توزین باسکول و لیبل QR', icon: Scale, color: 'text-emerald-700 bg-emerald-100 border-emerald-300' },
-    { id: 'com_tehran_pricing', label: 'فی‌گذاری و فاکتور تهران', icon: ShoppingCart, color: 'text-indigo-700 bg-indigo-100 border-indigo-300' }
+    { id: 'prd_line_perf', label: 'عملکرد خط و باسکول (چاپ لیبل)', icon: Scale, color: 'text-orange-700 bg-orange-50 border-orange-200' },
+    { id: 'wh_sales_remittance', label: 'حواله فروش کارخانه (خروج بدون فی)', icon: Truck, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+    { id: 'wh_receipt_production', label: 'رسید تحویل از خط تولید', icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+    { id: 'wh_inter_remittance', label: 'حواله بین‌انبار (انتقال)', icon: ArrowLeftRight, color: 'text-purple-600 bg-purple-50 border-purple-200' },
+    { id: 'wh_inter_receipt', label: 'رسید حواله بین‌انبار (تایید ورود)', icon: CheckCircle2, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+    { id: 'wh_tracking', label: 'رهگیری جامع کارتن با کد ارجاع / بارکد', icon: Layers, color: 'text-teal-700 bg-teal-50 border-teal-200' },
+    { id: 'prd_lines', label: 'تعریف خطوط تولید', icon: Factory, color: 'text-orange-600 bg-orange-50 border-orange-200' },
+    { id: 'prd_items', label: 'تعریف کالاها و اوزان دوک/کارتن', icon: Package, color: 'text-slate-700 bg-slate-100 border-slate-300' },
+    { id: 'wh_warehouses', label: 'تعریف انبارها و تخصیص', icon: Boxes, color: 'text-teal-600 bg-teal-50 border-teal-200' },
+    { id: 'prd_archive', label: 'بایگانی تولید', icon: FolderKanban, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+    { id: 'wh_archive', label: 'بایگانی اسناد انبار', icon: FolderKanban, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
+    { id: 'wh_stock_report', label: 'گزارش موجودی کالا', icon: Boxes, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' }
   ];
 
   // Determine which isolated domain module handles the activeSubView
@@ -691,7 +789,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       className={`${
         isErpFullScreen
           ? 'fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 flex flex-col overflow-hidden'
-          : 'flex flex-col min-h-[calc(100vh-5rem)] bg-slate-100 dark:bg-slate-950 rounded-2xl border border-slate-300 dark:border-slate-800 overflow-hidden shadow-lg'
+          : 'flex-1 flex flex-col min-h-0 h-full bg-slate-100 dark:bg-slate-950 overflow-hidden'
       }`}
       dir="rtl"
     >
@@ -716,7 +814,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             <div className="flex items-center gap-2">
               <span className="font-black text-xs md:text-sm text-white">{selectedCompany.name}</span>
               <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold">
-                دوره مالی {erpState.activeFiscalYear || selectedCompany.activeFiscalYear || '1405'}
+                دوره مالی {currentErpState.activeFiscalYear || selectedCompany.activeFiscalYear || '1405'}
               </span>
               <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold">
                 <Layers size={11} />
@@ -730,6 +828,19 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Switch to Main Program Sidebar Toggle Button */}
+          <button
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('TOGGLE_ERP_SIDEBAR_SWAP', { detail: { swapped: false } }));
+              showToast('success', 'سایدبار اصلی برنامه نمایش داده شد. جهت بازگشت به سایدبار ERP از دکمه بالای سایدبار استفاده فرمایید.');
+            }}
+            className="px-3 py-1.5 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 border border-blue-400/40 text-[11px] font-black flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors"
+            title="سوییچ به سایدبار اصلی برنامه"
+          >
+            <ArrowLeftRight size={13} />
+            <span className="hidden sm:inline">⇄ سوییچ به سایدبار اصلی برنامه</span>
+          </button>
+
           <button
             onClick={handleSyncSayanBarcodes}
             disabled={syncingBarcodes}
@@ -784,9 +895,18 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* DEDICATED STANDALONE ERP RIGHT SIDEBAR */}
         <aside className="w-full lg:w-72 bg-slate-200/80 dark:bg-slate-900 border-b lg:border-b-0 lg:border-l border-slate-300 dark:border-slate-800 flex flex-col shrink-0 overflow-y-auto max-h-72 lg:max-h-none">
-          <div className="p-2.5 bg-slate-300/70 dark:bg-slate-800/80 border-b border-slate-300 dark:border-slate-700 flex items-center justify-between text-xs font-black text-slate-800 dark:text-slate-200">
+          <div className="p-2.5 bg-slate-300/70 dark:bg-slate-800/80 border-b border-slate-300 dark:border-slate-700 flex items-center justify-between text-xs font-black text-slate-800 dark:text-slate-200 shrink-0">
             <span>منوی جامع سیستم‌های ERP</span>
-            <span className="text-[10px] font-mono text-indigo-700 dark:text-indigo-400">۱۰ زیرسیستم مجزا</span>
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('TOGGLE_ERP_SIDEBAR_SWAP', { detail: { swapped: false } }));
+              }}
+              className="text-[10px] text-blue-700 dark:text-blue-400 hover:underline flex items-center gap-1 font-bold cursor-pointer"
+              title="نمایش سایدبار اصلی برنامه"
+            >
+              <ArrowLeftRight size={11} />
+              <span>منوی اصلی</span>
+            </button>
           </div>
 
           <div className="divide-y divide-slate-300/70 dark:divide-slate-800">
@@ -850,7 +970,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         </aside>
 
         {/* LEFT WORKSPACE AREA (OPEN TABS BAR + ISOLATED ACTIVE MODULE VIEW) */}
-        <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
+        <main className="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-950 min-h-0">
           {/* MDI OPEN TABS BAR */}
           <div className="bg-slate-200/80 dark:bg-slate-900 border-b border-slate-300 dark:border-slate-800 px-2 pt-1.5 flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0">
             {openTabs.map(tabId => {
@@ -880,23 +1000,18 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           </div>
 
           {/* ACTIVE SUBVIEW CONTENT CONTAINER (ISOLATED DOMAIN COMPONENTS) */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-5">
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
             {isWarehouseDomain && (
-              <ErpDomainErrorBoundary moduleTitle="انبارداری، باسکول و حسابداری انبار">
+              <ErpDomainErrorBoundary moduleTitle="انبارداری، حواله‌ها و رهگیری کارتن">
                 <WarehouseModuleView
                   activeSubView={activeSubView}
                   selectedCompany={selectedCompany}
-                  erpState={erpState}
+                  erpState={currentErpState}
                   setErpState={setErpState}
                   persistErpState={persistErpState}
                   currentUser={currentUser}
                   showToast={showToast}
                   openSubViewTab={openSubViewTab}
-                  canWeighAndPrintLabel={canWeighAndPrintLabel}
-                  canIssueRemittance={canIssueRemittance}
-                  canViewCostPrice={canViewCostPrice}
-                  syncingBarcodes={syncingBarcodes}
-                  handleSyncSayanBarcodes={handleSyncSayanBarcodes}
                 />
               </ErpDomainErrorBoundary>
             )}
@@ -906,7 +1021,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 <CommercialTradeModuleView
                   activeSubView={activeSubView}
                   selectedCompany={selectedCompany}
-                  erpState={erpState}
+                  erpState={currentErpState}
                   setErpState={setErpState}
                   persistErpState={persistErpState}
                   currentUser={currentUser}
@@ -918,11 +1033,16 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             )}
 
             {isProductionDomain && (
-              <ErpDomainErrorBoundary moduleTitle="مهندسی تولید، فرمول ساخت (BOM) و بهای تمام‌شده">
+              <ErpDomainErrorBoundary moduleTitle="عملکرد خط تولید، توزین باسکول و فرمول ساخت (BOM)">
                 <ProductionBomModuleView
                   activeSubView={activeSubView}
-                  erpState={erpState}
+                  selectedCompany={selectedCompany}
+                  erpState={currentErpState}
+                  setErpState={setErpState}
                   persistErpState={persistErpState}
+                  currentUser={currentUser}
+                  showToast={showToast}
+                  openSubViewTab={openSubViewTab}
                 />
               </ErpDomainErrorBoundary>
             )}
@@ -932,7 +1052,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 <TreasuryBankingModuleView
                   activeSubView={activeSubView}
                   selectedCompany={selectedCompany}
-                  erpState={erpState}
+                  erpState={currentErpState}
                   persistErpState={persistErpState}
                   currentUser={currentUser}
                 />
@@ -944,7 +1064,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 <FinancialAccountingModuleView
                   activeSubView={activeSubView}
                   selectedCompany={selectedCompany}
-                  erpState={erpState}
+                  erpState={currentErpState}
                   persistErpState={persistErpState}
                   currentUser={currentUser}
                   showToast={showToast}
@@ -964,7 +1084,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                   selectedCompany={selectedCompany}
                   companies={companies}
                   setSelectedCompany={setSelectedCompany}
-                  erpState={erpState}
+                  erpState={currentErpState}
                   persistErpState={persistErpState}
                   currentUser={currentUser}
                   cutoffDateInput={cutoffDateInput}
@@ -985,7 +1105,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 {selectedCompany.name} (دیتابیس مستقل)
               </span>
               <span>|</span>
-              <span>سال مالی فعال: {erpState.activeFiscalYear || '1405'}</span>
+              <span>سال مالی فعال: {currentErpState.activeFiscalYear || '1405'}</span>
               <span>|</span>
               <span>بخش فعال: {SUBVIEW_TITLES[activeSubView]}</span>
             </div>

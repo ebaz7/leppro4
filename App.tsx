@@ -82,8 +82,28 @@ function App() {
   const allowedNavItems = useMemo(() => {
     return getAppNavItems(currentUser, settings || null);
   }, [currentUser, settings]);
-  const [activeTab, setActiveTabState] = useState('dashboard');
-  const [tabHistory, setTabHistory] = useState<string[]>(['dashboard']);
+  const [activeTab, setActiveTabState] = useState<string>(() => {
+    try {
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
+        if (rawHash && rawHash !== 'dashboard') {
+          return rawHash;
+        }
+      }
+    } catch {}
+    return 'dashboard';
+  });
+  const [tabHistory, setTabHistory] = useState<string[]>(() => {
+    try {
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
+        if (rawHash && rawHash !== 'dashboard') {
+          return ['dashboard', rawHash];
+        }
+      }
+    } catch {}
+    return ['dashboard'];
+  });
   const [directChatTarget, setDirectChatTarget] = useState<{ type: 'private' | 'group' | 'public' | 'task_group' | 'system', id: string, taskId?: string } | null>(null);
   const [showAiScannerModal, setShowAiScannerModal] = useState(false);
   const [globalSendToChat, setGlobalSendToChat] = useState<{
@@ -2361,7 +2381,7 @@ function App() {
                 </div>
             )}
 
-            <div className={`flex-1 relative flex flex-col min-h-0 ${(activeTab === 'chat' || Boolean(secondaryTab)) ? 'h-full overflow-hidden' : ''}`}>
+            <div className={`flex-1 relative flex flex-col min-h-0 ${(activeTab === 'chat' || activeTab === 'industrial-erp' || Boolean(secondaryTab)) ? 'h-full overflow-hidden' : ''}`}>
                 {loading && (
                     <div className="fixed top-20 right-4 z-[999] bg-white/80 dark:bg-gray-800/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 shadow-lg flex items-center gap-2 animate-fade-in">
                         <Loader2 size={16} className="animate-spin text-blue-600" />
@@ -2397,7 +2417,7 @@ function App() {
                     {activeTab === 'manage-invoices' && <div className="page-transition flex flex-col flex-1 min-h-0"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="INVOICE" /></ErrorBoundary></div>}
                     {activeTab === 'manage-exit' && <div className="page-transition flex flex-col flex-1 min-h-0"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="EXIT" /></ErrorBoundary></div>}
                     {activeTab === 'warehouse' && <div className="page-transition flex flex-col flex-1 min-h-0"><WarehouseModule currentUser={currentUser} settings={settings} initialTab={warehouseInitialTab} financialYear={financialYear} /></div>}
-                    {activeTab === 'industrial-erp' && <div className="page-transition flex flex-col flex-1 min-h-0"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>}
+                    {activeTab === 'industrial-erp' && <div className="page-transition flex flex-col flex-1 min-h-0 h-full overflow-hidden"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>}
                     {activeTab === 'trade' && <div className="page-transition flex flex-col flex-1 min-h-0"><TradeModule currentUser={currentUser} /></div>}
                     {activeTab === 'balances' && <div className="page-transition flex flex-col flex-1 min-h-0"><CustomerBalanceModule currentUser={currentUser} /></div>}
                     {activeTab === 'sales' && <div className="page-transition flex flex-col flex-1 min-h-0"><SalesCRMModule /></div>}

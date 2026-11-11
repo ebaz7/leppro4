@@ -1,43 +1,58 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Scale,
-  QrCode,
+  Boxes,
+  Plus,
+  Trash2,
+  Edit2,
+  CheckCircle2,
+  Clock,
   Printer,
   RefreshCw,
+  Search,
+  Eye,
+  FileText,
   Truck,
-  Database,
+  ArrowRightLeft,
+  RotateCcw,
+  Check,
   X,
-  ShoppingCart
+  AlertCircle,
+  Warehouse as WhIcon,
+  Layers,
+  Sparkles,
+  BarChart3,
+  Calendar,
+  User as UserIcon,
+  ShieldCheck,
+  Hash
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { apiCall } from '../../services/apiService';
-import { User, ExitPermit } from '../../types';
 import {
-  ErpCompanySummary,
   ErpSubViewId,
   IndustrialErpState,
-  ErpCartonLabel,
+  ErpCompanySummary,
   ErpWarehouse,
+  ErpCommodityGroup,
   ErpItem,
-  ErpWarehouseDoc,
-  ErpBomComponent,
-  getTodayJalali
+  ErpCartonLabel,
+  ErpProductionVoucher,
+  ErpWarehouseDocument,
+  ErpWarehouseDocType,
+  ErpCartonHistoryEvent,
+  getTodayJalali,
+  getExactTimeNow
 } from './types';
+import { User } from '../../types';
 
 interface WarehouseModuleViewProps {
   activeSubView: ErpSubViewId;
-  selectedCompany: ErpCompanySummary;
+  selectedCompany?: ErpCompanySummary;
   erpState: IndustrialErpState;
-  setErpState: React.Dispatch<React.SetStateAction<IndustrialErpState | null>>;
+  setErpState?: React.Dispatch<React.SetStateAction<IndustrialErpState | null>>;
   persistErpState: (nextState: IndustrialErpState, toastText?: string) => Promise<void>;
-  currentUser: User;
-  showToast: (type: 'success' | 'error', text: string) => void;
-  openSubViewTab: (subId: ErpSubViewId) => void;
-  canWeighAndPrintLabel: boolean;
-  canIssueRemittance: boolean;
-  canViewCostPrice: boolean;
-  syncingBarcodes: boolean;
-  handleSyncSayanBarcodes: () => Promise<void>;
+  currentUser?: User;
+  showToast?: (type: 'success' | 'error', text: string) => void;
+  openSubViewTab?: (subId: ErpSubViewId) => void;
 }
 
 export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
@@ -48,1439 +63,1614 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
   persistErpState,
   currentUser,
   showToast,
-  openSubViewTab,
-  canWeighAndPrintLabel,
-  canIssueRemittance,
-  canViewCostPrice,
-  syncingBarcodes,
-  handleSyncSayanBarcodes
+  openSubViewTab
 }) => {
-  // Weighbridge state
-  const [selectedYarnId, setSelectedYarnId] = useState<string>('itm_yarn_150_w');
-  const [scaleGrossWeightKg, setScaleGrossWeightKg] = useState<number>(25.61);
-  const [conesCount, setConesCount] = useState<number>(6);
-  const [overrideConeWeightGrams, setOverrideConeWeightGrams] = useState<number>(110);
-  const [overrideCartonWeightGrams, setOverrideCartonWeightGrams] = useState<number>(1450);
-  const [lotNumber, setLotNumber] = useState<string>('L405-88');
-  const [machineCode, setMachineCode] = useState<string>('TMT-01');
-  const [shiftName, setShiftName] = useState<string>('شیفت صبح A');
-  const [grade, setGrade] = useState<'A' | 'B' | 'C'>('A');
-  const [autoIssueProductionVoucher, setAutoIssueProductionVoucher] = useState<boolean>(true);
-  const [activePreviewLabel, setActivePreviewLabel] = useState<ErpCartonLabel | null>(null);
-  const [qrDataUrl, setQrDataUrl] = useState<string>('');
-  const [savingLocal, setSavingLocal] = useState(false);
+  // Warehouses fallback
+  const warehouses: ErpWarehouse[] = useMemo(() => {
+    if (erpState.warehouses && erpState.warehouses.length > 0) {
+      return erpState.warehouses;
+    }
+    return [
+      { id: 'wh_finished', code: 'WH-01', name: 'انبار محصول نخ کارخانه', type: 'FINISHED_YARN', location: 'سالن اصلی کارخانه', managerName: 'مرتضی احمدی', assignedGroupIds: ['grp_dty', 'grp_fdy'] },
+      { id: 'wh_temp_line', code: 'WH-02', name: 'انبار موقت پای خط تولید', type: 'GENERAL', location: 'انتهای سالن تکسچرایزینگ', managerName: 'علی رضایی', assignedGroupIds: ['grp_dty'] },
+      { id: 'wh_tehran', code: 'WH-03', name: 'انبار مرکزی تهران (شوروم)', type: 'FINISHED_YARN', location: 'تهران - بازار بزرگ', managerName: 'حسین محمدی', assignedGroupIds: ['grp_dty', 'grp_fdy'] },
+      { id: 'wh_raw', code: 'WH-04', name: 'انبار مواد اولیه (POY و کارتن)', type: 'RAW_MATERIAL', location: 'انبار سوله شمالی', managerName: 'جعفر صالحی', assignedGroupIds: ['grp_poy', 'grp_pack'] },
+      { id: 'wh_waste', code: 'WH-05', name: 'انبار ضایعات و بازیافت', type: 'WASTE', location: 'محوطه باز کارخانه', managerName: 'رضا حسینی', assignedGroupIds: ['grp_waste'] }
+    ];
+  }, [erpState.warehouses]);
 
-  // Factory Exit Remittance state
-  const [scanInput, setScanInput] = useState<string>('');
-  const [scannedCartonsForRemittance, setScannedCartonsForRemittance] = useState<ErpCartonLabel[]>([]);
-  const [remCustomerName, setRemCustomerName] = useState<string>('شرکت نساجی بهپود');
-  const [remCustomerCode, setRemCustomerCode] = useState<string>('113101');
-  const [remDriverName, setRemDriverName] = useState<string>('');
-  const [remDriverPhone, setRemDriverPhone] = useState<string>('');
-  const [remPlateNumber, setRemPlateNumber] = useState<string>('');
-  const [remDestinationAddress, setRemDestinationAddress] = useState<string>('');
+  // Commodity groups
+  const groups: ErpCommodityGroup[] = useMemo(() => {
+    return erpState.commodityGroups || [
+      { id: 'grp_dty', code: 'GRP-01', name: 'نخ‌های تکسچره پلی‌استر (DTY)' },
+      { id: 'grp_poy', code: 'GRP-02', name: 'نخ‌های ممتد اولیه (POY)' },
+      { id: 'grp_fdy', code: 'GRP-03', name: 'نخ‌های کاملاً کشیده شده (FDY)' },
+      { id: 'grp_pack', code: 'GRP-04', name: 'ملزومات بسته‌بندی کارتن و دوک' },
+      { id: 'grp_waste', code: 'GRP-05', name: 'ضایعات خطوط تولید' }
+    ];
+  }, [erpState.commodityGroups]);
 
-  // Warehouse Master & Docs state
-  const [newWarehouseForm, setNewWarehouseForm] = useState({
+  // Warehouse documents
+  const warehouseDocs: ErpWarehouseDocument[] = useMemo(() => {
+    return erpState.warehouseDocuments || [];
+  }, [erpState.warehouseDocuments]);
+
+  // All carton labels
+  const allCartons: ErpCartonLabel[] = useMemo(() => {
+    return erpState.cartonLabels || [];
+  }, [erpState.cartonLabels]);
+
+  // -------------------------------------------------------------
+  // 1. SUBVIEW: WH_WAREHOUSES (تعریف انبارها و تخصیص گروه/کالا)
+  // -------------------------------------------------------------
+  const [showAddWhModal, setShowAddWhModal] = useState(false);
+  const [whForm, setWhForm] = useState<Partial<ErpWarehouse>>({
     code: '',
     name: '',
-    type: 'FINISHED_YARN' as ErpWarehouse['type'],
+    type: 'FINISHED_YARN',
     location: '',
-    managerName: ''
+    managerName: '',
+    assignedGroupIds: []
   });
-  const [newItem, setNewItem] = useState<Partial<ErpItem>>({
-    code: '',
-    name: '',
-    category: 'FINISHED_YARN',
-    unit: 'کیلوگرم',
-    warehouseId: 'wh_yarn',
-    stockQty: 0,
-    unitCost: 1850000,
-    salesPrice: 2150000,
-    yarnCount: '150D/48F',
-    colorName: 'سفید',
-    coneWeightGrams: 110,
-    cartonWeightGrams: 1450,
-    defaultConesPerCarton: 6
-  });
-  const [whDocForm, setWhDocForm] = useState({
-    docType: 'RECEIPT_PURCHASE' as ErpWarehouseDoc['docType'],
-    warehouseId: 'wh_raw',
-    counterpartyName: '',
-    itemId: 'itm_poy_150',
-    qty: 100,
-    notes: ''
-  });
-  const [stockCountMap, setStockCountMap] = useState<Record<string, number>>({});
 
-  // Live Delkam Exit Permits (for cross-module integration with Delkam Factory Exit / Guard section)
-  const [delkamExitPermits, setDelkamExitPermits] = useState<ExitPermit[]>([]);
-  const [loadingDelkamPermits, setLoadingDelkamPermits] = useState<boolean>(false);
-
-  const fetchDelkamExitPermits = async () => {
-    try {
-      setLoadingDelkamPermits(true);
-      const list = await apiCall<ExitPermit[]>('/exit-permits');
-      if (Array.isArray(list)) {
-        setDelkamExitPermits(list.slice(0, 20));
-      }
-    } catch {
-      // ignore if user lacks exit permit view permission
-    } finally {
-      setLoadingDelkamPermits(false);
+  const handleSaveWarehouse = async () => {
+    if (!whForm.name || !whForm.code) {
+      showToast?.('error', 'لطفاً کد و نام انبار را وارد نمایید');
+      return;
     }
+    const newWh: ErpWarehouse = {
+      id: whForm.id || `wh_${Date.now()}`,
+      code: whForm.code,
+      name: whForm.name,
+      type: whForm.type || 'FINISHED_YARN',
+      location: whForm.location || '',
+      managerName: whForm.managerName || '',
+      assignedGroupIds: whForm.assignedGroupIds || []
+    };
+    const currentWhs = erpState.warehouses && erpState.warehouses.length > 0 ? erpState.warehouses : warehouses;
+    const exists = currentWhs.some(w => w.id === newWh.id);
+    const updated = exists ? currentWhs.map(w => w.id === newWh.id ? newWh : w) : [...currentWhs, newWh];
+    await persistErpState({ ...erpState, warehouses: updated }, 'اطلاعات انبار با موفقیت ذخیره شد');
+    setShowAddWhModal(false);
+    setWhForm({ code: '', name: '', type: 'FINISHED_YARN', location: '', managerName: '', assignedGroupIds: [] });
   };
 
-  useEffect(() => {
-    if (activeSubView === 'wh_exit_remittance' || activeSubView === 'wh_cartable') {
-      fetchDelkamExitPermits();
-    }
-  }, [activeSubView, erpState.remittances.length]);
+  // -------------------------------------------------------------
+  // 2. SUBVIEW: WH_RECEIPT_PRODUCTION (رسید تحویل کالا از تولید)
+  // -------------------------------------------------------------
+  const [targetWhForReceipt, setTargetWhForReceipt] = useState<string>(warehouses[0]?.id || 'wh_finished');
+  
+  // Pending production batches waiting for delivery to warehouse
+  const pendingProductionVouchers = useMemo(() => {
+    return (erpState.productionVouchers || []).filter(v => v.status === 'PENDING_WAREHOUSE_DELIVERY');
+  }, [erpState.productionVouchers]);
 
-  useEffect(() => {
-    if (erpState.cartonLabels?.length > 0 && !activePreviewLabel) {
-      setActivePreviewLabel(erpState.cartonLabels[0]);
-    }
-  }, [erpState.cartonLabels, activePreviewLabel]);
+  const handleAcceptProductionDelivery = async (voucher: ErpProductionVoucher) => {
+    const selWh = warehouses.find(w => w.id === targetWhForReceipt);
+    const dateToday = getTodayJalali();
+    const exactTime = getExactTimeNow();
+    const cleanDate = dateToday.replace(/\//g, '');
+    const docSeq = (warehouseDocs.length + 1);
+    const docNo = `REC-PRD-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
 
-  const selectedYarnProduct = useMemo(() => {
-    return erpState.items.find(i => i.id === selectedYarnId) || erpState.items.find(i => i.category === 'FINISHED_YARN') || null;
-  }, [erpState, selectedYarnId]);
-
-  useEffect(() => {
-    if (selectedYarnProduct) {
-      setConesCount(selectedYarnProduct.defaultConesPerCarton || 6);
-      setOverrideConeWeightGrams(selectedYarnProduct.coneWeightGrams || 110);
-      setOverrideCartonWeightGrams(selectedYarnProduct.cartonWeightGrams || 1450);
-    }
-  }, [selectedYarnProduct]);
-
-  useEffect(() => {
-    if (!activePreviewLabel) {
-      setQrDataUrl('');
-      return;
-    }
-    QRCode.toDataURL(activePreviewLabel.qrPayload, {
-      width: 190,
-      margin: 1,
-      color: { dark: '#0f172a', light: '#ffffff' }
-    })
-      .then(url => setQrDataUrl(url))
-      .catch(() => setQrDataUrl(''));
-  }, [activePreviewLabel]);
-
-  const calculateBomCostPerKg = (
-    components: ErpBomComponent[],
-    wastePct: number,
-    laborPerKg: number,
-    overheadPerKg: number,
-    yarnItem?: ErpItem | null
-  ) => {
-    let rawMaterialCostPerKg = 0;
-    let packagingCostPerKg = 0;
-    const avgNetPerCarton = 23.5;
-
-    for (const comp of components) {
-      const mat = erpState.items.find(i => i.id === comp.itemId);
-      const unitCost = mat?.unitCost || 0;
-      if (comp.category === 'RAW_MATERIAL') {
-        const effectiveQty = comp.qtyPerKgOutput * (1 + wastePct / 100);
-        rawMaterialCostPerKg += effectiveQty * unitCost;
-      } else {
-        if (comp.unit.includes('عدد')) {
-          packagingCostPerKg += (comp.qtyPerKgOutput * unitCost) / avgNetPerCarton;
-        } else {
-          packagingCostPerKg += comp.qtyPerKgOutput * unitCost;
-        }
-      }
-    }
-
-    if (components.length === 0 && yarnItem) {
-      return {
-        rawMaterialCostPerKg: yarnItem.unitCost * 0.78,
-        packagingCostPerKg: yarnItem.unitCost * 0.06,
-        laborPerKg,
-        overheadPerKg,
-        totalCostPerKg: yarnItem.unitCost
-      };
-    }
-
-    const totalCostPerKg = Math.round(rawMaterialCostPerKg + packagingCostPerKg + laborPerKg + overheadPerKg);
-    return {
-      rawMaterialCostPerKg: Math.round(rawMaterialCostPerKg),
-      packagingCostPerKg: Math.round(packagingCostPerKg),
-      laborPerKg: Math.round(laborPerKg),
-      overheadPerKg: Math.round(overheadPerKg),
-      totalCostPerKg
-    };
-  };
-
-  const weighCalculation = useMemo(() => {
-    const totalConesGrams = Math.max(0, conesCount) * Math.max(0, overrideConeWeightGrams);
-    const totalTareGrams = totalConesGrams + Math.max(0, overrideCartonWeightGrams);
-    const totalTareKg = Number((totalTareGrams / 1000).toFixed(3));
-    const netWeightKg = Number(Math.max(0, scaleGrossWeightKg - totalTareKg).toFixed(3));
-
-    const productBom = erpState.boms.find(b => b.finishedItemId === selectedYarnProduct?.id);
-    const costBreakdown = calculateBomCostPerKg(
-      productBom?.components || [],
-      productBom?.wastePercent ?? 2.5,
-      productBom?.directLaborPerKg ?? 145000,
-      productBom?.factoryOverheadPerKg ?? 105000,
-      selectedYarnProduct
-    );
-
-    const bomDeductions: { itemId: string; itemName: string; deductedQty: number; unit: string; totalCost: number }[] = [];
-    if (productBom) {
-      for (const comp of productBom.components) {
-        const mat = erpState.items.find(i => i.id === comp.itemId);
-        let deductedQty = 0;
-        if (comp.category === 'RAW_MATERIAL') {
-          deductedQty = Number((netWeightKg * comp.qtyPerKgOutput * (1 + productBom.wastePercent / 100)).toFixed(3));
-        } else {
-          if (comp.itemId.includes('cone') || comp.itemName.includes('دوک')) {
-            deductedQty = conesCount;
-          } else if (comp.itemId.includes('carton') || comp.itemName.includes('کارتن')) {
-            deductedQty = 1;
-          } else {
-            deductedQty = Number((netWeightKg * comp.qtyPerKgOutput).toFixed(3));
-          }
-        }
-        bomDeductions.push({
-          itemId: comp.itemId,
-          itemName: comp.itemName,
-          deductedQty,
-          unit: comp.unit,
-          totalCost: Math.round(deductedQty * (mat?.unitCost || 0))
-        });
-      }
-    }
-
-    return {
-      totalConesGrams,
-      totalTareGrams,
-      totalTareKg,
-      netWeightKg,
-      unitCostPerKg: costBreakdown.totalCostPerKg,
-      totalCartonCostRials: Math.round(netWeightKg * costBreakdown.totalCostPerKg),
-      bomDeductions
-    };
-  }, [scaleGrossWeightKg, conesCount, overrideConeWeightGrams, overrideCartonWeightGrams, selectedYarnProduct, erpState]);
-
-  const handleIssueWeighbridgeLabel = async () => {
-    if (!selectedYarnProduct) return;
-    if (!canWeighAndPrintLabel) {
-      showToast('error', 'شما مجوز توزین باسکول و صدور لیبل کارتن را ندارید.');
-      return;
-    }
-    if (weighCalculation.netWeightKg <= 0) {
-      showToast('error', 'وزن خالص کارتن باید بزرگ‌تر از صفر باشد.');
-      return;
-    }
-
-    setSavingLocal(true);
-    try {
-      const serialCounter = erpState.nextSerialCounter || 10002;
-      const serialNumber = `DLK-405-${serialCounter}`;
-      const qrPayload = `DLKAM|${serialNumber}|${selectedYarnProduct.code}|LOT:${lotNumber}|GROSS:${scaleGrossWeightKg}|TARE:${weighCalculation.totalTareKg}|NET:${weighCalculation.netWeightKg}|CONES:${conesCount}`;
-      const todayJalali = getTodayJalali();
-
-      const newLabel: ErpCartonLabel = {
-        id: `lbl_${Date.now()}`,
-        serialNumber,
-        qrPayload,
-        productId: selectedYarnProduct.id,
-        productCode: selectedYarnProduct.code,
-        productName: selectedYarnProduct.name,
-        yarnCount: selectedYarnProduct.yarnCount || '',
-        colorName: selectedYarnProduct.colorName || '',
-        lotNumber,
-        machineCode,
-        shift: shiftName,
-        grade,
-        grossWeightKg: scaleGrossWeightKg,
-        conesCount,
-        coneWeightGrams: overrideConeWeightGrams,
-        cartonWeightGrams: overrideCartonWeightGrams,
-        totalTareKg: weighCalculation.totalTareKg,
-        netWeightKg: weighCalculation.netWeightKg,
-        unitCostPerKg: weighCalculation.unitCostPerKg,
-        totalCostRials: weighCalculation.totalCartonCostRials,
-        warehouseId: selectedYarnProduct.warehouseId || 'wh_yarn',
-        status: 'IN_STOCK',
-        createdAt: Date.now(),
-        createdDateJalali: todayJalali,
-        createdBy: currentUser.fullName,
-        sourceSystem: 'DELKAM'
-      };
-
-      const nextItems = erpState.items.map(item => {
-        if (item.id === selectedYarnProduct.id) {
-          return {
-            ...item,
-            stockQty: Number((item.stockQty + weighCalculation.netWeightKg).toFixed(3)),
-            unitCost: weighCalculation.unitCostPerKg
-          };
-        }
-        const deduct = weighCalculation.bomDeductions.find(d => d.itemId === item.id);
-        if (deduct) {
-          return {
-            ...item,
-            stockQty: Number(Math.max(0, item.stockQty - deduct.deductedQty).toFixed(3))
-          };
-        }
-        return item;
-      });
-
-      const nextVouchers = [...erpState.vouchers];
-      let nextVoucherNo = erpState.nextVoucherNo || 1002;
-
-      if (autoIssueProductionVoucher) {
-        const rawTotal = weighCalculation.bomDeductions
-          .filter(d => erpState.items.find(i => i.id === d.itemId)?.category === 'RAW_MATERIAL')
-          .reduce((s, d) => s + d.totalCost, 0);
-        const packTotal = weighCalculation.bomDeductions
-          .filter(d => erpState.items.find(i => i.id === d.itemId)?.category === 'PACKAGING')
-          .reduce((s, d) => s + d.totalCost, 0);
-        const remainderOverhead = Math.max(0, weighCalculation.totalCartonCostRials - rawTotal - packTotal);
-
-        const prodVoucher = {
-          id: `vch_${Date.now()}`,
-          voucherNo: nextVoucherNo,
-          dateJalali: todayJalali,
-          type: 'PRODUCTION' as const,
-          status: 'FINALIZED' as const,
-          description: `سند اتوماتیک تولید و توزین کارتن ${serialNumber} (${selectedYarnProduct.name} - خالص ${weighCalculation.netWeightKg} Kg)`,
-          referenceId: newLabel.id,
-          createdBy: currentUser.fullName,
-          createdAt: Date.now(),
-          lines: [
-            {
-              id: `vl_${Date.now()}_1`,
-              accountCode: '110403',
-              accountTitle: 'موجودی انبار محصول نهایی نخ',
-              tafziliName: selectedYarnProduct.name,
-              debit: weighCalculation.totalCartonCostRials,
-              credit: 0,
-              description: `رسید تولید کارتن ${serialNumber} با وزن خالص ${weighCalculation.netWeightKg} کیلوگرم`
-            },
-            ...(rawTotal > 0
-              ? [
-                  {
-                    id: `vl_${Date.now()}_2`,
-                    accountCode: '110401',
-                    accountTitle: 'موجودی انبار مواد اولیه (الیاف و POY)',
-                    tafziliName: 'مصرف مواد اولیه طبق BOM',
-                    debit: 0,
-                    credit: rawTotal,
-                    description: `کسر اتوماتیک مواد اولیه بابت کارتن ${serialNumber}`
-                  }
-                ]
-              : []),
-            ...(packTotal > 0
-              ? [
-                  {
-                    id: `vl_${Date.now()}_3`,
-                    accountCode: '110402',
-                    accountTitle: 'موجودی انبار ملزومات بسته‌بندی (دوک و کارتن)',
-                    tafziliName: `${conesCount} عدد دوک + ۱ کارتن`,
-                    debit: 0,
-                    credit: packTotal,
-                    description: `کسر اتوماتیک دوک و کارتن مصرفی (${weighCalculation.totalTareKg} Kg)`
-                  }
-                ]
-              : []),
-            ...(remainderOverhead > 0
-              ? [
-                  {
-                    id: `vl_${Date.now()}_4`,
-                    accountCode: '5102',
-                    accountTitle: 'دستمزد مستقیم و سربار جذب‌شده تولید',
-                    tafziliName: machineCode,
-                    debit: 0,
-                    credit: remainderOverhead,
-                    description: `جذب دستمزد و سربار کارخانه برای ${weighCalculation.netWeightKg} Kg`
-                  }
-                ]
-              : [])
-          ]
+    // Update cartons warehouseId & add history event
+    const updatedCartons = allCartons.map(c => {
+      if (voucher.cartonIds?.includes(c.id) || c.productionVoucherNo === voucher.voucherNo) {
+        const histEvent: ErpCartonHistoryEvent = {
+          id: `hist_${Date.now()}_${Math.random()}`,
+          stage: 'WAREHOUSE_RECEIPT',
+          title: `رسید ورود به ${selWh?.name}`,
+          dateJalali: dateToday,
+          timeExact: exactTime,
+          actor: currentUser?.fullName || 'مسئول انبار',
+          details: `ورود رسمی به ${selWh?.name} طبق سند تحویل تولید ${voucher.voucherNo}`,
+          docNo,
+          archiveCode
         };
-        nextVouchers.unshift(prodVoucher);
-        nextVoucherNo += 1;
+        return {
+          ...c,
+          warehouseId: targetWhForReceipt,
+          history: [...(c.history || []), histEvent]
+        };
       }
+      return c;
+    });
 
-      const nextState: IndustrialErpState = {
-        ...erpState,
-        items: nextItems,
-        cartonLabels: [newLabel, ...erpState.cartonLabels],
-        vouchers: nextVouchers,
-        nextVoucherNo,
-        nextSerialCounter: serialCounter + 1
-      };
+    // Update voucher status
+    const updatedVouchers = (erpState.productionVouchers || []).map(v => {
+      if (v.id === voucher.id) {
+        return {
+          ...v,
+          status: 'DELIVERED_TO_WAREHOUSE' as const,
+          deliveredWarehouseId: targetWhForReceipt,
+          deliveredWarehouseName: selWh?.name,
+          deliveredDocNo: docNo
+        };
+      }
+      return v;
+    });
 
-      await persistErpState(
-        nextState,
-        `لیبل کارتن ${serialNumber} با وزن خالص ${weighCalculation.netWeightKg} Kg صادر شد و کسورات BOM از انبار کسر گردید.`
-      );
-      setActivePreviewLabel(newLabel);
-    } finally {
-      setSavingLocal(false);
-    }
+    const newDoc: ErpWarehouseDocument = {
+      id: `whdoc_${Date.now()}`,
+      docNo,
+      archiveCode,
+      docType: 'RECEIPT_PRODUCTION',
+      dateJalali: dateToday,
+      timeExact: exactTime,
+      targetWarehouseId: targetWhForReceipt,
+      targetWarehouseName: selWh?.name,
+      productionVoucherId: voucher.id,
+      cartonIds: voucher.cartonIds || [],
+      cartonsCount: voucher.cartonsCount,
+      totalGrossWeightKg: voucher.totalGrossWeightKg,
+      totalNetWeightKg: voucher.totalNetWeightKg,
+      status: 'COMPLETED',
+      receiverUserName: currentUser?.fullName || 'انباردار',
+      createdBy: currentUser?.fullName || 'انباردار',
+      notes: `رسید تحویل کالا از خط ${voucher.lineName} به ${selWh?.name}`
+    };
+
+    const nextState: IndustrialErpState = {
+      ...erpState,
+      cartonLabels: updatedCartons,
+      productionVouchers: updatedVouchers,
+      warehouseDocuments: [newDoc, ...warehouseDocs]
+    };
+
+    await persistErpState(nextState, `رسید ورود انبار ${docNo} با موفقیت ثبت شد و کالاها وارد انبار گردیدند`);
   };
 
-  const handlePrintCartonLabel = (label: ErpCartonLabel) => {
-    const win = window.open('', '_blank', 'width=520,height=650');
-    if (!win) return;
-    win.document.write(`
-      <!DOCTYPE html>
-      <html dir="rtl" lang="fa">
-      <head>
-        <meta charset="UTF-8" />
-        <title>لیبل کارتن نخ ${label.serialNumber}</title>
-        <style>
-          body { font-family: Tahoma, Vazirmatn, sans-serif; margin: 0; padding: 14px; background: #fff; color: #0f172a; }
-          .box { border: 3px solid #0f172a; border-radius: 12px; padding: 14px; }
-          .hdr { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
-          .title { font-size: 16px; font-weight: 900; }
-          .serial { font-family: monospace; font-size: 16px; font-weight: 900; background: #0f172a; color: #fff; padding: 4px 10px; border-radius: 6px; }
-          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; margin-bottom: 10px; }
-          .cell { border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 8px; }
-          .lbl { color: #475569; font-size: 10px; display: block; }
-          .val { font-weight: 800; font-size: 13px; }
-          .weights { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; background: #f8fafc; border: 2px solid #0f172a; border-radius: 8px; padding: 8px; text-align: center; margin-bottom: 10px; }
-          .net { font-size: 18px; font-weight: 900; color: #047857; }
-          .qr-row { display: flex; align-items: center; justify-content: space-between; border-top: 1px dashed #94a3b8; padding-top: 10px; }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <div class="hdr">
-            <div>
-              <div class="title">${selectedCompany?.name || erpState?.companyName || 'شرکت تولیدی لپان بافت'}</div>
-              <div style="font-size:11px;font-weight:bold;margin-top:2px;">${label.productName}</div>
-            </div>
-            <div class="serial">${label.serialNumber}</div>
-          </div>
-          <div class="grid">
-            <div class="cell"><span class="lbl">نمره نخ / دنیر و فیلامنت</span><span class="val">${label.yarnCount || '-'}</span></div>
-            <div class="cell"><span class="lbl">شماره لات (Lot No) و گرید</span><span class="val">${label.lotNumber} | درجه ${label.grade}</span></div>
-            <div class="cell"><span class="lbl">رنگ نخ</span><span class="val">${label.colorName || '-'}</span></div>
-            <div class="cell"><span class="lbl">تعداد دوک در کارتن</span><span class="val">${label.conesCount} عدد دوک</span></div>
-            <div class="cell"><span class="lbl">ماشین / شیفت تولید</span><span class="val">${label.machineCode} - ${label.shift}</span></div>
-            <div class="cell"><span class="lbl">تاریخ تولید</span><span class="val">${label.createdDateJalali}</span></div>
-          </div>
-          <div class="weights">
-            <div><span class="lbl">وزن ناخالص باسکول</span><span class="val">${label.grossWeightKg.toFixed(2)} Kg</span></div>
-            <div><span class="lbl">وزن کارتن و دوک (Tare)</span><span class="val">${label.totalTareKg.toFixed(2)} Kg</span></div>
-            <div><span class="lbl">وزن خالص نخ (Net)</span><span class="net">${label.netWeightKg.toFixed(2)} Kg</span></div>
-          </div>
-          <div class="qr-row">
-            <div style="font-size:10px;font-family:monospace;word-break:break-all;max-width:65%;">${label.qrPayload}</div>
-            ${qrDataUrl ? `<img src="${qrDataUrl}" style="width:105px;height:105px;" />` : ''}
-          </div>
-        </div>
-        <script>window.onload = function() { window.print(); }</script>
-      </body>
-      </html>
-    `);
-    win.document.close();
+  // -------------------------------------------------------------
+  // 3. SUBVIEW: WH_SALES_REMITTANCE (حواله فروش کارخانه - خروج بدون فی)
+  // -------------------------------------------------------------
+  const [sourceWhForRemittance, setSourceWhForRemittance] = useState<string>(warehouses[0]?.id || 'wh_finished');
+  const [customerName, setCustomerName] = useState<string>('شرکت نساجی اصفهان');
+  const [driverName, setDriverName] = useState<string>('');
+  const [plateNumber, setPlateNumber] = useState<string>('');
+  const [cartonSearchCode, setCartonSearchCode] = useState<string>('');
+  const [selectedCartonsForSales, setSelectedCartonsForSales] = useState<ErpCartonLabel[]>([]);
+
+  // Cartons available in this warehouse
+  const availableCartonsInWh = useMemo(() => {
+    return allCartons.filter(c => c.warehouseId === sourceWhForRemittance && (c.status === 'IN_STOCK' || !c.status));
+  }, [allCartons, sourceWhForRemittance]);
+
+  // Scan or add carton by code
+  const handleAddCartonToRemittance = (carton: ErpCartonLabel) => {
+    if (selectedCartonsForSales.some(c => c.id === carton.id)) {
+      showToast?.('error', 'این کارتن قبلاً به لیست حواله اضافه شده است');
+      return;
+    }
+    setSelectedCartonsForSales(prev => [carton, ...prev]);
   };
 
-  const handleScanCartonForRemittance = async () => {
-    if (!scanInput.trim()) return;
-    const raw = scanInput.trim();
-    let serial = raw;
-    if (raw.includes('|')) {
-      const parts = raw.split('|');
-      if (parts.length >= 2) serial = parts[1].trim();
-    }
-
-    let found = erpState.cartonLabels.find(
-      c => c.serialNumber.toLowerCase() === serial.toLowerCase() || c.qrPayload.toLowerCase() === raw.toLowerCase()
+  const handleScanCartonInput = (code: string) => {
+    if (!code.trim()) return;
+    const clean = code.trim().toLowerCase();
+    const found = availableCartonsInWh.find(c =>
+      c.referenceCode.toLowerCase() === clean ||
+      c.serialNumber.toLowerCase() === clean ||
+      c.qrPayload.toLowerCase().includes(clean)
     );
+    if (found) {
+      handleAddCartonToRemittance(found);
+      setCartonSearchCode('');
+      showToast?.('success', `کارتن ${found.referenceCode} افزوده شد`);
+    } else {
+      showToast?.('error', 'کارتنی با این بارکد/کد ارجاع در این انبار یافت نشد');
+    }
+  };
 
-    if (!found) {
-      try {
-        const liveRes = await apiCall<any>('/industrial-erp/lookup-any-barcode', 'POST', {
-          companyId: selectedCompany.id,
-          barcode: raw
-        });
-        if (liveRes?.success && liveRes.carton) {
-          found = liveRes.carton;
-          if (liveRes.state) setErpState(liveRes.state);
-        }
-      } catch {
-        // handled below
+  const remTotalNetWeight = useMemo(() => {
+    return Number(selectedCartonsForSales.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
+  }, [selectedCartonsForSales]);
+  const remTotalGrossWeight = useMemo(() => {
+    return Number(selectedCartonsForSales.reduce((sum, c) => sum + c.grossWeightKg, 0).toFixed(3));
+  }, [selectedCartonsForSales]);
+
+  const handleIssueSalesRemittance = async () => {
+    if (selectedCartonsForSales.length === 0) {
+      showToast?.('error', 'لطفاً حداقل یک کارتن را برای صدور حواله فروش انتخاب نمایید');
+      return;
+    }
+    if (!customerName.trim()) {
+      showToast?.('error', 'لطفاً نام مشتری / خریدار را وارد نمایید');
+      return;
+    }
+    const selWh = warehouses.find(w => w.id === sourceWhForRemittance);
+    const dateToday = getTodayJalali();
+    const exactTime = getExactTimeNow();
+    const cleanDate = dateToday.replace(/\//g, '');
+    const docSeq = (warehouseDocs.length + 1);
+    const docNo = `REM-SAL-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+
+    const remCartonIds = selectedCartonsForSales.map(c => c.id);
+
+    // Update carton statuses & add history event
+    const updatedCartons = allCartons.map(c => {
+      if (remCartonIds.includes(c.id)) {
+        const histEvent: ErpCartonHistoryEvent = {
+          id: `hist_${Date.now()}_${Math.random()}`,
+          stage: 'SALES_REMITTANCE',
+          title: `حواله فروش و خروج کارخانه به ${customerName}`,
+          dateJalali: dateToday,
+          timeExact: exactTime,
+          actor: currentUser?.fullName || 'انباردار کارخانه',
+          details: `خروج از ${selWh?.name} | راننده: ${driverName || '—'} | پلاک: ${plateNumber || '—'}`,
+          docNo,
+          archiveCode
+        };
+        return {
+          ...c,
+          status: 'SOLD' as const,
+          remittanceId: docNo,
+          history: [...(c.history || []), histEvent]
+        };
       }
-    }
+      return c;
+    });
 
-    if (!found) {
-      showToast('error', `کارتن با بارکد/سریال «${serial}» در انبار این شرکت یا سایان یافت نشد.`);
-      return;
-    }
-    if (found.status !== 'IN_STOCK') {
-      showToast('error', `کارتن ${found.serialNumber} قبلاً خارج یا ابطال شده است (${found.status}).`);
-      return;
-    }
-    if (scannedCartonsForRemittance.some(c => c.id === found!.id)) {
-      showToast('error', `کارتن ${found.serialNumber} همین الان در لیست اسکن قرار دارد.`);
-      return;
-    }
+    const newDoc: ErpWarehouseDocument = {
+      id: `whdoc_${Date.now()}`,
+      docNo,
+      archiveCode,
+      docType: 'SALES_REMITTANCE',
+      dateJalali: dateToday,
+      timeExact: exactTime,
+      sourceWarehouseId: sourceWhForRemittance,
+      sourceWarehouseName: selWh?.name,
+      partyName: customerName,
+      driverName,
+      plateNumber,
+      cartonIds: remCartonIds,
+      cartonsCount: selectedCartonsForSales.length,
+      totalGrossWeightKg: remTotalGrossWeight,
+      totalNetWeightKg: remTotalNetWeight,
+      status: 'COMPLETED',
+      createdBy: currentUser?.fullName || 'انباردار کارخانه',
+      notes: `حواله خروج فروش کارخانه (بدون فی) برای ${customerName}`
+    };
 
-    setScannedCartonsForRemittance(prev => [...prev, found!]);
-    setScanInput('');
-    showToast('success', `کارتن ${found.serialNumber} (${found.netWeightKg} Kg خالص) به حواله خروج اضافه شد.`);
+    const nextState: IndustrialErpState = {
+      ...erpState,
+      cartonLabels: updatedCartons,
+      warehouseDocuments: [newDoc, ...warehouseDocs]
+    };
+
+    await persistErpState(nextState, `حواله فروش ${docNo} با کد بایگانی ${archiveCode} صادر گردید`);
+    setSelectedCartonsForSales([]);
+    setDriverName('');
+    setPlateNumber('');
   };
 
-  const handleIssueFactoryExitRemittance = async () => {
-    if (!remCustomerName.trim()) {
-      showToast('error', 'لطفاً نام مشتری / گیرنده را برای صدور خروج کارخانه وارد کنید.');
+  // -------------------------------------------------------------
+  // 4. SUBVIEW: WH_INTER_REMITTANCE (حواله بین انبار - انتقال)
+  // -------------------------------------------------------------
+  const [transferSourceWh, setTransferSourceWh] = useState<string>(warehouses[0]?.id || 'wh_finished');
+  const [transferTargetWh, setTransferTargetWh] = useState<string>(warehouses[2]?.id || 'wh_tehran');
+  const [selectedCartonsForTransfer, setSelectedCartonsForTransfer] = useState<ErpCartonLabel[]>([]);
+  const [transferDriver, setTransferDriver] = useState<string>('');
+  const [transferPlate, setTransferPlate] = useState<string>('');
+
+  const availableCartonsForTransfer = useMemo(() => {
+    return allCartons.filter(c => c.warehouseId === transferSourceWh && (c.status === 'IN_STOCK' || !c.status));
+  }, [allCartons, transferSourceWh]);
+
+  const handleIssueInterWhTransfer = async () => {
+    if (transferSourceWh === transferTargetWh) {
+      showToast?.('error', 'انبار مبدا و مقصد نمی‌توانند یکسان باشند');
       return;
     }
-    if (scannedCartonsForRemittance.length === 0) {
-      showToast('error', 'حداقل یک کارتن باید با بارکد/QR اسکن یا انتخاب شود.');
+    if (selectedCartonsForTransfer.length === 0) {
+      showToast?.('error', 'لطفاً حداقل یک کارتن را برای انتقال انتخاب نمایید');
       return;
     }
+    const srcWh = warehouses.find(w => w.id === transferSourceWh);
+    const tgtWh = warehouses.find(w => w.id === transferTargetWh);
+    const dateToday = getTodayJalali();
+    const exactTime = getExactTimeNow();
+    const cleanDate = dateToday.replace(/\//g, '');
+    const docSeq = (warehouseDocs.length + 1);
+    const docNo = `TRF-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
 
-    try {
-      setSavingLocal(true);
-      const res = await apiCall<any>('/industrial-erp/factory-exit-remittance', 'POST', {
-        companyId: selectedCompany.id,
-        customerName: remCustomerName.trim(),
-        customerCode: remCustomerCode.trim(),
-        driverName: remDriverName.trim(),
-        driverPhone: remDriverPhone.trim(),
-        plateNumber: remPlateNumber.trim(),
-        destinationAddress: remDestinationAddress.trim(),
-        cartonIds: scannedCartonsForRemittance.map(c => c.id),
-        createdBy: currentUser.fullName
-      });
+    const trfCartonIds = selectedCartonsForTransfer.map(c => c.id);
+    const totNet = Number(selectedCartonsForTransfer.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
+    const totGross = Number(selectedCartonsForTransfer.reduce((sum, c) => sum + c.grossWeightKg, 0).toFixed(3));
 
-      if (res?.state) setErpState(res.state);
-      setScannedCartonsForRemittance([]);
-      setRemCustomerName('');
-      setRemCustomerCode('');
-      setRemDriverName('');
-      setRemDriverPhone('');
-      setRemPlateNumber('');
-      setRemDestinationAddress('');
-      fetchDelkamExitPermits();
-      showToast('success', res?.message || 'حواله خروج کارخانه (بدون فی) و مجوز خروج انتظامات دلکام صادر شد.');
-    } catch (err: any) {
-      showToast('error', err?.message || 'خطا در صدور حواله خروج کارخانه');
-    } finally {
-      setSavingLocal(false);
+    // Update carton history and mark in transit
+    const updatedCartons = allCartons.map(c => {
+      if (trfCartonIds.includes(c.id)) {
+        const histEvent: ErpCartonHistoryEvent = {
+          id: `hist_${Date.now()}_${Math.random()}`,
+          stage: 'INTER_WH_TRANSFER',
+          title: `حواله انتقال از ${srcWh?.name} به ${tgtWh?.name}`,
+          dateJalali: dateToday,
+          timeExact: exactTime,
+          actor: currentUser?.fullName || 'انباردار مبدا',
+          details: `صدور حواله انتقال بین‌انبار | راننده: ${transferDriver || '—'}`,
+          docNo,
+          archiveCode
+        };
+        return {
+          ...c,
+          history: [...(c.history || []), histEvent]
+        };
+      }
+      return c;
+    });
+
+    const newDoc: ErpWarehouseDocument = {
+      id: `whdoc_${Date.now()}`,
+      docNo,
+      archiveCode,
+      docType: 'INTER_WH_TRANSFER',
+      dateJalali: dateToday,
+      timeExact: exactTime,
+      sourceWarehouseId: transferSourceWh,
+      sourceWarehouseName: srcWh?.name,
+      targetWarehouseId: transferTargetWh,
+      targetWarehouseName: tgtWh?.name,
+      driverName: transferDriver,
+      plateNumber: transferPlate,
+      cartonIds: trfCartonIds,
+      cartonsCount: selectedCartonsForTransfer.length,
+      totalGrossWeightKg: totGross,
+      totalNetWeightKg: totNet,
+      status: 'PENDING_RECEIPT', // Waiting for target warehouse confirmation!
+      createdBy: currentUser?.fullName || 'انباردار مبدا',
+      notes: `حواله انتقال از ${srcWh?.name} به ${tgtWh?.name}`
+    };
+
+    const nextState: IndustrialErpState = {
+      ...erpState,
+      cartonLabels: updatedCartons,
+      warehouseDocuments: [newDoc, ...warehouseDocs]
+    };
+
+    await persistErpState(nextState, `حواله بین‌انبار ${docNo} ثبت شد و در انتظار تایید ورود در ${tgtWh?.name} قرار گرفت`);
+    setSelectedCartonsForTransfer([]);
+  };
+
+  // -------------------------------------------------------------
+  // 5. SUBVIEW: WH_INTER_RECEIPT (رسید حواله بین انبار - تایید ورود مقصد)
+  // -------------------------------------------------------------
+  const [activeReceivingWh, setActiveReceivingWh] = useState<string>(warehouses[2]?.id || 'wh_tehran');
+
+  // Transfers waiting for confirmation by activeReceivingWh
+  const pendingInterWhReceipts = useMemo(() => {
+    return warehouseDocs.filter(d =>
+      d.docType === 'INTER_WH_TRANSFER' &&
+      d.status === 'PENDING_RECEIPT' &&
+      (!activeReceivingWh || d.targetWarehouseId === activeReceivingWh)
+    );
+  }, [warehouseDocs, activeReceivingWh]);
+
+  const handleConfirmInterWhReceipt = async (transferDoc: ErpWarehouseDocument) => {
+    const tgtWh = warehouses.find(w => w.id === transferDoc.targetWarehouseId);
+    const dateToday = getTodayJalali();
+    const exactTime = getExactTimeNow();
+    const cleanDate = dateToday.replace(/\//g, '');
+    const docSeq = (warehouseDocs.length + 1);
+    const docNo = `REC-TRF-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+
+    // Move cartons to target warehouse & stamp receipt history
+    const updatedCartons = allCartons.map(c => {
+      if (transferDoc.cartonIds?.includes(c.id)) {
+        const histEvent: ErpCartonHistoryEvent = {
+          id: `hist_${Date.now()}_${Math.random()}`,
+          stage: 'INTER_WH_RECEIPT',
+          title: `رسید تایید ورود در ${tgtWh?.name}`,
+          dateJalali: dateToday,
+          timeExact: exactTime,
+          actor: currentUser?.fullName || 'انباردار مقصد',
+          details: `تایید وصول و تحویل کالا در ${tgtWh?.name} عطف به حواله ${transferDoc.docNo}`,
+          docNo,
+          archiveCode
+        };
+        return {
+          ...c,
+          warehouseId: transferDoc.targetWarehouseId || 'wh_tehran',
+          history: [...(c.history || []), histEvent]
+        };
+      }
+      return c;
+    });
+
+    // Mark transferDoc as completed
+    const updatedDocs = warehouseDocs.map(d => {
+      if (d.id === transferDoc.id) {
+        return { ...d, status: 'COMPLETED' as const, receiverUserName: currentUser?.fullName || 'انباردار مقصد' };
+      }
+      return d;
+    });
+
+    const newDoc: ErpWarehouseDocument = {
+      id: `whdoc_${Date.now()}`,
+      docNo,
+      archiveCode,
+      docType: 'INTER_WH_RECEIPT',
+      dateJalali: dateToday,
+      timeExact: exactTime,
+      sourceWarehouseId: transferDoc.sourceWarehouseId,
+      sourceWarehouseName: transferDoc.sourceWarehouseName,
+      targetWarehouseId: transferDoc.targetWarehouseId,
+      targetWarehouseName: tgtWh?.name,
+      referenceDocId: transferDoc.id,
+      cartonIds: transferDoc.cartonIds,
+      cartonsCount: transferDoc.cartonsCount,
+      totalGrossWeightKg: transferDoc.totalGrossWeightKg,
+      totalNetWeightKg: transferDoc.totalNetWeightKg,
+      status: 'COMPLETED',
+      receiverUserName: currentUser?.fullName || 'انباردار مقصد',
+      createdBy: currentUser?.fullName || 'انباردار مقصد',
+      notes: `رسید تایید ورود حواله انتقال ${transferDoc.docNo}`
+    };
+
+    const nextState: IndustrialErpState = {
+      ...erpState,
+      cartonLabels: updatedCartons,
+      warehouseDocuments: [newDoc, ...updatedDocs]
+    };
+
+    await persistErpState(nextState, `رسید ورود ${docNo} ثبت شد و کارتن‌ها رسماً وارد انبار مقصد گردیدند`);
+  };
+
+  // -------------------------------------------------------------
+  // 6. SUBVIEW: WH_SALES_RETURN (رسید مرجوعی از فروش)
+  // -------------------------------------------------------------
+  const [returnTargetWh, setReturnTargetWh] = useState<string>(warehouses[0]?.id || 'wh_finished');
+  const [returnCustomer, setReturnCustomer] = useState<string>('');
+  const [returnReason, setReturnReason] = useState<string>('عدم تطابق شید رنگ در خط بافت');
+  const [returnCartonCode, setReturnCartonCode] = useState<string>('');
+  const [selectedCartonsForReturn, setSelectedCartonsForReturn] = useState<ErpCartonLabel[]>([]);
+
+  const handleAddCartonToReturn = () => {
+    if (!returnCartonCode.trim()) return;
+    const clean = returnCartonCode.trim().toLowerCase();
+    const found = allCartons.find(c =>
+      c.referenceCode.toLowerCase() === clean ||
+      c.serialNumber.toLowerCase() === clean
+    );
+    if (found) {
+      if (selectedCartonsForReturn.some(c => c.id === found.id)) {
+        showToast?.('error', 'این کارتن قبلاً اضافه شده است');
+        return;
+      }
+      setSelectedCartonsForReturn(prev => [found, ...prev]);
+      setReturnCartonCode('');
+      showToast?.('success', `کارتن ${found.referenceCode} به لیست مرجوعی اضافه شد`);
+    } else {
+      showToast?.('error', 'کارتنی با این مشخصات یافت نشد');
     }
   };
+
+  const handleIssueSalesReturn = async () => {
+    if (selectedCartonsForReturn.length === 0) {
+      showToast?.('error', 'لطفاً حداقل یک کارتن مرجوعی انتخاب نمایید');
+      return;
+    }
+    const tgtWh = warehouses.find(w => w.id === returnTargetWh);
+    const dateToday = getTodayJalali();
+    const exactTime = getExactTimeNow();
+    const cleanDate = dateToday.replace(/\//g, '');
+    const docSeq = (warehouseDocs.length + 1);
+    const docNo = `RET-SAL-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+
+    const retCartonIds = selectedCartonsForReturn.map(c => c.id);
+    const totNet = Number(selectedCartonsForReturn.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
+    const totGross = Number(selectedCartonsForReturn.reduce((sum, c) => sum + c.grossWeightKg, 0).toFixed(3));
+
+    const updatedCartons = allCartons.map(c => {
+      if (retCartonIds.includes(c.id)) {
+        const histEvent: ErpCartonHistoryEvent = {
+          id: `hist_${Date.now()}_${Math.random()}`,
+          stage: 'SALES_RETURN',
+          title: `رسید مرجوعی از فروش به ${tgtWh?.name}`,
+          dateJalali: dateToday,
+          timeExact: exactTime,
+          actor: currentUser?.fullName || 'انباردار',
+          details: `علت مرجوعی: ${returnReason} | مشتری: ${returnCustomer || '—'}`,
+          docNo,
+          archiveCode
+        };
+        return {
+          ...c,
+          warehouseId: returnTargetWh,
+          status: 'RETURNED' as const,
+          history: [...(c.history || []), histEvent]
+        };
+      }
+      return c;
+    });
+
+    const newDoc: ErpWarehouseDocument = {
+      id: `whdoc_${Date.now()}`,
+      docNo,
+      archiveCode,
+      docType: 'SALES_RETURN',
+      dateJalali: dateToday,
+      timeExact: exactTime,
+      targetWarehouseId: returnTargetWh,
+      targetWarehouseName: tgtWh?.name,
+      partyName: returnCustomer || 'مشتری نامشخص',
+      cartonIds: retCartonIds,
+      cartonsCount: selectedCartonsForReturn.length,
+      totalGrossWeightKg: totGross,
+      totalNetWeightKg: totNet,
+      status: 'COMPLETED',
+      createdBy: currentUser?.fullName || 'انباردار',
+      notes: `مرجوعی از فروش به دلیل: ${returnReason}`
+    };
+
+    const nextState: IndustrialErpState = {
+      ...erpState,
+      cartonLabels: updatedCartons,
+      warehouseDocuments: [newDoc, ...warehouseDocs]
+    };
+
+    await persistErpState(nextState, `رسید مرجوعی ${docNo} ثبت گردید و کالاها به موجودی انبار بازگشتند`);
+    setSelectedCartonsForReturn([]);
+  };
+
+  // -------------------------------------------------------------
+  // 7. SUBVIEW: WH_ARCHIVE (بایگانی جامع اسناد انبار)
+  // -------------------------------------------------------------
+  const [archiveFilterType, setArchiveFilterType] = useState<string>('ALL');
+  const [archiveSearchTerm, setArchiveSearchTerm] = useState<string>('');
+  const [selectedDocForModal, setSelectedDocForModal] = useState<ErpWarehouseDocument | null>(null);
+
+  const filteredWarehouseDocs = useMemo(() => {
+    return warehouseDocs.filter(d => {
+      if (archiveFilterType !== 'ALL' && d.docType !== archiveFilterType) return false;
+      if (archiveSearchTerm.trim()) {
+        const q = archiveSearchTerm.toLowerCase();
+        return (
+          d.docNo.toLowerCase().includes(q) ||
+          d.archiveCode.toLowerCase().includes(q) ||
+          (d.partyName && d.partyName.toLowerCase().includes(q)) ||
+          (d.sourceWarehouseName && d.sourceWarehouseName.toLowerCase().includes(q)) ||
+          (d.targetWarehouseName && d.targetWarehouseName.toLowerCase().includes(q)) ||
+          d.dateJalali.includes(q)
+        );
+      }
+      return true;
+    });
+  }, [warehouseDocs, archiveFilterType, archiveSearchTerm]);
+
+  const getDocTypeBadge = (type: ErpWarehouseDocType) => {
+    switch (type) {
+      case 'RECEIPT_PRODUCTION':
+        return <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 px-2 py-0.5 rounded-full text-[10px] font-black">رسید تحویل از تولید</span>;
+      case 'SALES_REMITTANCE':
+        return <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-600 px-2 py-0.5 rounded-full text-[10px] font-black">حواله فروش کارخانه</span>;
+      case 'INTER_WH_TRANSFER':
+        return <span className="bg-purple-50 dark:bg-purple-950/40 text-purple-600 px-2 py-0.5 rounded-full text-[10px] font-black">حواله بین‌انبار (انتقال)</span>;
+      case 'INTER_WH_RECEIPT':
+        return <span className="bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 px-2 py-0.5 rounded-full text-[10px] font-black">رسید حواله بین‌انبار (ورود)</span>;
+      case 'SALES_RETURN':
+        return <span className="bg-rose-50 dark:bg-rose-950/40 text-rose-600 px-2 py-0.5 rounded-full text-[10px] font-black">رسید مرجوعی از فروش</span>;
+    }
+  };
+
+  // -------------------------------------------------------------
+  // 8. SUBVIEW: WH_TRACKING (رهگیری جامع کارتن با کد ارجاع / بارکد)
+  // -------------------------------------------------------------
+  const [trackingCodeInput, setTrackingCodeInput] = useState<string>('DLK-PL-01-01001');
+  const [trackedCarton, setTrackedCarton] = useState<ErpCartonLabel | null>(null);
+
+  const handleTrackCarton = (codeToSearch?: string) => {
+    const q = (codeToSearch || trackingCodeInput).trim().toLowerCase();
+    if (!q) return;
+    const found = allCartons.find(c =>
+      c.referenceCode.toLowerCase() === q ||
+      c.serialNumber.toLowerCase() === q ||
+      c.qrPayload.toLowerCase().includes(q)
+    );
+    if (found) {
+      setTrackedCarton(found);
+      showToast?.('success', `کارتن با کد ارجاع ${found.referenceCode} یافت شد`);
+    } else {
+      setTrackedCarton(null);
+      showToast?.('error', 'کارتنی با این کد ارجاع یا بارکد در سامانه یافت نشد');
+    }
+  };
+
+  // Auto-search if sample available
+  useEffect(() => {
+    if (activeSubView === 'wh_tracking' && !trackedCarton && allCartons.length > 0) {
+      setTrackedCarton(allCartons[0]);
+      setTrackingCodeInput(allCartons[0].referenceCode);
+    }
+  }, [activeSubView, allCartons]);
+
+  // -------------------------------------------------------------
+  // 9. SUBVIEW: WH_STOCK_REPORT & KARDEX
+  // -------------------------------------------------------------
+  const [stockWhFilter, setStockWhFilter] = useState<string>('ALL');
 
   return (
-    <div className="space-y-5">
-      {/* 1. WEIGHBRIDGE & QR LABELING (wh_weighbridge) */}
-      {activeSubView === 'wh_weighbridge' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
-                  <Scale size={20} />
-                </div>
-                <div>
-                  <h3 className="font-black text-sm text-slate-900 dark:text-white">
-                    میز توزین دیجیتال باسکول، کسر خودکار وزن دوک/کارتن و چاپ لیبل QR
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    محاسبه اتوماتیک وزن خالص نخ + کسر مواد اولیه و ملزومات از انبار طبق BOM
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setScaleGrossWeightKg(Number((23.5 + Math.random() * 3.2).toFixed(2)))}
-                className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 text-emerald-700 font-bold text-xs flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 cursor-pointer"
-              >
-                <RefreshCw size={13} />
-                <span>خواندن وزن زنده باسکول</span>
-              </button>
+    <div className="h-full flex flex-col min-h-0 bg-transparent overflow-hidden">
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 1. WH_WAREHOUSES: DEFINITION & COMMODITY GROUP ASSIGNMENT */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_warehouses' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="flex items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div>
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <WhIcon className="w-5 h-5 text-teal-600" />
+                تعریف انبارها و تخصیص گروه کالایی
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">مدیریت انبارهای محصول، انبار موقت خط، انبار مرکزی و تعیین گروه‌های مجاز هر انبار</p>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="sm:col-span-2">
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
-                  انتخاب کالای تولیدی (نخ) روی باسکول
-                </label>
-                <select
-                  value={selectedYarnId}
-                  onChange={e => setSelectedYarnId(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
-                >
-                  {erpState.items
-                    .filter(i => i.category === 'FINISHED_YARN')
-                    .map(y => (
-                      <option key={y.id} value={y.id}>
-                        {y.code} — {y.name} ({y.yarnCount})
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">
-                  وزن ناخالص باسکول (Gross Kg)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={scaleGrossWeightKg}
-                  onChange={e => setScaleGrossWeightKg(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border-2 border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/20 font-mono font-black text-base text-emerald-700 dark:text-emerald-300"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">تعداد دوک داخل کارتن</label>
-                <input
-                  type="number"
-                  value={conesCount}
-                  onChange={e => setConesCount(parseInt(e.target.value, 10) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">وزن هر دوک خالی (گرم)</label>
-                <input
-                  type="number"
-                  value={overrideConeWeightGrams}
-                  onChange={e => setOverrideConeWeightGrams(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">وزن کارتن خالی و نایلون (گرم)</label>
-                <input
-                  type="number"
-                  value={overrideCartonWeightGrams}
-                  onChange={e => setOverrideCartonWeightGrams(parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">شماره لات تولید (Lot No)</label>
-                <input
-                  type="text"
-                  value={lotNumber}
-                  onChange={e => setLotNumber(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">کد ماشین / شیفت / درجه</label>
-                <div className="grid grid-cols-3 gap-1.5">
-                  <input
-                    type="text"
-                    value={machineCode}
-                    onChange={e => setMachineCode(e.target.value)}
-                    className="px-2 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono text-center"
-                  />
-                  <input
-                    type="text"
-                    value={shiftName}
-                    onChange={e => setShiftName(e.target.value)}
-                    className="px-2 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-center"
-                  />
-                  <select
-                    value={grade}
-                    onChange={e => setGrade(e.target.value as 'A' | 'B' | 'C')}
-                    className="px-2 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-center"
-                  >
-                    <option value="A">A</option>
-                    <option value="B">B</option>
-                    <option value="C">C</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3 bg-slate-900 text-white rounded-2xl p-4 text-center">
-              <div>
-                <span className="text-[11px] text-slate-400 block">وزن ناخالص (Gross)</span>
-                <span className="font-mono font-black text-base">{scaleGrossWeightKg.toFixed(2)} Kg</span>
-              </div>
-              <div className="border-x border-slate-700">
-                <span className="text-[11px] text-amber-300 block">کسر ظرف و دوک (Tare)</span>
-                <span className="font-mono font-black text-base text-amber-400">
-                  {weighCalculation.totalTareKg.toFixed(3)} Kg
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] text-emerald-300 block">وزن خالص نخ (Net)</span>
-                <span className="font-mono font-black text-xl text-emerald-400">
-                  {weighCalculation.netWeightKg.toFixed(3)} Kg
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-1">
-              <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoIssueProductionVoucher}
-                  onChange={e => setAutoIssueProductionVoucher(e.target.checked)}
-                  className="w-4 h-4 rounded accent-emerald-600"
-                />
-                <span>صدور اتوماتیک سند حسابداری تولید و کسر BOM از انبار</span>
-              </label>
-
-              <button
-                onClick={handleIssueWeighbridgeLabel}
-                disabled={savingLocal}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center gap-2 shadow-md cursor-pointer"
-              >
-                <QrCode size={16} />
-                <span>ثبت توزین، کسر از انبار و صدور لیبل QR</span>
-              </button>
-            </div>
+            <button
+              onClick={() => {
+                setWhForm({ code: `WH-0${warehouses.length + 1}`, name: '', type: 'FINISHED_YARN', location: '', managerName: '', assignedGroupIds: [] });
+                setShowAddWhModal(true);
+              }}
+              className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-2 shadow-sm transition-colors"
+            >
+              <Plus size={16} />
+              تعریف انبار جدید
+            </button>
           </div>
 
-          <div className="lg:col-span-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h3 className="font-black text-sm text-slate-900 dark:text-white">پیش‌نمایش لیبل کارتن و QR Code</h3>
-              {activePreviewLabel && (
-                <button
-                  onClick={() => handlePrintCartonLabel(activePreviewLabel)}
-                  className="px-3.5 py-1.5 rounded-xl bg-slate-900 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Printer size={14} />
-                  <span>چاپ لیبل حرارتی</span>
-                </button>
-              )}
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {warehouses.map(w => {
+              const inStockCount = allCartons.filter(c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || !c.status)).length;
+              const totalKg = allCartons
+                .filter(c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || !c.status))
+                .reduce((sum, c) => sum + c.netWeightKg, 0);
 
-            {activePreviewLabel && (
-              <div className="border-2 border-slate-900 dark:border-slate-600 rounded-xl p-4 bg-white text-slate-900 space-y-3">
-                <div className="flex items-center justify-between border-b-2 border-slate-900 pb-2">
+              return (
+                <div key={w.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-between space-y-3">
                   <div>
-                    <div className="font-black text-xs">{selectedCompany.name}</div>
-                    <div className="font-bold text-sm text-indigo-900">{activePreviewLabel.productName}</div>
-                  </div>
-                  <span className="px-2.5 py-1 rounded bg-slate-900 text-white font-mono font-black text-xs">
-                    {activePreviewLabel.serialNumber}
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-center bg-slate-50 p-2.5 rounded-lg border border-slate-300 text-xs">
-                  <div>
-                    <span className="text-[10px] text-slate-500 block">ناخالص</span>
-                    <span className="font-mono font-bold">{activePreviewLabel.grossWeightKg} Kg</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 block">ظرف (دوک+کارتن)</span>
-                    <span className="font-mono font-bold">{activePreviewLabel.totalTareKg} Kg</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-emerald-700 font-bold block">خالص نخ</span>
-                    <span className="font-mono font-black text-sm text-emerald-700">
-                      {activePreviewLabel.netWeightKg} Kg
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between pt-1">
-                  <div className="text-[11px] space-y-0.5">
-                    <div>لات: {activePreviewLabel.lotNumber} | درجه: {activePreviewLabel.grade}</div>
-                    <div>تعداد دوک: {activePreviewLabel.conesCount} عدد | تاریخ: {activePreviewLabel.createdDateJalali}</div>
-                    <div className="font-mono text-[9px] text-slate-500 break-all max-w-[200px]">
-                      {activePreviewLabel.qrPayload}
-                    </div>
-                  </div>
-                  {qrDataUrl && <img src={qrDataUrl} alt="QR" className="w-24 h-24 border border-slate-300 rounded p-1" />}
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-2 pt-2">
-              <div className="flex items-center justify-between">
-                <h4 className="font-black text-xs text-slate-700 dark:text-slate-300">
-                  کارتن‌های موجود در انبار این شرکت ({erpState.cartonLabels.filter(c => c.status === 'IN_STOCK').length})
-                </h4>
-                <button
-                  onClick={handleSyncSayanBarcodes}
-                  disabled={syncingBarcodes}
-                  className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <Database size={12} />
-                  <span>فراخوانی بارکدهای موجود سایان</span>
-                </button>
-              </div>
-              <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
-                {erpState.cartonLabels.slice(0, 25).map(lbl => (
-                  <div
-                    key={lbl.id}
-                    onClick={() => setActivePreviewLabel(lbl)}
-                    className={`p-2 rounded-lg border text-xs flex items-center justify-between cursor-pointer ${
-                      activePreviewLabel?.id === lbl.id
-                        ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30'
-                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <div>
-                      <span className="font-mono font-black text-indigo-700 dark:text-indigo-300">{lbl.serialNumber}</span>
-                      <span className="mx-1.5 text-slate-400">|</span>
-                      <span className="font-bold">{lbl.productName}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-black text-emerald-600">{lbl.netWeightKg} Kg</span>
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          lbl.status === 'IN_STOCK' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                        }`}
-                      >
-                        {lbl.status === 'IN_STOCK' ? 'موجود' : 'خارج شده'}
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-teal-50 dark:bg-teal-950/40 text-teal-600 border border-teal-200 dark:border-teal-800">
+                        {w.code}
+                      </span>
+                      <span className="text-[11px] font-bold text-slate-400">
+                        مسئول: <strong className="text-slate-700 dark:text-slate-300">{w.managerName || '—'}</strong>
                       </span>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+                    <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{w.name}</h3>
+                    <p className="text-xs text-slate-500 mb-2">موقعیت: {w.location || '—'}</p>
 
-      {/* 2. FACTORY EXIT REMITTANCE WITHOUT PRICE (wh_exit_remittance) */}
-      {activeSubView === 'wh_exit_remittance' && (
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-            <div className="lg:col-span-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center">
-                    <Truck size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-black text-sm text-slate-900 dark:text-white">
-                      صدور حواله خروج کارخانه (بدون فی) + ثبت اتوماتیک مجوز خروج انتظامات دلکام
-                    </h3>
-                    <p className="text-[11px] text-slate-500">
-                      اسکن بارکد کارتن‌های دلکام یا سایان — ارسال همزمان به کارتابل قیمت‌گذاری دفتر تهران و کارتابل خروج کارخانه دلکام
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={scanInput}
-                  onChange={e => setScanInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleScanCartonForRemittance()}
-                  placeholder="اسکن بارکد کارتن (دلکام یا سایان) و کلید Enter..."
-                  className="flex-1 px-3 py-2 rounded-xl border-2 border-amber-400 bg-amber-50/20 font-mono text-xs font-bold"
-                />
-                <button
-                  onClick={handleScanCartonForRemittance}
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs cursor-pointer"
-                >
-                  افزودن بارکد
-                </button>
-              </div>
-
-              <div className="flex flex-wrap gap-1.5">
-                {erpState.cartonLabels
-                  .filter(c => c.status === 'IN_STOCK')
-                  .slice(0, 8)
-                  .map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => {
-                        if (!scannedCartonsForRemittance.some(x => x.id === c.id)) {
-                          setScannedCartonsForRemittance(prev => [...prev, c]);
-                        }
-                      }}
-                      className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 text-[11px] font-mono font-bold border border-slate-200 dark:border-slate-700 cursor-pointer"
-                    >
-                      + {c.serialNumber} ({c.netWeightKg}Kg)
-                    </button>
-                  ))}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div>
-                  <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">نام مشتری / طرف حساب *</label>
-                  <input
-                    type="text"
-                    value={remCustomerName}
-                    onChange={e => setRemCustomerName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">کد تفصیلی مشتری</label>
-                  <input
-                    type="text"
-                    value={remCustomerCode}
-                    onChange={e => setRemCustomerCode(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">نام راننده</label>
-                  <input
-                    type="text"
-                    value={remDriverName}
-                    onChange={e => setRemDriverName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-600 dark:text-slate-300 block mb-1">شماره پلاک خودرو</label>
-                  <input
-                    type="text"
-                    value={remPlateNumber}
-                    onChange={e => setRemPlateNumber(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between text-xs font-black">
-                  <span>کارتن‌های اسکن‌شده ({scannedCartonsForRemittance.length} کارتن)</span>
-                  <span className="font-mono text-emerald-600">
-                    جمع خالص:{' '}
-                    {scannedCartonsForRemittance.reduce((s, c) => s + c.netWeightKg, 0).toFixed(2)} Kg
-                  </span>
-                </div>
-                {scannedCartonsForRemittance.map(c => (
-                  <div key={c.id} className="flex items-center justify-between text-xs bg-slate-50 dark:bg-slate-800 p-2 rounded-lg">
-                    <span className="font-mono font-bold">{c.serialNumber} — {c.productName}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-emerald-600">{c.netWeightKg} Kg</span>
-                      <button
-                        onClick={() => setScannedCartonsForRemittance(prev => prev.filter(x => x.id !== c.id))}
-                        className="text-rose-500 cursor-pointer"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <button
-                onClick={handleIssueFactoryExitRemittance}
-                disabled={savingLocal || !canIssueRemittance}
-                className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs cursor-pointer shadow-md"
-              >
-                ثبت قطعی خروج کارخانه (بدون فی) و ارسال همزمان به دفتر تهران و انتظامات دلکام
-              </button>
-            </div>
-
-            <div className="lg:col-span-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs space-y-4">
-              <h3 className="font-black text-sm text-slate-900 dark:text-white border-b border-slate-100 dark:border-slate-800 pb-3">
-                فهرست حواله‌های خروج کارخانه در «{selectedCompany.name}» ({erpState.remittances.length})
-              </h3>
-              <div className="space-y-2.5 max-h-[500px] overflow-y-auto">
-                {erpState.remittances.map(rem => (
-                  <div
-                    key={rem.id}
-                    className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-2"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-black text-xs text-indigo-600">{rem.remittanceNo}</span>
-                        {rem.exitPermitNumber && (
-                          <span className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-[10px] font-mono font-bold">
-                            مجوز خروج دلکام #{rem.exitPermitNumber}
-                          </span>
-                        )}
+                    {/* Stock quick badge */}
+                    <div className="bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">کارتن‌های موجود:</span>
+                        <strong className="font-bold text-slate-800 dark:text-slate-200">{inStockCount} کارتن</strong>
                       </div>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                          rem.status === 'INVOICED'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}
-                      >
-                        {rem.status === 'INVOICED' ? 'فاکتور نهایی صادر شد' : 'منتظر فی دفتر تهران'}
-                      </span>
+                      <div className="text-left">
+                        <span className="text-slate-400 block text-[10px]">موجودی خالص:</span>
+                        <strong className="font-mono font-black text-emerald-600" dir="ltr">{totalKg.toFixed(2)} Kg</strong>
+                      </div>
                     </div>
-                    <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                      مشتری: {rem.customerName} | تاریخ: {rem.dateJalali}
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>
-                        راننده: {rem.driverName || '-'} ({rem.plateNumber || '-'})
-                      </span>
-                      {rem.status !== 'INVOICED' && (
-                        <button
-                          onClick={() => openSubViewTab('com_tehran_pricing')}
-                          className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-bold text-[11px] cursor-pointer flex items-center gap-1"
-                        >
-                          <ShoppingCart size={12} />
-                          <span>ثبت فی در دفتر تهران</span>
-                        </button>
+                  </div>
+
+                  {/* Assigned commodity groups */}
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <span className="text-[10px] text-slate-400 block mb-1">گروه‌های کالایی مجاز در این انبار:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {w.assignedGroupIds && w.assignedGroupIds.length > 0 ? (
+                        w.assignedGroupIds.map(gid => {
+                          const grp = groups.find(g => g.id === gid);
+                          return (
+                            <span key={gid} className="px-2 py-0.5 rounded-lg bg-teal-50 dark:bg-teal-950/30 text-teal-700 dark:text-teal-300 text-[10px] font-bold">
+                              {grp?.name || gid}
+                            </span>
+                          );
+                        })
+                      ) : (
+                        <span className="text-[10px] text-slate-400 font-bold">تمام گروه‌های کالایی مجازند</span>
                       )}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* 3. WAREHOUSE MASTER: WAREHOUSES & ITEMS (wh_warehouses & wh_items) */}
-      {(activeSubView === 'wh_warehouses' || activeSubView === 'wh_items') && (
-        <div className="space-y-5">
-          {activeSubView === 'wh_warehouses' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
-                <h3 className="font-black text-sm">معرفی انبار جدید در «{selectedCompany.name}»</h3>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <label className="font-bold block mb-1">کد انبار</label>
-                    <input
-                      type="text"
-                      value={newWarehouseForm.code}
-                      onChange={e => setNewWarehouseForm({ ...newWarehouseForm, code: e.target.value })}
-                      placeholder="مثلاً 105"
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">نوع انبار</label>
-                    <select
-                      value={newWarehouseForm.type}
-                      onChange={e => setNewWarehouseForm({ ...newWarehouseForm, type: e.target.value as any })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-bold"
-                    >
-                      <option value="RAW_MATERIAL">مواد اولیه</option>
-                      <option value="PACKAGING">ملزومات بسته‌بندی</option>
-                      <option value="FINISHED_YARN">محصول نهایی نخ</option>
-                      <option value="WASTE">ضایعات و استوک</option>
-                    </select>
-                  </div>
-                  <div className="col-span-2">
-                    <label className="font-bold block mb-1">نام انبار</label>
-                    <input
-                      type="text"
-                      value={newWarehouseForm.name}
-                      onChange={e => setNewWarehouseForm({ ...newWarehouseForm, name: e.target.value })}
-                      placeholder="نام کامل انبار..."
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">موقعیت / سالن</label>
-                    <input
-                      type="text"
-                      value={newWarehouseForm.location}
-                      onChange={e => setNewWarehouseForm({ ...newWarehouseForm, location: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">انباردار مسئول</label>
-                    <input
-                      type="text"
-                      value={newWarehouseForm.managerName}
-                      onChange={e => setNewWarehouseForm({ ...newWarehouseForm, managerName: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50"
-                    />
-                  </div>
-                </div>
-                <button
-                  onClick={async () => {
-                    if (!newWarehouseForm.code || !newWarehouseForm.name) return;
-                    const nw: ErpWarehouse = {
-                      id: `wh_${Date.now()}`,
-                      ...newWarehouseForm
-                    };
-                    await persistErpState(
-                      { ...erpState, warehouses: [...erpState.warehouses, nw] },
-                      `انبار «${nw.name}» ثبت شد.`
-                    );
-                    setNewWarehouseForm({ code: '', name: '', type: 'FINISHED_YARN', location: '', managerName: '' });
-                  }}
-                  className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-black text-xs cursor-pointer"
-                >
-                  افزودن انبار جدید
-                </button>
-              </div>
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 2. WH_RECEIPT_PRODUCTION: RECEIPT OF COMMODITIES FROM PRODUCTION */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_receipt_production' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div>
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                رسید تحویل کالا از خط تولید به انبار
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">تایید تحویل کارتن‌های وزن‌شده در خط تولید و انتقال رسمی به موجودی انبار محصول</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-bold text-slate-600 dark:text-slate-300">تحویل به انبار مقصد:</span>
+              <select
+                value={targetWhForReceipt}
+                onChange={e => setTargetWhForReceipt(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-slate-800 dark:text-slate-100"
+              >
+                {warehouses.map(w => (
+                  <option key={w.id} value={w.id}>{w.code} — {w.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-              <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
-                <h3 className="font-black text-sm">لیست انبارهای فعال شرکت ({erpState.warehouses.length})</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {erpState.warehouses.map(w => (
-                    <div key={w.id} className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 space-y-1">
-                      <div className="flex justify-between">
-                        <span className="font-mono font-black text-xs text-indigo-600">کد {w.code}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-slate-200 font-bold">{w.location}</span>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden p-4 space-y-3">
+            <h3 className="font-black text-xs text-slate-700 dark:text-slate-300">
+              سندهای تولید آماده تحویل به انبار ({pendingProductionVouchers.length} سند):
+            </h3>
+
+            {pendingProductionVouchers.length === 0 ? (
+              <div className="py-12 text-center text-xs font-bold text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl">
+                در حال حاضر هیچ سند تولیدی در انتظار تحویل به انبار وجود ندارد. کارتن‌های وزن‌شده در عملکرد خط تولید پس از ثبت نهایی در این بخش ظاهر می‌شوند.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {pendingProductionVouchers.map(v => (
+                  <div key={v.id} className="border border-slate-200 dark:border-slate-800 rounded-2xl p-4 bg-slate-50/50 dark:bg-slate-800/40 space-y-3 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-black text-xs text-orange-600 bg-orange-50 dark:bg-orange-950/40 px-2 py-0.5 rounded">
+                          {v.voucherNo}
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-400">کد بایگانی: {v.archiveCode}</span>
                       </div>
-                      <div className="font-black text-sm">{w.name}</div>
-                      <div className="text-[11px] text-slate-500">مسئول انبار: {w.managerName || 'تعیین نشده'}</div>
+                      <h4 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{v.itemName}</h4>
+                      <div className="text-xs text-slate-500 space-y-1">
+                        <div>خط تولید: <strong className="text-slate-700 dark:text-slate-300">{v.lineName}</strong></div>
+                        <div>تعداد کارتن: <strong className="text-slate-800 dark:text-slate-200">{v.cartonsCount} کارتن</strong></div>
+                        <div>مجموع وزن خالص: <strong className="font-mono font-black text-emerald-600" dir="ltr">{v.totalNetWeightKg} Kg</strong></div>
+                        <div>تاریخ و ساعت ثبت: <strong className="font-mono">{v.dateJalali} — {v.timeExact}</strong></div>
+                      </div>
                     </div>
-                  ))}
-                </div>
+
+                    <button
+                      onClick={() => handleAcceptProductionDelivery(v)}
+                      className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center justify-center gap-2 shadow-sm transition-colors"
+                    >
+                      <Check size={16} />
+                      تایید تحویل و صدور رسید انبار (ورود به انبار)
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 3. WH_SALES_REMITTANCE: FACTORY EXIT SALES REMITTANCE (NO PRICE) */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_sales_remittance' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <div className="border-b border-slate-100 dark:border-slate-800 pb-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <Truck className="w-5 h-5 text-blue-600" />
+                  صدور حواله فروش و خروج کارخانه (بدون فی)
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  طبق فرآیند مصوب، کارخانه ابتدا حواله خروج فیزیکی را بدون فی برای شخص خریدار صادر نموده و دفتر تهران قیمت‌گذاری نهایی را انجام می‌دهد.
+                </p>
               </div>
             </div>
-          )}
 
-          {activeSubView === 'wh_items' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
-                <h3 className="font-black text-sm">معرفی سرفصل کالا / نخ و تنظیم وزن دوک و کارتن</h3>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <label className="font-bold block mb-1">کد کالا</label>
-                    <input
-                      type="text"
-                      value={newItem.code || ''}
-                      onChange={e => setNewItem({ ...newItem, code: e.target.value })}
-                      placeholder="YN-3005"
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">گروه کالا</label>
-                    <select
-                      value={newItem.category}
-                      onChange={e => setNewItem({ ...newItem, category: e.target.value as any })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-bold"
-                    >
-                      <option value="FINISHED_YARN">محصول نهایی نخ</option>
-                      <option value="RAW_MATERIAL">مواد اولیه (POY/الیاف)</option>
-                      <option value="PACKAGING">ملزومات (دوک/کارتن)</option>
-                      <option value="WASTE">ضایعات نساجی</option>
-                    </select>
-                  </div>
-                  <div className="col-span-2">
-                    <label className="font-bold block mb-1">نام کامل کالا / مشخصات نخ</label>
-                    <input
-                      type="text"
-                      value={newItem.name || ''}
-                      onChange={e => setNewItem({ ...newItem, name: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">وزن هر دوک (گرم)</label>
-                    <input
-                      type="number"
-                      value={newItem.coneWeightGrams || 0}
-                      onChange={e => setNewItem({ ...newItem, coneWeightGrams: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">وزن کارتن خالی (گرم)</label>
-                    <input
-                      type="number"
-                      value={newItem.cartonWeightGrams || 0}
-                      onChange={e => setNewItem({ ...newItem, cartonWeightGrams: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-bold block mb-1">موجودی اولیه</label>
-                    <input
-                      type="number"
-                      value={newItem.stockQty || 0}
-                      onChange={e => setNewItem({ ...newItem, stockQty: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono"
-                    />
-                  </div>
-                  {canViewCostPrice && (
-                    <div>
-                      <label className="font-bold block mb-1">بهای واحد (ریال)</label>
-                      <input
-                        type="number"
-                        value={newItem.unitCost || 0}
-                        onChange={e => setNewItem({ ...newItem, unitCost: parseFloat(e.target.value) || 0 })}
-                        className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono"
-                      />
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={async () => {
-                    if (!newItem.code || !newItem.name) return;
-                    const created: ErpItem = {
-                      id: `itm_${Date.now()}`,
-                      code: newItem.code.trim(),
-                      name: newItem.name.trim(),
-                      category: (newItem.category as any) || 'FINISHED_YARN',
-                      unit: newItem.unit || 'کیلوگرم',
-                      warehouseId: newItem.warehouseId || 'wh_yarn',
-                      stockQty: Number(newItem.stockQty) || 0,
-                      unitCost: Number(newItem.unitCost) || 1800000,
-                      salesPrice: Number(newItem.salesPrice) || 2150000,
-                      yarnCount: newItem.yarnCount || '150D/48F',
-                      colorName: newItem.colorName || 'سفید',
-                      coneWeightGrams: Number(newItem.coneWeightGrams) || 110,
-                      cartonWeightGrams: Number(newItem.cartonWeightGrams) || 1450,
-                      defaultConesPerCarton: Number(newItem.defaultConesPerCarton) || 6
-                    };
-                    await persistErpState({ ...erpState, items: [...erpState.items, created] }, 'کالای جدید ثبت شد.');
-                  }}
-                  className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-black text-xs cursor-pointer"
+            {/* Header Form */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">انبار مبدا خروج</label>
+                <select
+                  value={sourceWhForRemittance}
+                  onChange={e => setSourceWhForRemittance(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 >
-                  ذخیره سرفصل کالا در انبار
+                  {warehouses.map(w => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="font-bold block mb-1">نام خریدار / مشتری</label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={e => setCustomerName(e.target.value)}
+                  placeholder="مثال: شرکت نساجی اصفهان"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">نام راننده حامل</label>
+                <input
+                  type="text"
+                  value={driverName}
+                  onChange={e => setDriverName(e.target.value)}
+                  placeholder="نام راننده"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">شماره پلاک خودرو</label>
+                <input
+                  type="text"
+                  value={plateNumber}
+                  onChange={e => setPlateNumber(e.target.value)}
+                  placeholder="مثال: ۱۲ الف ۳۴۵ ایران ۶۸"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Barcode scanner / Code input */}
+            <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-2xl border border-blue-200 dark:border-blue-800 flex flex-col sm:flex-row items-center gap-2">
+              <span className="text-xs font-black text-blue-900 dark:text-blue-300 shrink-0">اسکن یا جستجوی کارتن با کد ارجاع / بارکد:</span>
+              <div className="flex-1 w-full flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="کد ارجاع یا بارکد کارتن را اسکن یا تایپ کنید..."
+                  value={cartonSearchCode}
+                  onChange={e => setCartonSearchCode(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      handleScanCartonInput(cartonSearchCode);
+                    }
+                  }}
+                  className="w-full px-3 py-1.5 rounded-xl border border-blue-300 bg-white dark:bg-slate-900 font-mono text-xs font-bold"
+                />
+                <button
+                  onClick={() => handleScanCartonInput(cartonSearchCode)}
+                  className="px-4 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-bold shrink-0"
+                >
+                  افزودن کارتن
+                </button>
+              </div>
+            </div>
+
+            {/* Selected cartons summary bar */}
+            <div className="grid grid-cols-3 gap-3 p-3 bg-slate-900 text-white rounded-xl text-xs">
+              <div className="text-center">
+                <span className="text-slate-400 block text-[10px]">کارتن‌های این حواله:</span>
+                <span className="text-base font-black">{selectedCartonsForSales.length} کارتن</span>
+              </div>
+              <div className="text-center border-x border-slate-700">
+                <span className="text-slate-400 block text-[10px]">مجموع وزن ناخالص:</span>
+                <span className="text-base font-mono font-bold" dir="ltr">{remTotalGrossWeight} Kg</span>
+              </div>
+              <div className="text-center">
+                <span className="text-emerald-400 block text-[10px]">مجموع وزن خالص نخ:</span>
+                <span className="text-base font-mono font-black text-emerald-400" dir="ltr">{remTotalNetWeight} Kg</span>
+              </div>
+            </div>
+
+            {/* Cartons Table in Remittance */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-black text-slate-700 dark:text-slate-300">کارتن‌های انتخاب‌شده برای خروج:</h4>
+                <button
+                  onClick={handleIssueSalesRemittance}
+                  disabled={selectedCartonsForSales.length === 0}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-md disabled:opacity-40 transition-colors"
+                >
+                  صدور حواله فروش و ثبت خروج کارخانه
                 </button>
               </div>
 
-              <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
-                <h3 className="font-black text-sm">فهرست سرفصل کالاها و موجودی لحظه‌ای ({erpState.items.length})</h3>
-                <div className="overflow-x-auto">
+              {selectedCartonsForSales.length === 0 ? (
+                <div className="py-8 text-center text-xs font-bold text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                  هیچ کارتنی برای این حواله انتخاب نشده است. از لیست زیر یا اسکنر کارتن‌ها را اضافه کنید.
+                </div>
+              ) : (
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
                   <table className="w-full text-right text-xs">
-                    <thead>
-                      <tr className="border-b text-slate-500">
-                        <th className="py-2 px-2">کد</th>
-                        <th className="py-2 px-2">نام کالا</th>
-                        <th className="py-2 px-2">موجودی</th>
-                        <th className="py-2 px-2">وزن دوک/کارتن</th>
-                        {canViewCostPrice && <th className="py-2 px-2">بهای واحد (ریال)</th>}
+                    <thead className="bg-slate-100 dark:bg-slate-800 font-bold text-slate-600">
+                      <tr>
+                        <th className="p-2">کد ارجاع</th>
+                        <th className="p-2">نام کالا</th>
+                        <th className="p-2 text-center">دوک</th>
+                        <th className="p-2 text-center">وزن خالص</th>
+                        <th className="p-2 text-center">عملیات</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
-                      {erpState.items.map(it => (
-                        <tr key={it.id}>
-                          <td className="py-2 px-2 font-mono font-bold text-indigo-600">{it.code}</td>
-                          <td className="py-2 px-2 font-bold">{it.name}</td>
-                          <td className="py-2 px-2 font-mono font-black text-emerald-600">
-                            {it.stockQty.toLocaleString()} {it.unit}
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {selectedCartonsForSales.map(c => (
+                        <tr key={c.id}>
+                          <td className="p-2 font-mono font-bold text-blue-600">{c.referenceCode}</td>
+                          <td className="p-2">{c.productName}</td>
+                          <td className="p-2 text-center">{c.conesCount}</td>
+                          <td className="p-2 text-center font-mono font-black text-emerald-600">{c.netWeightKg} Kg</td>
+                          <td className="p-2 text-center">
+                            <button
+                              onClick={() => setSelectedCartonsForSales(prev => prev.filter(x => x.id !== c.id))}
+                              className="text-rose-600 hover:bg-rose-50 p-1 rounded"
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </td>
-                          <td className="py-2 px-2 font-mono text-[11px]">
-                            {it.coneWeightGrams}g / {it.cartonWeightGrams}g
-                          </td>
-                          {canViewCostPrice && (
-                            <td className="py-2 px-2 font-mono font-bold">{it.unitCost.toLocaleString()}</td>
-                          )}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+              )}
+            </div>
+
+            {/* Quick selector of cartons in warehouse */}
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+              <h4 className="text-xs font-black text-slate-700 dark:text-slate-300 mb-2">
+                انتخاب سریع از کارتن‌های موجود در {warehouses.find(w => w.id === sourceWhForRemittance)?.name} ({availableCartonsInWh.length} کارتن):
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-40 overflow-y-auto custom-scrollbar p-1">
+                {availableCartonsInWh.map(c => {
+                  const isSelected = selectedCartonsForSales.some(x => x.id === c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => isSelected ? setSelectedCartonsForSales(prev => prev.filter(x => x.id !== c.id)) : handleAddCartonToRemittance(c)}
+                      className={`p-2 rounded-xl text-right text-xs transition-all border ${
+                        isSelected
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-blue-400'
+                      }`}
+                    >
+                      <div className="font-mono font-bold text-[11px] truncate">{c.referenceCode}</div>
+                      <div className="text-[10px] truncate opacity-80">{c.productName}</div>
+                      <div className="font-mono font-black text-[11px] mt-1" dir="ltr">{c.netWeightKg} Kg</div>
+                    </button>
+                  );
+                })}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 4. WH_INTER_REMITTANCE: INTER-WAREHOUSE TRANSFER */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_inter_remittance' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <ArrowRightLeft className="w-5 h-5 text-purple-600" />
+                حواله بین‌انبار (انتقال کالا و کارتن بین دو انبار)
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                ثبت حواله انتقال از انبار مبدا. وضعیت سند در حالت «در انتظار تایید ورود در انبار مقصد» قرار می‌گیرد تا کاربر انبار مقصد آن را تایید کند.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">انبار مبدا انتقال</label>
+                <select
+                  value={transferSourceWh}
+                  onChange={e => setTransferSourceWh(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                >
+                  {warehouses.map(w => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="font-bold block mb-1">انبار مقصد تحویل‌گیرنده</label>
+                <select
+                  value={transferTargetWh}
+                  onChange={e => setTransferTargetWh(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                >
+                  {warehouses.filter(w => w.id !== transferSourceWh).map(w => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="font-bold block mb-1">راننده / متصدی حمل</label>
+                <input
+                  type="text"
+                  value={transferDriver}
+                  onChange={e => setTransferDriver(e.target.value)}
+                  placeholder="نام راننده"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">شماره پلاک</label>
+                <input
+                  type="text"
+                  value={transferPlate}
+                  onChange={e => setTransferPlate(e.target.value)}
+                  placeholder="پلاک خودرو"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Selected summary */}
+            <div className="flex items-center justify-between p-3 bg-purple-50 dark:bg-purple-950/30 rounded-xl border border-purple-200 dark:border-purple-800 text-xs">
+              <div>
+                <strong className="text-purple-900 dark:text-purple-300">{selectedCartonsForTransfer.length} کارتن</strong> انتخاب شده برای انتقال
+              </div>
+              <button
+                onClick={handleIssueInterWhTransfer}
+                disabled={selectedCartonsForTransfer.length === 0}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-black shadow-md disabled:opacity-40"
+              >
+                ثبت و صدور حواله انتقال بین‌انبار
+              </button>
+            </div>
+
+            {/* Available cartons in source wh */}
+            <div>
+              <h4 className="text-xs font-black text-slate-700 dark:text-slate-300 mb-2">
+                کارتن‌های موجود در انبار مبدا ({availableCartonsForTransfer.length} کارتن):
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-52 overflow-y-auto custom-scrollbar p-1">
+                {availableCartonsForTransfer.map(c => {
+                  const isSel = selectedCartonsForTransfer.some(x => x.id === c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => isSel ? setSelectedCartonsForTransfer(prev => prev.filter(x => x.id !== c.id)) : setSelectedCartonsForTransfer(prev => [c, ...prev])}
+                      className={`p-2 rounded-xl text-right text-xs transition-all border ${
+                        isSel
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
+                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-purple-400'
+                      }`}
+                    >
+                      <div className="font-mono font-bold text-[11px] truncate">{c.referenceCode}</div>
+                      <div className="text-[10px] truncate opacity-80">{c.productName}</div>
+                      <div className="font-mono font-black text-[11px] mt-1" dir="ltr">{c.netWeightKg} Kg</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 5. WH_INTER_RECEIPT: RECEIPT & CONFIRMATION OF INTER-WH TRANSFER */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_inter_receipt' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div>
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-indigo-600" />
+                رسید حواله بین‌انبار (تایید ورود کالا در انبار مقصد)
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                وقتی کاربر در انبار مبدا حواله بین‌انبار صادر کرد، کاربر انبار مقصد در این بخش تایید ورود و تحویل رسمی را ثبت می‌کند.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-bold text-slate-600 dark:text-slate-300">مشاهده حواله‌های وارده به:</span>
+              <select
+                value={activeReceivingWh}
+                onChange={e => setActiveReceivingWh(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-slate-800 dark:text-slate-100"
+              >
+                {warehouses.map(w => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm p-4 space-y-3">
+            <h3 className="font-black text-xs text-slate-700 dark:text-slate-300">
+              حواله‌های ارسالی در انتظار تایید ورود ({pendingInterWhReceipts.length} حواله):
+            </h3>
+
+            {pendingInterWhReceipts.length === 0 ? (
+              <div className="py-12 text-center text-xs font-bold text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl">
+                هیچ حواله بین‌انباری در انتظار تایید ورود برای این انبار وجود ندارد.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {pendingInterWhReceipts.map(doc => (
+                  <div key={doc.id} className="border border-indigo-200 dark:border-indigo-900/50 rounded-2xl p-4 bg-indigo-50/30 dark:bg-slate-800/40 space-y-3 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono font-black text-xs text-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded">
+                          {doc.docNo}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">کد بایگانی: {doc.archiveCode}</span>
+                      </div>
+                      <div className="text-xs space-y-1 text-slate-600 dark:text-slate-300">
+                        <div>انبار مبدا: <strong className="text-slate-800 dark:text-slate-100">{doc.sourceWarehouseName}</strong></div>
+                        <div>انبار مقصد: <strong className="text-slate-800 dark:text-slate-100">{doc.targetWarehouseName}</strong></div>
+                        <div>تعداد کارتن: <strong className="text-slate-800 dark:text-slate-100">{doc.cartonsCount} کارتن</strong></div>
+                        <div>مجموع وزن خالص: <strong className="font-mono font-black text-emerald-600" dir="ltr">{doc.totalNetWeightKg} Kg</strong></div>
+                        <div>راننده: <strong>{doc.driverName || '—'}</strong> | پلاک: <strong>{doc.plateNumber || '—'}</strong></div>
+                        <div>تاریخ و ساعت ارسال: <strong className="font-mono">{doc.dateJalali} — {doc.timeExact}</strong></div>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleConfirmInterWhReceipt(doc)}
+                      className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black flex items-center justify-center gap-2 shadow-sm transition-colors"
+                    >
+                      <Check size={16} />
+                      تایید ورود و ثبت رسید انبار مقصد
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 6. WH_SALES_RETURN: SALES RETURN RECEIPT */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_sales_return' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-rose-600" />
+                رسید مرجوعی از فروش به انبار
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">ثبت کارتن‌های برگشت‌خورده از مشتریان با ذکر علت دقیق مرجوعی، تاریخ و ساعت</p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">انبار تحویل‌گیرنده مرجوعی</label>
+                <select
+                  value={returnTargetWh}
+                  onChange={e => setReturnTargetWh(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                >
+                  {warehouses.map(w => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="font-bold block mb-1">نام مشتری مرجوع‌کننده</label>
+                <input
+                  type="text"
+                  value={returnCustomer}
+                  onChange={e => setReturnCustomer(e.target.value)}
+                  placeholder="نام مشتری"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">علت مرجوعی</label>
+                <input
+                  type="text"
+                  value={returnReason}
+                  onChange={e => setReturnReason(e.target.value)}
+                  placeholder="مثال: پرزدهی، پارگی نخ، ناهماهنگی رنگ"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Input carton code */}
+            <div className="flex items-center gap-2 text-xs">
+              <input
+                type="text"
+                placeholder="کد ارجاع کارتن مرجوعی (مثال: DLK-PL-01-01001)..."
+                value={returnCartonCode}
+                onChange={e => setReturnCartonCode(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleAddCartonToReturn();
+                }}
+                className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+              />
+              <button
+                onClick={handleAddCartonToReturn}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold"
+              >
+                افزودن به مرجوعی
+              </button>
+            </div>
+
+            {/* Selected for return list */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  کارتن‌های مرجوعی: {selectedCartonsForReturn.length} عدد
+                </span>
+                <button
+                  onClick={handleIssueSalesReturn}
+                  disabled={selectedCartonsForReturn.length === 0}
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md disabled:opacity-40"
+                >
+                  ثبت نهایی رسید مرجوعی فروش
+                </button>
+              </div>
+
+              {selectedCartonsForReturn.map(c => (
+                <div key={c.id} className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="font-mono font-black text-rose-700 dark:text-rose-400 mr-2">{c.referenceCode}</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{c.productName}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono font-bold">{c.netWeightKg} Kg</span>
+                    <button
+                      onClick={() => setSelectedCartonsForReturn(prev => prev.filter(x => x.id !== c.id))}
+                      className="text-rose-600 p-1 rounded"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 7. WH_ARCHIVE: COMPREHENSIVE WAREHOUSE DOCUMENTS ARCHIVE */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_archive' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div>
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-teal-600" />
+                بایگانی جامع اسناد انبارداری
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">تفکیک نوع سند، کد بایگانی، شماره سند، انبار مبدا/مقصد، تاریخ و ساعت دقیق</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search size={14} className="absolute right-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="جستجو در اسناد انبار..."
+                  value={archiveSearchTerm}
+                  onChange={e => setArchiveSearchTerm(e.target.value)}
+                  className="pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Type Filter Tabs */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+            {[
+              { id: 'ALL', label: `همه اسناد (${warehouseDocs.length})` },
+              { id: 'SALES_REMITTANCE', label: `حواله فروش خروج کارخانه (${warehouseDocs.filter(d => d.docType === 'SALES_REMITTANCE').length})` },
+              { id: 'INTER_WH_TRANSFER', label: `حواله بین‌انبار (${warehouseDocs.filter(d => d.docType === 'INTER_WH_TRANSFER').length})` },
+              { id: 'INTER_WH_RECEIPT', label: `رسید ورود بین‌انبار (${warehouseDocs.filter(d => d.docType === 'INTER_WH_RECEIPT').length})` },
+              { id: 'RECEIPT_PRODUCTION', label: `رسید تحویل از تولید (${warehouseDocs.filter(d => d.docType === 'RECEIPT_PRODUCTION').length})` },
+              { id: 'SALES_RETURN', label: `رسید مرجوعی فروش (${warehouseDocs.filter(d => d.docType === 'SALES_RETURN').length})` }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setArchiveFilterType(tab.id)}
+                className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition-colors ${
+                  archiveFilterType === tab.id
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                  <tr>
+                    <th className="p-3">شماره سند</th>
+                    <th className="p-3">کد بایگانی</th>
+                    <th className="p-3 text-center">نوع سند</th>
+                    <th className="p-3">انبار مبدا / مقصد</th>
+                    <th className="p-3">طرف حساب / راننده</th>
+                    <th className="p-3 text-center">تعداد کارتن</th>
+                    <th className="p-3 text-center">وزن خالص (Kg)</th>
+                    <th className="p-3 text-center">تاریخ و ساعت دقیق</th>
+                    <th className="p-3 text-center">وضعیت</th>
+                    <th className="p-3 text-center">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredWarehouseDocs.map(doc => (
+                    <tr key={doc.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                      <td className="p-3 font-mono font-bold text-teal-600">{doc.docNo}</td>
+                      <td className="p-3 font-mono text-slate-500">{doc.archiveCode}</td>
+                      <td className="p-3 text-center">{getDocTypeBadge(doc.docType)}</td>
+                      <td className="p-3 text-slate-700 dark:text-slate-300">
+                        {doc.sourceWarehouseName ? <span>از {doc.sourceWarehouseName}</span> : ''}
+                        {doc.targetWarehouseName ? <span className="block text-[11px] text-slate-400">به {doc.targetWarehouseName}</span> : ''}
+                      </td>
+                      <td className="p-3">
+                        <strong className="block text-slate-800 dark:text-slate-200">{doc.partyName || '—'}</strong>
+                        {doc.driverName && <span className="text-[10px] text-slate-400 font-mono">راننده: {doc.driverName}</span>}
+                      </td>
+                      <td className="p-3 text-center font-bold">{doc.cartonsCount}</td>
+                      <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">{doc.totalNetWeightKg.toLocaleString()}</td>
+                      <td className="p-3 text-center">
+                        <div className="font-bold">{doc.dateJalali}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">{doc.timeExact}</div>
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${doc.status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                          {doc.status === 'COMPLETED' ? 'نهایی شده' : 'در انتظار تایید مقصد'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center">
+                        <button
+                          onClick={() => setSelectedDocForModal(doc)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 text-xs font-bold inline-flex items-center gap-1"
+                        >
+                          <Eye size={13} />
+                          مشاهده
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredWarehouseDocs.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="p-8 text-center text-slate-400 font-bold">
+                        هیچ سند انباری مطابق با فیلتر شما یافت نشد.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 8. WH_TRACKING: COMPREHENSIVE CARTON LIFECYCLE AUDIT TRAIL */}
+      {/* --------------------------------------------------------------------------------- */}
+      {activeSubView === 'wh_tracking' && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+            <div>
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Hash className="w-5 h-5 text-teal-600" />
+                رهگیری جامع شناسنامه و لایف‌سایکل کارتن با کد ارجاع / بارکد
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                مشاهده تاریخچه کامل کارتن از لحظه وزن‌کشی روی باسکول خط تولید، ورود به انبار، انتقالات بین‌انبار، تا حواله خروج فروش و مرجوعی
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-2">
+              <input
+                type="text"
+                placeholder="کد ارجاع، سریال یا بارکد کارتن را وارد نمایید (مثال: DLK-PL-01-01001)..."
+                value={trackingCodeInput}
+                onChange={e => setTrackingCodeInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleTrackCarton();
+                }}
+                className="flex-1 w-full px-4 py-2.5 rounded-xl border border-teal-300 dark:border-teal-700 bg-slate-50 dark:bg-slate-800 font-mono font-black text-xs text-slate-800 dark:text-slate-100"
+              />
+              <button
+                onClick={() => handleTrackCarton()}
+                className="w-full sm:w-auto px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center justify-center gap-2"
+              >
+                <Search size={15} />
+                ردیابی و رهگیری کارتن
+              </button>
+            </div>
+
+            {/* Quick sample chips */}
+            {allCartons.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-400">
+                <span>کارتن‌های اخیر:</span>
+                {allCartons.slice(0, 6).map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setTrackingCodeInput(c.referenceCode);
+                      handleTrackCarton(c.referenceCode);
+                    }}
+                    className="font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-teal-600 hover:bg-teal-50"
+                  >
+                    {c.referenceCode}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {trackedCarton ? (
+            <div className="space-y-4">
+              {/* Carton Identity Card */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold block">شناسنامه محصول نخ:</span>
+                    <h3 className="font-black text-base text-slate-800 dark:text-slate-100">{trackedCarton.productName}</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="font-mono text-xs font-black text-orange-600 bg-orange-50 dark:bg-orange-950/40 px-2 py-0.5 rounded">
+                        کد ارجاع: {trackedCarton.referenceCode}
+                      </span>
+                      <span className="font-mono text-xs text-slate-500">سریال: {trackedCarton.serialNumber}</span>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <span className="text-[10px] text-slate-400 block">وضعیت فعلی:</span>
+                    <span className={`px-3 py-1 rounded-full text-xs font-black inline-block ${
+                      trackedCarton.status === 'SOLD' ? 'bg-blue-50 text-blue-600 border border-blue-200' :
+                      trackedCarton.status === 'RETURNED' ? 'bg-rose-50 text-rose-600 border border-rose-200' :
+                      'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                    }`}>
+                      {trackedCarton.status === 'SOLD' ? 'تحویل مشتری (فروش رفته)' :
+                       trackedCarton.status === 'RETURNED' ? 'مرجوع شده به انبار' :
+                       'موجود در انبار'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl">
+                  <div>نمره نخ: <strong className="font-bold font-mono">{trackedCarton.yarnCount}</strong></div>
+                  <div>شماره لات: <strong className="font-bold font-mono">{trackedCarton.lotNumber}</strong></div>
+                  <div>تعداد دوک: <strong className="font-bold">{trackedCarton.conesCount} عدد</strong></div>
+                  <div>گرید کیفی: <strong className="font-bold text-orange-600">{trackedCarton.grade}</strong></div>
+                  <div>وزن ناخالص: <strong className="font-mono font-bold">{trackedCarton.grossWeightKg} Kg</strong></div>
+                  <div>کسر ظرف و دوک: <strong className="font-mono text-rose-500">-{trackedCarton.totalTareKg} Kg</strong></div>
+                  <div>وزن خالص نخ: <strong className="font-mono font-black text-emerald-600">{trackedCarton.netWeightKg} Kg</strong></div>
+                  <div>انبار فعلی: <strong>{warehouses.find(w => w.id === trackedCarton.warehouseId)?.name || 'انبار محصول'}</strong></div>
+                </div>
+              </div>
+
+              {/* Lifecycle Interactive Timeline */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
+                <h3 className="font-black text-xs text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-teal-600" />
+                  خط زمان وقایع و تاریخچه دقیق لایف‌سایکل کارتن (Lifecycle Audit Trail)
+                </h3>
+
+                <div className="relative border-r-2 border-teal-500 pr-5 space-y-6 mr-2">
+                  {/* Step 1: Production & Scale */}
+                  <div className="relative">
+                    <div className="absolute -right-[27px] top-0 w-4 h-4 rounded-full bg-orange-600 border-2 border-white dark:border-slate-900 shadow-sm"></div>
+                    <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1 text-xs">
+                      <div className="flex items-center justify-between">
+                        <strong className="font-black text-orange-600">۱. توزین روی باسکول و صدور شناسنامه خط تولید</strong>
+                        <span className="font-mono text-[11px] text-slate-500">{trackedCarton.createdDateJalali} — ساعت {trackedCarton.createdTimeExact || '۱۴:۳۲'}</span>
+                      </div>
+                      <p className="text-slate-600 dark:text-slate-300">
+                        توزین در <strong>{trackedCarton.machineCode}</strong> شیفت <strong>{trackedCarton.shift}</strong> توسط اپراتور <strong>{trackedCarton.createdBy}</strong>.
+                        وزن ناخالص: {trackedCarton.grossWeightKg} کیلو، وزن خالص: {trackedCarton.netWeightKg} کیلو.
+                      </p>
+                      {trackedCarton.productionVoucherNo && (
+                        <div className="text-[11px] text-slate-400 font-mono">سند تولید: {trackedCarton.productionVoucherNo} | کد بایگانی: {trackedCarton.productionArchiveCode}</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Step 2+: Historical events recorded */}
+                  {trackedCarton.history && trackedCarton.history.slice(1).map((ev, i) => (
+                    <div key={ev.id || i} className="relative">
+                      <div className="absolute -right-[27px] top-0 w-4 h-4 rounded-full bg-teal-600 border-2 border-white dark:border-slate-900 shadow-sm"></div>
+                      <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1 text-xs">
+                        <div className="flex items-center justify-between">
+                          <strong className="font-black text-teal-700 dark:text-teal-300">{ev.title}</strong>
+                          <span className="font-mono text-[11px] text-slate-500">{ev.dateJalali} — ساعت {ev.timeExact}</span>
+                        </div>
+                        <p className="text-slate-600 dark:text-slate-300">{ev.details}</p>
+                        <div className="flex items-center gap-3 text-[11px] text-slate-400 font-mono">
+                          {ev.docNo && <span>شماره سند: {ev.docNo}</span>}
+                          {ev.archiveCode && <span>کد بایگانی: {ev.archiveCode}</span>}
+                          {ev.actor && <span>مسئول: {ev.actor}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Current Status Footprint */}
+                  <div className="relative">
+                    <div className="absolute -right-[27px] top-0 w-4 h-4 rounded-full bg-emerald-600 border-2 border-white dark:border-slate-900 shadow-sm"></div>
+                    <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs">
+                      <strong className="font-black text-emerald-800 dark:text-emerald-300 block">وضعیت کنونی کارتن:</strong>
+                      <span className="text-emerald-700 dark:text-emerald-400">
+                        {trackedCarton.status === 'SOLD'
+                          ? `کارتن در حواله فروش تحویل مشتری گردیده است.`
+                          : `کارتن هم‌اکنون در موجودی فعال «${warehouses.find(w => w.id === trackedCarton.warehouseId)?.name || 'انبار محصول'}» قرار دارد و آماده بارگیری و انتقال است.`}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="py-12 text-center text-xs font-bold text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900">
+              برای مشاهده شناسنامه و لایف‌سایکل کارتن، کد ارجاع یا بارکد آن را در کادر بالا وارد نمایید.
             </div>
           )}
         </div>
       )}
 
-      {/* 4. WAREHOUSE DOCS, STOCKTAKING, DELKAM BIJAK LINK & KARDEX */}
-      {(activeSubView === 'wh_receipt_issue' ||
-        activeSubView === 'wh_cartable' ||
-        activeSubView === 'wh_stocktaking' ||
-        activeSubView === 'wh_kardex' ||
-        activeSubView === 'wacc_pricing' ||
-        activeSubView === 'wacc_riali_kardex') && (
-        <div className="space-y-5">
-          {activeSubView === 'wh_receipt_issue' && (
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-              <h3 className="font-black text-sm">صدور رسید مستقیم انبار / حواله مصرف خط تولید / انتقالی بین انبارها</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                <div>
-                  <label className="font-bold block mb-1">نوع سند انبار</label>
-                  <select
-                    value={whDocForm.docType}
-                    onChange={e => setWhDocForm({ ...whDocForm, docType: e.target.value as any })}
-                    className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-bold"
-                  >
-                    <option value="RECEIPT_PURCHASE">رسید ورود کالا به انبار (افزایش موجودی)</option>
-                    <option value="ISSUE_PRODUCTION">حواله مصرف خط تولید (کاهش موجودی)</option>
-                    <option value="TRANSFER">انتقال بین انبارها</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="font-bold block mb-1">انتخاب کالا</label>
-                  <select
-                    value={whDocForm.itemId}
-                    onChange={e => setWhDocForm({ ...whDocForm, itemId: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-bold"
-                  >
-                    {erpState.items.map(i => (
-                      <option key={i.id} value={i.id}>
-                        {i.code} — {i.name} (موجودی: {i.stockQty})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-bold block mb-1">مقدار / تعداد</label>
-                  <input
-                    type="number"
-                    value={whDocForm.qty}
-                    onChange={e => setWhDocForm({ ...whDocForm, qty: parseFloat(e.target.value) || 0 })}
-                    className="w-full px-3 py-2 rounded-xl border bg-slate-50 font-mono font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold block mb-1">طرف حساب / تحویل‌گیرنده</label>
-                  <input
-                    type="text"
-                    value={whDocForm.counterpartyName}
-                    onChange={e => setWhDocForm({ ...whDocForm, counterpartyName: e.target.value })}
-                    placeholder="نام تامین‌کننده یا سالن تولید..."
-                    className="w-full px-3 py-2 rounded-xl border bg-slate-50"
-                  />
-                </div>
-                <div className="sm:col-span-2 flex items-end">
-                  <button
-                    onClick={async () => {
-                      const itm = erpState.items.find(i => i.id === whDocForm.itemId);
-                      if (!itm || whDocForm.qty <= 0) return;
-                      const isAdd = whDocForm.docType === 'RECEIPT_PURCHASE';
-                      const newDoc: ErpWarehouseDoc = {
-                        id: `whd_${Date.now()}`,
-                        docNo: `WHD-405-${102 + (erpState.warehouseDocs || []).length}`,
-                        docType: whDocForm.docType,
-                        dateJalali: getTodayJalali(),
-                        warehouseId: itm.warehouseId,
-                        warehouseName: erpState.warehouses.find(w => w.id === itm.warehouseId)?.name || 'انبار کارخانه',
-                        counterpartyName: whDocForm.counterpartyName || 'داخلی کارخانه',
-                        status: 'FINALIZED',
-                        items: [
-                          {
-                            itemId: itm.id,
-                            itemCode: itm.code,
-                            itemName: itm.name,
-                            qty: whDocForm.qty,
-                            unit: itm.unit,
-                            unitCost: itm.unitCost,
-                            totalCost: Math.round(whDocForm.qty * itm.unitCost)
-                          }
-                        ]
-                      };
-                      const nextItems = erpState.items.map(i =>
-                        i.id === itm.id
-                          ? { ...i, stockQty: Number(Math.max(0, i.stockQty + (isAdd ? whDocForm.qty : -whDocForm.qty)).toFixed(3)) }
-                          : i
-                      );
-                      await persistErpState(
-                        {
-                          ...erpState,
-                          items: nextItems,
-                          warehouseDocs: [newDoc, ...(erpState.warehouseDocs || [])]
-                        },
-                        `سند انبار ${newDoc.docNo} ثبت شد و موجودی بروزرسانی گردید.`
-                      );
-                    }}
-                    className="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-black text-xs cursor-pointer"
-                  >
-                    ثبت قطعی سند انبار و بروزرسانی موجودی
-                  </button>
-                </div>
-              </div>
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 9. WH_STOCK_REPORT: INVENTORY REPORT & KARDEX */}
+      {/* --------------------------------------------------------------------------------- */}
+      {(activeSubView === 'wh_stock_report' || activeSubView === 'wh_kardex') && (
+        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div>
+              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-teal-600" />
+                {activeSubView === 'wh_kardex' ? 'کاردکس کالا و گردش ریز تراکنش‌های انبار' : 'گزارش موجودی کالاها و کارتن‌های انبار'}
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">موجودی لحظه‌ای تفکیک‌شده بر اساس انبار، گروه کالایی، تعداد کارتن و وزن خالص</p>
             </div>
-          )}
-
-          {activeSubView === 'wh_cartable' && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
-                <h3 className="font-black text-sm">اسناد انبار ثبت‌شده در این شرکت ({(erpState.warehouseDocs || []).length})</h3>
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                  {(erpState.warehouseDocs || []).map(doc => (
-                    <div key={doc.id} className="p-3 rounded-xl border bg-slate-50/50 text-xs space-y-1">
-                      <div className="flex justify-between font-bold">
-                        <span className="font-mono text-indigo-600">{doc.docNo}</span>
-                        <span>{doc.dateJalali}</span>
-                      </div>
-                      <div className="font-bold">{doc.warehouseName} — طرف حساب: {doc.counterpartyName}</div>
-                      {doc.items.map((it, idx) => (
-                        <div key={idx} className="text-slate-600 flex justify-between">
-                          <span>{it.itemName}</span>
-                          <span className="font-mono font-bold">{it.qty} {it.unit}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="lg:col-span-6 bg-white dark:bg-slate-900 rounded-2xl border border-amber-200 dark:border-amber-900/50 p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-black text-sm text-amber-800 dark:text-amber-300">
-                      اتصال زنده به کارتابل خروج کارخانه و بیجک‌های انتظامات دلکام ({delkamExitPermits.length})
-                    </h3>
-                    <p className="text-[11px] text-slate-500">
-                      مجوزهای خروج ثبت‌شده در ماژول خروج کارخانه دلکام که با انبار حسابداری در ارتباط هستند
-                    </p>
-                  </div>
-                  <button
-                    onClick={fetchDelkamExitPermits}
-                    className="p-1.5 rounded-lg border hover:bg-slate-100 cursor-pointer"
-                  >
-                    <RefreshCw size={14} className={loadingDelkamPermits ? 'animate-spin' : ''} />
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                  {delkamExitPermits.map(p => (
-                    <div key={p.id} className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-xs flex items-center justify-between">
-                      <div>
-                        <span className="font-mono font-black text-amber-600">مجوز خروج #{p.permitNumber}</span>
-                        <span className="mx-2 text-slate-300">|</span>
-                        <span className="font-bold">{p.recipientName || p.description || 'خروج کالا'}</span>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          راننده: {p.driverName || '-'} | پلاک: {p.plateNumber || '-'} | تاریخ: {p.date}
-                        </div>
-                      </div>
-                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-bold text-[10px]">
-                        {p.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-bold text-slate-500">فیلتر انبار:</span>
+              <select
+                value={stockWhFilter}
+                onChange={e => setStockWhFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+              >
+                <option value="ALL">همه انبارها</option>
+                {warehouses.map(w => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
             </div>
-          )}
+          </div>
 
-          {activeSubView === 'wh_stocktaking' && (
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-black text-sm">کنترل موجودی، شمارش فیزیکی و انبارگردانی</h3>
-                <button
-                  onClick={async () => {
-                    const nextItems = erpState.items.map(it => {
-                      const counted = stockCountMap[it.id];
-                      return counted !== undefined ? { ...it, stockQty: counted } : it;
-                    });
-                    await persistErpState({ ...erpState, items: nextItems }, 'تعدیلات انبارگردانی اعمال شد.');
-                  }}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-black text-xs cursor-pointer"
-                >
-                  اعمال شمارش فیزیکی و صدور سند تعدیل انبارگردانی
-                </button>
-              </div>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
-                <thead>
-                  <tr className="border-b text-slate-500">
-                    <th className="py-2 px-2">کد کالا</th>
-                    <th className="py-2 px-2">نام کالا</th>
-                    <th className="py-2 px-2">موجودی سیستم</th>
-                    <th className="py-2 px-2">شمارش فیزیکی انبارگردانی</th>
-                    <th className="py-2 px-2">مغایرت (کسری/اضافی)</th>
+                <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                  <tr>
+                    <th className="p-3">کد کالا</th>
+                    <th className="p-3">نام کالا</th>
+                    <th className="p-3">گروه کالایی</th>
+                    <th className="p-3">انبار</th>
+                    <th className="p-3 text-center">کارتن‌های موجود</th>
+                    <th className="p-3 text-center font-black text-emerald-600">مجموع وزن خالص (Kg)</th>
+                    <th className="p-3 text-center">میانگین وزن کارتن</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
-                  {erpState.items.map(it => {
-                    const counted = stockCountMap[it.id] ?? it.stockQty;
-                    const diff = Number((counted - it.stockQty).toFixed(3));
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {erpState.items.map(item => {
+                    const matchedCartons = allCartons.filter(c => {
+                      if (c.productId !== item.id && c.productCode !== item.code) return false;
+                      if (stockWhFilter !== 'ALL' && c.warehouseId !== stockWhFilter) return false;
+                      return c.status === 'IN_STOCK' || !c.status;
+                    });
+                    const totalNet = Number(matchedCartons.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
+                    const count = matchedCartons.length;
+
                     return (
-                      <tr key={it.id}>
-                        <td className="py-2 px-2 font-mono font-bold">{it.code}</td>
-                        <td className="py-2 px-2 font-bold">{it.name}</td>
-                        <td className="py-2 px-2 font-mono font-bold">{it.stockQty.toLocaleString()} {it.unit}</td>
-                        <td className="py-2 px-2">
-                          <input
-                            type="number"
-                            value={counted}
-                            onChange={e => setStockCountMap({ ...stockCountMap, [it.id]: parseFloat(e.target.value) || 0 })}
-                            className="w-28 px-2 py-1 rounded border font-mono font-bold"
-                          />
+                      <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                        <td className="p-3 font-mono font-bold text-teal-600">{item.code}</td>
+                        <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{item.name}</td>
+                        <td className="p-3 text-slate-500">{item.groupName || 'نخ‌های DTY'}</td>
+                        <td className="p-3 text-slate-600">
+                          {stockWhFilter === 'ALL' ? 'تمام انبارها' : warehouses.find(w => w.id === stockWhFilter)?.name}
                         </td>
-                        <td className={`py-2 px-2 font-mono font-black ${diff === 0 ? 'text-slate-400' : diff > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {diff > 0 ? `+${diff}` : diff} {it.unit}
+                        <td className="p-3 text-center font-bold">{count} کارتن</td>
+                        <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">{totalNet.toLocaleString()} Kg</td>
+                        <td className="p-3 text-center font-mono text-slate-500">
+                          {count > 0 ? (totalNet / count).toFixed(3) : '0.000'} Kg
                         </td>
                       </tr>
                     );
@@ -1488,51 +1678,139 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                 </tbody>
               </table>
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
-            <h3 className="font-black text-sm">
-              {activeSubView.startsWith('wacc_')
-                ? 'کاردکس ریالی-تعدادی و ارزش‌گذاری میانگین موزون موجودی انبارها'
-                : 'مرور گردش کالاها، اسناد انبار و کاردکس تعدادی'}
-            </h3>
-            <div className="overflow-x-auto">
+      {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: ADD WAREHOUSE */}
+      {/* --------------------------------------------------------------------------------- */}
+      {showAddWhModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">تعریف انبار جدید</h3>
+              <button onClick={() => setShowAddWhModal(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">کد انبار</label>
+                <input
+                  type="text"
+                  value={whForm.code}
+                  onChange={e => setWhForm({ ...whForm, code: e.target.value })}
+                  placeholder="WH-06"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">نام انبار</label>
+                <input
+                  type="text"
+                  value={whForm.name}
+                  onChange={e => setWhForm({ ...whForm, name: e.target.value })}
+                  placeholder="مثال: انبار محصول شماره ۲"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">موقعیت و آدرس انبار</label>
+                <input
+                  type="text"
+                  value={whForm.location}
+                  onChange={e => setWhForm({ ...whForm, location: e.target.value })}
+                  placeholder="سوله جنوبی کارخانه"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">مسئول انبار</label>
+                <input
+                  type="text"
+                  value={whForm.managerName}
+                  onChange={e => setWhForm({ ...whForm, managerName: e.target.value })}
+                  placeholder="نام انباردار"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowAddWhModal(false)} className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-600">
+                انصراف
+              </button>
+              <button onClick={handleSaveWarehouse} className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black shadow-sm">
+                ذخیره انبار
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: VIEW WAREHOUSE DOCUMENT DETAILS */}
+      {/* --------------------------------------------------------------------------------- */}
+      {selectedDocForModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div>
+                <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-teal-600" />
+                  سند انبارداری {selectedDocForModal.docNo}
+                </h3>
+                <span className="text-xs text-slate-400 font-mono">کد بایگانی: {selectedDocForModal.archiveCode}</span>
+              </div>
+              <button onClick={() => setSelectedDocForModal(null)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-2xl text-xs">
+              <div>نوع سند: <strong>{getDocTypeBadge(selectedDocForModal.docType)}</strong></div>
+              <div>انبار مبدا: <strong className="font-bold">{selectedDocForModal.sourceWarehouseName || '—'}</strong></div>
+              <div>انبار مقصد: <strong className="font-bold">{selectedDocForModal.targetWarehouseName || '—'}</strong></div>
+              <div>طرف حساب: <strong className="font-bold">{selectedDocForModal.partyName || '—'}</strong></div>
+              <div>تاریخ: <strong className="font-bold">{selectedDocForModal.dateJalali}</strong></div>
+              <div>ساعت دقیق: <strong className="font-mono text-teal-600">{selectedDocForModal.timeExact}</strong></div>
+              <div>تعداد کارتن: <strong className="font-bold">{selectedDocForModal.cartonsCount}</strong></div>
+              <div>وزن خالص کل: <strong className="font-mono text-emerald-600">{selectedDocForModal.totalNetWeightKg} Kg</strong></div>
+            </div>
+
+            <h4 className="text-xs font-black text-slate-700 dark:text-slate-300">اقلام و کارتن‌های ثبت شده در این سند:</h4>
+            <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
               <table className="w-full text-right text-xs">
-                <thead>
-                  <tr className="border-b text-slate-500">
-                    <th className="py-2 px-2">کد کالا</th>
-                    <th className="py-2 px-2">شرح کالا</th>
-                    <th className="py-2 px-2">انبار</th>
-                    <th className="py-2 px-2">موجودی فعلی</th>
-                    {(canViewCostPrice || activeSubView.startsWith('wacc_')) && (
-                      <>
-                        <th className="py-2 px-2">فی میانگین موزون (ریال)</th>
-                        <th className="py-2 px-2">ارزش ریالی کل موجودی (ریال)</th>
-                      </>
-                    )}
+                <thead className="bg-slate-100 dark:bg-slate-800 font-bold text-slate-600">
+                  <tr>
+                    <th className="p-2">ردیف</th>
+                    <th className="p-2">کد ارجاع</th>
+                    <th className="p-2">نام کالا</th>
+                    <th className="p-2 text-center">دوک</th>
+                    <th className="p-2 text-center">وزن خالص</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
-                  {erpState.items.map(it => (
-                    <tr key={it.id}>
-                      <td className="py-2 px-2 font-mono font-bold text-indigo-600">{it.code}</td>
-                      <td className="py-2 px-2 font-bold">{it.name}</td>
-                      <td className="py-2 px-2">{erpState.warehouses.find(w => w.id === it.warehouseId)?.name || '-'}</td>
-                      <td className="py-2 px-2 font-mono font-black text-emerald-600">
-                        {it.stockQty.toLocaleString()} {it.unit}
-                      </td>
-                      {(canViewCostPrice || activeSubView.startsWith('wacc_')) && (
-                        <>
-                          <td className="py-2 px-2 font-mono">{canViewCostPrice ? it.unitCost.toLocaleString() : '***'}</td>
-                          <td className="py-2 px-2 font-mono font-black text-indigo-700">
-                            {canViewCostPrice ? Math.round(it.stockQty * it.unitCost).toLocaleString() : 'محرمانه'}
-                          </td>
-                        </>
-                      )}
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {allCartons.filter(c => selectedDocForModal.cartonIds?.includes(c.id)).map((c, i) => (
+                    <tr key={c.id}>
+                      <td className="p-2 text-slate-400 font-mono">{i + 1}</td>
+                      <td className="p-2 font-mono font-bold text-teal-600">{c.referenceCode}</td>
+                      <td className="p-2">{c.productName}</td>
+                      <td className="p-2 text-center">{c.conesCount}</td>
+                      <td className="p-2 text-center font-mono font-black text-emerald-600">{c.netWeightKg} Kg</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setSelectedDocForModal(null)}
+                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-black shadow-sm"
+              >
+                بستن
+              </button>
             </div>
           </div>
         </div>

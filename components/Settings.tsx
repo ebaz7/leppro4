@@ -1136,6 +1136,8 @@ const Settings: React.FC<SettingsProps> = ({
   const [newCompanyLogo, setNewCompanyLogo] = useState("");
   const [newCompanyShowInWarehouse, setNewCompanyShowInWarehouse] =
     useState(true);
+  const [newCompanyIsAccountingEnabled, setNewCompanyIsAccountingEnabled] =
+    useState(true);
   const [newCompanyBanks, setNewCompanyBanks] = useState<CompanyBank[]>([]);
   const [newCompanyLetterhead, setNewCompanyLetterhead] = useState("");
 
@@ -2065,6 +2067,7 @@ const Settings: React.FC<SettingsProps> = ({
       name: newCompanyName.trim(),
       logo: newCompanyLogo,
       showInWarehouse: newCompanyShowInWarehouse,
+      isAccountingEnabled: newCompanyIsAccountingEnabled,
       banks: newCompanyBanks,
       letterhead: newCompanyLetterhead,
       registrationNumber: newCompanyRegNum,
@@ -2100,6 +2103,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewCompanyName(c.name);
     setNewCompanyLogo(c.logo || "");
     setNewCompanyShowInWarehouse(c.showInWarehouse !== false);
+    setNewCompanyIsAccountingEnabled(c.isAccountingEnabled !== false);
     setNewCompanyBanks(c.banks || []);
     setNewCompanyLetterhead(c.letterhead || "");
     setNewCompanyRegNum(c.registrationNumber || "");
@@ -2115,6 +2119,7 @@ const Settings: React.FC<SettingsProps> = ({
     setNewCompanyName("");
     setNewCompanyLogo("");
     setNewCompanyShowInWarehouse(true);
+    setNewCompanyIsAccountingEnabled(true);
     setNewCompanyBanks([]);
     setNewCompanyLetterhead("");
     setNewCompanyRegNum("");
@@ -3909,7 +3914,7 @@ const Settings: React.FC<SettingsProps> = ({
                         </div>
                       </div>
                       <div
-                        className={`flex items-center gap-2 glass-panel px-2 py-2 rounded border cursor-pointer flex-1 h-[42px] ${newCompanyShowInWarehouse ? "border-green-200 bg-green-50 text-green-700" : ""}`}
+                        className={`flex items-center gap-2 glass-panel px-2 py-2 rounded border cursor-pointer flex-1 h-[42px] ${newCompanyShowInWarehouse ? "border-green-200 bg-green-50 text-green-700 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300" : ""}`}
                         onClick={() =>
                           setNewCompanyShowInWarehouse(
                             !newCompanyShowInWarehouse,
@@ -3922,10 +3927,30 @@ const Settings: React.FC<SettingsProps> = ({
                           onChange={(e) =>
                             setNewCompanyShowInWarehouse(e.target.checked)
                           }
-                          className="w-4 h-4"
+                          className="w-4 h-4 cursor-pointer"
                         />
                         <span className="text-xs font-bold select-none">
                           نمایش در انبار
+                        </span>
+                      </div>
+                      <div
+                        className={`flex items-center gap-2 glass-panel px-2 py-2 rounded border cursor-pointer flex-1 h-[42px] ${newCompanyIsAccountingEnabled ? "border-indigo-200 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:border-indigo-800 dark:text-indigo-300" : ""}`}
+                        onClick={() =>
+                          setNewCompanyIsAccountingEnabled(
+                            !newCompanyIsAccountingEnabled,
+                          )
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newCompanyIsAccountingEnabled}
+                          onChange={(e) =>
+                            setNewCompanyIsAccountingEnabled(e.target.checked)
+                          }
+                          className="w-4 h-4 cursor-pointer"
+                        />
+                        <span className="text-xs font-bold select-none">
+                          فعال در حسابداری و تولید
                         </span>
                       </div>
                       <div>
@@ -4182,6 +4207,14 @@ const Settings: React.FC<SettingsProps> = ({
                               <span className="text-sm font-bold">
                                 {c.name}
                               </span>
+                              <div className="flex items-center gap-1">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${c.showInWarehouse !== false ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}>
+                                  {c.showInWarehouse !== false ? "انبار ✓" : "مخفی از انبار"}
+                                </span>
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${c.isAccountingEnabled !== false ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300" : "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300"}`}>
+                                  {c.isAccountingEnabled !== false ? "حسابداری فعال" : "حسابداری غیرفعال"}
+                                </span>
+                              </div>
                             </div>
                             <div className="flex gap-1">
                               <button

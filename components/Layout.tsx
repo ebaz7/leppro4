@@ -98,6 +98,23 @@ const Layout: React.FC<LayoutProps> = ({
   });
   const [bgImageVersion, setBgImageVersion] = useState<number>(0);
 
+  const [erpSidebarSwapped, setErpSidebarSwapped] = useState<boolean>(() => {
+    const saved = localStorage.getItem('erp_sidebar_swapped');
+    return saved !== 'false';
+  });
+
+  useEffect(() => {
+    const handleToggle = (e: any) => {
+      setErpSidebarSwapped(prev => {
+        const next = typeof e?.detail?.swapped === 'boolean' ? e.detail.swapped : !prev;
+        localStorage.setItem('erp_sidebar_swapped', String(next));
+        return next;
+      });
+    };
+    window.addEventListener('TOGGLE_ERP_SIDEBAR_SWAP', handleToggle);
+    return () => window.removeEventListener('TOGGLE_ERP_SIDEBAR_SWAP', handleToggle);
+  }, []);
+
   useEffect(() => {
     const handleBgChange = () => {
       setBgMode(localStorage.getItem('app_bg_mode') || 'preset');
@@ -1449,6 +1466,8 @@ const Layout: React.FC<LayoutProps> = ({
           onMouseEnter={() => setIsSidebarHovered(true)}
           onMouseLeave={() => setIsSidebarHovered(false)}
           className={`hidden md:block flex-shrink-0 relative transition-[width] duration-300 ease-[cubic-bezier(0.2,0,0,1)] my-4 mr-4 ml-2 z-[70] ${
+              activeTab === 'industrial-erp' && erpSidebarSwapped ? '!hidden' : ''
+          } ${
               isSidebarPinned ? 'w-64' : 'w-20'
           }`}
       >
@@ -1471,6 +1490,24 @@ const Layout: React.FC<LayoutProps> = ({
                   </div>
                   
                   <div className={`flex items-center gap-1.5 shrink-0 ${!isSidebarOpen ? 'mx-auto' : ''}`}>
+                      {/* Switch to ERP Dedicated Sidebar Button if in industrial-erp */}
+                      {activeTab === 'industrial-erp' && isSidebarOpen && (
+                          <button
+                              type="button"
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  setErpSidebarSwapped(true);
+                                  localStorage.setItem('erp_sidebar_swapped', 'true');
+                                  window.dispatchEvent(new CustomEvent('TOGGLE_ERP_SIDEBAR_SWAP', { detail: { swapped: true } }));
+                              }}
+                              className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 text-[10px] font-black flex items-center gap-1 transition-colors border border-emerald-500/20"
+                              title="سوییچ به سایدبار تخصصی حسابداری و تولید"
+                          >
+                              <ArrowLeftRight size={12} />
+                              <span>سایدبار ERP</span>
+                          </button>
+                      )}
+
                       {/* Pin Button */}
                       {isSidebarOpen && (
                           <button 
@@ -1964,7 +2001,7 @@ const Layout: React.FC<LayoutProps> = ({
       )}
 
       <main className={`flex flex-1 flex-col overflow-hidden relative min-w-0 min-h-0 w-full max-w-full m-0 ${
-          activeTab === 'dashboard' && !secondaryTab
+          (activeTab === 'dashboard' || activeTab === 'industrial-erp') && !secondaryTab
             ? 'bg-transparent border-0 md:border-0 shadow-none md:my-0 md:ml-0 md:mr-0 rounded-none'
             : `md:my-4 md:ml-4 md:mr-2 ${isNativeAndroid || lowSpecMode ? 'bg-white dark:bg-slate-900' : 'bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl'} md:rounded-[24px] border-0 md:border border-slate-200/50 dark:border-slate-800/50 shadow-sm`
       }`}>
@@ -2059,7 +2096,7 @@ const Layout: React.FC<LayoutProps> = ({
               </div>
           </header>
           
-          <div className={`flex-1 ${(activeTab === 'chat' || Boolean(secondaryTab)) ? 'flex flex-col overflow-hidden pb-0 min-h-0 h-full split-view-no-scroll' : isBottomBarVisible ? 'overflow-y-auto overflow-x-hidden pb-[calc(80px+env(safe-area-inset-bottom))] md:pb-24' : 'overflow-y-auto overflow-x-hidden pb-24'} bg-transparent min-w-0 w-full max-w-full custom-scrollbar`} id="main-scroll-container">
+          <div className={`flex-1 ${(activeTab === 'chat' || activeTab === 'industrial-erp' || Boolean(secondaryTab)) ? 'flex flex-col overflow-hidden pb-0 min-h-0 h-full split-view-no-scroll' : isBottomBarVisible ? 'overflow-y-auto overflow-x-hidden pb-[calc(80px+env(safe-area-inset-bottom))] md:pb-24' : 'overflow-y-auto overflow-x-hidden pb-24'} bg-transparent min-w-0 w-full max-w-full custom-scrollbar`} id="main-scroll-container">
               {/* Bale-Style Top Update Banner for Web, Mobile, and PWA */}
               {isUpdateAvailable && !isUpdateDismissed && updateInfo && (
                 <div className="p-2 sm:p-3 sm:pb-1 no-print animate-slide-down shrink-0">
@@ -2073,7 +2110,7 @@ const Layout: React.FC<LayoutProps> = ({
                 </div>
               )}
 
-              <div className={`${(activeTab === 'chat' && !secondaryTab) ? 'hidden' : 'hidden md:flex'} justify-end p-4 shrink-0 ${
+              <div className={`${((activeTab === 'chat' || activeTab === 'industrial-erp') && !secondaryTab) ? 'hidden' : 'hidden md:flex'} justify-end p-4 shrink-0 ${
                   activeTab === 'dashboard' && !secondaryTab
                     ? 'bg-transparent border-b-0' 
                     : 'bg-white/20 dark:bg-zinc-950/15 border-b border-zinc-200/40 dark:border-zinc-800/40 backdrop-blur-md'

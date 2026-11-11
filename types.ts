@@ -149,6 +149,7 @@ export interface Company {
   name: string;
   logo?: string;
   showInWarehouse?: boolean;
+  isAccountingEnabled?: boolean;
   banks?: CompanyBank[];
   letterhead?: string;
   registrationNumber?: string;
