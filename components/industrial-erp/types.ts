@@ -19,8 +19,9 @@ export interface ErpCompanySummary {
   economicCode: string;
   address: string;
   phone: string;
-  logo: string;
+  logo?: string;
   activeFiscalYear: string;
+  fiscalYears?: string[];
   allowedUserIds: string[];
   createdAt?: number;
   stats?: {

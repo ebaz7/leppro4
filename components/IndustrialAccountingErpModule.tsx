@@ -27,6 +27,7 @@ import {
   Layers
 } from 'lucide-react';
 import { apiCall } from '../services/apiService';
+import { getSettings } from '../services/storageService';
 import { User, UserRole } from '../types';
 import {
   ErpCompanySummary,
@@ -90,8 +91,22 @@ interface IndustrialAccountingErpModuleProps {
   financialYear?: string;
 }
 
-export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModuleProps> = ({ currentUser }) => {
-  // Multi-Company State (Secretariat-style entry portal)
+const makeStableCompanyId = (nameStr: string) => {
+  const clean = String(nameStr || '').trim();
+  let hash = 0;
+  for (let i = 0; i < clean.length; i++) {
+    hash = ((hash << 5) - hash) + clean.charCodeAt(i);
+    hash |= 0;
+  }
+  return 'comp_' + Math.abs(hash).toString(36);
+};
+
+export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModuleProps> = ({
+  currentUser,
+  settings,
+  financialYear
+}) => {
+  // Multi-Company State (Synced 100% with Settings companies just like Secretariat)
   const [companies, setCompanies] = useState<ErpCompanySummary[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<ErpCompanySummary | null>(null);
   const [showNewCompanyModal, setShowNewCompanyModal] = useState(false);
@@ -102,7 +117,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     economicCode: '',
     address: '',
     phone: '',
-    activeFiscalYear: '1405'
+    activeFiscalYear: financialYear || '1405'
   });
 
   // Standalone ERP Shell Navigation State
@@ -169,15 +184,97 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
   };
 
+  const extractSettingsCompanies = (sysSettingsObj: any): any[] => {
+    const companyMap = new Map<string, any>();
+    const rawComps = Array.isArray(sysSettingsObj?.companies) ? sysSettingsObj.companies : [];
+    const rawNames = Array.isArray(sysSettingsObj?.companyNames) ? sysSettingsObj.companyNames : [];
+
+    rawComps.forEach((c: any) => {
+      if (c && c.name && String(c.name).trim()) {
+        const cleanName = String(c.name).trim();
+        if (c.id === 'comp_arian' && !rawNames.includes(cleanName) && rawNames.length > 0) return;
+        companyMap.set(cleanName, {
+          ...c,
+          id: c.id || makeStableCompanyId(cleanName),
+          name: cleanName
+        });
+      }
+    });
+
+    rawNames.forEach((name: string) => {
+      if (name && String(name).trim()) {
+        const cleanName = String(name).trim();
+        if (!companyMap.has(cleanName)) {
+          companyMap.set(cleanName, {
+            id: makeStableCompanyId(cleanName),
+            name: cleanName
+          });
+        }
+      }
+    });
+
+    let merged = Array.from(companyMap.values());
+    if (merged.length > 1 && merged.some(c => c.name !== 'شرکت اصلی')) {
+      merged = merged.filter(
+        c =>
+          c.name !== 'شرکت اصلی' ||
+          c.logo ||
+          c.registrationNumber ||
+          c.nationalId ||
+          c.address ||
+          c.economicCode ||
+          (c.banks && c.banks.length > 0)
+      );
+    }
+    if (merged.length > 1 && merged.some(c => c.id !== 'comp_arian')) {
+      merged = merged.filter(c => c.id !== 'comp_arian');
+    }
+    return merged;
+  };
+
   const fetchCompaniesList = async () => {
     try {
       setLoading(true);
-      const list = await apiCall<ErpCompanySummary[]>('/industrial-erp/companies');
-      if (Array.isArray(list)) {
-        setCompanies(list);
+      const [erpRes, freshSettings] = await Promise.all([
+        apiCall<any>('/industrial-erp/companies').catch(() => null),
+        getSettings().catch(() => null)
+      ]);
+
+      const erpList: ErpCompanySummary[] = Array.isArray(erpRes)
+        ? erpRes
+        : Array.isArray(erpRes?.companies)
+        ? erpRes.companies
+        : [];
+
+      const effectiveSettings = freshSettings || settings || {};
+      const settingsComps = extractSettingsCompanies(effectiveSettings);
+
+      if (settingsComps.length > 0) {
+        const syncedList: ErpCompanySummary[] = settingsComps.map((sc: any) => {
+          const matchedErp = erpList.find(
+            ec => ec.id === sc.id || ec.name === sc.name || ec.name?.trim() === sc.name?.trim()
+          );
+          return {
+            id: sc.id || matchedErp?.id || makeStableCompanyId(sc.name),
+            name: sc.name,
+            logo: sc.logo || matchedErp?.logo || undefined,
+            registrationNumber: sc.registrationNumber || matchedErp?.registrationNumber || '-',
+            nationalId: sc.nationalId || matchedErp?.nationalId || '-',
+            economicCode: sc.economicCode || matchedErp?.economicCode || '-',
+            address: sc.address || matchedErp?.address || '-',
+            phone: sc.phone || matchedErp?.phone || '-',
+            activeFiscalYear: matchedErp?.activeFiscalYear || financialYear || '1405',
+            fiscalYears: matchedErp?.fiscalYears || ['1405', '1404'],
+            allowedUserIds: sc.erpAllowedUserIds || matchedErp?.allowedUserIds || [],
+            stats: matchedErp?.stats
+          };
+        });
+        setCompanies(syncedList);
+      } else if (erpList.length > 0) {
+        setCompanies(erpList);
       }
     } catch {
-      showToast('error', 'خطا در دریافت لیست شرکت‌های حسابداری');
+      showToast('error', 'خطا در دریافت لیست شرکت‌ها از تنظیمات');
     } finally {
       setLoading(false);
     }
@@ -201,7 +298,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
   useEffect(() => {
     fetchCompaniesList();
-  }, []);
+  }, [settings?.companies, settings?.companyNames]);
 
   useEffect(() => {
     if (selectedCompany) {
@@ -236,12 +333,8 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
     try {
       setSaving(true);
-      const res = await apiCall<{ success: boolean; company: ErpCompanySummary; companies: ErpCompanySummary[] }>(
-        '/industrial-erp/companies',
-        'POST',
-        newCompanyForm
-      );
-      if (res?.companies) setCompanies(res.companies);
+      await apiCall<any>('/industrial-erp/companies', 'POST', newCompanyForm);
+      await fetchCompaniesList();
       setShowNewCompanyModal(false);
       setNewCompanyForm({
         name: '',
@@ -250,14 +343,11 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         economicCode: '',
         address: '',
         phone: '',
-        activeFiscalYear: '1405'
+        activeFiscalYear: financialYear || '1405'
       });
-      if (res?.company) {
-        setSelectedCompany(res.company);
-      }
-      showToast('success', `شرکت «${res?.company?.name}» با محیط حسابداری و انبار کاملاً مستقل ایجاد شد.`);
+      showToast('success', `شرکت «${newCompanyForm.name}» در تنظیمات سیستم و حسابداری ثبت گردید.`);
     } catch (err: any) {
-      showToast('error', err?.message || 'خطا در ایجاد شرکت جدید');
+      showToast('error', err?.message || 'خطا در ثبت شرکت');
     } finally {
       setSaving(false);
     }
@@ -361,33 +451,34 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                   سامانه جامع حسابداری صنعتی، انبار و ERP چندشرکتی
                 </h1>
                 <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold">
-                  معماری ماژولار ایزوله + دیتابیس مستقل هر شرکت
+                  همگام با شرکت‌های تعریف‌شده در تنظیمات سیستم
                 </span>
               </div>
               <p className="text-xs md:text-sm text-slate-300 mt-1.5 leading-relaxed">
-                لطفاً شرکت و دوره مالی مورد نظر خود را جهت ورود به میزکار مستقل حسابداری، خزانه‌داری، انبار، توزین باسکول و تولید انتخاب نمایید.
+                فهرست زیر مستقیماً از شرکت‌های تعریف‌شده در بخش «تنظیمات سیستم» خوانده می‌شود. شرکت مورد نظر را جهت ورود به محیط مستقل حسابداری انتخاب نمایید.
               </p>
             </div>
           </div>
 
-          {canManageMasterData && (
+          <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setShowNewCompanyModal(true)}
-              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs flex items-center gap-2 shadow-lg cursor-pointer shrink-0"
+              onClick={fetchCompaniesList}
+              className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5 border border-white/20 cursor-pointer"
+              title="بروزرسانی لیست شرکت‌ها از تنظیمات"
             >
-              <Plus size={16} />
-              <span>تعریف شرکت جدید در حسابداری</span>
+              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+              <span>بروزرسانی از تنظیمات</span>
             </button>
-          )}
+          </div>
         </div>
 
         {loading ? (
           <div className="p-12 text-center text-slate-500 font-bold text-sm">
-            در حال بارگذاری فهرست شرکت‌ها و دوره‌های مالی...
+            در حال بارگذاری فهرست شرکت‌های تعریف‌شده در تنظیمات سیستم...
           </div>
         ) : visibleCompanies.length === 0 ? (
           <div className="bg-white dark:bg-slate-900 text-center p-10 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-500">
-            هیچ شرکتی برای حساب کاربری شما تعریف نشده است.
+            هیچ شرکتی در بخش تنظیمات سیستم تعریف نشده است. لطفاً ابتدا شرکت‌ها را در بخش «تنظیمات عمومی سیستم» تعریف نمایید.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

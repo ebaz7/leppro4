@@ -9156,38 +9156,113 @@ const getDefaultIndustrialErpState = (companyName = 'شرکت تولیدی لپ�
 function getErpCompaniesList(db) {
     if (!db.settings) db.settings = {};
     if (!Array.isArray(db.settings.companies)) db.settings.companies = [];
+    if (!Array.isArray(db.settings.companyNames)) db.settings.companyNames = [];
 
-    // Ensure at least the primary company exists in db.settings.companies
-    if (db.settings.companies.length === 0) {
-        db.settings.companies = [
+    const makeStableCompanyId = (nameStr) => {
+        const clean = String(nameStr || '').trim();
+        let hash = 0;
+        for (let i = 0; i < clean.length; i++) {
+            hash = ((hash << 5) - hash) + clean.charCodeAt(i);
+            hash |= 0;
+        }
+        return 'comp_' + Math.abs(hash).toString(36);
+    };
+
+    const companyMap = new Map();
+
+    // 1. Load existing structured companies from db.settings.companies
+    (db.settings.companies || []).forEach(c => {
+        if (c && c.name && String(c.name).trim()) {
+            const cleanName = String(c.name).trim();
+            // Skip synthetic demo company 'comp_arian' if not in companyNames
+            if (c.id === 'comp_arian' && !(db.settings.companyNames || []).includes(cleanName) && (db.settings.companyNames || []).length > 0) {
+                return;
+            }
+            companyMap.set(cleanName, {
+                ...c,
+                id: c.id || makeStableCompanyId(cleanName),
+                name: cleanName,
+                banks: Array.isArray(c.banks) ? c.banks : []
+            });
+        }
+    });
+
+    // 2. Merge any company names from db.settings.companyNames (defined in Settings)
+    (db.settings.companyNames || []).forEach(name => {
+        if (name && String(name).trim()) {
+            const cleanName = String(name).trim();
+            if (!companyMap.has(cleanName)) {
+                companyMap.set(cleanName, {
+                    id: makeStableCompanyId(cleanName),
+                    name: cleanName,
+                    showInWarehouse: true,
+                    banks: []
+                });
+            }
+        }
+    });
+
+    // 3. Merge any company names referenced in fiscalYears.companySequences
+    if (Array.isArray(db.settings.fiscalYears)) {
+        db.settings.fiscalYears.forEach(fy => {
+            if (fy && fy.companySequences && typeof fy.companySequences === 'object') {
+                Object.keys(fy.companySequences).forEach(k => {
+                    if (k && String(k).trim()) {
+                        const cleanName = String(k).trim();
+                        if (!companyMap.has(cleanName)) {
+                            companyMap.set(cleanName, {
+                                id: makeStableCompanyId(cleanName),
+                                name: cleanName,
+                                showInWarehouse: true,
+                                banks: []
+                            });
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    let mergedCompanies = Array.from(companyMap.values());
+
+    // Filter out unmodified default placeholder "شرکت اصلی" if real companies exist
+    if (mergedCompanies.length > 1 && mergedCompanies.some(c => c.name !== 'شرکت اصلی')) {
+        mergedCompanies = mergedCompanies.filter(c =>
+            c.name !== 'شرکت اصلی' ||
+            c.logo ||
+            c.registrationNumber ||
+            c.nationalId ||
+            c.address ||
+            c.economicCode ||
+            (c.banks && c.banks.length > 0)
+        );
+    }
+
+    // Remove synthetic 'comp_arian' if another real company exists and it was only added as a demo
+    if (mergedCompanies.length > 1 && mergedCompanies.some(c => c.id !== 'comp_arian')) {
+        mergedCompanies = mergedCompanies.filter(c => c.id !== 'comp_arian');
+    }
+
+    // Fallback if no company is defined in settings at all
+    if (mergedCompanies.length === 0) {
+        mergedCompanies = [
             {
                 id: 'comp_lepan',
                 name: 'شرکت تولیدی لپان بافت',
-                nationalId: '10102845120',
-                registrationNumber: '241580',
-                economicCode: '411154879652',
-                phone: '021-55667788',
-                address: 'تهران، بازار، خیابان خیام / کارخانه: زنجان، شهرک صنعتی علی‌آباد',
-                banks: []
-            },
-            {
-                id: 'comp_arian',
-                name: 'شرکت ریسندگی و نساجی آرین نخ',
-                nationalId: '14007891230',
-                registrationNumber: '489120',
-                economicCode: '411398745120',
-                phone: '021-88990011',
-                address: 'تهران، میدان ونک / کارخانه: شهرک صنعتی اشتهارد',
+                showInWarehouse: true,
                 banks: []
             }
         ];
     }
+
+    db.settings.companies = mergedCompanies;
+    db.settings.companyNames = mergedCompanies.map(c => c.name);
     return db.settings.companies;
 }
 
-function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی لپان بافت', isPrimary = false) {
+function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی لپان بافت', isPrimary = false, settingsCompany = null) {
     const def = getDefaultIndustrialErpState(companyName, isPrimary);
-    if (!target.companyName) target.companyName = companyName;
+    target.companyName = companyName;
     if (!target.activeFiscalYear) target.activeFiscalYear = def.activeFiscalYear;
     if (!Array.isArray(target.fiscalYears)) target.fiscalYears = def.fiscalYears;
     if (!Array.isArray(target.warehouses)) target.warehouses = def.warehouses;
@@ -9217,6 +9292,32 @@ function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی ل�
             }
         }
     }
+
+    // Sync company banks defined in Settings into ERP bankAccounts
+    if (settingsCompany && Array.isArray(settingsCompany.banks)) {
+        settingsCompany.banks.forEach((b, idx) => {
+            if (!b || !b.bankName) return;
+            const bankId = b.id || `settings_bank_${idx}`;
+            const exists = target.bankAccounts.some(
+                eb => eb.id === bankId || (eb.bankName === b.bankName && eb.accountNumber === (b.accountNumber || ''))
+            );
+            if (!exists) {
+                target.bankAccounts.push({
+                    id: bankId,
+                    code: `1101${String(target.bankAccounts.length + 1).padStart(2, '0')}`,
+                    bankName: b.bankName,
+                    branchName: 'مرکزی',
+                    accountNumber: b.accountNumber || '-',
+                    sheba: b.sheba || '-',
+                    accountingCode: '110101',
+                    balance: 0,
+                    currency: 'RIAL',
+                    isActive: true
+                });
+            }
+        });
+    }
+
     if (!target.nextCartonSeq) target.nextCartonSeq = 10003;
     if (!target.nextVoucherNo) target.nextVoucherNo = 1002;
     return target;
@@ -9238,15 +9339,20 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
     if (!db.industrialErp.companiesData[primaryCompany.id]) {
         const rootClone = { ...db.industrialErp };
         delete rootClone.companiesData;
-        db.industrialErp.companiesData[primaryCompany.id] = hydrateCompanyErpState(rootClone, primaryCompany.name, true);
+        db.industrialErp.companiesData[primaryCompany.id] = hydrateCompanyErpState(rootClone, primaryCompany.name, true, primaryCompany);
     }
 
     // Ensure every company in settings.companies has an isolated ERP state
     companies.forEach((comp, idx) => {
         if (!db.industrialErp.companiesData[comp.id]) {
-            db.industrialErp.companiesData[comp.id] = getDefaultIndustrialErpState(comp.name, idx === 0);
+            db.industrialErp.companiesData[comp.id] = hydrateCompanyErpState(
+                getDefaultIndustrialErpState(comp.name, idx === 0),
+                comp.name,
+                idx === 0,
+                comp
+            );
         } else {
-            hydrateCompanyErpState(db.industrialErp.companiesData[comp.id], comp.name, idx === 0);
+            hydrateCompanyErpState(db.industrialErp.companiesData[comp.id], comp.name, idx === 0, comp);
         }
     });
 
@@ -9269,12 +9375,17 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
     return companyState;
 }
 
-// Get list of all ERP Companies with isolated database KPIs
+// Get list of all ERP Companies (directly synced from Settings) with isolated database KPIs
 app.get('/api/industrial-erp/companies', (req, res) => {
     try {
         const db = getDb();
         const companies = getErpCompaniesList(db);
         ensureIndustrialErpStructure(db);
+        const activeFyObj = Array.isArray(db.settings?.fiscalYears)
+            ? db.settings.fiscalYears.find(f => f.id === db.settings?.activeFiscalYearId)
+            : null;
+        const defaultFyLabel = activeFyObj?.label || '1405';
+
         const result = companies.map((comp, idx) => {
             const st = ensureIndustrialErpStructure(db, comp.id);
             return {
@@ -9286,7 +9397,8 @@ app.get('/api/industrial-erp/companies', (req, res) => {
                 phone: comp.phone || '-',
                 address: comp.address || '-',
                 logo: comp.logo || null,
-                activeFiscalYear: st.activeFiscalYear || '1405',
+                banks: Array.isArray(comp.banks) ? comp.banks : [],
+                activeFiscalYear: st.activeFiscalYear || defaultFyLabel,
                 fiscalYears: st.fiscalYears || ['1405', '1404'],
                 allowedUserIds: comp.erpAllowedUserIds || [],
                 isPrimary: idx === 0,
@@ -9301,7 +9413,7 @@ app.get('/api/industrial-erp/companies', (req, res) => {
             };
         });
         saveDb(db);
-        res.json({ success: true, companies: result });
+        res.json(result);
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
