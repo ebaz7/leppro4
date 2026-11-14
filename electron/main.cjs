@@ -193,6 +193,7 @@ ipcMain.handle('check-local-file-exists', async (event, fileName) => {
 ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) => {
   try {
     const downloadsDir = app.getPath('downloads');
+    const userDataDir = app.getPath('userData');
     const filePath = path.join(downloadsDir, fileName);
     let buffer;
     if (Buffer.isBuffer(bytes)) {
@@ -205,6 +206,24 @@ ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) =>
       buffer = Buffer.from(bytes);
     }
     fs.writeFileSync(filePath, buffer);
+
+    // Purge older Delkam/Sayan update installers so C:\Users\...\Downloads does not bloat over updates
+    const keepLower = String(fileName || '').toLowerCase();
+    for (const dir of [downloadsDir, userDataDir]) {
+      try {
+        if (!dir || !fs.existsSync(dir)) continue;
+        for (const entry of fs.readdirSync(dir)) {
+          const lower = entry.toLowerCase();
+          if (
+            lower !== keepLower &&
+            /^(dlkam-desktop|dlkam-electron|sayan-desktop).*\.(exe|msi)$/i.test(lower)
+          ) {
+            try { fs.unlinkSync(path.join(dir, entry)); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+
     await shell.openPath(filePath);
     return filePath;
   } catch (err) {

@@ -63,7 +63,7 @@ async function buildAndPublishTauri() {
   if (sysTemp && fs.existsSync(sysTemp) && sysTemp !== localTempDir) {
     try {
       for (const entry of fs.readdirSync(sysTemp)) {
-        if (/^(rustc|cargo|tauri|wix|nsis|vite|npm-|v8-compile-cache)/i.test(entry)) {
+        if (/^(rustc|cargo|tauri|wix|nsis|electron|vite|npm-|v8-compile-cache)/i.test(entry)) {
           try {
             fs.rmSync(path.join(sysTemp, entry), { recursive: true, force: true });
           } catch (_) {}
@@ -105,6 +105,10 @@ async function buildAndPublishTauri() {
         TEMP: localTempDir,
         TMP: localTempDir,
         TMPDIR: localTempDir,
+        WIX_TEMP: localTempDir,
+        XDG_CACHE_HOME: path.join(ROOT_DIR, '.cache'),
+        ELECTRON_CACHE: path.join(ROOT_DIR, '.electron_cache'),
+        ELECTRON_BUILDER_CACHE: path.join(ROOT_DIR, '.electron_builder_cache'),
         NODE_OPTIONS: '--max-old-space-size=4096',
         CARGO_BUILD_JOBS: '1',
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16',

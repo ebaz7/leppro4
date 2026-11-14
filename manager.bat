@@ -6,13 +6,23 @@ title Payment System Deployment Manager
 :: Change to the directory of this script to avoid running in System32 when launched as Admin
 cd /d "%~dp0"
 
-:: Redirect temp and npm cache/logs to the installation drive so C:\ is NEVER filled
+:: Redirect temp and ALL build/package caches to the installation drive so C:\ is NEVER filled
 if not exist "%cd%\pgtemp" mkdir "%cd%\pgtemp" >nul 2>&1
 if not exist "%cd%\.npm_cache\_logs" mkdir "%cd%\.npm_cache\_logs" >nul 2>&1
+if not exist "%cd%\.gradle_home" mkdir "%cd%\.gradle_home" >nul 2>&1
+if not exist "%cd%\.android_home" mkdir "%cd%\.android_home" >nul 2>&1
+if not exist "%cd%\.electron_cache" mkdir "%cd%\.electron_cache" >nul 2>&1
+if not exist "%cd%\.electron_builder_cache" mkdir "%cd%\.electron_builder_cache" >nul 2>&1
+if not exist "%cd%\.cache" mkdir "%cd%\.cache" >nul 2>&1
 set "TEMP=%cd%\pgtemp"
 set "TMP=%cd%\pgtemp"
 set "npm_config_cache=%cd%\.npm_cache"
 set "npm_config_logs_dir=%cd%\.npm_cache\_logs"
+set "GRADLE_USER_HOME=%cd%\.gradle_home"
+set "ANDROID_USER_HOME=%cd%\.android_home"
+set "ELECTRON_CACHE=%cd%\.electron_cache"
+set "ELECTRON_BUILDER_CACHE=%cd%\.electron_builder_cache"
+set "XDG_CACHE_HOME=%cd%\.cache"
 
 :: Check for Administrator privileges
 net session >nul 2>&1
@@ -39,9 +49,10 @@ echo 3. Uninstall (Backup DB/Env, Stop Services Safely)
 echo 4. View Error Logs (Check why it didn't start)
 echo 5. Install / Start ONLYOFFICE Document Server (Offline Docker)
 echo 6. Setup / Check Local PostgreSQL (Same Install Drive, Offline)
-echo 7. Exit
+echo 7. Free Up Windows C:\ Drive Space (Safe Cleanup + Redirect Caches)
+echo 8. Exit
 echo ========================================================
-set /p choice="Select an option (1-7): "
+set /p choice="Select an option (1-8): "
 
 if "%choice%"=="1" goto INSTALL
 if "%choice%"=="2" goto UPDATE
@@ -49,8 +60,19 @@ if "%choice%"=="3" goto UNINSTALL
 if "%choice%"=="4" goto LOGS
 if "%choice%"=="5" goto ONLYOFFICE
 if "%choice%"=="6" goto POSTGRES
-if "%choice%"=="7" goto EOF
+if "%choice%"=="7" goto CLEAN_C
+if "%choice%"=="8" goto EOF
 
+goto MENU
+
+:CLEAN_C
+cls
+if exist "%cd%\scripts\free-c-drive.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\free-c-drive.ps1" -InstallDir "%cd%"
+) else (
+    echo [ERROR] scripts\free-c-drive.ps1 not found.
+)
+pause
 goto MENU
 
 :ONLYOFFICE
@@ -122,6 +144,12 @@ git rm -r --cached pgtemp 2>nul
 git rm -r --cached pgarchive 2>nul
 git rm -r --cached pgsql_offline 2>nul
 git rm -r --cached .npm_cache 2>nul
+git rm -r --cached .gradle_home 2>nul
+git rm -r --cached .android_home 2>nul
+git rm -r --cached .electron_cache 2>nul
+git rm -r --cached .electron_builder_cache 2>nul
+git rm -r --cached .temp 2>nul
+git rm -r --cached .cache 2>nul
 
 echo.
 echo [2/8] Configuring Port and Proxy (Preserving existing .env if present)...
@@ -293,6 +321,12 @@ git rm -r --cached pgtemp 2>nul
 git rm -r --cached pgarchive 2>nul
 git rm -r --cached pgsql_offline 2>nul
 git rm -r --cached .npm_cache 2>nul
+git rm -r --cached .gradle_home 2>nul
+git rm -r --cached .android_home 2>nul
+git rm -r --cached .electron_cache 2>nul
+git rm -r --cached .electron_builder_cache 2>nul
+git rm -r --cached .temp 2>nul
+git rm -r --cached .cache 2>nul
 
 REM Restore wauth session directory
 if "!WAUTH_BACKED_UP!"=="1" (

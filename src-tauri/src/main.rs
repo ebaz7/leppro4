@@ -265,6 +265,26 @@ fn open_local_file_dir(handle: tauri::AppHandle, file_name: String) -> Result<St
     Ok(path_str)
 }
 
+fn cleanup_old_desktop_installers(dir: &PathBuf, keep_file_name: &str) {
+    let keep_lower = keep_file_name.to_lowercase();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                let is_setup = (lower.starts_with("dlkam-") || lower.starts_with("sayan-"))
+                    && (lower.ends_with(".exe") || lower.ends_with(".msi"));
+                if is_setup && lower != keep_lower {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn save_and_open_local_file(
     handle: tauri::AppHandle,
@@ -279,6 +299,7 @@ fn save_and_open_local_file(
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     file.sync_all().ok();
     drop(file);
+    cleanup_old_desktop_installers(&dir, &safe_name);
     let path_str = target.to_string_lossy().to_string();
     if open_after.unwrap_or(true) {
         launch_local_file_or_installer(&handle, &target);

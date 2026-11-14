@@ -399,14 +399,32 @@ async function buildAndroid() {
   const buildType = isRelease ? 'Release' : 'Debug';
   console.log(`\n🔨 مرحله ۴: کامپایل فایل نصبی APK (${buildType}) با Gradle...`);
   const localTempDir = path.join(__dirname, '.temp');
-  if (!fs.existsSync(localTempDir)) {
-    fs.mkdirSync(localTempDir, { recursive: true });
+  const localGradleHome = path.join(__dirname, '.gradle_home');
+  const localAndroidHome = path.join(__dirname, '.android_home');
+  for (const d of [localTempDir, localGradleHome, localAndroidHome]) {
+    if (!fs.existsSync(d)) {
+      fs.mkdirSync(d, { recursive: true });
+    }
+  }
+  const sysTemp = process.env.TEMP || process.env.TMP;
+  if (sysTemp && fs.existsSync(sysTemp) && sysTemp !== localTempDir) {
+    try {
+      for (const entry of fs.readdirSync(sysTemp)) {
+        if (/^(gradle|kotlin|android|rustc|vite|npm-|v8-compile-cache)/i.test(entry)) {
+          try {
+            fs.rmSync(path.join(sysTemp, entry), { recursive: true, force: true });
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
   }
   const extraEnv = {
     ...(sdkPath ? { ANDROID_HOME: sdkPath, ANDROID_SDK_ROOT: sdkPath } : {}),
     TEMP: localTempDir,
     TMP: localTempDir,
     TMPDIR: localTempDir,
+    GRADLE_USER_HOME: localGradleHome,
+    ANDROID_USER_HOME: localAndroidHome,
     GRADLE_OPTS: `-Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8 -Djava.io.tmpdir=${localTempDir.replace(/\\/g, '/')}" -Dorg.gradle.workers.max=2`
   };
   try {
