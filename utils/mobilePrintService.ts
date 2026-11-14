@@ -14,8 +14,82 @@ export interface MobilePrintOptions {
 }
 
 /**
+ * Rewrite relative CSS url(...) references (e.g. local fonts/assets) against the stylesheet's
+ * original base URL so inlined styles resolve cleanly inside an isolated about:blank print iframe
+ * on Electron (file://), Tauri, and Web.
+ */
+const resolveCssUrls = (cssText: string, baseHref: string): string => {
+    if (!cssText || !baseHref) return cssText;
+    return cssText.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (match, quote, rawUrl) => {
+        const trimmed = String(rawUrl || '').trim();
+        if (
+            !trimmed ||
+            trimmed.startsWith('data:') ||
+            trimmed.startsWith('blob:') ||
+            trimmed.startsWith('#') ||
+            /^(?:https?:|file:|tauri:|asset:|capacitor:)/i.test(trimmed)
+        ) {
+            return match;
+        }
+        try {
+            const absUrl = new URL(trimmed, baseHref).href;
+            return `url("${absUrl}")`;
+        } catch {
+            return match;
+        }
+    });
+};
+
+/**
+ * Collect all document styles by serializing accessible CSSStyleSheet rules inline.
+ * This prevents broken relative <link href="./assets/..."> paths in Electron file:// / Tauri builds
+ * when printing inside a blank iframe.
+ */
+export const collectPrintableDocumentStyles = (): string => {
+    const chunks: string[] = [];
+    const fallbackOriginHref = typeof window !== 'undefined' ? window.location.href : '';
+
+    if (typeof document !== 'undefined' && document.styleSheets) {
+        const sheets = Array.from(document.styleSheets);
+        for (const sheet of sheets) {
+            if ((sheet as CSSStyleSheet).disabled) continue;
+            const ownerNode = sheet.ownerNode as (HTMLLinkElement | HTMLStyleElement | null);
+            const sheetBase = sheet.href || fallbackOriginHref;
+            try {
+                const rules = sheet.cssRules;
+                if (rules && rules.length > 0) {
+                    const cssText = Array.from(rules)
+                        .map((r) => r.cssText)
+                        .join('\n');
+                    chunks.push(`<style data-print-inlined="true">\n${resolveCssUrls(cssText, sheetBase)}\n</style>`);
+                } else if (ownerNode && ownerNode.tagName === 'STYLE' && ownerNode.textContent?.trim()) {
+                    chunks.push(`<style data-print-inlined="true">\n${resolveCssUrls(ownerNode.textContent, sheetBase)}\n</style>`);
+                }
+            } catch {
+                // Cross-origin stylesheet: preserve with its resolved absolute href
+                if (sheet.href) {
+                    chunks.push(`<link rel="stylesheet" href="${sheet.href}">`);
+                } else if (ownerNode && ownerNode.outerHTML) {
+                    chunks.push(ownerNode.outerHTML);
+                }
+            }
+        }
+    }
+
+    // Fallback if styleSheets API yielded nothing (e.g. non-browser environment)
+    if (chunks.length === 0 && typeof document !== 'undefined') {
+        const nodes = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'));
+        for (const node of nodes) {
+            chunks.push(node.outerHTML);
+        }
+    }
+
+    return chunks.join('\n');
+};
+
+/**
  * Cross-platform print & PDF generation helper.
- * On Desktop Web: Uses a dedicated hidden iframe to trigger the browser's native print dialog seamlessly.
+ * On Desktop Web / Electron / Tauri: Uses a dedicated hidden iframe with inlined CSS to trigger the native print dialog seamlessly.
  * On Mobile (Capacitor Android/iOS): Converts the element to high-res PDF and invokes Native Share / Print Spooler.
  */
 export const executeCrossPlatformPrint = async (
@@ -99,7 +173,7 @@ export const executeCrossPlatformPrint = async (
         }
     }
 
-    // 2. Desktop Web Handling (Hidden IFrame Printing)
+    // 2. Desktop Web / Electron / Tauri Handling (Hidden IFrame Printing)
     try {
         const printFrame = document.createElement('iframe');
         printFrame.style.position = 'fixed';
@@ -120,25 +194,35 @@ export const executeCrossPlatformPrint = async (
         if (typeof elementOrHtml === 'string') {
             contentHtml = elementOrHtml;
         } else {
-            // Clone element and copy all document styles for 100% visual fidelity
+            // Clone element and inline all document styles for 100% visual fidelity on Electron/Tauri/Web
             const clone = elementOrHtml.cloneNode(true) as HTMLElement;
             const activeHost = (typeof window !== 'undefined' ? (getServerHost() || window.location.origin) : '').replace(/\/+$/, '');
 
-            // Ensure all images in clone have absolute URLs and exact print color adjustment
+            // Ensure all images in clone have resolved absolute URLs and exact print color adjustment
             const liveImages = Array.from(elementOrHtml.querySelectorAll('img'));
             const cloneImages = Array.from(clone.querySelectorAll('img'));
             cloneImages.forEach((img, idx) => {
                 const liveImg = liveImages[idx];
                 const currentSrc = liveImg?.currentSrc || liveImg?.src || img.getAttribute('src');
                 if (currentSrc) {
-                    if (currentSrc.startsWith('data:') || currentSrc.startsWith('blob:')) {
-                        img.src = currentSrc;
-                    } else if (currentSrc.startsWith('http://') || currentSrc.startsWith('https://')) {
+                    if (
+                        currentSrc.startsWith('data:') ||
+                        currentSrc.startsWith('blob:') ||
+                        currentSrc.startsWith('http://') ||
+                        currentSrc.startsWith('https://') ||
+                        currentSrc.startsWith('file://') ||
+                        currentSrc.startsWith('tauri://') ||
+                        currentSrc.startsWith('asset://')
+                    ) {
                         img.src = currentSrc;
                     } else if (currentSrc.startsWith('/')) {
-                        img.src = activeHost ? `${activeHost}${currentSrc}` : currentSrc;
+                        img.src = activeHost && activeHost !== 'file://' ? `${activeHost}${currentSrc}` : currentSrc;
                     } else if (!currentSrc.includes('://')) {
-                        img.src = activeHost ? `${activeHost}/${currentSrc}` : currentSrc;
+                        try {
+                            img.src = new URL(currentSrc, window.location.href).href;
+                        } catch {
+                            img.src = activeHost && activeHost !== 'file://' ? `${activeHost}/${currentSrc}` : currentSrc;
+                        }
                     }
                 }
                 img.setAttribute('crossorigin', 'anonymous');
@@ -146,11 +230,9 @@ export const executeCrossPlatformPrint = async (
                 img.style.setProperty('print-color-adjust', 'exact');
             });
 
-            const docStyles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
-                .map(node => node.outerHTML)
-                .join('\n');
-            const pageOrientation = (orientation === 'landscape' || orientation === 'l') ? 'landscape' : 'portrait';
+            const docStyles = collectPrintableDocumentStyles();
             const pageSize = (orientation === 'landscape' || orientation === 'l') ? 'A5 landscape' : 'A4 portrait';
+            const cloneIdSelector = clone.id ? `#${clone.id}` : '';
 
             contentHtml = `
                 <!DOCTYPE html>
@@ -158,7 +240,6 @@ export const executeCrossPlatformPrint = async (
                 <head>
                     <meta charset="utf-8">
                     <title>${title}</title>
-                    <base href="${activeHost ? `${activeHost}/` : (typeof window !== 'undefined' ? `${window.location.origin}/` : '')}">
                     ${docStyles}
                     <style>
                         @page { size: ${pageSize}; margin: 0mm !important; }
@@ -171,6 +252,7 @@ export const executeCrossPlatformPrint = async (
                                 visibility: visible !important;
                                 opacity: 1 !important;
                             }
+                            ${cloneIdSelector ? `body > ${cloneIdSelector} { display: flex !important; visibility: visible !important; }` : ''}
                             #print-content-section {
                                 margin: 0 auto !important;
                                 border: none !important;
@@ -195,7 +277,7 @@ export const executeCrossPlatformPrint = async (
         frameDoc.write(contentHtml);
         frameDoc.close();
 
-        // Wait for all images inside the iframe to finish loading
+        // Wait for stylesheets, fonts, and images inside the iframe to finish loading before printing
         const triggerPrint = () => {
             try {
                 if (printFrame.contentWindow) {
@@ -214,23 +296,45 @@ export const executeCrossPlatformPrint = async (
             }
         };
 
+        const waitPromises: Promise<unknown>[] = [];
+
+        const frameLinks = Array.from(frameDoc.querySelectorAll('link[rel="stylesheet"]')) as HTMLLinkElement[];
+        for (const link of frameLinks) {
+            if (!link.sheet) {
+                waitPromises.push(
+                    new Promise((res) => {
+                        link.addEventListener('load', res, { once: true });
+                        link.addEventListener('error', res, { once: true });
+                    })
+                );
+            }
+        }
+
         const frameImages = Array.from(frameDoc.querySelectorAll('img'));
-        if (frameImages.length > 0) {
-            const imagePromises = frameImages.map((img) => {
-                if (img.complete) return Promise.resolve();
-                return new Promise((res) => {
-                    img.onload = res;
-                    img.onerror = res;
-                });
-            });
+        for (const img of frameImages) {
+            if (!img.complete) {
+                waitPromises.push(
+                    new Promise((res) => {
+                        img.onload = res;
+                        img.onerror = res;
+                    })
+                );
+            }
+        }
+
+        if (frameDoc.fonts && frameDoc.fonts.ready) {
+            waitPromises.push(frameDoc.fonts.ready.catch(() => undefined));
+        }
+
+        if (waitPromises.length > 0) {
             Promise.race([
-                Promise.all(imagePromises),
+                Promise.all(waitPromises),
                 new Promise((res) => setTimeout(res, 1500))
             ]).then(() => {
-                setTimeout(triggerPrint, 300);
+                setTimeout(triggerPrint, 200);
             });
         } else {
-            setTimeout(triggerPrint, 400);
+            setTimeout(triggerPrint, 250);
         }
 
         return true;

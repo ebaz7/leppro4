@@ -34,6 +34,7 @@ interface ChatRoomProps {
     onMessagesRead?: (msgIds: string[]) => void;
     directChatTarget?: { type: 'private' | 'group' | 'public' | 'task_group' | 'system', id: string, taskId?: string } | null;
     onClearDirectChatTarget?: () => void;
+    onActiveChannelChange?: (channel: { type: 'public' | 'private' | 'group' | 'task_group' | 'system', id: string | null } | null) => void;
     onNavigate?: (tab: string) => void;
 }
 
@@ -210,7 +211,7 @@ const AudioPlayer: React.FC<{ url: string; isMe: boolean; duration?: number }> =
     );
 };
 
-const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onRefresh, sharedData, onClearSharedData, onMessagesRead, directChatTarget, onClearDirectChatTarget }) => {
+const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onRefresh, sharedData, onClearSharedData, onMessagesRead, directChatTarget, onClearDirectChatTarget, onActiveChannelChange }) => {
     // --- Data State ---
     const [messages, setMessages] = useState<ChatMessage[]>(Array.isArray(preloadedMessages) ? preloadedMessages : []);
     const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
@@ -306,57 +307,280 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         }
     }, [messages]);
 
+    // Keep global active chat channel synced for foreground notification suppression & read-sync
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            (window as any).__dlkamActiveChat = activeChannel;
+        }
+        if (onActiveChannelChange) {
+            onActiveChannelChange(activeChannel);
+        }
+    }, [activeChannel, onActiveChannelChange]);
+
+    // --- Real-Time Typing Indicators ---
+    const [typingMap, setTypingMap] = useState<Record<string, Record<string, { name: string; expiresAt: number }>>>({});
+    const lastTypingSentRef = useRef<{ channelKey: string; sentAt: number }>({ channelKey: '', sentAt: 0 });
+    const typingStopTimerRef = useRef<any>(null);
+
+    const getTypingChannelKey = (type: string, id: string | null | undefined): string => {
+        if (type === 'private' && id) return `private:${String(id).toLowerCase()}`;
+        if ((type === 'group' || type === 'task_group') && id) return `group:${id}`;
+        if (type === 'public') return 'public';
+        return '';
+    };
+
+    const emitTypingSignal = (isTyping: boolean, overrideChannel?: { type: string; id: string | null } | null) => {
+        const ch = overrideChannel !== undefined ? overrideChannel : activeChannel;
+        if (!currentUser?.username || !ch || ch.type === 'system') return;
+        const channelKey = getTypingChannelKey(ch.type, ch.id);
+        if (!channelKey) return;
+
+        const now = Date.now();
+        if (isTyping) {
+            if (lastTypingSentRef.current.channelKey === channelKey && (now - lastTypingSentRef.current.sentAt) < 2000) {
+                return;
+            }
+            lastTypingSentRef.current = { channelKey, sentAt: now };
+        } else {
+            if (!lastTypingSentRef.current.sentAt) return;
+            lastTypingSentRef.current = { channelKey: '', sentAt: 0 };
+        }
+
+        const payload = {
+            senderUsername: currentUser.username,
+            senderName: currentUser.fullName || currentUser.username,
+            recipient: ch.type === 'private' ? ch.id : null,
+            groupId: (ch.type === 'group' || ch.type === 'task_group') ? ch.id : null,
+            isTyping
+        };
+
+        apiCall('/chat/typing', 'POST', payload, 0).catch(() => {});
+    };
+
+    // Listen for real-time typing events & clear immediately when a message arrives from that user
+    useEffect(() => {
+        const onTypingEvent = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (!detail || !detail.senderUsername) return;
+            const senderU = String(detail.senderUsername).toLowerCase();
+            if (currentUser?.username && senderU === currentUser.username.toLowerCase()) return;
+
+            const chKey = detail.groupId
+                ? `group:${detail.groupId}`
+                : detail.recipient
+                    ? `private:${senderU}`
+                    : 'public';
+
+            setTypingMap(prev => {
+                const channelTypers = { ...(prev[chKey] || {}) };
+                if (detail.isTyping) {
+                    channelTypers[senderU] = {
+                        name: detail.senderName || detail.senderUsername,
+                        expiresAt: Date.now() + 4500
+                    };
+                    return { ...prev, [chKey]: channelTypers };
+                } else {
+                    if (!channelTypers[senderU]) return prev;
+                    delete channelTypers[senderU];
+                    const next = { ...prev };
+                    if (Object.keys(channelTypers).length === 0) {
+                        delete next[chKey];
+                    } else {
+                        next[chKey] = channelTypers;
+                    }
+                    return next;
+                }
+            });
+        };
+
+        const onChatMsgRealtime = (e: Event) => {
+            const msg = (e as CustomEvent).detail;
+            if (!msg || !msg.senderUsername) return;
+            const senderU = String(msg.senderUsername).toLowerCase();
+            const chKey = msg.groupId
+                ? `group:${msg.groupId}`
+                : msg.recipient
+                    ? `private:${senderU}`
+                    : 'public';
+            setTypingMap(prev => {
+                if (!prev[chKey] || !prev[chKey][senderU]) return prev;
+                const channelTypers = { ...prev[chKey] };
+                delete channelTypers[senderU];
+                const next = { ...prev };
+                if (Object.keys(channelTypers).length === 0) delete next[chKey];
+                else next[chKey] = channelTypers;
+                return next;
+            });
+        };
+
+        window.addEventListener('CHAT_TYPING_REALTIME', onTypingEvent);
+        window.addEventListener('CHAT_MESSAGE_REALTIME', onChatMsgRealtime);
+        return () => {
+            window.removeEventListener('CHAT_TYPING_REALTIME', onTypingEvent);
+            window.removeEventListener('CHAT_MESSAGE_REALTIME', onChatMsgRealtime);
+        };
+    }, [currentUser?.username]);
+
+    // Auto-expire stale typing entries (runs only while active typers exist)
+    useEffect(() => {
+        if (Object.keys(typingMap).length === 0) return;
+        const interval = setInterval(() => {
+            const now = Date.now();
+            setTypingMap(prev => {
+                let changed = false;
+                const next: Record<string, Record<string, { name: string; expiresAt: number }>> = {};
+                for (const [chKey, usersMap] of Object.entries(prev)) {
+                    const remaining: Record<string, { name: string; expiresAt: number }> = {};
+                    for (const [uKey, info] of Object.entries(usersMap)) {
+                        if (info.expiresAt > now) {
+                            remaining[uKey] = info;
+                        } else {
+                            changed = true;
+                        }
+                    }
+                    if (Object.keys(remaining).length > 0) {
+                        next[chKey] = remaining;
+                    }
+                }
+                return changed ? next : prev;
+            });
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [typingMap]);
+
+    // Stop typing signal when switching channels or leaving chat
+    useEffect(() => {
+        const currentCh = activeChannel;
+        return () => {
+            if (typingStopTimerRef.current) {
+                clearTimeout(typingStopTimerRef.current);
+                typingStopTimerRef.current = null;
+            }
+            if (lastTypingSentRef.current.sentAt > 0 && currentCh) {
+                emitTypingSignal(false, currentCh);
+            }
+        };
+    }, [activeChannel?.type, activeChannel?.id]);
+
+    const getChannelTypingText = (type: string, id: string | null | undefined): string | null => {
+        const chKey = getTypingChannelKey(type, id);
+        if (!chKey) return null;
+        const typersObj = typingMap[chKey];
+        if (!typersObj) return null;
+        const now = Date.now();
+        const activeTypers = Object.values(typersObj).filter(t => t.expiresAt > now);
+        if (activeTypers.length === 0) return null;
+        if (type === 'private') {
+            return 'در حال تایپ...';
+        }
+        const firstName = (activeTypers[0].name || '').trim().split(/\s+/)[0] || activeTypers[0].name;
+        if (activeTypers.length === 1) {
+            return `${firstName} در حال تایپ...`;
+        }
+        return `${firstName} و ${activeTypers.length - 1} نفر دیگر در حال تایپ...`;
+    };
+
     // Check URL parameters for direct Chat Navigation on first load
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const pvUser = params.get('pv');
         const groupUser = params.get('group');
+        const taskParam = params.get('task');
         if (pvUser) {
             setActiveTab('CHATS');
             setActiveChannel({ type: 'private', id: pvUser });
-            window.history.replaceState({}, '', window.location.pathname);
+            window.history.replaceState({}, '', window.location.pathname + window.location.hash);
         } else if (groupUser) {
-            setActiveTab('CHATS');
-            setActiveChannel({ type: 'group', id: groupUser });
-            window.history.replaceState({}, '', window.location.pathname);
+            const isTaskGrp = Boolean(taskParam) || taskGroups.some(tg => tg.id === groupUser);
+            setActiveTab(isTaskGrp ? 'TASKS' : 'GROUPS');
+            setActiveChannel({ type: isTaskGrp ? 'task_group' : 'group', id: groupUser });
+            if (taskParam) pendingTaskIdRef.current = taskParam;
+            window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+        } else if (taskParam) {
+            pendingTaskIdRef.current = taskParam;
+            window.history.replaceState({}, '', window.location.pathname + window.location.hash);
         }
     }, []);
 
-    // Handle directChatTarget updates dynamically
+    // Handle directChatTarget updates dynamically (including notification taps)
     useEffect(() => {
-        if (directChatTarget && directChatTarget.id) {
-            console.log("ChatRoom: Received directChatTarget", directChatTarget);
-            if (directChatTarget.type === 'task_group') {
-                setActiveTab('TASKS');
-            } else if (directChatTarget.type === 'group') {
-                setActiveTab('GROUPS');
-            } else {
-                setActiveTab('CHATS');
-            }
-            
-            setActiveChannel({ type: directChatTarget.type as 'private' | 'group' | 'public' | 'task_group', id: directChatTarget.id });
-            
-            if (directChatTarget.taskId) {
-                pendingTaskIdRef.current = directChatTarget.taskId;
-                const foundTask = tasks.find(t => t.id === directChatTarget.taskId);
-                if (foundTask) {
-                    setActiveTaskForDetail(foundTask);
-                    setTaskReplyText('');
-                    pendingTaskIdRef.current = null;
+        if (!directChatTarget) return;
+        const targetId = directChatTarget.id || '';
+        const hasTask = Boolean(directChatTarget.taskId);
+
+        if (targetId || directChatTarget.type === 'public') {
+            let resolvedType: 'public' | 'private' | 'group' | 'task_group' | 'system' = directChatTarget.type;
+            let resolvedId = targetId || 'public';
+
+            if (resolvedType === 'group' && (hasTask || taskGroups.some(tg => tg.id === resolvedId))) {
+                resolvedType = 'task_group';
+            } else if (resolvedType === 'private' && users.length > 0) {
+                const matchedUser = users.find(u => u.username?.toLowerCase() === resolvedId.toLowerCase());
+                if (matchedUser?.username) {
+                    resolvedId = matchedUser.username;
                 }
             }
 
-            if (onClearDirectChatTarget) {
-                onClearDirectChatTarget();
+            if (resolvedType === 'task_group') {
+                setActiveTab('TASKS');
+            } else if (resolvedType === 'group') {
+                setActiveTab('GROUPS');
+            } else if (resolvedType === 'public') {
+                setActiveTab('ALL');
+            } else {
+                setActiveTab('CHATS');
+            }
+
+            setActiveChannel({ type: resolvedType, id: resolvedId });
+            if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+                setTimeout(() => {
+                    markAsRead(resolvedId, resolvedType);
+                    scrollToBottom();
+                }, 120);
             }
         }
-    }, [directChatTarget, onClearDirectChatTarget, tasks]);
+
+        if (directChatTarget.taskId) {
+            pendingTaskIdRef.current = directChatTarget.taskId;
+            const foundTask = tasks.find(t => t.id === directChatTarget.taskId);
+            if (foundTask) {
+                if (foundTask.groupId) {
+                    setActiveTab('TASKS');
+                    setActiveChannel({ type: 'task_group', id: foundTask.groupId });
+                }
+                setActiveTaskForDetail(foundTask);
+                setTaskReplyText('');
+                pendingTaskIdRef.current = null;
+            }
+        }
+
+        if (onClearDirectChatTarget) {
+            onClearDirectChatTarget();
+        }
+    }, [directChatTarget, onClearDirectChatTarget, tasks, taskGroups, users]);
+
+    // Auto-upgrade group -> task_group if taskGroups load slightly after direct navigation
+    useEffect(() => {
+        if (
+            activeChannel?.type === 'group' &&
+            activeChannel.id &&
+            !groups.some(g => g.id === activeChannel.id) &&
+            taskGroups.some(tg => tg.id === activeChannel.id)
+        ) {
+            setActiveTab('TASKS');
+            setActiveChannel({ type: 'task_group', id: activeChannel.id });
+        }
+    }, [activeChannel?.type, activeChannel?.id, groups, taskGroups]);
 
     // Handle lazy-resolving pending task ID when tasks array loads/updates
     useEffect(() => {
         if (pendingTaskIdRef.current && tasks.length > 0) {
             const foundTask = tasks.find(t => t.id === pendingTaskIdRef.current);
             if (foundTask) {
+                if (foundTask.groupId && (!activeChannel || activeChannel.id !== foundTask.groupId || activeChannel.type !== 'task_group')) {
+                    setActiveTab('TASKS');
+                    setActiveChannel({ type: 'task_group', id: foundTask.groupId });
+                }
                 setActiveTaskForDetail(foundTask);
                 setTaskReplyText('');
                 pendingTaskIdRef.current = null;
@@ -811,6 +1035,18 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                     inputAreaRef.current.style.height = `${Math.min(inputAreaRef.current.scrollHeight, 140)}px`;
                 }
             });
+        }
+
+        // Broadcast typing status (throttled every 2s, auto-stops after 3s idle or when cleared)
+        if (text.trim()) {
+            emitTypingSignal(true);
+            if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+            typingStopTimerRef.current = setTimeout(() => {
+                emitTypingSignal(false);
+            }, 3000);
+        } else {
+            if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+            emitTypingSignal(false);
         }
 
         // Only run regex mention check if text actually contains '@'
@@ -1557,6 +1793,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     // --- Actions ---
     const handleSendSticker = async (sticker: StickerItem) => {
         if (!currentUser || !activeChannel) return;
+        if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+        emitTypingSignal(false);
         const newMsgId = generateUUID();
         const newMsg: ChatMessage = {
             id: newMsgId,
@@ -1628,6 +1866,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
 
     const handleSendMessage = async () => {
         if ((!inputText.trim() && !localSharedData?.fileUrl) || isUploading) return;
+        if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+        emitTypingSignal(false);
 
         if (editingMessageId) {
             const msgToUpdate = displayMessages.find(m => m.id === editingMessageId);
@@ -1985,6 +2225,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         if (!currentUser || !items || items.length === 0) return;
 
         // Immediately close the modal and reset input state
+        if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+        emitTypingSignal(false);
         setPendingAttachmentModalFiles(null);
         setReplyingTo(null);
         setInputText('');
@@ -3013,9 +3255,26 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                                     {item.lastMsg && <span className="text-[11px] text-slate-600 dark:text-slate-300 font-bold font-mono tracking-tight">{formatTimeFa(item.lastMsg.timestamp)}</span>}
                                 </div>
                                 <div className="flex justify-between items-center">
-                                    <p className="text-xs text-slate-700 dark:text-slate-300 font-medium truncate max-w-[170px]">
-                                        {item.type === 'system' ? (item.lastMsg?.message || 'اعلانات و هشدارهای کارتابل') : item.type === 'task_group' ? 'لیست تسک‌ها...' : item.lastMsg ? (item.lastMsg.audioUrl ? '🎤 پیام صوتی' : item.lastMsg.attachment ? '📎 فایل' : item.lastMsg.message) : 'پیامی نیست'}
-                                    </p>
+                                    {(() => {
+                                        const channelTypingText = getChannelTypingText(item.type, item.id);
+                                        if (channelTypingText) {
+                                            return (
+                                                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold truncate max-w-[185px] flex items-center gap-1.5">
+                                                    <span className="inline-flex items-center gap-0.5 shrink-0">
+                                                        <span className="w-1 h-1 rounded-full bg-emerald-500 animate-bounce [animation-delay:-0.3s]"></span>
+                                                        <span className="w-1 h-1 rounded-full bg-emerald-500 animate-bounce [animation-delay:-0.15s]"></span>
+                                                        <span className="w-1 h-1 rounded-full bg-emerald-500 animate-bounce"></span>
+                                                    </span>
+                                                    <span className="truncate">{channelTypingText}</span>
+                                                </p>
+                                            );
+                                        }
+                                        return (
+                                            <p className="text-xs text-slate-700 dark:text-slate-300 font-medium truncate max-w-[170px]">
+                                                {item.type === 'system' ? (item.lastMsg?.message || 'اعلانات و هشدارهای کارتابل') : item.type === 'task_group' ? 'لیست تسک‌ها...' : item.lastMsg ? (item.lastMsg.audioUrl ? '🎤 پیام صوتی' : item.lastMsg.attachment ? '📎 فایل' : item.lastMsg.message) : 'پیامی نیست'}
+                                            </p>
+                                        );
+                                    })()}
                                     <div className="flex items-center gap-1.5">
                                         {item.hasMention && (
                                             <span 
@@ -3131,12 +3390,29 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                                         if (tg) setShowGroupInfo({...tg, isTaskGroup: true});
                                     }
                                 }}>
-                                    <h3 className="font-bold text-gray-800 dark:text-gray-100 text-xs sm:text-sm leading-tight truncate">
-                                        {activeChannel.type === 'system' ? 'پیام‌ها و اعلانات سیستم' :
-                                         activeChannel.type === 'private' ? (users.find(u=>u.username?.toLowerCase()===activeChannel.id?.toLowerCase())?.fullName || activeChannel.id) : 
-                                         activeChannel.type === 'group' ? groups.find(g=>g.id===activeChannel.id)?.name :
-                                         activeChannel.type === 'task_group' ? taskGroups.find(g=>g.id===activeChannel.id)?.name : 'کانال عمومی'}
-                                    </h3>
+                                    {(() => {
+                                        const headerTypingText = getChannelTypingText(activeChannel.type, activeChannel.id);
+                                        return (
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <h3 className="font-bold text-gray-800 dark:text-gray-100 text-xs sm:text-sm leading-tight truncate">
+                                                    {activeChannel.type === 'system' ? 'پیام‌ها و اعلانات سیستم' :
+                                                     activeChannel.type === 'private' ? (users.find(u=>u.username?.toLowerCase()===activeChannel.id?.toLowerCase())?.fullName || activeChannel.id) : 
+                                                     activeChannel.type === 'group' ? groups.find(g=>g.id===activeChannel.id)?.name :
+                                                     activeChannel.type === 'task_group' ? taskGroups.find(g=>g.id===activeChannel.id)?.name : 'کانال عمومی'}
+                                                </h3>
+                                                {headerTypingText && (
+                                                    <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
+                                                        <span className="inline-flex items-center gap-0.5">
+                                                            <span className="w-1 h-1 rounded-full bg-emerald-500 animate-bounce [animation-delay:-0.3s]"></span>
+                                                            <span className="w-1 h-1 rounded-full bg-emerald-500 animate-bounce [animation-delay:-0.15s]"></span>
+                                                            <span className="w-1 h-1 rounded-full bg-emerald-500 animate-bounce"></span>
+                                                        </span>
+                                                        <span className="truncate max-w-[140px] sm:max-w-[200px]">{headerTypingText}</span>
+                                                    </span>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                     <div className="flex items-center gap-1.5 mt-0.5">
                                         {activeChannel.type === 'system' ? (
                                             <span className="text-[10px] text-blue-500 font-medium truncate">مرکز دریافت اعلانات کارتابل و پیام‌های خودکار</span>

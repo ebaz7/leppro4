@@ -48,6 +48,7 @@ public class MainActivity extends BridgeActivity {
     private static final String APP_FILES_FOLDER = "DlkamFiles";
     private static final int REQ_POST_NOTIFICATIONS = 1091;
     private ScheduledExecutorService nativePollExecutor;
+    private volatile String pendingNotificationTargetUrl = null;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -110,9 +111,51 @@ public class MainActivity extends BridgeActivity {
             Log.e(TAG, "Failed to register DlkamAndroid JavascriptInterface", e);
         }
 
+        // Capture deep-link targetUrl if launched via tapping a notification (cold start)
+        extractNotificationTargetUrl(getIntent());
+
         // Enqueue the WorkManager background synchronization task + live background executor
         setupScheduler();
         startFastNativeNotificationPoller();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        extractNotificationTargetUrl(intent);
+    }
+
+    private void extractNotificationTargetUrl(Intent intent) {
+        if (intent == null) return;
+        try {
+            String rawTarget = intent.getStringExtra("targetUrl");
+            if (rawTarget == null || rawTarget.trim().isEmpty()) {
+                rawTarget = intent.getStringExtra("url");
+            }
+            if (rawTarget == null || rawTarget.trim().isEmpty()) {
+                return;
+            }
+            final String cleanTarget = rawTarget.trim();
+            pendingNotificationTargetUrl = cleanTarget;
+            intent.removeExtra("targetUrl");
+            intent.removeExtra("url");
+
+            if (this.getBridge() != null && this.getBridge().getWebView() != null) {
+                final WebView webView = this.getBridge().getWebView();
+                final String quotedUrl = org.json.JSONObject.quote(cleanTarget);
+                webView.post(() -> {
+                    try {
+                        webView.evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('dlkam-notification-tap', { detail: { url: " + quotedUrl + " } }));",
+                            null
+                        );
+                    } catch (Exception ignored) {}
+                });
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "extractNotificationTargetUrl error", e);
+        }
     }
 
     private void syncWebViewUserToNativePrefsIfNeeded() {
@@ -251,6 +294,7 @@ public class MainActivity extends BridgeActivity {
                     : ("dlkam_" + System.currentTimeMillis());
 
             Intent intent = new Intent(context, MainActivity.class);
+            intent.setAction("com.payment.system.OPEN_NOTIFICATION." + safeId);
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             if (targetUrl != null && !targetUrl.isEmpty()) {
                 intent.putExtra("targetUrl", targetUrl);
@@ -345,6 +389,13 @@ public class MainActivity extends BridgeActivity {
                 Log.e(TAG, "showNativeNotification bridge error", e);
                 return false;
             }
+        }
+
+        @JavascriptInterface
+        public String consumePendingNotificationUrl() {
+            String url = pendingNotificationTargetUrl;
+            pendingNotificationTargetUrl = null;
+            return url != null ? url : "";
         }
 
         @JavascriptInterface
@@ -677,14 +728,14 @@ public class MainActivity extends BridgeActivity {
                 return;
             }
             nativePollExecutor = Executors.newSingleThreadScheduledExecutor();
-            // Battery-friendly 45-second periodic check while activity is alive
+            // Battery-friendly 20-second periodic check while activity is alive
             nativePollExecutor.scheduleWithFixedDelay(() -> {
                 try {
                     SyncWorker.pollAndDispatchNotifications(getApplicationContext());
                 } catch (Exception e) {
                     Log.w(TAG, "Native periodic poll iteration error", e);
                 }
-            }, 15, 45, TimeUnit.SECONDS);
+            }, 10, 20, TimeUnit.SECONDS);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start native notification poller", e);
         }

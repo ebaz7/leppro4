@@ -10,7 +10,16 @@
 
 import { sendNotification, hasNotificationBeenShown, markNotificationAsShown } from './notificationService';
 import { apiCall, getEffectiveApiUrl } from './apiService';
+import { Capacitor } from '@capacitor/core';
+import { isElectronDesktop, isTauriDesktop } from '../utils/platformDetection';
 import { User } from '../types';
+
+function getClientDeviceTag(): string {
+    if (Capacitor.isNativePlatform()) return 'android';
+    if (isElectronDesktop()) return 'electron';
+    if (isTauriDesktop()) return 'tauri';
+    return 'web';
+}
 
 let eventSourceInstance: EventSource | null = null;
 let reconnectTimer: any = null;
@@ -147,9 +156,9 @@ function connectSSE(currentUser: User) {
                     priority: data.priority
                 });
 
-                // Acknowledge receipt to the server queue
+                // Acknowledge receipt to the server queue per device
                 if (data.id) {
-                    apiCall('/notifications/ack', 'POST', { id: data.id, username }).catch(() => {});
+                    apiCall('/notifications/ack', 'POST', { id: data.id, username, device: getClientDeviceTag() }).catch(() => {});
                 }
 
                 // Dispatch custom DOM event for active UI components
@@ -187,10 +196,12 @@ function connectSSE(currentUser: User) {
                         markNotificationAsShown(notifId);
                         
                         // Check if user is currently looking at this exact chat in foreground
-                        const isLooking = typeof document !== 'undefined' && 
-                            !document.hidden && 
-                            window.location.hash.includes('chat') && 
-                            window.location.search.includes(`pv=${msg.senderUsername}`);
+                        const activeChat = typeof window !== 'undefined' ? (window as any).__dlkamActiveChat : null;
+                        const isLooking = typeof document !== 'undefined' &&
+                            !document.hidden &&
+                            document.visibilityState === 'visible' &&
+                            activeChat?.type === 'private' &&
+                            String(activeChat?.id || '').toLowerCase() === String(msg.senderUsername || '').toLowerCase();
 
                         if (!isLooking) {
                             const title = `پیام از ${msg.sender || msg.senderUsername}`;
@@ -207,6 +218,21 @@ function connectSSE(currentUser: User) {
                 }
             } catch (err) {
                 console.error('[SSE] Error handling chat_message event:', err);
+            }
+        });
+
+        // Listen for real-time typing indicator events
+        eventSourceInstance.addEventListener('chat_typing', (event: MessageEvent) => {
+            resetWatchdog(currentUser);
+            try {
+                const payload = JSON.parse(event.data);
+                if (!payload || !payload.senderUsername) return;
+                if (payload.senderUsername.toLowerCase() === username.toLowerCase()) return;
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('CHAT_TYPING_REALTIME', { detail: payload }));
+                }
+            } catch (err) {
+                console.warn('[SSE] Error handling chat_typing event:', err);
             }
         });
 
@@ -247,10 +273,11 @@ function reconnectSSE(currentUser: User) {
  * Drain missed notifications that were queued while offline or sleeping
  */
 async function drainOfflineQueue(username: string) {
+    const deviceTag = getClientDeviceTag();
     try {
-        const pendingItems = await apiCall<any[]>(`/notifications/queue-pending?username=${encodeURIComponent(username)}`);
+        const pendingItems = await apiCall<any[]>(`/notifications/queue-pending?username=${encodeURIComponent(username)}&device=${encodeURIComponent(deviceTag)}`);
         if (Array.isArray(pendingItems) && pendingItems.length > 0) {
-            console.log(`[SSE] Draining ${pendingItems.length} missed notifications from queue...`);
+            console.log(`[SSE] Draining ${pendingItems.length} missed notifications from queue (${deviceTag})...`);
             for (const item of pendingItems) {
                 if (item.id && !hasNotificationBeenShown(item.id)) {
                     markNotificationAsShown(item.id);
@@ -266,7 +293,7 @@ async function drainOfflineQueue(username: string) {
                     }
                 }
                 if (item.id) {
-                    apiCall('/notifications/ack', 'POST', { id: item.id, username }).catch(() => {});
+                    apiCall('/notifications/ack', 'POST', { id: item.id, username, device: deviceTag }).catch(() => {});
                 }
             }
         }

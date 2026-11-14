@@ -284,7 +284,7 @@ const PrintVoucher: React.FC<PrintVoucherProps> = ({ order, onClose, settings, c
                     -webkit-print-color-adjust: exact !important;
                     print-color-adjust: exact !important;
                 }
-                body > *:not(.printing-modal) { 
+                body > *:not(.printing-modal):not(#${printAreaId}) { 
                     display: none !important; 
                 }
                 .printing-modal {
@@ -330,8 +330,22 @@ const PrintVoucher: React.FC<PrintVoucherProps> = ({ order, onClose, settings, c
                     break-inside: avoid !important;
                     page-break-after: avoid !important;
                 }
+                #${printAreaId} .flex { display: flex !important; }
+                #${printAreaId} .flex-col { flex-direction: column !important; }
+                #${printAreaId} .flex-1 { flex: 1 1 0% !important; }
+                #${printAreaId} .justify-between { justify-content: space-between !important; }
+                #${printAreaId} .justify-center { justify-content: center !important; }
+                #${printAreaId} .items-center { align-items: center !important; }
+                #${printAreaId} .items-end { align-items: flex-end !important; }
+                #${printAreaId} .grid { display: grid !important; }
+                #${printAreaId} .grid-cols-12 { grid-template-columns: repeat(12, minmax(0, 1fr)) !important; }
+                #${printAreaId} .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+                #${printAreaId} .col-span-8 { grid-column: span 8 / span 8 !important; }
+                #${printAreaId} .col-span-4 { grid-column: span 4 / span 4 !important; }
+                #${printAreaId} table { width: 100% !important; border-collapse: collapse !important; }
                 #${printAreaId} * { 
                     visibility: visible !important; 
+                    box-sizing: border-box !important;
                 }
             }
           `;

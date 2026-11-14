@@ -374,12 +374,15 @@ async function processQueueBatch() {
 /**
  * Client Acknowledges receipt of a notification
  */
-export function acknowledgeNotification(notifId, username) {
+export function acknowledgeNotification(notifId, username, device = null) {
     if (!notifId || !username) return false;
     const item = queueItems.find(q => q.id === notifId);
     if (item) {
         if (!item.recipientsAck) item.recipientsAck = {};
-        item.recipientsAck[username.toLowerCase()] = Date.now();
+        const lowerU = String(username).toLowerCase().trim();
+        const cleanDevice = device ? String(device).toLowerCase().trim() : '';
+        const ackKey = cleanDevice ? `${lowerU}::${cleanDevice}` : lowerU;
+        item.recipientsAck[ackKey] = Date.now();
         syncQueueToDb();
         return true;
     }
@@ -389,9 +392,11 @@ export function acknowledgeNotification(notifId, username) {
 /**
  * Get pending undelivered notifications for a user (offline queue drainage)
  */
-export function getPendingNotificationsForUser(username, userRoles = []) {
+export function getPendingNotificationsForUser(username, userRoles = [], device = null) {
     if (!username) return [];
     const lowerU = String(username).toLowerCase().trim();
+    const cleanDevice = device ? String(device).toLowerCase().trim() : '';
+    const ackKey = cleanDevice ? `${lowerU}::${cleanDevice}` : lowerU;
     const roleList = Array.isArray(userRoles) ? userRoles : (userRoles ? [userRoles] : []);
     const lowerRoles = new Set(roleList.map(r => String(r).toLowerCase().trim()).filter(Boolean));
 
@@ -416,8 +421,8 @@ export function getPendingNotificationsForUser(username, userRoles = []) {
 
         if (!targeted) return false;
 
-        // Has the user already acknowledged receipt?
-        const acked = item.recipientsAck && item.recipientsAck[lowerU];
+        // Has this user (or specific device) already acknowledged receipt?
+        const acked = item.recipientsAck && item.recipientsAck[ackKey];
         return !acked;
     }).slice(-50);
 }

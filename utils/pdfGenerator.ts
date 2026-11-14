@@ -117,8 +117,7 @@ export const printHtmlInPage = (
             ? detectHtmlOrientation(htmlString, filename)
             : orientationSetting;
 
-    const finalHtml = injectOrientationStylesIntoHtml(htmlString, resolvedOrientation);
-
+    const resolvedHtml = injectOrientationStylesIntoHtml(htmlString, resolvedOrientation);
     const existingFrame = document.getElementById('dlkam-hidden-print-iframe');
     if (existingFrame && existingFrame.parentNode) {
         existingFrame.parentNode.removeChild(existingFrame);
@@ -144,7 +143,7 @@ export const printHtmlInPage = (
     }
 
     doc.open();
-    doc.write(finalHtml);
+    doc.write(resolvedHtml);
     doc.close();
 
     let printed = false;
@@ -165,10 +164,30 @@ export const printHtmlInPage = (
         }
     };
 
-    iframe.onload = () => {
-        setTimeout(triggerPrint, 350);
+    const runPrintWhenReady = () => {
+        const waits: Promise<unknown>[] = [];
+        try {
+            const imgs = Array.from(doc.querySelectorAll('img'));
+            for (const img of imgs) {
+                if (!img.complete) {
+                    waits.push(new Promise((res) => { img.onload = res; img.onerror = res; }));
+                }
+            }
+            if (doc.fonts && doc.fonts.ready) {
+                waits.push(doc.fonts.ready.catch(() => undefined));
+            }
+        } catch {}
+        if (waits.length > 0) {
+            Promise.race([Promise.all(waits), new Promise((res) => setTimeout(res, 1200))]).then(() => {
+                setTimeout(triggerPrint, 180);
+            });
+        } else {
+            setTimeout(triggerPrint, 250);
+        }
     };
-    setTimeout(triggerPrint, 700);
+
+    iframe.onload = runPrintWhenReady;
+    setTimeout(runPrintWhenReady, 500);
 };
 
 /**

@@ -221,7 +221,7 @@ public class SyncWorker extends Worker {
 
             // 1. Drain pending queue items (/api/notifications/queue-pending) for instant PV chat & role/user cartable alerts
             try {
-                String queueUrl = serverUrl + "/api/notifications/queue-pending?username=" + java.net.URLEncoder.encode(username, "UTF-8");
+                String queueUrl = serverUrl + "/api/notifications/queue-pending?username=" + java.net.URLEncoder.encode(username, "UTF-8") + "&device=android";
                 if (role != null && !role.isEmpty()) {
                     queueUrl += "&role=" + java.net.URLEncoder.encode(role, "UTF-8");
                 }
@@ -394,6 +394,7 @@ public class SyncWorker extends Worker {
             JSONObject body = new JSONObject();
             body.put("username", username);
             body.put("id", id);
+            body.put("device", "android");
 
             byte[] outputBytes = body.toString().getBytes("UTF-8");
             conn.getOutputStream().write(outputBytes);

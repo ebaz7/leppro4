@@ -105,6 +105,7 @@ function App() {
     return ['dashboard'];
   });
   const [directChatTarget, setDirectChatTarget] = useState<{ type: 'private' | 'group' | 'public' | 'task_group' | 'system', id: string, taskId?: string } | null>(null);
+  const [activeChatChannel, setActiveChatChannel] = useState<{ type: 'public' | 'private' | 'group' | 'task_group' | 'system', id: string | null } | null>(null);
   const [showAiScannerModal, setShowAiScannerModal] = useState(false);
   const [globalSendToChat, setGlobalSendToChat] = useState<{
     isOpen: boolean;
@@ -183,6 +184,11 @@ function App() {
   const tabHistoryRef = useRef(tabHistory);
   const customBackRef = useRef<(() => void) | null>(null);
   const lastBackTimestampRef = useRef<number>(0);
+  const currentUserRef = useRef<User | null>(currentUser);
+  const appTaskGroupsRef = useRef<TaskGroup[]>([]);
+  const activeChatChannelRef = useRef<{ type: 'public' | 'private' | 'group' | 'task_group' | 'system', id: string | null } | null>(null);
+  const pendingNotificationUrlRef = useRef<string | null>(null);
+  const lastHandledTapRef = useRef<{ url: string; at: number }>({ url: '', at: 0 });
 
   useEffect(() => {
     // Launch Zero-Lag Hybrid Graphics Pipeline (GPU Compositor + Server Offload)
@@ -231,6 +237,117 @@ function App() {
       activeTabRef.current = activeTab;
       tabHistoryRef.current = tabHistory;
   }, [activeTab, tabHistory]);
+
+
+  useEffect(() => {
+      activeChatChannelRef.current = activeChatChannel;
+  }, [activeChatChannel]);
+
+  const mapNotificationUrlToTab = (url: string | undefined): string | null => {
+      if (!url) return null;
+      const path = url.replace('#', '').trim().toLowerCase();
+      const basePath = path.split('?')[0].replace(/^\//, '');
+
+      if (basePath === 'chat' || path.includes('/chat?') || path.startsWith('chat?')) return 'chat';
+      if (path.includes('payment-approvals') || path.includes('payment-orders') || path.includes('manage')) return 'manage';
+      if (path.includes('exit-permits') || path.includes('exit-approvals') || path.includes('manage-exit') || basePath === 'exit') return 'manage-exit';
+      if (path.includes('security-panel') || basePath === 'security') return 'security';
+      if (path.includes('warehouse')) return 'warehouse';
+      if (path.includes('balances')) return 'balances';
+      if (path.includes('purchase')) return 'purchase';
+      if (path.includes('meetings')) return 'meetings';
+      if (path.includes('invoices') || path.includes('manage-invoices')) return 'manage-invoices';
+
+      const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'security', 'purchase', 'balances', 'meetings', 'knowledge', 'ccti', 'sayan', 'industrial-erp'];
+      if (validTabs.includes(basePath)) {
+          return basePath;
+      }
+      return null;
+  };
+
+  const navigateFromNotificationUrl = (rawUrl: string | undefined) => {
+      if (!rawUrl || !rawUrl.trim()) return;
+      const cleanRawUrl = rawUrl.trim();
+      const now = Date.now();
+      if (lastHandledTapRef.current.url === cleanRawUrl && now - lastHandledTapRef.current.at < 500) {
+          return;
+      }
+      lastHandledTapRef.current = { url: cleanRawUrl, at: now };
+
+      if (!currentUserRef.current) {
+          pendingNotificationUrlRef.current = cleanRawUrl;
+          return;
+      }
+
+      const searchPart = cleanRawUrl.includes('?') ? cleanRawUrl.substring(cleanRawUrl.indexOf('?')) : '';
+      const params = new URLSearchParams(searchPart);
+      const pv = params.get('pv');
+      const group = params.get('group');
+      const taskId = params.get('task');
+      const exitStatus = params.get('exitStatus');
+      const filterStatus = params.get('filterStatus');
+      const filter = params.get('filter');
+      const requestId = params.get('requestId');
+      const subTab = params.get('subTab');
+
+      if (pv) {
+          setDirectChatTarget({ type: 'private', id: pv });
+          setActiveTab('chat');
+      } else if (group) {
+          const isTaskGrp = Boolean(taskId) || appTaskGroupsRef.current.some(g => g.id === group);
+          setDirectChatTarget({
+              type: isTaskGrp ? 'task_group' : 'group',
+              id: group,
+              taskId: taskId || undefined
+          });
+          setActiveTab('chat');
+      } else if (taskId) {
+          setDirectChatTarget({ type: 'task_group', id: '', taskId });
+          setActiveTab('chat');
+      } else {
+          const mappedTab = mapNotificationUrlToTab(cleanRawUrl);
+          if (mappedTab === 'chat') {
+              setDirectChatTarget({ type: 'public', id: 'public' });
+              setActiveTab('chat');
+          } else if (mappedTab) {
+              setActiveTab(mappedTab);
+              if (mappedTab !== 'warehouse') setWarehouseInitialTab('dashboard');
+              if (mappedTab !== 'manage-exit') setExitPermitStatusFilter(null);
+              if (mappedTab !== 'manage') setDashboardStatusFilter(null);
+              if (mappedTab !== 'purchase') setPurchaseInitialTab('REQUESTS');
+          }
+      }
+
+      if (exitStatus === 'pending') setExitPermitStatusFilter('pending');
+      if (filterStatus) setDashboardStatusFilter(filterStatus);
+      if (filter && mapNotificationUrlToTab(cleanRawUrl) === 'warehouse') setWarehouseInitialTab('approvals');
+      if (requestId) {
+          setPurchaseInitialTab('REQUESTS');
+          const payload = { requestId, subTab: subTab || 'comments' };
+          try { sessionStorage.setItem('pending_purchase_deep_link', JSON.stringify(payload)); } catch {}
+          setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('OPEN_PURCHASE_REQUEST_DETAILS', { detail: payload }));
+          }, 80);
+      }
+  };
+
+  useEffect(() => {
+      currentUserRef.current = currentUser;
+      if (currentUser) {
+          // Consume any cold-start native Android notification intent URL once session is ready
+          try {
+              const dlkamBridge = (window as any).DlkamAndroid;
+              const nativeUrl = dlkamBridge && typeof dlkamBridge.consumePendingNotificationUrl === 'function'
+                  ? dlkamBridge.consumePendingNotificationUrl()
+                  : '';
+              const queuedUrl = pendingNotificationUrlRef.current || nativeUrl;
+              if (queuedUrl) {
+                  pendingNotificationUrlRef.current = null;
+                  setTimeout(() => navigateFromNotificationUrl(queuedUrl), 60);
+              }
+          } catch (_) {}
+      }
+  }, [currentUser]);
 
   const setActiveTab = (tab: string, addToHistory = true) => {
       setOpenWorkstationTabs(prev => prev.includes(tab) ? prev : [...prev, tab]);
@@ -585,7 +702,10 @@ function App() {
   });
   const [appTaskGroups, setAppTaskGroups] = useState<TaskGroup[]>(() => {
     try { const item = localStorage.getItem('app_data_task_groups'); return item ? JSON.parse(item) : []; } catch { return []; }
-  }); 
+  });
+  useEffect(() => {
+      appTaskGroupsRef.current = appTaskGroups;
+  }, [appTaskGroups]);
   const [loading, setLoading] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const notificationsRef = useRef<AppNotification[]>([]);
@@ -624,71 +744,13 @@ function App() {
         } catch(e) { console.error("Back button listener error", e); }
         
         try {
-            const mapNotificationUrlToTab = (url: string | undefined): string | null => {
-                if (!url) return null;
-                const path = url.replace('#', '').trim().toLowerCase();
-                
-                if (path.includes('chat')) return 'chat';
-                if (path.includes('payment-approvals') || path.includes('payment-orders') || path.includes('manage')) return 'manage';
-                if (path.includes('exit-permits') || path.includes('exit-approvals') || path.includes('exit') || path.includes('manage-exit')) return 'manage-exit';
-                if (path.includes('security-panel') || path.includes('security')) return 'security';
-                if (path.includes('warehouse')) return 'warehouse';
-                if (path.includes('balances')) return 'balances';
-                if (path.includes('purchase')) return 'purchase';
-                if (path.includes('meetings')) return 'meetings';
-                if (path.includes('invoices') || path.includes('manage-invoices')) return 'manage-invoices';
-                
-                const cleaned = path.replace(/^\//, ''); // remove leading slash
-                const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'security', 'purchase', 'balances', 'meetings', 'knowledge', 'ccti', 'sayan'];
-                if (validTabs.includes(cleaned)) {
-                    return cleaned;
-                }
-                return null;
-            };
-
-            const mapNotificationToChatTarget = (urlStr: string | undefined) => {
-                if (!urlStr) return null;
-                try {
-                    const searchPart = urlStr.includes('?') ? urlStr.substring(urlStr.indexOf('?')) : '';
-                    const params = new URLSearchParams(searchPart);
-                    const pv = params.get('pv');
-                    const group = params.get('group');
-                    if (pv) return { type: 'private' as const, id: pv };
-                    if (group) return { type: 'group' as const, id: group };
-                } catch (e) {}
-                return null;
-            };
-
-            const dispatchPurchaseDeepLink = (urlStr: string) => {
-                try {
-                    if (!urlStr || !urlStr.includes('?')) return;
-                    const searchStr = urlStr.substring(urlStr.indexOf('?'));
-                    const params = new URLSearchParams(searchStr);
-                    const requestId = params.get('requestId');
-                    const subTab = params.get('subTab');
-                    if (requestId) {
-                        const payload = { requestId, subTab: subTab || 'comments' };
-                        sessionStorage.setItem('pending_purchase_deep_link', JSON.stringify(payload));
-                        window.dispatchEvent(new CustomEvent('OPEN_PURCHASE_REQUEST_DETAILS', { detail: payload }));
-                    }
-                } catch {}
-            };
-
             PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
                 const data = notification.notification.data;
                 console.log("Push Action Data:", data);
                 if (data && data.url) {
-                    const mappedTab = mapNotificationUrlToTab(data.url);
-                    if (mappedTab) setActiveTab(mappedTab);
-                    
-                    const chatTarget = mapNotificationToChatTarget(data.url);
-                    if (chatTarget) setDirectChatTarget(chatTarget);
-                    
-                    if (data.url.includes('?')) {
-                        const searchStr = data.url.substring(data.url.indexOf('?'));
-                        if (searchStr.length > 1) window.history.pushState({}, '', window.location.pathname + searchStr);
-                        dispatchPurchaseDeepLink(data.url);
-                    }
+                    navigateFromNotificationUrl(data.url);
+                } else if (data && data.tab) {
+                    setActiveTab(data.tab);
                 }
             });
 
@@ -696,20 +758,28 @@ function App() {
                 const data = action.notification.extra;
                 console.log("Local action data:", data);
                 if (data && data.url) {
-                    const mappedTab = mapNotificationUrlToTab(data.url);
-                    if (mappedTab) setActiveTab(mappedTab);
-                    
-                    const chatTarget = mapNotificationToChatTarget(data.url);
-                    if (chatTarget) setDirectChatTarget(chatTarget);
-                    
-                    if (data.url.includes('?')) {
-                        const searchStr = data.url.substring(data.url.indexOf('?'));
-                        if (searchStr.length > 1) window.history.pushState({}, '', window.location.pathname + searchStr);
-                        dispatchPurchaseDeepLink(data.url);
-                    }
+                    navigateFromNotificationUrl(data.url);
+                } else if (data && data.tab) {
+                    setActiveTab(data.tab);
                 }
             });
         } catch(e) { console.error("Notification Listener Error", e); }
+
+        // Listen for direct Android MainActivity intent taps (warm start & cold start fallback)
+        const handleNativeNotificationTap = (e: any) => {
+            try {
+                const dlkamBridge = (window as any).DlkamAndroid;
+                const bridgeUrl = dlkamBridge && typeof dlkamBridge.consumePendingNotificationUrl === 'function'
+                    ? dlkamBridge.consumePendingNotificationUrl()
+                    : '';
+                const targetUrl = e?.detail?.url || bridgeUrl;
+                if (targetUrl) {
+                    navigateFromNotificationUrl(targetUrl);
+                }
+            } catch (_) {}
+        };
+        window.addEventListener('dlkam-notification-tap' as any, handleNativeNotificationTap);
+        handleNativeNotificationTap(null);
 
         // --- ANDROID INTENT SUPPORT (Simplified) & SHARE TARGET plugin ---
         try {
@@ -757,6 +827,7 @@ function App() {
 
         return () => {
             if (backListener) backListener.remove();
+            window.removeEventListener('dlkam-notification-tap' as any, handleNativeNotificationTap);
         };
     }
   }, []);
@@ -1553,13 +1624,24 @@ function App() {
                 const alertsToShow = chronNotifs.slice(-3);
                 
                 alertsToShow.forEach((latest, index) => {
-                    // Do not play sounds or toast if the user is actively inside the corresponding view AND app is focused
+                    // Do not play sounds or toast ONLY if the user is actively inside THAT exact conversation & focused
                     let isLookingAtSection = false;
-                    if (latest.url) {
+                    if (latest.url && activeTabRef.current === 'chat' && document.visibilityState === 'visible') {
                         const path = latest.url.replace(/^\//, '').trim();
                         const cleanPath = path.split('?')[0];
-                        if (cleanPath === 'chat' && activeTabRef.current === 'chat' && document.visibilityState === 'visible') {
-                            isLookingAtSection = true;
+                        if (cleanPath === 'chat') {
+                            const activeChat = activeChatChannelRef.current;
+                            const searchPart = path.includes('?') ? path.substring(path.indexOf('?')) : '';
+                            const params = new URLSearchParams(searchPart);
+                            const pvParam = params.get('pv');
+                            const groupParam = params.get('group');
+                            if (pvParam && activeChat?.type === 'private' && activeChat.id?.toLowerCase() === pvParam.toLowerCase()) {
+                                isLookingAtSection = true;
+                            } else if (groupParam && (activeChat?.type === 'group' || activeChat?.type === 'task_group') && activeChat.id === groupParam) {
+                                isLookingAtSection = true;
+                            } else if (!pvParam && !groupParam && activeChat?.type === 'public') {
+                                isLookingAtSection = true;
+                            }
                         }
                     }
                     
@@ -1618,10 +1700,14 @@ function App() {
                     if (!isDirectPV && !isGroupForMe && !isPublic) return false;
 
                     // If user is actively inside this exact conversation right now, do not fire external notification
-                    const isLookingAtThisChat = activeTabRef.current === 'chat' && 
-                        document.visibilityState === 'visible' && 
-                        directChatTarget && 
-                        (directChatTarget.id === m.senderUsername || directChatTarget.id === m.groupId);
+                    const activeChat = activeChatChannelRef.current;
+                    const isLookingAtThisChat = activeTabRef.current === 'chat' &&
+                        document.visibilityState === 'visible' &&
+                        Boolean(activeChat) && (
+                            (activeChat?.type === 'private' && !m.groupId && activeChat.id?.toLowerCase() === m.senderUsername?.toLowerCase()) ||
+                            ((activeChat?.type === 'group' || activeChat?.type === 'task_group') && m.groupId && activeChat.id === m.groupId) ||
+                            (activeChat?.type === 'public' && !m.recipient && !m.groupId)
+                        );
 
                     return !isLookingAtThisChat;
                 });
@@ -1721,6 +1807,15 @@ function App() {
 
       const handleAppStateChange = async (state: any) => {
           if (state.isActive) {
+              try {
+                  const dlkamBridge = (window as any).DlkamAndroid;
+                  const nativeUrl = dlkamBridge && typeof dlkamBridge.consumePendingNotificationUrl === 'function'
+                      ? dlkamBridge.consumePendingNotificationUrl()
+                      : '';
+                  if (nativeUrl) {
+                      navigateFromNotificationUrl(nativeUrl);
+                  }
+              } catch (_) {}
               triggerReload();
           }
       };
@@ -2006,20 +2101,10 @@ function App() {
       let cleanupElectronNav: any = null;
       if (electronAPI && typeof electronAPI.onNavigate === 'function') {
           cleanupElectronNav = electronAPI.onNavigate((data: any) => {
-              if (data?.tab) setActiveTab(data.tab);
               if (data?.url) {
-                  try {
-                      const parsed = new URL(data.url, window.location.origin);
-                      const pv = parsed.searchParams.get('pv');
-                      const group = parsed.searchParams.get('group');
-                      if (pv) {
-                          setDirectChatTarget({ id: pv, type: 'private' });
-                          setActiveTab('chat');
-                      } else if (group) {
-                          setDirectChatTarget({ id: group, type: 'group' });
-                          setActiveTab('chat');
-                      }
-                  } catch (_) {}
+                  navigateFromNotificationUrl(data.url);
+              } else if (data?.tab) {
+                  setActiveTab(data.tab);
               }
           });
       }
@@ -2034,16 +2119,23 @@ function App() {
   // Synchronize Active Screen Views with Client and Server Notification read statuses
   useEffect(() => {
       if (!currentUser || notifications.length === 0) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       
       let targetUrls: string[] = [];
-      if (activeTab === 'chat' && directChatTarget?.id) {
+      const currentChatId = directChatTarget?.id || activeChatChannel?.id;
+      const currentChatType = directChatTarget?.type || activeChatChannel?.type;
+      if (activeTab === 'chat' && currentChatId) {
           // Only auto-dismiss notifications for this specific conversation, NOT all unread chats!
-          targetUrls = [
-              `/chat?pv=${directChatTarget.id}`, 
-              `/chat?group=${directChatTarget.id}`, 
-              `chat?pv=${directChatTarget.id}`, 
-              `chat?group=${directChatTarget.id}`
-          ];
+          if (currentChatType === 'public') {
+              targetUrls = ['/chat', 'chat'];
+          } else {
+              targetUrls = [
+                  `/chat?pv=${currentChatId}`,
+                  `/chat?group=${currentChatId}`,
+                  `chat?pv=${currentChatId}`,
+                  `chat?group=${currentChatId}`
+              ];
+          }
       } else if (activeTab === 'manage' || activeTab === 'manage-orders') {
           targetUrls = ['/payment-approvals', '/payment-orders', 'payment-approvals', 'payment-orders'];
       } else if (activeTab === 'manage-exit' || activeTab === 'manage-invoices') {
@@ -2053,7 +2145,10 @@ function App() {
       if (targetUrls.length > 0) {
           const unreadMatched = notifications.filter(n => {
               if (n.read || !n.url) return false;
-              // Ignore query parameters when matching base path
+              // Match exact URL for specific chat queries, or clean base path for non-chat tabs
+              if (activeTab === 'chat') {
+                  return targetUrls.some(t => n.url!.toLowerCase() === t.toLowerCase());
+              }
               const cleanUrl = n.url.split('?')[0];
               return targetUrls.includes(n.url) || targetUrls.includes(cleanUrl);
           });
@@ -2063,13 +2158,16 @@ function App() {
               });
           }
       }
-  }, [activeTab, notifications, currentUser, directChatTarget]);
+  }, [activeTab, notifications, currentUser, directChatTarget, activeChatChannel]);
 
   const handleOrderCreated = () => { loadData(); setManageOrdersInitialTab('current'); setDashboardStatusFilter(null); setActiveTab('manage'); };
   const handleLogin = (user: User) => { 
+      currentUserRef.current = user;
       setCurrentUser(user); 
       syncServiceWorkerAuth(user).catch(console.error);
-      setActiveTab('dashboard'); 
+      if (!pendingNotificationUrlRef.current) {
+          setActiveTab('dashboard'); 
+      }
   };
   const handleViewArchive = () => { setManageOrdersInitialTab('archive'); setDashboardStatusFilter(null); setActiveTab('manage'); };
   const handleDashboardFilter = (status: any) => { setDashboardStatusFilter(status); setManageOrdersInitialTab('current'); setActiveTab('manage'); };
@@ -2274,6 +2372,7 @@ function App() {
                 }}
                 directChatTarget={directChatTarget}
                 onClearDirectChatTarget={() => setDirectChatTarget(null)}
+                onActiveChannelChange={setActiveChatChannel}
             />
           </div>
         );
@@ -2359,42 +2458,15 @@ function App() {
             onOpenNotification={(n) => {
                 deleteNotification(n.id);
                 if (n.url) {
-                    const cleanUrl = n.url.replace(/^\/+/, '');
-                    const [targetTab, searchParams] = cleanUrl.split('?');
-                    if (targetTab) {
-                        setActiveTab(targetTab);
-                        if (targetTab !== 'warehouse') setWarehouseInitialTab('dashboard');
-                        if (targetTab !== 'manage-exit') setExitPermitStatusFilter(null);
-                        if (targetTab !== 'manage') setDashboardStatusFilter(null);
-                        if (targetTab !== 'purchase') setPurchaseInitialTab('REQUESTS');
-                    }
-                    if (searchParams) {
-                        try {
-                            const params = new URLSearchParams(searchParams);
-                            const exitStatus = params.get('exitStatus');
-                            const filterStatus = params.get('filterStatus');
-                            const filter = params.get('filter');
-                            const taskId = params.get('task');
-                            const requestId = params.get('requestId');
-                            const subTab = params.get('subTab');
-                            if (exitStatus === 'pending') setExitPermitStatusFilter('pending');
-                            if (filterStatus) setDashboardStatusFilter(filterStatus);
-                            if (filter && targetTab === 'warehouse') setWarehouseInitialTab('approvals');
-                            if (taskId) {
-                                window.dispatchEvent(new CustomEvent('OPEN_TASK_DETAILS', { detail: { taskId } }));
-                            }
-                            if (requestId && targetTab === 'purchase') {
-                                setPurchaseInitialTab('REQUESTS');
-                                const payload = { requestId, subTab: subTab || 'comments' };
-                                sessionStorage.setItem('pending_purchase_deep_link', JSON.stringify(payload));
-                                setTimeout(() => {
-                                    window.dispatchEvent(new CustomEvent('OPEN_PURCHASE_REQUEST_DETAILS', { detail: payload }));
-                                }, 50);
-                            }
-                        } catch (e) {
-                            console.error('Error parsing notification params:', e);
+                    navigateFromNotificationUrl(n.url);
+                    try {
+                        const searchPart = n.url.includes('?') ? n.url.substring(n.url.indexOf('?')) : '';
+                        const params = new URLSearchParams(searchPart);
+                        const taskId = params.get('task');
+                        if (taskId) {
+                            window.dispatchEvent(new CustomEvent('OPEN_TASK_DETAILS', { detail: { taskId } }));
                         }
-                    }
+                    } catch (_) {}
                 }
             }}
             onAddNotification={addAppNotification}
@@ -2419,7 +2491,9 @@ function App() {
             <NotificationController 
                 currentUser={currentUser} 
                 onNotificationClick={(data) => {
-                    if (data && data.tab) {
+                    if (data?.url) {
+                        navigateFromNotificationUrl(data.url);
+                    } else if (data && data.tab) {
                         setActiveTab(data.tab);
                     }
                 }}
@@ -2502,6 +2576,7 @@ function App() {
                             }}
                             directChatTarget={directChatTarget}
                             onClearDirectChatTarget={() => setDirectChatTarget(null)}
+                            onActiveChannelChange={setActiveChatChannel}
                         />
                     </div>
                   </>

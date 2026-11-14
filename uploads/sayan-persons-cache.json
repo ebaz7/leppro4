@@ -16872,18 +16872,6 @@
     "levelCode": "11"
   },
   {
-    "personCode": "2557",
-    "tafsiliCode": "2557",
-    "fullName": "شرکت الیاف سازان بهکوش لباف",
-    "levelCode": "11"
-  },
-  {
-    "personCode": "2004",
-    "tafsiliCode": "2004",
-    "fullName": "rasha nasaj فارسی",
-    "levelCode": "11"
-  },
-  {
     "personCode": "1025",
     "tafsiliCode": "11025",
     "fullName": "ولی مهدویان",
@@ -17037,6 +17025,18 @@
     "personCode": "1024",
     "tafsiliCode": "11024",
     "fullName": "علیرضا صادقی",
+    "levelCode": "11"
+  },
+  {
+    "personCode": "2557",
+    "tafsiliCode": "2557",
+    "fullName": "شرکت الیاف سازان بهکوش لباف",
+    "levelCode": "11"
+  },
+  {
+    "personCode": "2004",
+    "tafsiliCode": "2004",
+    "fullName": "rasha nasaj فارسی",
     "levelCode": "11"
   },
   {

@@ -7882,9 +7882,9 @@ app.get('/api/notifications/stream', (req, res) => {
 
 // Acknowledge receipt of a queued notification
 app.post('/api/notifications/ack', (req, res) => {
-    const { id, username } = req.body || {};
+    const { id, username, device } = req.body || {};
     if (id && username) {
-        notificationQueue.acknowledgeNotification(id, username);
+        notificationQueue.acknowledgeNotification(id, username, device || null);
     }
     res.json({ success: true });
 });
@@ -7893,6 +7893,7 @@ app.post('/api/notifications/ack', (req, res) => {
 app.get('/api/notifications/queue-pending', (req, res) => {
     const username = req.query.username;
     if (!username) return res.json([]);
+    const device = req.query.device ? String(req.query.device) : null;
     const db = getDb();
     const lowerU = String(username).toLowerCase().trim();
     const dbUser = (db.users || []).find(u => u && u.username && String(u.username).toLowerCase().trim() === lowerU);
@@ -7901,7 +7902,7 @@ app.get('/api/notifications/queue-pending', (req, res) => {
         ...(Array.isArray(dbUser?.roles) ? dbUser.roles : []),
         req.query.role
     ].filter(Boolean)));
-    const pending = notificationQueue.getPendingNotificationsForUser(username, userRoles);
+    const pending = notificationQueue.getPendingNotificationsForUser(username, userRoles, device);
     res.json(pending);
 });
 
@@ -8437,6 +8438,52 @@ app.post('/api/chat/:id/reaction', (req, res) => {
         return res.json({ success: true, reactions });
     }
     res.status(404).json({ error: 'Message not found' });
+});
+
+// Real-Time Chat Typing Indicator Endpoint (zero disk write, pure SSE broadcast)
+app.post(['/api/chat/typing', '/chat/typing'], (req, res) => {
+    try {
+        const { senderUsername, senderName, recipient, groupId, isTyping } = req.body || {};
+        if (!senderUsername) {
+            return res.status(400).json({ error: 'senderUsername is required' });
+        }
+        const db = getDb();
+        const payload = {
+            senderUsername,
+            senderName: senderName || senderUsername,
+            recipient: recipient || null,
+            groupId: groupId || null,
+            isTyping: Boolean(isTyping),
+            timestamp: Date.now()
+        };
+
+        if (recipient) {
+            const targetUser = (db.users || []).find(u =>
+                (u.username && u.username.toLowerCase() === String(recipient).toLowerCase()) ||
+                (u.fullName && u.fullName.toLowerCase() === String(recipient).toLowerCase())
+            );
+            const targets = [recipient];
+            if (targetUser) {
+                if (targetUser.username && !targets.includes(targetUser.username)) targets.push(targetUser.username);
+                if (targetUser.fullName && !targets.includes(targetUser.fullName)) targets.push(targetUser.fullName);
+            }
+            notificationQueue.dispatchSSEEvent('chat_typing', payload, targets, [senderUsername]);
+        } else if (groupId) {
+            const group = db.groups?.find(g => g.id === groupId) || db.taskGroups?.find(g => g.id === groupId);
+            if (group) {
+                const memberList = Array.isArray(group.members) ? [...group.members] : [];
+                if (group.createdBy && !memberList.includes(group.createdBy)) memberList.push(group.createdBy);
+                notificationQueue.dispatchSSEEvent('chat_typing', payload, memberList, [senderUsername]);
+            }
+        } else {
+            // Public channel
+            notificationQueue.dispatchSSEEvent('chat_typing', payload, null, [senderUsername]);
+        }
+
+        return res.json({ success: true });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
 });
 
 // Server-Side Graphics Processing Engine Routes
