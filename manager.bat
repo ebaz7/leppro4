@@ -68,6 +68,14 @@ echo No files or data will be placed on Windows C:\ drive.
 echo.
 if exist "%cd%\scripts\setup-local-postgres.ps1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\setup-local-postgres.ps1" -InstallDir "%cd%" -Mode update
+    sc query PaymentSystem >nul 2>&1
+    if !errorlevel! equ 0 (
+        sc query PaymentSystem | findstr "RUNNING" >nul 2>&1
+        if !errorlevel! neq 0 (
+            echo [INFO] Starting PaymentSystem Windows Service...
+            net start PaymentSystem
+        )
+    )
 ) else (
     echo [ERROR] scripts\setup-local-postgres.ps1 not found.
 )
@@ -341,9 +349,16 @@ echo.
 echo [6/7] Updating & Restarting Windows Service...
 if exist install-service.js (
     node install-service.js >nul 2>&1
+    timeout /t 3 /nobreak >nul 2>&1
 )
-net stop PaymentSystem >nul 2>&1
-net start PaymentSystem
+sc query PaymentSystem | findstr "RUNNING" >nul 2>&1
+if !errorlevel! neq 0 (
+    net start PaymentSystem
+) else (
+    net stop PaymentSystem >nul 2>&1
+    timeout /t 2 /nobreak >nul 2>&1
+    net start PaymentSystem
+)
 
 echo.
 echo [7/7] Configuring Windows Firewall and ONLYOFFICE...

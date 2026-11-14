@@ -220,26 +220,45 @@ if (-not (Test-Path $PostgresExe)) {
         exit 2
     }
 
-    Write-Info "Extracting offline PostgreSQL archive strictly on $InstallDrive..."
-    $extractStage = Join-Path $PgTempDir "pg_extract_stage"
-    if (Test-Path $extractStage) { Remove-Item -Recurse -Force $extractStage }
-    New-Item -ItemType Directory -Force -Path $extractStage | Out-Null
-    Expand-Archive -Path $zipPath -DestinationPath $extractStage -Force
-
-    $nestedPg = Join-Path $extractStage "pgsql\bin\postgres.exe"
-    $directPg = Join-Path $extractStage "bin\postgres.exe"
+    Write-Info "Extracting offline PostgreSQL binaries strictly on $InstallDrive (fast single-pass, skipping pgAdmin/doc bloat)..."
+    $ProgressPreference = 'SilentlyContinue'
     New-Item -ItemType Directory -Force -Path $PgBinRoot | Out-Null
-
-    if (Test-Path $nestedPg) {
-        Copy-Item -Path (Join-Path $extractStage "pgsql\*") -Destination $PgBinRoot -Recurse -Force
-    } elseif (Test-Path $directPg) {
-        Copy-Item -Path (Join-Path $extractStage "*") -Destination $PgBinRoot -Recurse -Force
-    } else {
-        throw "Invalid PostgreSQL ZIP archive: bin\postgres.exe not found inside $zipPath"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zipArchive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+    $extractedCount = 0
+    try {
+        foreach ($entry in $zipArchive.Entries) {
+            if ([string]::IsNullOrEmpty($entry.Name) -or $entry.FullName.EndsWith("/") -or $entry.FullName.EndsWith("\")) {
+                continue
+            }
+            $relPath = $entry.FullName.Replace('\', '/').TrimStart('/')
+            if ($relPath.StartsWith("pgsql/", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $relPath = $relPath.Substring(6)
+            }
+            if ([string]::IsNullOrEmpty($relPath)) { continue }
+            $lowerRel = $relPath.ToLowerInvariant()
+            if ($lowerRel.StartsWith("pgadmin 4/") -or $lowerRel.StartsWith("stackbuilder/") -or $lowerRel.StartsWith("doc/") -or $lowerRel.StartsWith("symbols/")) {
+                continue
+            }
+            $destPath = Join-Path $PgBinRoot ($relPath.Replace('/', '\'))
+            $destDir = Split-Path -Parent $destPath
+            if ($destDir -and -not (Test-Path $destDir)) {
+                New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+            $extractedCount++
+            if (($extractedCount % 400) -eq 0) {
+                Write-Info "Extracted $extractedCount core PostgreSQL files..."
+            }
+        }
+    } finally {
+        $zipArchive.Dispose()
     }
 
-    Remove-Item -Recurse -Force $extractStage -ErrorAction SilentlyContinue
-    Write-Ok "PostgreSQL binaries extracted to $PgBinRoot (Zero files on $WinDrive)."
+    if (-not (Test-Path $PostgresExe)) {
+        throw "Invalid PostgreSQL ZIP archive: bin\postgres.exe not found inside $zipPath"
+    }
+    Write-Ok "Extracted $extractedCount PostgreSQL core files to $PgBinRoot (Zero files on $WinDrive)."
 }
 
 # STEP 2: Resolve SQL_* settings non-destructively (preserve existing credentials!)

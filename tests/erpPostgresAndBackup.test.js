@@ -317,6 +317,8 @@ test('Windows install-drive PostgreSQL script protects C: drive, existing .env/p
 
   assert.ok(!/[^\x00-\x7F]/.test(ps1), 'setup-local-postgres.ps1 must stay strictly 7-bit ASCII for Windows PowerShell 5.1 localization safety');
   assert.ok(ps1.includes('Invoke-PsqlStdin'), 'Uses stdin pipe for psql commands to avoid PS 5.1 quote mangling');
+  assert.ok(ps1.includes('System.IO.Compression.ZipFile'), 'Uses fast .NET ZipFile single-pass extraction instead of slow Expand-Archive');
+  assert.ok(ps1.includes('pgadmin 4/'), 'Skips bulky pgAdmin 4 files to keep install drive compact and extraction fast');
   assert.ok(ps1.includes('$env:TEMP = $PgTempDir'), 'Temp directory redirected to install drive');
   assert.ok(ps1.includes('PG_VERSION'), 'Checks PG_VERSION before initdb so existing pgdata is never overwritten');
   assert.ok(ps1.includes('5439'), 'Uses dedicated isolated port 5439 to avoid colliding with organizational SQL');
