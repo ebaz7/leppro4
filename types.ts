@@ -1547,22 +1547,51 @@ export interface TradeRecord {
 
 export interface PetrochemicalPurchaseData {
     petrochemicalName: string; // نام پتروشیمی (تندگویان، شازند، اروند، تبریز، جم، امیرکبیر و...)
-    brokerName?: string; // کارگزاری بورس کالا (کاریزما، آگاه، مفید، مبین سرمایه، صبا جهاد و...)
+    brokerName?: string; // کارگزار خریدار در بورس کالا (هامرز، کاریزما، آگاه، مفید و...)
+    sellerBrokerName?: string; // نام کارگزار فروشنده (مثلاً خلیج فارس)
+    customerName?: string; // نام مشتری / شرکت خریدار در قرارداد بورس
+    exchangeMarket?: string; // بازار بورس (مثلاً بورس کالای ایران)
     contractNumber?: string; // شماره قرارداد / اطلاعیه خرید بورس کالا / شناسه معامله
+    contractSubNumber?: string; // شماره جزء قرارداد (مثلاً 39 در 1405338318/39)
     offeringCode?: string; // کد عرضه بورس کالا
     proformaNumber?: string; // شماره پیش‌فاکتور داخلی پتروشیمی
     proformaDate?: string; // تاریخ پیش‌فاکتور
+    offeringDate?: string; // تاریخ عرضه
+    contractDate?: string; // تاریخ شمسی قرارداد
+    calculatedDeliveryDeadline?: string; // مهلت تحویل محاسباتی
+    deliveryDate?: string; // تاریخ تحویل
+    settlementDate?: string; // تاریخ تسویه
+    deliveryLocation?: string; // محل تحویل (مثلاً انبار کارخانه)
+    currentStage?: string; // مرحله جاری (مثلاً انبار محصول پتروشیمی تندگویان، پذیرش کارگزاری...)
+    paymentIdentifier?: string; // شناسه پرداخت
     paymentMethod: 'cash' | 'internal_lc' | 'draft_barat' | 'bourse_salaf'; // روش تسویه: نقدی / ال‌سی داخلی / برات الکترونیک / سلف
-    gradeName?: string; // گرید کالایی پتروشیمی (مثلاً چیپس پلی استر نساجی TG642، چیپس بطری BG821...)
-    quantityKg: number; // وزن / تناژ به کیلوگرم
-    basePricePerKg: number; // قیمت پایه یا معامله شده هر کیلوگرم (ریال)
+    gradeName?: string; // نام تجاری محصول / گرید کالایی در بورس (مثلاً پلی اتیلن ترفتالات نساجی TG645)
+    symbolTitle?: string; // عنوان نماد (مثلاً PTC-PETTG645J-00)
+    packagingTitle?: string; // عنوان فارسی بسته‌بندی (مثلاً جامبوبگ 1100 کیلویی)
+    qualityCode?: string; // کد کیفیت محصول (مثلاً منطبق)
+    baseCurrency?: string; // ارز مبنا معامله (پیش‌فرض ریال)
+    quantityKg: number; // مقدار قرارداد / وزن به کیلوگرم
+    basePricePerKg: number; // قیمت واحد ریالی / معامله شده هر کیلوگرم (ریال)
     competitionPercent?: number; // درصد رقابت بورس کالا (%)
-    totalGoodsPrice: number; // مبلغ خالص کالا (ریال)
-    vatAmount: number; // مالیات بر ارزش افزوده (۱۰٪ یا مقدار معین)
-    brokerageFee: number; // کارمزد کارگزاری و بورس
+    totalGoodsPrice: number; // ارزش قرارداد / مبلغ خالص کالا (ریال)
+    sellerShareRial?: number; // سهم فروشنده ریالی
+    vatStatus?: 'subject' | 'exempt' | string; // وضعیت مالیات ارزش افزوده (مشمول / معاف)
+    vatAmount: number; // مالیات و عوارض ارزش افزوده (۱۰٪ یا مقدار معین)
+    brokerageFee: number; // جمع کارمزدهای بورس و کارگزاری
     otherFees?: number; // سایر هزینه‌ها و عوارض
+    penaltyStatus?: string; // وضعیت جریمه (ندارد / دارای جریمه تاخیر یا ابطال)
+    delayPenaltyAmount?: number; // جریمه تاخیر (ریال)
+    cancellationPenaltyAmount?: number; // جریمه ابطال (ریال)
     totalInvoiceAmount: number; // مبلغ کل پیش‌فاکتور و فاکتور نهایی (ریال)
     bourseSettlementDeadline?: string; // مهلت تسویه در بورس کالا
+
+    // اطلاعات صورتحساب رسمی پتروشیمی
+    invoiceInfo?: {
+        invoiceNumber?: string; // شماره صورتحساب (مثلاً PTC0508/05483)
+        invoiceDate?: string; // تاریخ صورتحساب (مثلاً 1405/08/16)
+        invoiceQuantityKg?: number; // مقدار درج شده در صورتحساب (مثلاً 22,070)
+        finalInvoiceAmount?: number; // جمع صورتحساب (ریال)
+    };
     
     // مشخصات تسویه نقدی بورس
     cashSettlement?: {
@@ -1628,16 +1657,25 @@ export interface PetrochemicalPurchaseData {
 
     // اعلامیه بارگیری و حواله فروش پتروشیمی
     loadingNotice?: {
-        remittanceNumber?: string; // شماره حواله فروش پتروشیمی
-        remittanceDate?: string; // تاریخ حواله پتروشیمی
+        remittanceNumber?: string; // شماره حواله فروش پتروشیمی (مثلاً BT03802/05)
+        remittanceDate?: string; // تاریخ حواله پتروشیمی (مثلاً 1405/07/26)
+        remittanceQuantityKg?: number; // مقدار حواله (کیلوگرم)
+        remittanceRemainingKg?: number; // مانده حواله / باقیمانده (مثلاً -70)
+        remittanceNotes?: string; // توضیحات پیش فاکتور / حواله
+        remittanceRegisteredAt?: string; // تاریخ و ساعت ثبت حواله
         behenyabCode?: string; // کد سهمیه بهین‌یاب
         loadingTerminal?: string; // پایانه / مخزن بارگیری پتروشیمی
         loadingDeadline?: string; // مهلت بارگیری
-        transportCompany?: string; // شرکت حمل و نقل / باربری
+        unloadingAddress?: string; // آدرس محل تخلیه
+        transportCompany?: string; // موسسه حمل / شرکت حمل و نقل
+        originNetWeightKg?: number; // وزن خالص بارگیری مبدا (پتروشیمی)
+        entryDateTime?: string; // ساعت و تاریخ ورود کامیون
+        exitDateTime?: string; // ساعت و تاریخ خروج کامیون
+        deliveryNoteSerial?: string; // شماره سریال برگه تحویل (مثلاً 142592)
         driverName?: string; // نام راننده
         driverPhone?: string; // شماره تماس راننده
         driverNationalCode?: string; // کد ملی راننده
-        truckPlate?: string; // پلاک کامیون
+        truckPlate?: string; // پلاک / شماره کامیون
         waybillNumber?: string; // شماره بارنامه تمبردار
         freightCostRial?: number; // کل کرایه حمل توافق شده
         prepaidFreight?: number; // پیش‌کرایه پرداختی

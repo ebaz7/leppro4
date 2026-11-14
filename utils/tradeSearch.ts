@@ -304,6 +304,47 @@ export const matchesTradeRecord = (record: TradeRecord, searchQuery: string): bo
         });
     }
 
+    // 15. Domestic Petrochemical & Bourse Purchases (مواد اولیه پتروشیمی، شماره حواله، قرارداد، صورتحساب، برگه تحویل)
+    if (record.petrochemicalData) {
+        const pd = record.petrochemicalData;
+        if (pd.petrochemicalName) searchableParts.push(`پتروشیمی فروشنده ${pd.petrochemicalName}`);
+        if (pd.brokerName) searchableParts.push(`کارگزار خریدار ${pd.brokerName}`);
+        if (pd.sellerBrokerName) searchableParts.push(`کارگزار فروشنده ${pd.sellerBrokerName}`);
+        if (pd.customerName) searchableParts.push(`مشتری ${pd.customerName}`);
+        if (pd.contractNumber) {
+            searchableParts.push(`قرارداد ${pd.contractNumber}`);
+            if (pd.contractSubNumber) {
+                searchableParts.push(`جزء ${pd.contractSubNumber} ${pd.contractNumber}/${pd.contractSubNumber}`);
+            }
+        }
+        if (pd.offeringCode) searchableParts.push(`کد عرضه ${pd.offeringCode}`);
+        if (pd.proformaNumber) searchableParts.push(`پیش فاکتور پتروشیمی ${pd.proformaNumber}`);
+        if (pd.gradeName) searchableParts.push(`محصول گرید ${pd.gradeName}`);
+        if (pd.symbolTitle) searchableParts.push(`نماد ${pd.symbolTitle}`);
+        if (pd.packagingTitle) searchableParts.push(`بسته بندی ${pd.packagingTitle}`);
+        if (pd.currentStage) searchableParts.push(`مرحله جاری ${pd.currentStage}`);
+        if (pd.paymentIdentifier) searchableParts.push(`شناسه پرداخت ${pd.paymentIdentifier}`);
+        if (pd.invoiceInfo) {
+            if (pd.invoiceInfo.invoiceNumber) searchableParts.push(`صورتحساب فاکتور ${pd.invoiceInfo.invoiceNumber}`);
+            if (pd.invoiceInfo.invoiceDate) searchableParts.push(`تاریخ صورتحساب ${pd.invoiceInfo.invoiceDate}`);
+        }
+        if (pd.internalLc?.lcNumber) searchableParts.push(`ال سی lc ${pd.internalLc.lcNumber} ${pd.internalLc.issuingBank || ''}`);
+        if (pd.draftBarat?.sepamCode) searchableParts.push(`برات سپام ${pd.draftBarat.sepamCode} ${pd.draftBarat.baratNumber || ''}`);
+        if (pd.loadingNotice) {
+            const ln = pd.loadingNotice;
+            if (ln.remittanceNumber) searchableParts.push(`حواله شماره_حواله ${ln.remittanceNumber}`);
+            if (ln.remittanceDate) searchableParts.push(`تاریخ حواله ${ln.remittanceDate}`);
+            if (ln.behenyabCode) searchableParts.push(`بهین یاب ${ln.behenyabCode}`);
+            if (ln.deliveryNoteSerial) searchableParts.push(`برگه تحویل سریال ${ln.deliveryNoteSerial}`);
+            if (ln.transportCompany) searchableParts.push(`موسسه حمل باربری ${ln.transportCompany}`);
+            if (ln.unloadingAddress) searchableParts.push(`محل تخلیه ${ln.unloadingAddress}`);
+            if (ln.driverName) searchableParts.push(`راننده ${ln.driverName}`);
+            if (ln.truckPlate) searchableParts.push(`کامیون پلاک ${ln.truckPlate}`);
+            if (ln.waybillNumber) searchableParts.push(`بارنامه ${ln.waybillNumber}`);
+        }
+        if (pd.warehouseReceipt?.receiptNumber) searchableParts.push(`قبض انبار رسید ${pd.warehouseReceipt.receiptNumber}`);
+    }
+
     // Combine all and normalize
     const fullSearchableText = normalizeSearchText(searchableParts.join(' '));
 
@@ -404,6 +445,35 @@ export const getTradeRecordMatchHighlights = (record: TradeRecord, searchQuery: 
                 highlights.push({ label: 'قبض انبار', value: num });
             }
         });
+    }
+
+    // Petrochemical Remittance, Contract, Invoice & Delivery Serial
+    if (record.petrochemicalData) {
+        const pd = record.petrochemicalData;
+        if (testMatch(pd.loadingNotice?.remittanceNumber)) {
+            highlights.push({ label: 'شماره حواله', value: pd.loadingNotice!.remittanceNumber! });
+        }
+        const fullContract = pd.contractNumber
+            ? (pd.contractSubNumber ? `${pd.contractNumber}/${pd.contractSubNumber}` : pd.contractNumber)
+            : '';
+        if (fullContract && testMatch(fullContract)) {
+            highlights.push({ label: 'قرارداد بورس', value: fullContract });
+        }
+        if (testMatch(pd.invoiceInfo?.invoiceNumber)) {
+            highlights.push({ label: 'شماره صورتحساب', value: pd.invoiceInfo!.invoiceNumber! });
+        }
+        if (testMatch(pd.loadingNotice?.deliveryNoteSerial)) {
+            highlights.push({ label: 'سریال برگه تحویل', value: pd.loadingNotice!.deliveryNoteSerial! });
+        }
+        if (testMatch(pd.symbolTitle)) {
+            highlights.push({ label: 'عنوان نماد', value: pd.symbolTitle! });
+        }
+        if (testMatch(pd.loadingNotice?.transportCompany)) {
+            highlights.push({ label: 'موسسه حمل', value: pd.loadingNotice!.transportCompany! });
+        }
+        if (testMatch(pd.loadingNotice?.truckPlate)) {
+            highlights.push({ label: 'شماره کامیون', value: pd.loadingNotice!.truckPlate! });
+        }
     }
 
     return highlights;

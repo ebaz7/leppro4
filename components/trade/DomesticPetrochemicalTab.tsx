@@ -162,18 +162,21 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
         const qty = next.quantityKg || 0;
         const base = next.basePricePerKg || 0;
         const totalGoods = qty * base;
-        const vat = next.vatAmount !== undefined && next.vatAmount > 0 
-            ? next.vatAmount 
-            : Math.round(totalGoods * 0.10); // Standard 10% VAT
-        const brokerage = next.brokerageFee !== undefined && next.brokerageFee > 0 
-            ? next.brokerageFee 
-            : Math.round(totalGoods * 0.0036); // standard bourse & broker fees ~0.36%
+        const isVatExempt = next.vatStatus === 'exempt' || next.vatStatus === 'معاف';
+        const vat = partial.vatAmount !== undefined
+            ? partial.vatAmount
+            : isVatExempt
+                ? 0
+                : (next.vatAmount !== undefined && next.vatAmount > 0 ? next.vatAmount : Math.round(totalGoods * 0.10));
+        const brokerage = partial.brokerageFee !== undefined
+            ? partial.brokerageFee
+            : (next.brokerageFee !== undefined && next.brokerageFee > 0 ? next.brokerageFee : Math.round(totalGoods * 0.0036));
         const otherFees = next.otherFees || 0;
         const totalInvoice = totalGoods + vat + brokerage + otherFees;
 
         next.totalGoodsPrice = totalGoods;
-        if (!partial.vatAmount) next.vatAmount = vat;
-        if (!partial.brokerageFee) next.brokerageFee = brokerage;
+        if (partial.vatAmount === undefined) next.vatAmount = vat;
+        if (partial.brokerageFee === undefined) next.brokerageFee = brokerage;
         next.totalInvoiceAmount = totalInvoice;
 
         // Auto sync LC or Barat principal amount if empty or matching previous total
@@ -260,21 +263,29 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                     <h2 style="text-align: center;">صورت وضعیت و بهای تمام‌شده خرید پتروشیمی و بورس کالا</h2>
                     <p style="text-align: center;">شرکت: ${record.company || '---'} | پتروشیمی: ${petroData.petrochemicalName} | شماره پرونده: ${record.fileNumber || '---'}</p>
                     <table>
-                        <tr class="header-row"><td colspan="4">۱. اطلاعات قرارداد بورس و کالا</td></tr>
-                        <tr><td>گرید کالا</td><td>${petroData.gradeName || record.goodsName}</td><td>شماره قرارداد بورس</td><td>${petroData.contractNumber || '---'}</td></tr>
-                        <tr><td>کارگزاری</td><td>${petroData.brokerName || '---'}</td><td>شماره پیش‌فاکتور</td><td>${petroData.proformaNumber || '---'}</td></tr>
-                        <tr><td>وزن معامله (کیلوگرم)</td><td class="num">${petroData.quantityKg || 0}</td><td>نرخ پایه هر کیلو (ریال)</td><td class="num">${petroData.basePricePerKg || 0}</td></tr>
-                        <tr><td>ارزش خالص کالا (ریال)</td><td class="num">${petroData.totalGoodsPrice || 0}</td><td>مالیات ارزش افزوده ۱۰٪</td><td class="num">${petroData.vatAmount || 0}</td></tr>
-                        <tr><td>کارمزد بورس و کارگزاری</td><td class="num">${petroData.brokerageFee || 0}</td><td>مبلغ کل فاکتور پتروشیمی</td><td class="num">${petroData.totalInvoiceAmount || 0}</td></tr>
+                        <tr class="header-row"><td colspan="4">۱. اطلاعات پایه قرارداد بورس و کالا</td></tr>
+                        <tr><td>گرید / محصول</td><td>${petroData.gradeName || record.goodsName}</td><td>شماره قرارداد / جزء</td><td>${petroData.contractNumber || '---'}${petroData.contractSubNumber ? '/' + petroData.contractSubNumber : ''}</td></tr>
+                        <tr><td>عنوان نماد</td><td>${petroData.symbolTitle || '---'}</td><td>بسته‌بندی / کیفیت</td><td>${petroData.packagingTitle || '---'} / ${petroData.qualityCode || 'منطبق'}</td></tr>
+                        <tr><td>کارگزار خریدار / فروشنده</td><td>${petroData.brokerName || '---'} / ${petroData.sellerBrokerName || '---'}</td><td>بازار بورس / محل تحویل</td><td>${petroData.exchangeMarket || 'بورس کالای ایران'} / ${petroData.deliveryLocation || 'انبار کارخانه'}</td></tr>
+                        <tr><td>تاریخ قرارداد / عرضه</td><td>${petroData.contractDate || '---'} / ${petroData.offeringDate || '---'}</td><td>تاریخ تحویل / تسویه</td><td>${petroData.deliveryDate || '---'} / ${petroData.settlementDate || '---'}</td></tr>
+                        <tr><td>شماره پیش‌فاکتور</td><td>${petroData.proformaNumber || '---'}</td><td>مرحله جاری</td><td>${petroData.currentStage || '---'}</td></tr>
+                        <tr><td>وزن قرارداد (کیلوگرم)</td><td class="num">${petroData.quantityKg || 0}</td><td>نرخ پایه هر کیلو (ریال)</td><td class="num">${petroData.basePricePerKg || 0}</td></tr>
+                        <tr><td>ارزش قرارداد (ریال)</td><td class="num">${petroData.totalGoodsPrice || 0}</td><td>سهم فروشنده ریالی</td><td class="num">${petroData.sellerShareRial || 0}</td></tr>
+                        <tr><td>مالیات ارزش افزوده (${petroData.vatStatus === 'exempt' ? 'معاف' : 'مشمول'})</td><td class="num">${petroData.vatAmount || 0}</td><td>جمع کارمزدهای بورس</td><td class="num">${petroData.brokerageFee || 0}</td></tr>
+                        <tr><td>شماره و تاریخ صورتحساب</td><td>${petroData.invoiceInfo?.invoiceNumber || '---'} (${petroData.invoiceInfo?.invoiceDate || '---'})</td><td>جمع صورتحساب رسمی (ریال)</td><td class="num">${petroData.invoiceInfo?.finalInvoiceAmount || petroData.totalInvoiceAmount || 0}</td></tr>
                         
                         <tr class="header-row"><td colspan="4">۲. تسویه مالی و اسناد بانکی</td></tr>
-                        <tr><td>روش تسویه</td><td>${petroData.paymentMethod === 'internal_lc' ? 'اعتبار اسنادی داخلی (LC)' : petroData.paymentMethod === 'draft_barat' ? 'برات الکترونیک (سپام)' : 'نقدی بورس'}</td><td>بانک عامل</td><td>${petroData.paymentMethod === 'internal_lc' ? petroData.internalLc?.issuingBank : petroData.paymentMethod === 'draft_barat' ? petroData.draftBarat?.bankName : 'اتاق پایاپای'}</td></tr>
+                        <tr><td>روش تسویه</td><td>${petroData.paymentMethod === 'internal_lc' ? 'اعتبار اسنادی داخلی (LC)' : petroData.paymentMethod === 'draft_barat' ? 'برات الکترونیک (سپام)' : 'نقدی بورس'}</td><td>بانک عامل / شناسه پرداخت</td><td>${petroData.paymentMethod === 'internal_lc' ? petroData.internalLc?.issuingBank : petroData.paymentMethod === 'draft_barat' ? petroData.draftBarat?.bankName : 'اتاق پایاپای'} (${petroData.paymentIdentifier || '---'})</td></tr>
                         <tr><td>شناسه سند / LC / سپام</td><td>${petroData.paymentMethod === 'internal_lc' ? (petroData.internalLc?.lcNumber || '---') : petroData.paymentMethod === 'draft_barat' ? (petroData.draftBarat?.sepamCode || '---') : '---'}</td><td>تاریخ سررسید</td><td>${petroData.paymentMethod === 'internal_lc' ? (petroData.internalLc?.dueDate || '---') : petroData.paymentMethod === 'draft_barat' ? (petroData.draftBarat?.dueDate || '---') : '---'}</td></tr>
                         
-                        <tr class="header-row"><td colspan="4">۳. لجستیک، ناوگان و باسکول کارخانه</td></tr>
-                        <tr><td>شماره حواله فروش</td><td>${petroData.loadingNotice?.remittanceNumber || '---'}</td><td>کد بهین‌یاب</td><td>${petroData.loadingNotice?.behenyabCode || '---'}</td></tr>
-                        <tr><td>نام راننده و شماره تماس</td><td>${petroData.loadingNotice?.driverName || '---'} (${petroData.loadingNotice?.driverPhone || '---'})</td><td>پلاک کامیون</td><td>${petroData.loadingNotice?.truckPlate || '---'}</td></tr>
-                        <tr><td>شماره بارنامه</td><td>${petroData.loadingNotice?.waybillNumber || '---'}</td><td>کرایه حمل کل (ریال)</td><td class="num">${totalFreight}</td></tr>
+                        <tr class="header-row"><td colspan="4">۳. اطلاعات حواله، بارگیری و باسکول کارخانه</td></tr>
+                        <tr><td>شماره حواله فروش</td><td>${petroData.loadingNotice?.remittanceNumber || '---'}</td><td>تاریخ حواله</td><td>${petroData.loadingNotice?.remittanceDate || '---'}</td></tr>
+                        <tr><td>مقدار حواله (kg)</td><td class="num">${petroData.loadingNotice?.remittanceQuantityKg || petroData.quantityKg || 0}</td><td>مانده حواله (باقیمانده)</td><td class="num">${petroData.loadingNotice?.remittanceRemainingKg ?? 0}</td></tr>
+                        <tr><td>موسسه حمل</td><td>${petroData.loadingNotice?.transportCompany || '---'}</td><td>سریال برگه تحویل</td><td>${petroData.loadingNotice?.deliveryNoteSerial || '---'}</td></tr>
+                        <tr><td>آدرس محل تخلیه</td><td colspan="3">${petroData.loadingNotice?.unloadingAddress || '---'}</td></tr>
+                        <tr><td>کد بهین‌یاب / تاریخ بارگیری</td><td>${petroData.loadingNotice?.behenyabCode || '---'} / ${petroData.loadingNotice?.loadingDate || '---'}</td><td>ورود / خروج</td><td>${petroData.loadingNotice?.entryDateTime || '---'} / ${petroData.loadingNotice?.exitDateTime || '---'}</td></tr>
+                        <tr><td>نام راننده و شماره تماس</td><td>${petroData.loadingNotice?.driverName || '---'} (${petroData.loadingNotice?.driverPhone || '---'})</td><td>شماره کامیون (پلاک)</td><td>${petroData.loadingNotice?.truckPlate || '---'}</td></tr>
+                        <tr><td>شماره بارنامه / وزن خالص مبدا</td><td>${petroData.loadingNotice?.waybillNumber || '---'} / ${petroData.loadingNotice?.originNetWeightKg || 0} kg</td><td>کرایه حمل کل (ریال)</td><td class="num">${totalFreight}</td></tr>
                         <tr><td>وزن باسکول کارخانه (kg)</td><td class="num">${petroData.warehouseReceipt?.receivedWeightKg || 0}</td><td>اختلاف وزن باسکول (kg)</td><td class="num">${weightVarianceKg}</td></tr>
 
                         <tr class="total-row"><td colspan="2">مجموع بهای تمام‌شده خرید پتروشیمی (ریال)</td><td colspan="2" class="num">${finalTotalCost}</td></tr>
@@ -384,13 +395,23 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                     <h2 className="text-lg sm:text-2xl font-black text-white truncate">
                         {petroData.petrochemicalName || 'پتروشیمی'} - {petroData.gradeName || 'کالای بورسی'}
                     </h2>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-emerald-200">
-                        <span>قرارداد بورس: <strong className="font-mono text-white">{petroData.contractNumber || 'ثبت نشده'}</strong></span>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-emerald-200">
+                        <span className="bg-amber-400/20 border border-amber-300/40 text-amber-200 px-2.5 py-0.5 rounded-lg">
+                            شماره حواله: <strong className="font-mono text-white text-sm">{petroData.loadingNotice?.remittanceNumber || 'ثبت نشده'}</strong>
+                            {petroData.loadingNotice?.remittanceDate && <span className="mr-1.5 text-amber-100 font-mono">({petroData.loadingNotice.remittanceDate})</span>}
+                        </span>
+                        <span>قرارداد بورس: <strong className="font-mono text-white">{petroData.contractNumber || 'ثبت نشده'}{petroData.contractSubNumber ? `/${petroData.contractSubNumber}` : ''}</strong></span>
                         <span>•</span>
-                        <span>پیش‌فاکتور: <strong className="font-mono text-white">{petroData.proformaNumber || 'ثبت نشده'}</strong></span>
+                        <span>صورتحساب: <strong className="font-mono text-white">{petroData.invoiceInfo?.invoiceNumber || petroData.proformaNumber || 'ثبت نشده'}</strong></span>
+                        {petroData.currentStage && (
+                            <>
+                                <span>•</span>
+                                <span>مرحله جاری: <strong className="text-emerald-100">{petroData.currentStage}</strong></span>
+                            </>
+                        )}
                         <span>•</span>
                         <span>روش تسویه: <strong className="text-amber-300">
-                            {petroData.paymentMethod === 'internal_lc' ? 'اعتبار اسنادی داخلی (LC ریالی)' : petroData.paymentMethod === 'draft_barat' ? 'برات الکترونیک (سپام)' : 'نقدی بورس'}
+                            {petroData.paymentMethod === 'internal_lc' ? 'اعتبار اسنادی داخلی (LC ریالی)' : petroData.paymentMethod === 'draft_barat' ? 'برات الکترونیک (سپام)' : petroData.paymentMethod === 'bourse_salaf' ? 'خرید سلف بورس' : 'نقدی بورس'}
                         </strong></span>
                     </div>
                 </div>
@@ -490,17 +511,62 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                 </button>
             </div>
 
-            {/* SUB-TAB 1: Bourse Contract & Proforma */}
+            {/* SUB-TAB 1: Bourse Contract, Base Info & Invoice */}
             {subTab === 'contract' && (
                 <div className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-3xl border border-gray-200 dark:border-gray-700 space-y-6 shadow-sm">
-                    <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-700 pb-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 dark:border-gray-700 pb-4">
                         <div>
-                            <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">مشخصات عرضه بورس کالا و پیش‌فاکتور پتروشیمی</h3>
-                            <p className="text-xs text-gray-500 mt-0.5">اطلاعات پایه عرضه، کارگزاری، گرید، تناژ و مبالغ معامله شده</p>
+                            <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">اطلاعات پایه قرارداد بورس کالا، حواله و صورتحساب</h3>
+                            <p className="text-xs text-gray-500 mt-0.5">کلیه مشخصات اسنادی گزارش خرید بورس (شماره حواله، قرارداد و جزء، نماد، تاریخ‌ها و صورتحساب)</p>
                         </div>
                         <span className="px-3 py-1 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 text-xs font-bold rounded-xl border border-emerald-200">
-                            بورس کالای ایران
+                            {petroData.exchangeMarket || 'بورس کالای ایران'}
                         </span>
+                    </div>
+
+                    {/* Critical Highlight: Remittance Number + Contract + Sub Number */}
+                    <div className="p-4 bg-amber-50/70 dark:bg-amber-950/20 rounded-2xl border border-amber-200 dark:border-amber-800/60 grid grid-cols-1 md:grid-cols-4 gap-3.5 text-xs">
+                        <div className="space-y-1.5">
+                            <label className="font-black text-amber-900 dark:text-amber-300 flex items-center gap-1">
+                                <span>شماره حواله فروش پتروشیمی *</span>
+                            </label>
+                            <input
+                                className="w-full border-2 border-amber-300 dark:border-amber-700 rounded-xl p-2.5 bg-white dark:bg-gray-900 text-sm font-mono font-black text-amber-900 dark:text-amber-200 text-left dir-ltr"
+                                value={petroData.loadingNotice?.remittanceNumber || ''}
+                                onChange={e => updatePetro({
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceNumber: e.target.value }
+                                })}
+                                placeholder="مثال: BT03802/05"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">تاریخ حواله</label>
+                            <TradeDatePicker
+                                value={petroData.loadingNotice?.remittanceDate || ''}
+                                onChange={d => updatePetro({
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceDate: d }
+                                })}
+                                placeholder="1405/07/26"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره قرارداد بورس *</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-2.5 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                value={petroData.contractNumber || ''}
+                                onChange={e => updatePetro({ contractNumber: e.target.value })}
+                                placeholder="مثال: 1405338318"
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره جزء قرارداد</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-2.5 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-900 dark:text-gray-100 text-center"
+                                value={petroData.contractSubNumber || ''}
+                                onChange={e => updatePetro({ contractSubNumber: e.target.value })}
+                                placeholder="مثال: 39"
+                            />
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
@@ -515,71 +581,134 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">کارگزاری بورس کالا</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">نام مشتری (خریدار)</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
+                                value={petroData.customerName ?? record.company ?? ''}
+                                onChange={e => updatePetro({ customerName: e.target.value })}
+                                placeholder="مثال: تولیدی لپان بافت"
+                            />
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">بازار بورس / محل تحویل</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-gray-100"
+                                    value={petroData.exchangeMarket ?? 'بورس کالای ایران'}
+                                    onChange={e => updatePetro({ exchangeMarket: e.target.value })}
+                                    placeholder="بازار بورس"
+                                />
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-gray-100"
+                                    value={petroData.deliveryLocation ?? 'انبار کارخانه'}
+                                    onChange={e => updatePetro({ deliveryLocation: e.target.value })}
+                                    placeholder="محل تحویل"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">نام کارگزار خریدار</label>
                             <input
                                 className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
                                 value={petroData.brokerName || ''}
                                 onChange={e => updatePetro({ brokerName: e.target.value })}
-                                placeholder="مثال: کاریزما، آگاه، مفید، صبا جهاد..."
+                                placeholder="مثال: هامرز، کاریزما، آگاه، مفید..."
                             />
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره قرارداد / شناسه معامله بورس</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">نام کارگزار فروشنده</label>
                             <input
-                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100"
-                                value={petroData.contractNumber || ''}
-                                onChange={e => updatePetro({ contractNumber: e.target.value })}
-                                placeholder="شناسه معامله / قرارداد..."
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
+                                value={petroData.sellerBrokerName || ''}
+                                onChange={e => updatePetro({ sellerBrokerName: e.target.value })}
+                                placeholder="مثال: خلیج فارس"
                             />
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">کد عرضه بورس کالا</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">مرحله جاری سند</label>
                             <input
-                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100"
-                                value={petroData.offeringCode || ''}
-                                onChange={e => updatePetro({ offeringCode: e.target.value })}
-                                placeholder="کد اطلاعیه عرضه..."
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
+                                value={petroData.currentStage || ''}
+                                onChange={e => updatePetro({ currentStage: e.target.value })}
+                                placeholder="مثال: انبار محصول پتروشیمی تندگویان"
                             />
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره پیش‌فاکتور داخلی پتروشیمی</label>
-                            <input
-                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100"
-                                value={petroData.proformaNumber || ''}
-                                onChange={e => updatePetro({ proformaNumber: e.target.value })}
-                                placeholder="شماره پیش‌فاکتور..."
-                            />
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">تاریخ پیش‌فاکتور</label>
-                            <TradeDatePicker
-                                value={petroData.proformaDate || ''}
-                                onChange={d => updatePetro({ proformaDate: d })}
-                                placeholder="تاریخ صدور..."
-                            />
-                        </div>
-
-                        <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">گرید کالایی پتروشیمی *</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">نام تجاری محصول در بورس (گرید) *</label>
                             <input
                                 className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
                                 value={petroData.gradeName || ''}
                                 onChange={e => updatePetro({ gradeName: e.target.value })}
-                                placeholder="مثال: چیپس نساجی TG642، پلی‌پروپیلن C30S..."
+                                placeholder="مثال: پلی اتیلن ترفتالات نساجی TG645"
                             />
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">مهلت تسویه در بورس کالا</label>
-                            <TradeDatePicker
-                                value={petroData.bourseSettlementDeadline || ''}
-                                onChange={d => updatePetro({ bourseSettlementDeadline: d })}
-                                placeholder="تاریخ مهلت تسویه..."
+                            <label className="font-bold text-gray-700 dark:text-gray-300">عنوان نماد معاملاتی</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                value={petroData.symbolTitle || ''}
+                                onChange={e => updatePetro({ symbolTitle: e.target.value })}
+                                placeholder="مثال: PTC-PETTG645J-00"
                             />
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">عنوان فارسی بسته‌بندی و کد کیفیت</label>
+                            <div className="grid grid-cols-3 gap-2">
+                                <input
+                                    className="col-span-2 w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-bold text-gray-900 dark:text-gray-100"
+                                    value={petroData.packagingTitle || ''}
+                                    onChange={e => updatePetro({ packagingTitle: e.target.value })}
+                                    placeholder="جامبوبگ 1100 کیلویی"
+                                />
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-bold text-center text-gray-900 dark:text-gray-100"
+                                    value={petroData.qualityCode ?? 'منطبق'}
+                                    onChange={e => updatePetro({ qualityCode: e.target.value })}
+                                    placeholder="منطبق"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره پیش‌فاکتور و تاریخ آن</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                    value={petroData.proformaNumber || ''}
+                                    onChange={e => updatePetro({ proformaNumber: e.target.value })}
+                                    placeholder="شماره پیش‌فاکتور"
+                                />
+                                <TradeDatePicker
+                                    value={petroData.proformaDate || ''}
+                                    onChange={d => updatePetro({ proformaDate: d })}
+                                    placeholder="تاریخ پیش‌فاکتور"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">کد عرضه بورس / شناسه پرداخت</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                    value={petroData.offeringCode || ''}
+                                    onChange={e => updatePetro({ offeringCode: e.target.value })}
+                                    placeholder="کد عرضه"
+                                />
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-xs font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                    value={petroData.paymentIdentifier || ''}
+                                    onChange={e => updatePetro({ paymentIdentifier: e.target.value })}
+                                    placeholder="شناسه پرداخت"
+                                />
+                            </div>
                         </div>
 
                         <div className="space-y-1.5">
@@ -595,22 +724,56 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                         </div>
                     </div>
 
+                    {/* Contract Dates & Deadlines */}
+                    <div className="p-4 bg-blue-50/40 dark:bg-blue-950/20 rounded-2xl border border-blue-100 dark:border-blue-900/50 space-y-3">
+                        <h4 className="font-bold text-xs text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
+                            <Calendar size={15} />
+                            <span>تاریخ‌ها و مهلت‌های قرارداد بورس</span>
+                        </h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-600 dark:text-gray-400">تاریخ عرضه</label>
+                                <TradeDatePicker value={petroData.offeringDate || ''} onChange={d => updatePetro({ offeringDate: d })} placeholder="1405/07/21" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-600 dark:text-gray-400">تاریخ شمسی قرارداد</label>
+                                <TradeDatePicker value={petroData.contractDate || ''} onChange={d => updatePetro({ contractDate: d })} placeholder="1405/07/21" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-600 dark:text-gray-400">مهلت تسویه</label>
+                                <TradeDatePicker value={petroData.bourseSettlementDeadline || ''} onChange={d => updatePetro({ bourseSettlementDeadline: d })} placeholder="1405/07/26" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-600 dark:text-gray-400">تاریخ تسویه</label>
+                                <TradeDatePicker value={petroData.settlementDate || ''} onChange={d => updatePetro({ settlementDate: d })} placeholder="1405/07/26" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-600 dark:text-gray-400">مهلت تحویل محاسباتی</label>
+                                <TradeDatePicker value={petroData.calculatedDeliveryDeadline || ''} onChange={d => updatePetro({ calculatedDeliveryDeadline: d })} placeholder="1405/08/26" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-600 dark:text-gray-400">تاریخ تحویل</label>
+                                <TradeDatePicker value={petroData.deliveryDate || ''} onChange={d => updatePetro({ deliveryDate: d })} placeholder="1405/08/19" />
+                            </div>
+                        </div>
+                    </div>
+
                     {/* Quantities & Price Breakdown Grid */}
                     <div className="p-5 bg-slate-50 dark:bg-gray-900/50 rounded-2xl border border-slate-200 dark:border-gray-700 space-y-4">
                         <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200 flex items-center gap-2">
                             <Calculator size={18} className="text-emerald-600" />
-                            <span>محاسبه مالی پیش‌فاکتور و معامله بورس کالا</span>
+                            <span>محاسبه مالی قرارداد، سهم فروشنده، کارمزدها و جرائم</span>
                         </h4>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
                             <div className="space-y-1.5">
-                                <label className="font-bold text-gray-700 dark:text-gray-300">وزن معامله شده (کیلوگرم) *</label>
+                                <label className="font-bold text-gray-700 dark:text-gray-300">مقدار قرارداد (کیلوگرم) *</label>
                                 <input
                                     type="number"
                                     className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-base font-mono font-bold text-gray-900 dark:text-gray-100 text-center"
                                     value={petroData.quantityKg || ''}
                                     onChange={e => updatePetro({ quantityKg: parseFloat(e.target.value) || 0 })}
-                                    placeholder="مثال: 50000"
+                                    placeholder="مثال: 22000"
                                 />
                                 <span className="text-[11px] text-gray-500 block text-left">
                                     معادل: {((petroData.quantityKg || 0) / 1000).toFixed(2)} تن
@@ -618,30 +781,55 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="font-bold text-gray-700 dark:text-gray-300">قیمت معامله شده هر کیلو (ریال) *</label>
+                                <label className="font-bold text-gray-700 dark:text-gray-300">قیمت واحد ریالی هر کیلو *</label>
                                 <input
                                     type="text"
                                     className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-base font-mono font-bold text-emerald-700 dark:text-emerald-400 text-center"
                                     value={formatNumberString(petroData.basePricePerKg || 0)}
                                     onChange={e => updatePetro({ basePricePerKg: deformatNumberString(e.target.value) })}
-                                    placeholder="نرخ هر کیلوگرم..."
+                                    placeholder="مثال: 3,800,000"
                                 />
                                 <span className="text-[11px] text-gray-500 block text-left">
-                                    {(petroData.basePricePerKg || 0).toLocaleString('fa-IR')} ریال
+                                    {(petroData.basePricePerKg || 0).toLocaleString('fa-IR')} {petroData.baseCurrency || 'ریال'}
                                 </span>
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="font-bold text-gray-700 dark:text-gray-300">مبلغ خالص کالا (ریال)</label>
+                                <label className="font-bold text-gray-700 dark:text-gray-300">ارزش قرارداد (ریالی)</label>
                                 <div className="w-full p-3 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl font-mono text-base font-black text-emerald-800 dark:text-emerald-300 text-center">
                                     {(petroData.totalGoodsPrice || 0).toLocaleString('fa-IR')}
                                 </div>
                             </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">ارز مبنا معامله</label>
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-center text-gray-900 dark:text-gray-100"
+                                    value={petroData.baseCurrency ?? 'ریال'}
+                                    onChange={e => updatePetro({ baseCurrency: e.target.value })}
+                                    placeholder="ریال"
+                                />
+                            </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs pt-2 border-t border-slate-200 dark:border-gray-800">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs pt-2 border-t border-slate-200 dark:border-gray-800">
                             <div className="space-y-1.5">
-                                <label className="font-bold text-gray-700 dark:text-gray-300">مالیات بر ارزش افزوده (۱۰٪) (ریال)</label>
+                                <label className="font-bold text-gray-700 dark:text-gray-300">وضعیت مالیات ارزش افزوده</label>
+                                <select
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-800 dark:text-gray-200"
+                                    value={petroData.vatStatus || 'subject'}
+                                    onChange={e => updatePetro({
+                                        vatStatus: e.target.value,
+                                        vatAmount: e.target.value === 'exempt' ? 0 : Math.round((petroData.totalGoodsPrice || 0) * 0.10)
+                                    })}
+                                >
+                                    <option value="subject">مشمول مالیات و عوارض ارزش افزوده</option>
+                                    <option value="exempt">معاف از مالیات ارزش افزوده</option>
+                                </select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">مالیات و عوارض ارزش افزوده (ریال)</label>
                                 <input
                                     type="text"
                                     className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-800 dark:text-gray-200 text-center"
@@ -651,7 +839,7 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="font-bold text-gray-700 dark:text-gray-300">کارمزد بورس کالا و کارگزاری (ریال)</label>
+                                <label className="font-bold text-gray-700 dark:text-gray-300">جمع کارمزدهای بورس و کارگزاری (ریال)</label>
                                 <input
                                     type="text"
                                     className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-800 dark:text-gray-200 text-center"
@@ -661,10 +849,104 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                             </div>
 
                             <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">سهم فروشنده ریالی</label>
+                                <input
+                                    type="text"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-800 dark:text-gray-200 text-center"
+                                    value={formatNumberString(petroData.sellerShareRial ?? Math.max(0, (petroData.totalGoodsPrice || 0) - (petroData.brokerageFee || 0)))}
+                                    onChange={e => updatePetro({ sellerShareRial: deformatNumberString(e.target.value) })}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs pt-2 border-t border-slate-200 dark:border-gray-800">
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">وضعیت جریمه</label>
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-800 dark:text-gray-200"
+                                    value={petroData.penaltyStatus ?? 'ندارد'}
+                                    onChange={e => updatePetro({ penaltyStatus: e.target.value })}
+                                    placeholder="ندارد"
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">جریمه تاخیر (ریال)</label>
+                                <input
+                                    type="text"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-800 dark:text-gray-200 text-center"
+                                    value={formatNumberString(petroData.delayPenaltyAmount || 0)}
+                                    onChange={e => updatePetro({ delayPenaltyAmount: deformatNumberString(e.target.value) })}
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">جریمه ابطال (ریال)</label>
+                                <input
+                                    type="text"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-800 dark:text-gray-200 text-center"
+                                    value={formatNumberString(petroData.cancellationPenaltyAmount || 0)}
+                                    onChange={e => updatePetro({ cancellationPenaltyAmount: deformatNumberString(e.target.value) })}
+                                />
+                            </div>
+                            <div className="space-y-1.5">
                                 <label className="font-bold text-gray-900 dark:text-gray-100">جمع کل پیش‌فاکتور و فاکتور (ریال)</label>
                                 <div className="w-full p-3 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl font-mono text-base font-black text-indigo-900 dark:text-indigo-200 text-center">
                                     {(petroData.totalInvoiceAmount || 0).toLocaleString('fa-IR')}
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Official Petrochemical Invoice Details (اطلاعات صورتحساب) */}
+                    <div className="p-4 bg-purple-50/40 dark:bg-purple-950/20 rounded-2xl border border-purple-200 dark:border-purple-800/50 space-y-3">
+                        <h4 className="font-bold text-xs text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                            <FileText size={15} />
+                            <span>اطلاعات صورتحساب رسمی پتروشیمی</span>
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">شماره صورتحساب</label>
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-2.5 bg-white dark:bg-gray-900 font-mono text-sm text-left dir-ltr font-bold"
+                                    value={petroData.invoiceInfo?.invoiceNumber || ''}
+                                    onChange={e => updatePetro({
+                                        invoiceInfo: { ...(petroData.invoiceInfo || {}), invoiceNumber: e.target.value }
+                                    })}
+                                    placeholder="مثال: PTC0508/05483"
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">تاریخ صورتحساب</label>
+                                <TradeDatePicker
+                                    value={petroData.invoiceInfo?.invoiceDate || ''}
+                                    onChange={d => updatePetro({
+                                        invoiceInfo: { ...(petroData.invoiceInfo || {}), invoiceDate: d }
+                                    })}
+                                    placeholder="1405/08/16"
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">مقدار صورتحساب (کیلوگرم)</label>
+                                <input
+                                    type="number"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-2.5 bg-white dark:bg-gray-900 font-mono text-sm font-bold text-center"
+                                    value={petroData.invoiceInfo?.invoiceQuantityKg ?? ''}
+                                    onChange={e => updatePetro({
+                                        invoiceInfo: { ...(petroData.invoiceInfo || {}), invoiceQuantityKg: parseFloat(e.target.value) || 0 }
+                                    })}
+                                    placeholder="مثال: 22070"
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">جمع صورتحساب (ریال)</label>
+                                <input
+                                    type="text"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-2.5 bg-white dark:bg-gray-900 font-mono text-sm font-bold text-purple-800 dark:text-purple-300 text-center"
+                                    value={formatNumberString(petroData.invoiceInfo?.finalInvoiceAmount || 0)}
+                                    onChange={e => updatePetro({
+                                        invoiceInfo: { ...(petroData.invoiceInfo || {}), finalInvoiceAmount: deformatNumberString(e.target.value) }
+                                    })}
+                                    placeholder="مثال: 92,252,600,000"
+                                />
                             </div>
                         </div>
                     </div>
@@ -1119,36 +1401,178 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                 <div className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-3xl border border-gray-200 dark:border-gray-700 space-y-6 shadow-sm">
                     <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-700 pb-4">
                         <div>
-                            <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">حواله پتروشیمی، سامانه بهین‌یاب و ناوگان بارگیری</h3>
-                            <p className="text-xs text-gray-500 mt-0.5">ثبت حواله بارگیری، سهمیه بهین‌یاب، اطلاعات بارنامه، راننده، پلاک کامیون و کرایه حمل</p>
+                            <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">اطلاعات حواله پتروشیمی، مانده حواله، بارگیری و ناوگان</h3>
+                            <p className="text-xs text-gray-500 mt-0.5">ثبت شماره و تاریخ حواله، مانده حواله، موسسه حمل، برگه تحویل، ساعت ورود/خروج و مشخصات کامیون</p>
                         </div>
                         <span className="px-3 py-1 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 text-xs font-bold rounded-xl border border-amber-200">
-                            ناوگان و لجستیک
+                            حواله و بارگیری
                         </span>
                     </div>
 
+                    {/* Section A: Remittance Info (اطلاعات حواله و مانده حواله) */}
+                    <div className="p-4 bg-amber-50/50 dark:bg-amber-950/20 rounded-2xl border border-amber-200 dark:border-amber-800/60 space-y-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h4 className="font-bold text-xs text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                                <FileText size={15} />
+                                <span>اطلاعات حواله فروش پتروشیمی</span>
+                            </h4>
+                            {(() => {
+                                const remQty = petroData.loadingNotice?.remittanceQuantityKg ?? petroData.quantityKg ?? 0;
+                                const loadedQty = petroData.loadingNotice?.originNetWeightKg || petroData.invoiceInfo?.invoiceQuantityKg || petroData.warehouseReceipt?.receivedWeightKg || 0;
+                                const remaining = petroData.loadingNotice?.remittanceRemainingKg !== undefined
+                                    ? petroData.loadingNotice.remittanceRemainingKg
+                                    : (loadedQty > 0 ? remQty - loadedQty : remQty);
+                                return (
+                                    <span className={`px-3 py-1 rounded-xl text-xs font-mono font-black border ${
+                                        remaining < 0
+                                            ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300'
+                                            : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300'
+                                    }`}>
+                                        مانده حواله: {remaining.toLocaleString('fa-IR')} kg
+                                    </span>
+                                );
+                            })()}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">شماره حواله فروش پتروشیمی *</label>
+                                <input
+                                    className="w-full border-2 border-amber-300 dark:border-amber-700 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-black text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                    value={petroData.loadingNotice?.remittanceNumber || ''}
+                                    onChange={e => updatePetro({
+                                        loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceNumber: e.target.value }
+                                    })}
+                                    placeholder="مثال: BT03802/05"
+                                />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">تاریخ حواله</label>
+                                <TradeDatePicker
+                                    value={petroData.loadingNotice?.remittanceDate || ''}
+                                    onChange={d => updatePetro({
+                                        loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceDate: d }
+                                    })}
+                                    placeholder="1405/07/26"
+                                />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">تاریخ و ساعت ثبت حواله</label>
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                    value={petroData.loadingNotice?.remittanceRegisteredAt || ''}
+                                    onChange={e => updatePetro({
+                                        loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceRegisteredAt: e.target.value }
+                                    })}
+                                    placeholder="1405/07/26 15:29"
+                                />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">مقدار حواله (kg)</label>
+                                <input
+                                    type="number"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-900 dark:text-gray-100 text-center"
+                                    value={petroData.loadingNotice?.remittanceQuantityKg ?? petroData.quantityKg ?? ''}
+                                    onChange={e => updatePetro({
+                                        loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceQuantityKg: parseFloat(e.target.value) || 0 }
+                                    })}
+                                    placeholder="مثال: 22000"
+                                />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">باقیمانده / مانده حواله (kg)</label>
+                                <input
+                                    type="number"
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-900 dark:text-gray-100 text-center"
+                                    value={petroData.loadingNotice?.remittanceRemainingKg ?? ''}
+                                    onChange={e => updatePetro({
+                                        loadingNotice: {
+                                            ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }),
+                                            remittanceRemainingKg: e.target.value === '' ? undefined : parseFloat(e.target.value)
+                                        }
+                                    })}
+                                    placeholder="مثال: -70 (محاسبه خودکار اگر خالی باشد)"
+                                />
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">کد سهمیه سامانه بهین‌یاب</label>
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100"
+                                    value={petroData.loadingNotice?.behenyabCode || ''}
+                                    onChange={e => updatePetro({
+                                        loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), behenyabCode: e.target.value }
+                                    })}
+                                    placeholder="کد بهین‌یاب..."
+                                />
+                            </div>
+
+                            <div className="md:col-span-3 space-y-1.5">
+                                <label className="font-bold text-gray-700 dark:text-gray-300">توضیحات پیش‌فاکتور / حواله</label>
+                                <input
+                                    className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100"
+                                    value={petroData.loadingNotice?.remittanceNotes || ''}
+                                    onChange={e => updatePetro({
+                                        loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceNotes: e.target.value }
+                                    })}
+                                    placeholder="توضیحات درج شده در برگه حواله یا پیش‌فاکتور..."
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Section B: Loading Details & Fleet (اطلاعات بارگیری و ناوگان) */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره حواله فروش پتروشیمی *</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">موسسه حمل / باربری</label>
                             <input
-                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100"
-                                value={petroData.loadingNotice?.remittanceNumber || ''}
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
+                                value={petroData.loadingNotice?.transportCompany || ''}
                                 onChange={e => updatePetro({
-                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), remittanceNumber: e.target.value }
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), transportCompany: e.target.value }
                                 })}
-                                placeholder="شماره حواله..."
+                                placeholder="مثال: بهرام بار بندر"
                             />
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">کد سهمیه سامانه بهین‌یاب</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره سریال برگه تحویل</label>
                             <input
-                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100"
-                                value={petroData.loadingNotice?.behenyabCode || ''}
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                value={petroData.loadingNotice?.deliveryNoteSerial || ''}
                                 onChange={e => updatePetro({
-                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), behenyabCode: e.target.value }
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), deliveryNoteSerial: e.target.value }
                                 })}
-                                placeholder="کد بهین‌یاب..."
+                                placeholder="مثال: 142592"
+                            />
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">وزن خالص بارگیری پتروشیمی (kg)</label>
+                            <input
+                                type="number"
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono font-bold text-emerald-700 dark:text-emerald-400 text-center"
+                                value={petroData.loadingNotice?.originNetWeightKg ?? ''}
+                                onChange={e => updatePetro({
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), originNetWeightKg: parseFloat(e.target.value) || 0 }
+                                })}
+                                placeholder="مثال: 22070"
+                            />
+                        </div>
+
+                        <div className="md:col-span-3 space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">آدرس محل تخلیه</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-bold text-gray-900 dark:text-gray-100"
+                                value={petroData.loadingNotice?.unloadingAddress || ''}
+                                onChange={e => updatePetro({
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), unloadingAddress: e.target.value }
+                                })}
+                                placeholder="مثال: شهرک صنعتی علی آباد خیابان تیر روزبه 8 و 9 شرکت لپان"
                             />
                         </div>
 
@@ -1200,14 +1624,38 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                         </div>
 
                         <div className="space-y-1.5">
-                            <label className="font-bold text-gray-700 dark:text-gray-300">پلاک کامیون / تریلی</label>
+                            <label className="font-bold text-gray-700 dark:text-gray-300">شماره کامیون (پلاک)</label>
                             <input
                                 className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100 text-center font-bold"
                                 value={petroData.loadingNotice?.truckPlate || ''}
                                 onChange={e => updatePetro({
                                     loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), truckPlate: e.target.value }
                                 })}
-                                placeholder="مثال: 12 ع 345 ایران 68"
+                                placeholder="مثال: 66ع279ایران69"
+                            />
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">ساعت و تاریخ ورود</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                value={petroData.loadingNotice?.entryDateTime || ''}
+                                onChange={e => updatePetro({
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), entryDateTime: e.target.value }
+                                })}
+                                placeholder="1405/08/11 08:30"
+                            />
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="font-bold text-gray-700 dark:text-gray-300">ساعت و تاریخ خروج</label>
+                            <input
+                                className="w-full border border-gray-300 dark:border-gray-600 rounded-xl p-3 bg-white dark:bg-gray-900 text-sm font-mono text-gray-900 dark:text-gray-100 text-left dir-ltr"
+                                value={petroData.loadingNotice?.exitDateTime || ''}
+                                onChange={e => updatePetro({
+                                    loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), exitDateTime: e.target.value }
+                                })}
+                                placeholder="1405/08/11 00:00"
                             />
                         </div>
 
@@ -1231,7 +1679,7 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                                 onChange={d => updatePetro({
                                     loadingNotice: { ...(petroData.loadingNotice || { deliveryStatus: 'pending_loading' }), loadingDate: d }
                                 })}
-                                placeholder="تاریخ بارگیری..."
+                                placeholder="1405/08/11"
                             />
                         </div>
 

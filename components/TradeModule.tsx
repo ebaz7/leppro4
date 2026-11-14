@@ -92,7 +92,9 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
 
     // Domestic Petrochemical / Bourse specific modal fields
     const [newDomesticContractNumber, setNewDomesticContractNumber] = useState('');
+    const [newDomesticContractSubNumber, setNewDomesticContractSubNumber] = useState('');
     const [newDomesticRemittanceNumber, setNewDomesticRemittanceNumber] = useState('');
+    const [newDomesticRemittanceDate, setNewDomesticRemittanceDate] = useState('');
     const [newDomesticProformaNumber, setNewDomesticProformaNumber] = useState('');
     const [newDomesticBroker, setNewDomesticBroker] = useState('کارگزاری بورس کالا');
     const [newDomesticQuantityKgStr, setNewDomesticQuantityKgStr] = useState('50,000');
@@ -217,6 +219,21 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
 
     const calculateRecordCostPerKg = (record: TradeRecord) => {
         if (!record) return 0;
+        if (record.purchaseType === 'domestic_bourse' || record.petrochemicalData) {
+            const p = record.petrochemicalData;
+            if (p) {
+                const freight = p.loadingNotice?.freightCostRial || 0;
+                const bankComm = p.paymentMethod === 'internal_lc'
+                    ? (p.internalLc?.commissionFee || 0) + (p.internalLc?.extensionFee || 0) + (p.internalLc?.taxStampFee || 0)
+                    : p.paymentMethod === 'draft_barat'
+                        ? (p.draftBarat?.interestAmount || 0) + (p.draftBarat?.sepamFee || 0)
+                        : 0;
+                const otherCosts = (p.otherCosts || []).reduce((acc, c) => acc + (c.amount || 0), 0);
+                const grandTotal = (p.totalInvoiceAmount || 0) + freight + bankComm + otherCosts;
+                const weight = p.warehouseReceipt?.receivedWeightKg || p.quantityKg || (record.items?.reduce((s, item) => s + item.weight, 0) || 0);
+                return weight > 0 ? Math.round(grandTotal / weight) : 0;
+            }
+        }
         const totalItemsCurrency = record.items?.reduce((a, b) => a + b.totalPrice, 0) || 0;
         const totalFreightCurrency = record.freightCost || 0;
         const totalProformaCurrency = totalItemsCurrency + totalFreightCurrency;
@@ -737,6 +754,10 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
             const brokerageFee = Math.round(totalGoodsPrice * 0.003);
             const totalInvoiceAmount = totalGoodsPrice + vatAmount + brokerageFee;
 
+            const contractSubNo = (newDomesticContractSubNumber || '').trim();
+            const remitDate = (newDomesticRemittanceDate || '').trim();
+            const dealDate = newDomesticDealDate || new Date().toISOString().split('T')[0];
+
             const newRecord: TradeRecord = {
                 id: generateUUID(),
                 company: company,
@@ -758,7 +779,7 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                     totalPrice: totalGoodsPrice
                 }],
                 freightCost: 0,
-                startDate: newDomesticDealDate || new Date().toISOString().split('T')[0],
+                startDate: dealDate,
                 status: 'Active',
                 isInTransit: false,
                 isInCustoms: false,
@@ -770,18 +791,27 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                 petrochemicalData: {
                     petrochemicalName: seller,
                     brokerName: newDomesticBroker || 'کارگزاری بورس کالا',
+                    customerName: company,
+                    exchangeMarket: 'بورس کالای ایران',
+                    deliveryLocation: 'انبار کارخانه',
                     contractNumber: contractNo,
+                    contractSubNumber: contractSubNo || undefined,
                     offeringCode: '',
+                    offeringDate: dealDate,
+                    contractDate: dealDate,
                     proformaNumber: petroProfNo || contractNo,
-                    proformaDate: newDomesticDealDate || new Date().toISOString().split('T')[0],
+                    proformaDate: dealDate,
                     paymentMethod: newDomesticPaymentMethod || 'internal_lc',
                     gradeName: goods,
                     quantityKg: quantityKg,
                     basePricePerKg: unitPrice,
                     competitionPercent: 0,
+                    baseCurrency: 'ریال',
+                    vatStatus: 'subject',
                     totalGoodsPrice: totalGoodsPrice,
                     vatAmount: vatAmount,
                     brokerageFee: brokerageFee,
+                    sellerShareRial: Math.max(0, totalGoodsPrice - brokerageFee),
                     otherFees: 0,
                     totalInvoiceAmount: totalInvoiceAmount,
                     bourseSettlementDeadline: '',
@@ -822,7 +852,9 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                     },
                     loadingNotice: {
                         remittanceNumber: remitNo,
-                        remittanceDate: '',
+                        remittanceDate: remitDate,
+                        remittanceQuantityKg: quantityKg,
+                        remittanceRemainingKg: quantityKg,
                         behenyabCode: '',
                         loadingTerminal: '',
                         transportCompany: '',
@@ -865,7 +897,9 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
             setShowNewModal(false); 
             // Reset Domestic fields
             setNewDomesticContractNumber('');
+            setNewDomesticContractSubNumber('');
             setNewDomesticRemittanceNumber('');
+            setNewDomesticRemittanceDate('');
             setNewDomesticProformaNumber('');
             setNewDomesticBroker('کارگزاری بورس کالا');
             setNewDomesticQuantityKgStr('50,000');
@@ -3681,6 +3715,21 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                                     {selectedRecord.proformaNumber && (
                                         <span className="text-[10px] sm:text-xs font-mono text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-800 px-2 py-0.5 rounded-full" title="شماره پروفرم">پروفرم: {selectedRecord.proformaNumber}</span>
                                     )}
+                                    {selectedRecord.petrochemicalData?.loadingNotice?.remittanceNumber && (
+                                        <span className="text-[10px] sm:text-xs font-mono font-black text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-900/50 border border-amber-300 dark:border-amber-700 px-2.5 py-0.5 rounded-full" title={`تاریخ حواله: ${selectedRecord.petrochemicalData.loadingNotice.remittanceDate || 'ثبت نشده'}`}>
+                                            حواله: {selectedRecord.petrochemicalData.loadingNotice.remittanceNumber}
+                                        </span>
+                                    )}
+                                    {selectedRecord.petrochemicalData?.contractNumber && (
+                                        <span className="text-[10px] sm:text-xs font-mono text-emerald-800 dark:text-emerald-200 bg-emerald-50 dark:bg-emerald-900/40 border border-emerald-200 dark:border-emerald-800 px-2 py-0.5 rounded-full" title="شماره قرارداد بورس / جزء">
+                                            قرارداد: {selectedRecord.petrochemicalData.contractNumber}{selectedRecord.petrochemicalData.contractSubNumber ? `/${selectedRecord.petrochemicalData.contractSubNumber}` : ''}
+                                        </span>
+                                    )}
+                                    {selectedRecord.petrochemicalData?.invoiceInfo?.invoiceNumber && (
+                                        <span className="text-[10px] sm:text-xs font-mono text-indigo-800 dark:text-indigo-200 bg-indigo-50 dark:bg-indigo-900/40 border border-indigo-200 dark:border-indigo-800 px-2 py-0.5 rounded-full" title="شماره صورتحساب رسمی">
+                                            صورتحساب: {selectedRecord.petrochemicalData.invoiceInfo.invoiceNumber}
+                                        </span>
+                                    )}
                                     <button type="button" onClick={openEditMetadata} className="text-gray-400 hover:text-blue-600 transition-colors p-0.5" title="ویرایش مشخصات پرونده"><Edit size={14}/></button>
                                     <button type="button" onClick={(e) => handleDuplicateRecord(selectedRecord, e)} className="text-gray-400 hover:text-indigo-600 transition-colors p-0.5" title="کپی آنی پرونده"><Copy size={14}/></button>
                                 </h1>
@@ -3779,6 +3828,7 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                             record={selectedRecord}
                             onUpdateRecord={persistRecordUpdate}
                             currentUser={currentUser}
+                            settings={settings}
                         />
                     )}
 
@@ -6184,6 +6234,38 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                                 </div>
                                 <div className="space-y-1.5 text-xs text-gray-500">
                                     <div className="flex items-center gap-1"><span className="text-[11px] text-gray-400">شماره پرونده:</span> <span className="font-mono text-gray-700 dark:text-gray-200 font-bold">{record.fileNumber || '---'}</span></div>
+                                    {(record.purchaseType === 'domestic_bourse' || record.petrochemicalData) && (
+                                        <>
+                                            <div className="flex items-center justify-between gap-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70 px-2 py-1 rounded-lg">
+                                                <span className="text-[11px] font-bold text-amber-800 dark:text-amber-300">شماره حواله:</span>
+                                                <div className="flex items-center gap-1.5 font-mono">
+                                                    <span className="font-black text-amber-950 dark:text-amber-100">{record.petrochemicalData?.loadingNotice?.remittanceNumber || 'ثبت نشده'}</span>
+                                                    {record.petrochemicalData?.loadingNotice?.remittanceDate && (
+                                                        <span className="text-[10px] text-amber-700 dark:text-amber-400">({record.petrochemicalData.loadingNotice.remittanceDate})</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {record.petrochemicalData?.contractNumber && (
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-[11px] text-gray-400">قرارداد بورس:</span>
+                                                    <span className="font-mono text-emerald-700 dark:text-emerald-300 font-bold">
+                                                        {record.petrochemicalData.contractNumber}{record.petrochemicalData.contractSubNumber ? `/${record.petrochemicalData.contractSubNumber}` : ''}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {record.petrochemicalData?.invoiceInfo?.invoiceNumber && (
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-[11px] text-gray-400">صورتحساب:</span>
+                                                    <span className="font-mono text-indigo-700 dark:text-indigo-300 font-semibold">{record.petrochemicalData.invoiceInfo.invoiceNumber}</span>
+                                                </div>
+                                            )}
+                                            {record.petrochemicalData?.currentStage && (
+                                                <div className="text-[10px] text-emerald-800 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-900/50 px-2 py-0.5 rounded-md line-clamp-1 font-medium">
+                                                    مرحله: {record.petrochemicalData.currentStage}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
                                     {record.proformaNumber && <div className="flex items-center gap-1"><FolderOpen size={12} /> پروفرم: <span className="font-mono text-gray-700 dark:text-gray-200 font-bold">{record.proformaNumber}</span></div>}
                                     {record.orderNumber && <div className="flex items-center gap-1"><span className="text-[11px] text-gray-400">سفارش:</span> <span className="font-mono text-gray-700 dark:text-gray-300 font-semibold">{record.orderNumber}</span></div>}
                                     {record.registrationNumber && <div className="flex items-center gap-1"><span className="text-[11px] text-gray-400">ثبت سفارش:</span> <span className="font-mono text-blue-700 dark:text-blue-300 font-semibold">{record.registrationNumber}</span></div>}
@@ -6280,29 +6362,51 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                                     <span className="bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 px-2.5 py-0.5 rounded-lg text-[10px] font-black">ریالی (IRR)</span>
                                 </div>
 
-                                {/* Row 1: Contract Number & Remittance Number */}
+                                {/* Row 1: Contract Number, Sub-Number & Remittance Number / Date */}
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                                    <div className="space-y-1.5">
-                                        <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">
-                                            <span>شماره قرارداد / شناسه معامله بورس *</span>
-                                        </label>
-                                        <input 
-                                            className="w-full border border-emerald-300 dark:border-emerald-700 rounded-xl p-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-left dir-ltr text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none" 
-                                            value={newDomesticContractNumber} 
-                                            onChange={e => setNewDomesticContractNumber(e.target.value)} 
-                                            placeholder="مثال: 1403/B-9842 یا 872145..." 
-                                        />
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <div className="col-span-2 space-y-1.5">
+                                            <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">
+                                                <span>شماره قرارداد بورس *</span>
+                                            </label>
+                                            <input 
+                                                className="w-full border border-emerald-300 dark:border-emerald-700 rounded-xl p-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-left dir-ltr text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none" 
+                                                value={newDomesticContractNumber} 
+                                                onChange={e => setNewDomesticContractNumber(e.target.value)} 
+                                                placeholder="1405338318" 
+                                            />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">شماره جزء</label>
+                                            <input 
+                                                className="w-full border border-gray-300 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-center dir-ltr text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none" 
+                                                value={newDomesticContractSubNumber} 
+                                                onChange={e => setNewDomesticContractSubNumber(e.target.value)} 
+                                                placeholder="39" 
+                                            />
+                                        </div>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">
-                                            <span>شماره حواله / تخصیص بارگیری پتروشیمی</span>
-                                        </label>
-                                        <input 
-                                            className="w-full border border-gray-300 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-left dir-ltr text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none" 
-                                            value={newDomesticRemittanceNumber} 
-                                            onChange={e => setNewDomesticRemittanceNumber(e.target.value)} 
-                                            placeholder="مثال: REM-88421 یا 984512..." 
-                                        />
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="space-y-1.5">
+                                            <label className="block text-xs font-black text-amber-800 dark:text-amber-300">
+                                                <span>شماره حواله فروش *</span>
+                                            </label>
+                                            <input 
+                                                className="w-full border-2 border-amber-400 dark:border-amber-700 rounded-xl p-2.5 bg-amber-50/40 dark:bg-amber-950/30 text-gray-900 dark:text-gray-100 font-mono font-bold text-left dir-ltr text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all outline-none" 
+                                                value={newDomesticRemittanceNumber} 
+                                                onChange={e => setNewDomesticRemittanceNumber(e.target.value)} 
+                                                placeholder="BT03802/05" 
+                                            />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">تاریخ حواله</label>
+                                            <input 
+                                                className="w-full border border-gray-300 dark:border-gray-700 rounded-xl p-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-mono text-center dir-ltr text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all outline-none" 
+                                                value={newDomesticRemittanceDate} 
+                                                onChange={e => setNewDomesticRemittanceDate(e.target.value)} 
+                                                placeholder="1405/07/26" 
+                                            />
+                                        </div>
                                     </div>
                                 </div>
 

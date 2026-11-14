@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { X, Printer, Loader2, FileDown, ZoomIn, ZoomOut, RotateCcw, Building2, Truck, Landmark, Scale, FileText, CheckCircle2 } from 'lucide-react';
-import { TradeRecord, SystemSettings } from '../../types';
+import { TradeRecord, SystemSettings, PetrochemicalPurchaseData } from '../../types';
 import { formatCurrency, formatNumberString } from '../../constants';
 import { generatePdf } from '../../utils/pdfGenerator';
 import { shareElementToChat } from '../../services/chatShareService';
@@ -17,7 +17,7 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
   const [userZoom, setUserZoom] = useState<number | null>(null);
   const containerWrapperRef = useRef<HTMLDivElement>(null);
 
-  const petro = record.petrochemicalData || {
+  const petro: PetrochemicalPurchaseData = record.petrochemicalData || {
     petrochemicalName: record.sellerName || 'پتروشیمی',
     paymentMethod: 'cash',
     quantityKg: 0,
@@ -37,7 +37,15 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
     address: ''
   };
 
-  const totalFreight = petro.loadingNotice?.freightCostRial || 0;
+  const invoiceInfo: NonNullable<PetrochemicalPurchaseData['invoiceInfo']> = petro.invoiceInfo || {};
+  const loading: Partial<NonNullable<PetrochemicalPurchaseData['loadingNotice']>> = petro.loadingNotice || {};
+  const remittanceQty = loading.remittanceQuantityKg ?? petro.quantityKg ?? 0;
+  const loadedQty = loading.originNetWeightKg ?? petro.warehouseReceipt?.receivedWeightKg ?? 0;
+  const remittanceRemaining = loading.remittanceRemainingKg !== undefined
+    ? loading.remittanceRemainingKg
+    : (remittanceQty - loadedQty);
+
+  const totalFreight = loading.freightCostRial || 0;
   const bankComm = petro.paymentMethod === 'internal_lc' 
     ? (petro.internalLc?.commissionFee || 0) + (petro.internalLc?.extensionFee || 0) + (petro.internalLc?.taxStampFee || 0)
     : petro.paymentMethod === 'draft_barat'
@@ -70,7 +78,7 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
           height: 297mm !important;
           max-height: 297mm !important;
           margin: 0 auto !important;
-          padding: 8mm 10mm !important;
+          padding: 7mm 9mm !important;
           box-sizing: border-box !important;
           overflow: hidden !important;
           page-break-after: avoid !important;
@@ -133,6 +141,11 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
           <span className="font-bold text-sm sm:text-base">
             صورتحساب و بهای تمام‌شده خرید پتروشیمی ({record.goodsName})
           </span>
+          {loading.remittanceNumber && (
+            <span className="hidden md:inline-block px-2 py-0.5 text-xs bg-amber-500/20 text-amber-300 rounded border border-amber-400/40 font-mono">
+              حواله: {loading.remittanceNumber}
+            </span>
+          )}
           <span className="hidden sm:inline-block px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-300 rounded border border-emerald-400/30">
             {petro.paymentMethod === 'internal_lc' ? 'اعتبار اسنادی LC' : petro.paymentMethod === 'draft_barat' ? 'برات الکترونیک سپام' : 'نقدی بورس کالا'}
           </span>
@@ -214,100 +227,119 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
           {/* A4 Printable Sheet */}
           <div
             id="domestic-petro-print-area"
-            className="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-6 text-xs font-sans border border-gray-300 relative flex flex-col justify-between"
+            className="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-5 text-[10px] font-sans border border-gray-300 relative flex flex-col justify-between"
             style={{ boxSizing: 'border-box' }}
           >
             <div>
               {/* Header Box */}
-              <div className="border-2 border-slate-800 rounded-xl p-3 mb-3">
-                <div className="flex justify-between items-center border-b border-slate-300 pb-2 mb-2">
+              <div className="border-2 border-slate-800 rounded-xl p-2.5 mb-2">
+                <div className="flex justify-between items-center border-b border-slate-300 pb-1.5 mb-1.5">
                   <div className="w-1/4">
-                    <span className="font-bold text-slate-600 block text-[10px]">خریدار:</span>
-                    <span className="font-black text-slate-900 text-sm">{companyInfo.name}</span>
+                    <span className="font-bold text-slate-600 block text-[9px]">مشتری / خریدار:</span>
+                    <span className="font-black text-slate-900 text-xs">{petro.customerName || companyInfo.name}</span>
                   </div>
                   <div className="w-2/4 text-center">
-                    <h1 className="text-base font-black text-slate-900">صورت وضعیت و بهای تمام‌شده خرید داخلی پتروشیمی</h1>
-                    <span className="text-[10px] text-slate-600 font-bold">بورس کالای ایران / سامانه بهین‌یاب</span>
+                    <h1 className="text-sm font-black text-slate-900">صورت وضعیت خرید مواد اولیه پتروشیمی و بهای تمام‌شده</h1>
+                    <span className="text-[9px] text-slate-600 font-bold">{petro.exchangeMarket || 'بورس کالای ایران'} / سامانه آرکا و بهین‌یاب</span>
                   </div>
-                  <div className="w-1/4 text-left font-mono text-[10px] space-y-0.5">
-                    <div>شماره پرونده: <strong className="text-xs">{record.fileNumber || '---'}</strong></div>
+                  <div className="w-1/4 text-left font-mono text-[9.5px] space-y-0.5">
+                    <div>شماره پرونده: <strong className="text-[11px]">{record.fileNumber || '---'}</strong></div>
+                    <div className="text-amber-900">شماره حواله: <strong className="text-[11px] bg-amber-100 px-1 rounded">{loading.remittanceNumber || '---'}</strong></div>
                     <div>تاریخ چاپ: <strong>{new Date().toLocaleDateString('fa-IR')}</strong></div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-2 text-[10px] pt-1 text-slate-700">
-                  <div>پتروشیمی: <strong className="text-slate-900">{petro.petrochemicalName}</strong></div>
-                  <div>کارگزاری: <strong className="text-slate-900">{petro.brokerName || '---'}</strong></div>
-                  <div>قرارداد بورس: <strong className="font-mono text-slate-900">{petro.contractNumber || '---'}</strong></div>
-                  <div>پیش‌فاکتور: <strong className="font-mono text-slate-900">{petro.proformaNumber || '---'}</strong></div>
+                {/* ARCA Contract Base Info */}
+                <div className="grid grid-cols-4 gap-x-2 gap-y-1 text-[9px] text-slate-700">
+                  <div>فروشنده (پتروشیمی): <strong className="text-slate-900">{petro.petrochemicalName}</strong></div>
+                  <div>قرارداد / جزء: <strong className="font-mono text-slate-900">{petro.contractNumber || '---'}{petro.contractSubNumber ? `/${petro.contractSubNumber}` : ''}</strong></div>
+                  <div>تاریخ قرارداد / عرضه: <strong className="font-mono text-slate-900">{petro.contractDate || '---'} {petro.offeringDate ? `(${petro.offeringDate})` : ''}</strong></div>
+                  <div>تاریخ / مهلت تحویل: <strong className="font-mono text-slate-900">{petro.deliveryDate || petro.calculatedDeliveryDeadline || '---'}</strong></div>
+                  <div>کارگزار خریدار: <strong className="text-slate-900">{petro.brokerName || '---'}</strong></div>
+                  <div>کارگزار فروشنده: <strong className="text-slate-900">{petro.sellerBrokerName || '---'}</strong></div>
+                  <div>محل تحویل: <strong className="text-slate-900">{petro.deliveryLocation || 'انبار کارخانه'}</strong></div>
+                  <div>تاریخ تسویه: <strong className="font-mono text-slate-900">{petro.settlementDate || petro.bourseSettlementDeadline || '---'}</strong></div>
+                  <div>عنوان نماد: <strong className="font-mono text-slate-900">{petro.symbolTitle || '---'}</strong></div>
+                  <div>بسته‌بندی / کیفیت: <strong className="text-slate-900">{petro.packagingTitle || '---'} / {petro.qualityCode || 'منطبق'}</strong></div>
+                  <div>پیش‌فاکتور / شناسه پرداخت: <strong className="font-mono text-slate-900">{petro.proformaNumber || '---'}{petro.paymentIdentifier ? ` / ${petro.paymentIdentifier}` : ''}</strong></div>
+                  <div>مرحله جاری: <strong className="text-emerald-900">{petro.currentStage || '---'}</strong></div>
                 </div>
               </div>
 
               {/* Specs & Goods Detail */}
-              <div className="border border-slate-300 rounded-lg p-2.5 mb-3 bg-slate-50/50">
-                <h3 className="font-bold text-xs text-slate-800 mb-2 border-b border-slate-200 pb-1 flex items-center gap-1.5">
-                  <FileText size={14} className="text-slate-700" />
-                  <span>مشخصات کالا و شرایط معامله بورس</span>
+              <div className="border border-slate-300 rounded-lg p-2 mb-2 bg-slate-50/50">
+                <h3 className="font-bold text-[10.5px] text-slate-800 mb-1.5 border-b border-slate-200 pb-0.5 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <FileText size={12} className="text-slate-700" />
+                    <span>مشخصات کالا، قرارداد بورس و صورتحساب رسمی</span>
+                  </span>
+                  <span className="text-[9px] font-normal text-slate-600">
+                    ارز مبنا: <strong>{petro.baseCurrency || 'ریال'}</strong> | وضعیت مالیات: <strong>{petro.vatStatus === 'exempt' ? 'معاف' : 'مشمول'}</strong> | وضعیت جریمه: <strong>{petro.penaltyStatus || 'ندارد'}</strong>
+                  </span>
                 </h3>
-                <table className="w-full text-center border-collapse text-[10px]">
+                <table className="w-full text-center border-collapse text-[9.5px]">
                   <thead>
                     <tr className="bg-slate-200 text-slate-800 font-bold border border-slate-300">
-                      <th className="p-1.5 border border-slate-300">گرید کالایی</th>
-                      <th className="p-1.5 border border-slate-300">وزن معامله (kg)</th>
-                      <th className="p-1.5 border border-slate-300">نرخ پایه (ریال)</th>
-                      <th className="p-1.5 border border-slate-300">مبلغ خالص (ریال)</th>
-                      <th className="p-1.5 border border-slate-300">ارزش افزوده ۱۰٪</th>
-                      <th className="p-1.5 border border-slate-300">کارمزد بورس</th>
-                      <th className="p-1.5 border border-slate-300">جمع فاکتور (ریال)</th>
+                      <th className="p-1 border border-slate-300">نام تجاری محصول</th>
+                      <th className="p-1 border border-slate-300">وزن (kg)</th>
+                      <th className="p-1 border border-slate-300">نرخ واحد (ریال)</th>
+                      <th className="p-1 border border-slate-300">ارزش قرارداد (ریال)</th>
+                      <th className="p-1 border border-slate-300">ارزش افزوده</th>
+                      <th className="p-1 border border-slate-300">کارمزد بورس</th>
+                      <th className="p-1 border border-slate-300">سهم فروشنده</th>
+                      <th className="p-1 border border-slate-300">جمع نهایی (ریال)</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr className="border border-slate-300 font-mono">
-                      <td className="p-2 border border-slate-300 font-sans font-bold">{petro.gradeName || record.goodsName}</td>
-                      <td className="p-2 border border-slate-300 font-bold">{petro.quantityKg?.toLocaleString('fa-IR')}</td>
-                      <td className="p-2 border border-slate-300 font-bold">{petro.basePricePerKg?.toLocaleString('fa-IR')}</td>
-                      <td className="p-2 border border-slate-300">{petro.totalGoodsPrice?.toLocaleString('fa-IR')}</td>
-                      <td className="p-2 border border-slate-300">{petro.vatAmount?.toLocaleString('fa-IR')}</td>
-                      <td className="p-2 border border-slate-300">{petro.brokerageFee?.toLocaleString('fa-IR')}</td>
-                      <td className="p-2 border border-slate-300 font-bold text-slate-900 bg-slate-100">{petro.totalInvoiceAmount?.toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300 font-sans font-bold">{petro.gradeName || record.goodsName}</td>
+                      <td className="p-1.5 border border-slate-300 font-bold">{petro.quantityKg?.toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300 font-bold">{petro.basePricePerKg?.toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300">{petro.totalGoodsPrice?.toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300">{petro.vatAmount?.toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300">{petro.brokerageFee?.toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300">{(petro.sellerShareRial ?? 0).toLocaleString('fa-IR')}</td>
+                      <td className="p-1.5 border border-slate-300 font-bold text-slate-900 bg-slate-100">{petro.totalInvoiceAmount?.toLocaleString('fa-IR')}</td>
                     </tr>
                   </tbody>
                 </table>
+                {(invoiceInfo.invoiceNumber || invoiceInfo.finalInvoiceAmount || petro.delayPenaltyAmount || petro.cancellationPenaltyAmount) && (
+                  <div className="grid grid-cols-4 gap-2 text-[9px] mt-1.5 pt-1 border-t border-slate-200 text-slate-700">
+                    <div>شماره صورتحساب: <strong className="font-mono text-indigo-900">{invoiceInfo.invoiceNumber || '---'}</strong></div>
+                    <div>تاریخ صورتحساب: <strong className="font-mono">{invoiceInfo.invoiceDate || '---'}</strong></div>
+                    <div>مقدار صورتحساب: <strong className="font-mono">{invoiceInfo.invoiceQuantityKg ? `${invoiceInfo.invoiceQuantityKg.toLocaleString('fa-IR')} kg` : '---'}</strong></div>
+                    <div>جمع صورتحساب: <strong className="font-mono text-indigo-950">{invoiceInfo.finalInvoiceAmount ? `${invoiceInfo.finalInvoiceAmount.toLocaleString('fa-IR')} ریال` : '---'}</strong></div>
+                  </div>
+                )}
               </div>
 
               {/* Settlement & Banking Section */}
-              <div className="border border-slate-300 rounded-lg p-2.5 mb-3">
-                <h3 className="font-bold text-xs text-slate-800 mb-2 border-b border-slate-200 pb-1 flex items-center gap-1.5">
-                  <Landmark size={14} className="text-slate-700" />
+              <div className="border border-slate-300 rounded-lg p-2 mb-2">
+                <h3 className="font-bold text-[10.5px] text-slate-800 mb-1 border-b border-slate-200 pb-0.5 flex items-center gap-1.5">
+                  <Landmark size={12} className="text-slate-700" />
                   <span>روش تسویه و اسناد مالی / اعتباری</span>
                 </h3>
 
                 {petro.paymentMethod === 'internal_lc' ? (
-                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                  <div className="grid grid-cols-3 gap-1.5 text-[9.5px]">
                     <div>نوع تسویه: <strong className="text-indigo-800">اعتبار اسنادی داخلی (LC ریالی)</strong></div>
                     <div>شماره LC: <strong className="font-mono">{petro.internalLc?.lcNumber || '---'}</strong></div>
                     <div>بانک گشایش‌کننده: <strong>{petro.internalLc?.issuingBank} {petro.internalLc?.branch ? `(${petro.internalLc.branch})` : ''}</strong></div>
                     <div>مبلغ اعتبار: <strong className="font-mono">{petro.internalLc?.lcAmount?.toLocaleString('fa-IR')} ریال</strong></div>
-                    <div>تاریخ گشایش: <strong className="font-mono">{petro.internalLc?.issueDate || '---'}</strong></div>
-                    <div>تاریخ سررسید: <strong className="font-mono">{petro.internalLc?.dueDate || '---'}</strong></div>
-                    <div>کارمزد بانکی: <strong className="font-mono">{petro.internalLc?.commissionFee?.toLocaleString('fa-IR')} ریال</strong></div>
-                    <div>پیش‌پرداخت/سپرده: <strong className="font-mono">{petro.internalLc?.prepaymentAmount?.toLocaleString('fa-IR') || '۰'} ریال</strong></div>
-                    <div>وثایق: <strong>{petro.internalLc?.collateralDesc || 'چک و سفته شرکتی'}</strong></div>
+                    <div>تاریخ گشایش / سررسید: <strong className="font-mono">{petro.internalLc?.issueDate || '---'} / {petro.internalLc?.dueDate || '---'}</strong></div>
+                    <div>کارمزد بانکی / سپرده: <strong className="font-mono">{petro.internalLc?.commissionFee?.toLocaleString('fa-IR')} / {petro.internalLc?.prepaymentAmount?.toLocaleString('fa-IR') || '۰'}</strong></div>
                   </div>
                 ) : petro.paymentMethod === 'draft_barat' ? (
-                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                  <div className="grid grid-cols-3 gap-1.5 text-[9.5px]">
                     <div>نوع تسویه: <strong className="text-teal-800">برات الکترونیک (سامانه سپام)</strong></div>
                     <div>شناسه سپام: <strong className="font-mono">{petro.draftBarat?.sepamCode || '---'}</strong></div>
                     <div>بانک عامل: <strong>{petro.draftBarat?.bankName}</strong></div>
                     <div>مبلغ اصل برات: <strong className="font-mono">{petro.draftBarat?.amount?.toLocaleString('fa-IR')} ریال</strong></div>
-                    <div>تاریخ صدور: <strong className="font-mono">{petro.draftBarat?.issueDate || '---'}</strong></div>
-                    <div>تاریخ سررسید: <strong className="font-mono">{petro.draftBarat?.dueDate || '---'}</strong></div>
-                    <div>کارمزد اعتباری: <strong className="font-mono">{petro.draftBarat?.interestAmount?.toLocaleString('fa-IR') || '۰'} ریال</strong></div>
-                    <div>برات‌کش / متعهد: <strong>{petro.draftBarat?.drawerName || companyInfo.name}</strong></div>
-                    <div>ذینفع برات: <strong>{petro.draftBarat?.beneficiaryName || petro.petrochemicalName}</strong></div>
+                    <div>تاریخ صدور / سررسید: <strong className="font-mono">{petro.draftBarat?.issueDate || '---'} / {petro.draftBarat?.dueDate || '---'}</strong></div>
+                    <div>کارمزد / ذینفع: <strong className="font-mono">{petro.draftBarat?.interestAmount?.toLocaleString('fa-IR') || '۰'} ({petro.draftBarat?.beneficiaryName || petro.petrochemicalName})</strong></div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                  <div className="grid grid-cols-3 gap-1.5 text-[9.5px]">
                     <div>نوع تسویه: <strong className="text-slate-800">تسویه نقدی اتاق پایاپای بورس کالا</strong></div>
                     <div>وضعیت: <strong>{petro.cashSettlement?.isSettled ? 'تسویه کامل انجام شده' : 'در انتظار واریز'}</strong></div>
                     <div>مهلت تسویه بورس: <strong className="font-mono">{petro.bourseSettlementDeadline || '۳ روز کاری'}</strong></div>
@@ -316,32 +348,36 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
               </div>
 
               {/* Logistics & Weighbridge */}
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                {/* Logistics */}
-                <div className="border border-slate-300 rounded-lg p-2.5 bg-slate-50/50">
-                  <h3 className="font-bold text-xs text-slate-800 mb-1.5 border-b border-slate-200 pb-1 flex items-center gap-1.5">
-                    <Truck size={14} className="text-slate-700" />
-                    <span>حواله پتروشیمی و اطلاعات ناوگان حمل</span>
+              <div className="grid grid-cols-2 gap-2.5 mb-2">
+                {/* Remittance & Loading Logistics */}
+                <div className="border border-slate-300 rounded-lg p-2 bg-slate-50/50">
+                  <h3 className="font-bold text-[10.5px] text-slate-800 mb-1 border-b border-slate-200 pb-0.5 flex items-center gap-1.5">
+                    <Truck size={12} className="text-slate-700" />
+                    <span>اطلاعات حواله، بارگیری و ناوگان حمل</span>
                   </h3>
-                  <div className="space-y-1 text-[10px]">
-                    <div className="flex justify-between"><span>شماره حواله فروش:</span><strong className="font-mono">{petro.loadingNotice?.remittanceNumber || '---'}</strong></div>
-                    <div className="flex justify-between"><span>کد بهین‌یاب:</span><strong className="font-mono">{petro.loadingNotice?.behenyabCode || '---'}</strong></div>
-                    <div className="flex justify-between"><span>شماره بارنامه:</span><strong className="font-mono">{petro.loadingNotice?.waybillNumber || '---'}</strong></div>
-                    <div className="flex justify-between"><span>نام راننده:</span><strong>{petro.loadingNotice?.driverName || '---'} ({petro.loadingNotice?.driverPhone || '-'})</strong></div>
-                    <div className="flex justify-between"><span>پلاک کامیون:</span><strong className="font-mono">{petro.loadingNotice?.truckPlate || '---'}</strong></div>
-                    <div className="flex justify-between"><span>کرایه حمل کل:</span><strong className="font-mono">{totalFreight.toLocaleString('fa-IR')} ریال</strong></div>
+                  <div className="space-y-0.5 text-[9.2px]">
+                    <div className="flex justify-between"><span>شماره حواله / تاریخ حواله:</span><strong className="font-mono text-amber-900">{loading.remittanceNumber || '---'} ({loading.remittanceDate || '-'})</strong></div>
+                    <div className="flex justify-between"><span>مقدار حواله / مانده حواله:</span><strong className="font-mono">{remittanceQty.toLocaleString('fa-IR')} kg / <span className={remittanceRemaining < 0 ? 'text-rose-700' : 'text-emerald-800'}>{remittanceRemaining.toLocaleString('fa-IR')} kg</span></strong></div>
+                    <div className="flex justify-between"><span>موسسه حمل / کد بهین‌یاب:</span><strong>{loading.transportCompany || '---'} ({loading.behenyabCode || '-'})</strong></div>
+                    <div className="flex justify-between"><span>سریال برگه تحویل / بارنامه:</span><strong className="font-mono">{loading.deliveryNoteSerial || '---'} / {loading.waybillNumber || '---'}</strong></div>
+                    <div className="flex justify-between"><span>نام راننده / پلاک کامیون:</span><strong>{loading.driverName || '---'} | <span className="font-mono">{loading.truckPlate || '---'}</span></strong></div>
+                    <div className="flex justify-between"><span>تاریخ بارگیری / ساعت خروج:</span><strong className="font-mono">{loading.loadingDate || '---'} {loading.exitDateTime ? `| ${loading.exitDateTime}` : ''}</strong></div>
+                    <div className="flex justify-between"><span>وزن خالص بارگیری / کرایه حمل:</span><strong className="font-mono">{loading.originNetWeightKg ? `${loading.originNetWeightKg.toLocaleString('fa-IR')} kg` : '---'} / {totalFreight.toLocaleString('fa-IR')} ریال</strong></div>
+                    {loading.unloadingAddress && (
+                      <div className="pt-0.5 text-[8.5px] text-slate-600 truncate" title={loading.unloadingAddress}>محل تخلیه: <strong className="text-slate-800">{loading.unloadingAddress}</strong></div>
+                    )}
                   </div>
                 </div>
 
                 {/* Weighbridge & Warehouse */}
-                <div className="border border-slate-300 rounded-lg p-2.5 bg-slate-50/50">
-                  <h3 className="font-bold text-xs text-slate-800 mb-1.5 border-b border-slate-200 pb-1 flex items-center gap-1.5">
-                    <Scale size={14} className="text-slate-700" />
+                <div className="border border-slate-300 rounded-lg p-2 bg-slate-50/50">
+                  <h3 className="font-bold text-[10.5px] text-slate-800 mb-1 border-b border-slate-200 pb-0.5 flex items-center gap-1.5">
+                    <Scale size={12} className="text-slate-700" />
                     <span>باسکول کارخانه و رسید انبار</span>
                   </h3>
-                  <div className="space-y-1 text-[10px]">
-                    <div className="flex justify-between"><span>قبض انبار / رسید:</span><strong className="font-mono">{petro.warehouseReceipt?.receiptNumber || '---'}</strong></div>
-                    <div className="flex justify-between"><span>وزن فاکتور پتروشیمی:</span><strong className="font-mono">{petro.quantityKg?.toLocaleString('fa-IR')} kg</strong></div>
+                  <div className="space-y-0.5 text-[9.2px]">
+                    <div className="flex justify-between"><span>قبض انبار / برگه باسکول:</span><strong className="font-mono">{petro.warehouseReceipt?.receiptNumber || '---'} / {petro.warehouseReceipt?.weighbridgeSlipNumber || '---'}</strong></div>
+                    <div className="flex justify-between"><span>وزن فاکتور / قرارداد:</span><strong className="font-mono">{petro.quantityKg?.toLocaleString('fa-IR')} kg</strong></div>
                     <div className="flex justify-between"><span>وزن خالص باسکول کارخانه:</span><strong className="font-mono font-bold text-emerald-800">{(petro.warehouseReceipt?.receivedWeightKg || petro.quantityKg || 0).toLocaleString('fa-IR')} kg</strong></div>
                     <div className="flex justify-between">
                       <span>اختلاف وزن (کسری/اضافه):</span>
@@ -350,42 +386,43 @@ export const PrintDomesticPetrochemical: React.FC<Props> = ({ record, settings, 
                       </strong>
                     </div>
                     <div className="flex justify-between"><span>انبار مقصد:</span><strong>{petro.warehouseReceipt?.warehouseName || 'انبار مرکزی مواد اولیه'}</strong></div>
-                    <div className="flex justify-between"><span>تاریخ ورود:</span><strong className="font-mono">{petro.warehouseReceipt?.receiptDate || '---'}</strong></div>
+                    <div className="flex justify-between"><span>تاریخ ورود به انبار:</span><strong className="font-mono">{petro.warehouseReceipt?.receiptDate || '---'}</strong></div>
+                    <div className="flex justify-between"><span>بچ کنترل کیفیت / وضعیت QC:</span><strong className="font-mono">{petro.warehouseReceipt?.qcBatchNumber || '---'}</strong></div>
                   </div>
                 </div>
               </div>
 
               {/* Final Costing Breakdown Box */}
-              <div className="border-2 border-emerald-800 rounded-xl p-3 bg-emerald-50/40">
-                <h3 className="font-black text-xs text-emerald-950 mb-2 border-b border-emerald-300 pb-1">
+              <div className="border-2 border-emerald-800 rounded-xl p-2.5 bg-emerald-50/40">
+                <h3 className="font-black text-[10.5px] text-emerald-950 mb-1.5 border-b border-emerald-300 pb-0.5">
                   آنالیز نهایی بهای تمام‌شده و قیمت هر کیلوگرم تحویل درب کارخانه
                 </h3>
 
-                <div className="grid grid-cols-4 gap-2 text-center text-[10px] mb-2">
-                  <div className="p-1.5 bg-white border border-emerald-200 rounded">
+                <div className="grid grid-cols-4 gap-2 text-center text-[9.5px] mb-1.5">
+                  <div className="p-1 bg-white border border-emerald-200 rounded">
                     <span className="text-slate-500 block">ارزش فاکتور پتروشیمی</span>
                     <strong className="font-mono text-slate-800">{petro.totalInvoiceAmount?.toLocaleString('fa-IR')} ریال</strong>
                   </div>
-                  <div className="p-1.5 bg-white border border-emerald-200 rounded">
+                  <div className="p-1 bg-white border border-emerald-200 rounded">
                     <span className="text-slate-500 block">کرایه حمل و باربری</span>
                     <strong className="font-mono text-slate-800">{totalFreight.toLocaleString('fa-IR')} ریال</strong>
                   </div>
-                  <div className="p-1.5 bg-white border border-emerald-200 rounded">
+                  <div className="p-1 bg-white border border-emerald-200 rounded">
                     <span className="text-slate-500 block">هزینه‌ها و کارمزد بانکی</span>
-                    <strong className="font-mono text-slate-800">{bankComm.toLocaleString('fa-IR')} ریال</strong>
+                    <strong className="font-mono text-slate-800">{(bankComm + totalOtherCosts).toLocaleString('fa-IR')} ریال</strong>
                   </div>
-                  <div className="p-1.5 bg-emerald-100 border border-emerald-300 rounded">
+                  <div className="p-1 bg-emerald-100 border border-emerald-300 rounded">
                     <span className="text-emerald-900 font-bold block">مجموع بهای تمام‌شده</span>
-                    <strong className="font-mono text-emerald-950 font-black text-xs">{grandTotalCost.toLocaleString('fa-IR')} ریال</strong>
+                    <strong className="font-mono text-emerald-950 font-black text-[11px]">{grandTotalCost.toLocaleString('fa-IR')} ریال</strong>
                   </div>
                 </div>
 
-                <div className="p-2 bg-emerald-800 text-white rounded-lg flex justify-between items-center px-4">
-                  <span className="font-bold text-xs">بهای تمام‌شده هر کیلوگرم کالا در انبار کارخانه (Cost Per Kg):</span>
+                <div className="p-1.5 bg-emerald-800 text-white rounded-lg flex justify-between items-center px-3">
+                  <span className="font-bold text-[10.5px]">بهای تمام‌شده هر کیلوگرم کالا در انبار کارخانه (Cost Per Kg):</span>
                   <div className="text-left font-mono">
-                    <span className="text-base font-black">{costPerKg.toLocaleString('fa-IR')}</span>
-                    <span className="text-[10px] mr-1">ریال / کیلوگرم</span>
-                    <span className="text-[10px] text-emerald-200 block">
+                    <span className="text-sm font-black">{costPerKg.toLocaleString('fa-IR')}</span>
+                    <span className="text-[9.5px] mr-1">ریال / کیلوگرم</span>
+                    <span className="text-[9.5px] text-emerald-200 block">
                       (معادل {Math.round(costPerKg / 10).toLocaleString('fa-IR')} تومان/kg)
                     </span>
                   </div>

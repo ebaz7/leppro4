@@ -69,15 +69,19 @@ export const GeneralTradeListReport: React.FC<Props> = ({
 
     // Helper: Calculate total weight (in kg)
     const calculateTotalWeight = (r: TradeRecord): number => {
-        return r.items?.reduce((sum, item) => sum + (Number(item.weight) || 0), 0) || 0;
+        const itemsWeight = r.items?.reduce((sum, item) => sum + (Number(item.weight) || 0), 0) || 0;
+        if (itemsWeight > 0) return itemsWeight;
+        return Number(r.petrochemicalData?.quantityKg || 0);
     };
 
     // Helper: Calculate total amount
     const calculateTotalAmount = (r: TradeRecord): number => {
-        return r.items?.reduce((sum, item) => {
+        const itemsAmount = r.items?.reduce((sum, item) => {
             const totalPrice = item.totalPrice !== undefined ? Number(item.totalPrice) : (Number(item.weight || 0) * Number(item.unitPrice || 0));
             return sum + (totalPrice || 0);
         }, 0) || 0;
+        if (itemsAmount > 0) return itemsAmount;
+        return Number(r.petrochemicalData?.totalInvoiceAmount || r.petrochemicalData?.totalGoodsPrice || 0);
     };
 
     // Helper: Formatted weight & goods description e.g. "۲۵۰ تن چیپس پلی استر نساجی"
@@ -591,9 +595,9 @@ export const GeneralTradeListReport: React.FC<Props> = ({
                             <tr>
                                 <th className="p-3.5 text-center w-12">ردیف</th>
                                 <th className="p-3.5 min-w-[200px]">کالا و مقدار (وزن + شرح)</th>
-                                <th className="p-3.5 min-w-[110px] text-center">شماره سفارش</th>
-                                <th className="p-3.5 min-w-[120px] text-center">شماره ثبت سفارش</th>
-                                <th className="p-3.5 min-w-[110px] text-center">شماره پروفرم</th>
+                                <th className="p-3.5 min-w-[115px] text-center">سفارش / قرارداد</th>
+                                <th className="p-3.5 min-w-[130px] text-center">ثبت سفارش / شماره حواله</th>
+                                <th className="p-3.5 min-w-[120px] text-center">پروفرم / صورتحساب</th>
                                 <th className="p-3.5 min-w-[130px]">نام شرکت</th>
                                 <th className="p-3.5 min-w-[130px] text-center">مبلغ و نوع ارز</th>
                                 <th className="p-3.5 min-w-[140px] text-center">وضعیت فرآیند</th>
@@ -641,9 +645,13 @@ export const GeneralTradeListReport: React.FC<Props> = ({
                                                 )}
                                             </td>
 
-                                            {/* 3. Order Number */}
+                                            {/* 3. Order Number / Petrochemical Bourse Contract */}
                                             <td className="p-3.5 text-center">
-                                                {record.orderNumber ? (
+                                                {record.petrochemicalData?.contractNumber ? (
+                                                    <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-lg border border-emerald-200/70 dark:border-emerald-900/50 text-[11px]">
+                                                        {record.petrochemicalData.contractNumber}{record.petrochemicalData.contractSubNumber ? `/${record.petrochemicalData.contractSubNumber}` : ''}
+                                                    </span>
+                                                ) : record.orderNumber ? (
                                                     <span className="font-mono font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-lg border border-blue-200/60 dark:border-blue-900/40 text-[11px]">
                                                         {record.orderNumber}
                                                     </span>
@@ -652,22 +660,40 @@ export const GeneralTradeListReport: React.FC<Props> = ({
                                                 )}
                                             </td>
 
-                                            {/* 4. Registration Number (شماره ثبت سفارش) */}
+                                            {/* 4. Registration Number OR Petrochemical Remittance Number (شماره حواله) */}
                                             <td className="p-3.5 text-center">
-                                                {record.registrationNumber ? (
-                                                    <span className="font-mono font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-lg text-[11px]">
-                                                        {record.registrationNumber}
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-gray-400 font-mono">-</span>
-                                                )}
+                                                <div className="flex flex-col items-center gap-1">
+                                                    {record.petrochemicalData?.loadingNotice?.remittanceNumber ? (
+                                                        <span className="font-mono font-black text-amber-900 dark:text-amber-200 bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 px-2 py-0.5 rounded-lg text-[11px]">
+                                                            حواله: {record.petrochemicalData.loadingNotice.remittanceNumber}
+                                                        </span>
+                                                    ) : record.registrationNumber ? (
+                                                        <span className="font-mono font-bold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-lg text-[11px]">
+                                                            {record.registrationNumber}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-gray-400 font-mono">-</span>
+                                                    )}
+                                                    {record.petrochemicalData?.loadingNotice?.remittanceDate && (
+                                                        <span className="font-mono text-[10px] text-amber-700 dark:text-amber-400">
+                                                            {record.petrochemicalData.loadingNotice.remittanceDate}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
 
-                                            {/* 5. Proforma / File Number */}
+                                            {/* 5. Proforma / File Number / Invoice Number */}
                                             <td className="p-3.5 text-center">
-                                                <span className="font-mono text-gray-700 dark:text-gray-300 text-[11px]">
-                                                    {record.proformaNumber || record.fileNumber || '-'}
-                                                </span>
+                                                <div className="flex flex-col items-center gap-0.5">
+                                                    <span className="font-mono text-gray-700 dark:text-gray-300 text-[11px]">
+                                                        {record.proformaNumber || record.fileNumber || '-'}
+                                                    </span>
+                                                    {record.petrochemicalData?.invoiceInfo?.invoiceNumber && (
+                                                        <span className="font-mono text-[10px] text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 px-1.5 py-0.2 rounded">
+                                                            صورتحساب: {record.petrochemicalData.invoiceInfo.invoiceNumber}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
 
                                             {/* 6. Company Name */}
@@ -837,7 +863,7 @@ export const GeneralTradeListReport: React.FC<Props> = ({
                                         onClick={() => {
                                             const rec = selectedRecordForJourney;
                                             setSelectedRecordForJourney(null);
-                                            onNavigateToDetails(rec, 'proforma');
+                                            onNavigateToDetails(rec, (rec.purchaseType === 'domestic_bourse' || rec.petrochemicalData) ? 'domestic_petrochemical' : 'proforma');
                                         }}
                                         className="px-3 py-1.5 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 rounded-xl text-xs font-bold border border-blue-200 dark:border-blue-800 hover:bg-blue-100 transition-colors"
                                     >
@@ -855,17 +881,33 @@ export const GeneralTradeListReport: React.FC<Props> = ({
 
                         {/* Top Key Specs Summary Grid */}
                         <div className="p-4 bg-gray-50/50 dark:bg-gray-800/30 border-b border-gray-100 dark:border-gray-800 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 text-xs shrink-0">
+                            {selectedRecordForJourney.petrochemicalData?.loadingNotice?.remittanceNumber ? (
+                                <div>
+                                    <span className="text-gray-400 block text-[11px]">شماره حواله:</span>
+                                    <span className="font-bold font-mono text-amber-700 dark:text-amber-300">
+                                        {selectedRecordForJourney.petrochemicalData.loadingNotice.remittanceNumber}
+                                        {selectedRecordForJourney.petrochemicalData.loadingNotice.remittanceDate ? ` (${selectedRecordForJourney.petrochemicalData.loadingNotice.remittanceDate})` : ''}
+                                    </span>
+                                </div>
+                            ) : (
+                                <div>
+                                    <span className="text-gray-400 block text-[11px]">شماره سفارش:</span>
+                                    <span className="font-bold font-mono text-blue-700 dark:text-blue-300">{selectedRecordForJourney.orderNumber || '-'}</span>
+                                </div>
+                            )}
                             <div>
-                                <span className="text-gray-400 block text-[11px]">شماره سفارش:</span>
-                                <span className="font-bold font-mono text-blue-700 dark:text-blue-300">{selectedRecordForJourney.orderNumber || '-'}</span>
+                                <span className="text-gray-400 block text-[11px]">{selectedRecordForJourney.petrochemicalData ? 'شماره قرارداد بورس:' : 'شماره ثبت سفارش:'}</span>
+                                <span className="font-bold font-mono text-gray-800 dark:text-gray-200">
+                                    {selectedRecordForJourney.petrochemicalData?.contractNumber
+                                        ? `${selectedRecordForJourney.petrochemicalData.contractNumber}${selectedRecordForJourney.petrochemicalData.contractSubNumber ? `/${selectedRecordForJourney.petrochemicalData.contractSubNumber}` : ''}`
+                                        : (selectedRecordForJourney.registrationNumber || '-')}
+                                </span>
                             </div>
                             <div>
-                                <span className="text-gray-400 block text-[11px]">شماره ثبت سفارش:</span>
-                                <span className="font-bold font-mono text-gray-800 dark:text-gray-200">{selectedRecordForJourney.registrationNumber || '-'}</span>
-                            </div>
-                            <div>
-                                <span className="text-gray-400 block text-[11px]">شماره پروفرم:</span>
-                                <span className="font-bold font-mono text-gray-800 dark:text-gray-200">{selectedRecordForJourney.proformaNumber || selectedRecordForJourney.fileNumber || '-'}</span>
+                                <span className="text-gray-400 block text-[11px]">{selectedRecordForJourney.petrochemicalData?.invoiceInfo?.invoiceNumber ? 'شماره صورتحساب:' : 'شماره پروفرم:'}</span>
+                                <span className="font-bold font-mono text-gray-800 dark:text-gray-200">
+                                    {selectedRecordForJourney.petrochemicalData?.invoiceInfo?.invoiceNumber || selectedRecordForJourney.proformaNumber || selectedRecordForJourney.fileNumber || '-'}
+                                </span>
                             </div>
                             <div>
                                 <span className="text-gray-400 block text-[11px]">شماره پرونده:</span>
@@ -878,8 +920,12 @@ export const GeneralTradeListReport: React.FC<Props> = ({
                                 </span>
                             </div>
                             <div>
-                                <span className="text-gray-400 block text-[11px]">بانک عامل:</span>
-                                <span className="font-bold text-gray-800 dark:text-gray-200">{selectedRecordForJourney.operatingBank || '-'}</span>
+                                <span className="text-gray-400 block text-[11px]">{selectedRecordForJourney.petrochemicalData ? 'کارگزار / مرحله:' : 'بانک عامل:'}</span>
+                                <span className="font-bold text-gray-800 dark:text-gray-200">
+                                    {selectedRecordForJourney.petrochemicalData
+                                        ? (selectedRecordForJourney.petrochemicalData.currentStage || selectedRecordForJourney.petrochemicalData.brokerName || '-')
+                                        : (selectedRecordForJourney.operatingBank || '-')}
+                                </span>
                             </div>
                         </div>
 
