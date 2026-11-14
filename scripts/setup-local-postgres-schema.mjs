@@ -520,9 +520,30 @@ export const ERP_SCHEMA_DDL_STATEMENTS = [
     created_date_jalali TEXT NOT NULL DEFAULT ''
   );`,
   `CREATE INDEX IF NOT EXISTS idx_erp_backups_company_time ON erp_company_backups (company_id, created_at_ms);`,
+
+  // Non-destructive column upgrades for existing production PostgreSQL installations
+  `ALTER TABLE erp_companies ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;`,
+  `ALTER TABLE erp_companies ADD COLUMN IF NOT EXISTS cutover_config JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE erp_companies ADD COLUMN IF NOT EXISTS label_template_config JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE erp_companies ADD COLUMN IF NOT EXISTS scale_config JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE erp_carton_labels ADD COLUMN IF NOT EXISTS production_line_id TEXT;`,
+  `ALTER TABLE erp_carton_labels ADD COLUMN IF NOT EXISTS production_voucher_no TEXT;`,
+  `ALTER TABLE erp_carton_labels ADD COLUMN IF NOT EXISTS production_archive_code TEXT;`,
+  `ALTER TABLE erp_carton_labels ADD COLUMN IF NOT EXISTS remittance_id TEXT;`,
+  `ALTER TABLE erp_carton_labels ADD COLUMN IF NOT EXISTS source_system TEXT NOT NULL DEFAULT 'DELKAM';`,
+  `ALTER TABLE erp_carton_labels ADD COLUMN IF NOT EXISTS extra JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE erp_production_vouchers ADD COLUMN IF NOT EXISTS delivered_warehouse_id TEXT;`,
+  `ALTER TABLE erp_production_vouchers ADD COLUMN IF NOT EXISTS delivered_warehouse_name TEXT;`,
+  `ALTER TABLE erp_production_vouchers ADD COLUMN IF NOT EXISTS delivered_doc_no TEXT;`,
+  `ALTER TABLE erp_production_vouchers ADD COLUMN IF NOT EXISTS extra JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE erp_warehouses ADD COLUMN IF NOT EXISTS assigned_group_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE erp_warehouses ADD COLUMN IF NOT EXISTS assigned_item_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE erp_warehouses ADD COLUMN IF NOT EXISTS extra JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE erp_items ADD COLUMN IF NOT EXISTS is_tare_locked BOOLEAN NOT NULL DEFAULT FALSE;`,
+  `ALTER TABLE erp_items ADD COLUMN IF NOT EXISTS extra JSONB NOT NULL DEFAULT '{}'::jsonb;`,
 ];
 
-export async function applyIdempotentErpSchema(pool) {
+export async function applyIdempotentErpSchema(pool, appUser = process.env.SQL_USER) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -530,6 +551,17 @@ export async function applyIdempotentErpSchema(pool) {
       await client.query(stmt);
     }
     await client.query('COMMIT');
+
+    if (appUser && /^[a-zA-Z0-9_]+$/.test(String(appUser))) {
+      try {
+        await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO "${appUser}";`);
+        await client.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "${appUser}";`);
+        await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "${appUser}";`);
+      } catch {
+        // Ignore privilege grant warnings if connected as non-superuser with existing table access
+      }
+    }
+
     return { appliedStatements: ERP_SCHEMA_DDL_STATEMENTS.length };
   } catch (err) {
     try {

@@ -114,18 +114,33 @@ const makeStableCompanyId = (nameStr: string) => {
   return 'comp_' + Math.abs(hash).toString(36);
 };
 
+const getCandidateCacheKeys = (companyId: string, companyName: string): string[] => {
+  const keys = new Set<string>();
+  if (companyId) keys.add(companyId);
+  if (companyName) {
+    keys.add(makeStableCompanyId(companyName));
+    if (companyName.includes('لپان') || companyName.includes('لیان')) {
+      keys.add('comp_lepan');
+    }
+  }
+  return Array.from(keys);
+};
+
 const getCachedCompanyErpState = (companyId: string, companyName: string): IndustrialErpState => {
   try {
-    const raw = localStorage.getItem(`delcom_erp_state_${companyId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.items)) {
-        return {
-          ...createDefaultIndustrialErpState(companyId, companyName),
-          ...parsed,
-          companyId,
-          companyName: parsed.companyName || companyName
-        };
+    const candidates = getCandidateCacheKeys(companyId, companyName);
+    for (const key of candidates) {
+      const raw = localStorage.getItem(`delcom_erp_state_${key}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.items)) {
+          return {
+            ...createDefaultIndustrialErpState(companyId, companyName),
+            ...parsed,
+            companyId,
+            companyName: parsed.companyName || companyName
+          };
+        }
       }
     }
   } catch {}
@@ -207,6 +222,11 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   const selectedCompanyRef = React.useRef<ErpCompanySummary | null>(selectedCompany);
   selectedCompanyRef.current = selectedCompany;
   const syncInFlightRef = React.useRef<boolean>(false);
+  const queuedSyncRef = React.useRef<{
+    compId: string;
+    compName: string;
+    options?: { silent?: boolean; force?: boolean };
+  } | null>(null);
 
   // Sayan Cutover & Barcode Sync Shared Handlers
   const [cutoffDateInput, setCutoffDateInput] = useState<string>('1405/08/20');
@@ -729,7 +749,18 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     compName: string,
     options?: { silent?: boolean; force?: boolean }
   ) => {
-    if (!compId || syncInFlightRef.current) return;
+    if (!compId) return;
+    if (syncInFlightRef.current) {
+      queuedSyncRef.current = {
+        compId,
+        compName,
+        options: {
+          silent: queuedSyncRef.current?.options?.silent === false ? false : options?.silent,
+          force: Boolean(queuedSyncRef.current?.options?.force || options?.force)
+        }
+      };
+      return;
+    }
     syncInFlightRef.current = true;
     const silent = Boolean(options?.silent);
     const force = Boolean(options?.force);
@@ -737,44 +768,45 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     try {
       setSyncStatus('syncing');
 
-      // 1. If there are unsent local changes queued for this company, push & merge them first!
+      // 1. Fetch authoritative state from central server (PostgreSQL / Server DB) first
+      let serverData = await apiCall<IndustrialErpState & { _storageEngine?: string; _pgConnected?: boolean }>(
+        `/industrial-erp/state?companyId=${encodeURIComponent(compId)}&companyName=${encodeURIComponent(compName)}&_t=${Date.now()}`
+      );
+
+      // 2. If there are unsent local changes queued for this company, push & merge them with server state
       let hasPendingLocal = false;
+      const candidateKeys = getCandidateCacheKeys(compId, compName);
       try {
-        hasPendingLocal = localStorage.getItem(getPendingSyncStorageKey(compId)) === '1';
+        hasPendingLocal = candidateKeys.some(k => localStorage.getItem(getPendingSyncStorageKey(k)) === '1');
       } catch {}
 
       if (hasPendingLocal) {
-        const queuedState = getCachedCompanyErpState(compId, compName);
-        const pushRes = await apiCall<{ success: boolean; state?: IndustrialErpState }>(
-          '/industrial-erp/save-state',
-          'POST',
-          { companyId: compId, companyName: compName, state: queuedState }
-        );
-        if (pushRes?.success) {
-          try {
-            localStorage.removeItem(getPendingSyncStorageKey(compId));
-          } catch {}
-          const resolvedId = pushRes.state?.companyId || compId;
-          if (pushRes.state) {
-            setErpState(pushRes.state);
-            try {
-              localStorage.setItem(`delcom_erp_state_${resolvedId}`, JSON.stringify(pushRes.state));
-            } catch {}
-            setSyncStatus('synced');
-            setLastSyncedAt(Date.now());
-            setSyncErrorMsg(null);
-            if (!silent) {
-              showToast('success', 'تغییرات معوق این دستگاه به سرور مرکزی ارسال و با موفقیت همگام شد.');
+        try {
+          const queuedState = getCachedCompanyErpState(compId, compName);
+          const pushRes = await apiCall<{ success: boolean; state?: IndustrialErpState }>(
+            '/industrial-erp/save-state',
+            'POST',
+            {
+              companyId: serverData?.companyId || compId,
+              companyName: compName,
+              state: {
+                ...queuedState,
+                _revision: queuedState._revision || serverData?._revision || 0
+              }
             }
-            return;
+          );
+          if (pushRes?.success) {
+            try {
+              candidateKeys.forEach(k => localStorage.removeItem(getPendingSyncStorageKey(k)));
+            } catch {}
+            if (pushRes.state) {
+              serverData = pushRes.state as any;
+            }
           }
+        } catch {
+          // Even if pushing pending local changes had a transient issue, still apply the fetched serverData below
         }
       }
-
-      // 2. Fetch authoritative state from central server (PostgreSQL / Server DB) with cache-buster + companyName fallback
-      const serverData = await apiCall<IndustrialErpState>(
-        `/industrial-erp/state?companyId=${encodeURIComponent(compId)}&companyName=${encodeURIComponent(compName)}&_t=${Date.now()}`
-      );
 
       if (serverData && typeof serverData === 'object' && Array.isArray(serverData.items)) {
         const canonicalId = serverData.companyId || compId;
@@ -796,6 +828,9 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           setErpState(serverData);
           try {
             localStorage.setItem(`delcom_erp_state_${canonicalId}`, JSON.stringify(serverData));
+            if (compId !== canonicalId) {
+              localStorage.setItem(`delcom_erp_state_${compId}`, JSON.stringify(serverData));
+            }
           } catch {}
         }
         setSyncStatus('synced');
@@ -818,6 +853,11 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       }
     } finally {
       syncInFlightRef.current = false;
+      if (queuedSyncRef.current) {
+        const nextReq = queuedSyncRef.current;
+        queuedSyncRef.current = null;
+        syncCompanyStateFromServer(nextReq.compId, nextReq.compName, nextReq.options);
+      }
     }
   };
 
@@ -1002,10 +1042,19 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       try {
         localStorage.removeItem(getPendingSyncStorageKey(activeComp.id));
       } catch {}
-      if (saveRes?.state && saveRes.state.companyId === activeComp.id) {
+      if (saveRes?.state) {
+        const canonicalId = saveRes.state.companyId || activeComp.id;
+        if (canonicalId !== activeComp.id && selectedCompanyRef.current && selectedCompanyRef.current.id === activeComp.id) {
+          const reconciled = { ...selectedCompanyRef.current, id: canonicalId };
+          setSelectedCompany(reconciled);
+          try {
+            localStorage.setItem('delcom_erp_selected_company', JSON.stringify(reconciled));
+            localStorage.setItem('delcom_erp_last_selected_company_id', canonicalId);
+          } catch {}
+        }
         setErpState(saveRes.state);
         try {
-          localStorage.setItem(`delcom_erp_state_${activeComp.id}`, JSON.stringify(saveRes.state));
+          localStorage.setItem(`delcom_erp_state_${canonicalId}`, JSON.stringify(saveRes.state));
         } catch {}
       }
       setSyncStatus('synced');
@@ -1424,26 +1473,28 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
               <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold">
                 دوره مالی {currentErpState.activeFiscalYear || selectedCompany.activeFiscalYear || '1405'}
               </span>
-              <span
-                className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+              <button
+                type="button"
+                onClick={() => syncCompanyStateFromServer(selectedCompany.id, selectedCompany.name, { silent: false, force: true })}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
                   syncStatus === 'synced'
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
                     : syncStatus === 'syncing'
                     ? 'bg-blue-500/20 text-blue-200 border-blue-400/30'
                     : syncStatus === 'pending'
-                    ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
-                    : 'bg-rose-500/20 text-rose-200 border-rose-400/40'
+                    ? 'bg-amber-500/20 text-amber-200 border-amber-400/40 hover:bg-amber-500/30'
+                    : 'bg-rose-500/20 text-rose-200 border-rose-400/40 hover:bg-rose-500/30'
                 }`}
-                title={syncErrorMsg || `سرور: ${getConnectedCentralServerLabel()}`}
+                title={syncErrorMsg ? `خطا: ${syncErrorMsg} (برای تلاش مجدد کلیک کنید)` : `سرور: ${getConnectedCentralServerLabel()} (برای همگام‌سازی فوری کلیک کنید)`}
               >
                 {syncStatus === 'synced'
-                  ? `همگام با سرور مرکزی (v${currentErpState._revision || 1})`
+                  ? `همگام با سرور مرکزی (v${currentErpState._revision || 1}${(currentErpState as any)._storageEngine === 'postgresql' ? ' • PostgreSQL' : ''})`
                   : syncStatus === 'syncing'
                   ? 'در حال همگام‌سازی...'
                   : syncStatus === 'pending'
-                  ? 'تغییرات در صف ارسال به سرور'
-                  : 'عدم ارتباط با سرور مرکزی'}
-              </span>
+                  ? 'تغییرات در صف ارسال به سرور (تلاش مجدد)'
+                  : `عدم ارتباط با سرور مرکزی${syncErrorMsg ? ` (${syncErrorMsg.slice(0, 35)})` : ''} ↻`}
+              </button>
             </div>
             <div className="text-[10px] text-slate-400 font-mono truncate max-w-[340px] sm:max-w-none">
               سرور: {getConnectedCentralServerLabel()} | شناسه: {selectedCompany.id} | کاربر: {currentUser.fullName}

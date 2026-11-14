@@ -189,20 +189,60 @@ try {
     }
 } catch {}
 
-# STEP 1: Ensure portable PostgreSQL binaries exist inside $PgBinRoot (Install Drive ONLY)
+function Find-SystemPostgresBinRoot {
+    $searchPaths = @(
+        "$InstallDrive\PostgreSQL\*\bin\postgres.exe",
+        "$InstallDrive\Program Files\PostgreSQL\*\bin\postgres.exe",
+        "C:\Program Files\PostgreSQL\*\bin\postgres.exe",
+        "D:\PostgreSQL\*\bin\postgres.exe",
+        "D:\Program Files\PostgreSQL\*\bin\postgres.exe"
+    )
+    foreach ($pattern in $searchPaths) {
+        $found = Get-Item -Path $pattern -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+        if ($found -and (Test-Path $found.FullName)) {
+            return Split-Path -Parent (Split-Path -Parent $found.FullName)
+        }
+    }
+    $cmd = Get-Command postgres.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+        return Split-Path -Parent (Split-Path -Parent $cmd.Source)
+    }
+    return $null
+}
+
+# STEP 1: Ensure PostgreSQL binaries exist (Portable in $PgBinRoot OR existing Windows PostgreSQL installation)
+if (-not (Test-Path $PostgresExe)) {
+    $sysPgRoot = Find-SystemPostgresBinRoot
+    if ($sysPgRoot) {
+        Write-Ok "Detected existing Windows PostgreSQL installation at: $sysPgRoot"
+        Write-Info "Using existing binaries while keeping all ERP database files strictly inside $PgDataDir ($InstallDrive)."
+        $PgBinRoot   = $sysPgRoot
+        $PostgresExe = Join-Path $PgBinRoot "bin\postgres.exe"
+        $PgCtlExe    = Join-Path $PgBinRoot "bin\pg_ctl.exe"
+        $InitDbExe   = Join-Path $PgBinRoot "bin\initdb.exe"
+        $PsqlExe     = Join-Path $PgBinRoot "bin\psql.exe"
+        $PgIsReady   = Join-Path $PgBinRoot "bin\pg_isready.exe"
+        $PgDumpExe   = Join-Path $PgBinRoot "bin\pg_dump.exe"
+    }
+}
+
 if (-not (Test-Path $PostgresExe)) {
     $zipPath = Find-OfflinePgZip
-    if (-not $zipPath) {
-        $mirrorUrl = $envMap["PG_OFFLINE_ZIP_URL"]
-        if ($mirrorUrl -and -not $OfflineOnly) {
-            $dlTarget = Join-Path $PgOfflineDir "postgresql-offline-binaries.zip"
-            Write-Info "Attempting download from configured PG_OFFLINE_ZIP_URL ($mirrorUrl)..."
-            try {
-                Invoke-WebRequest -Uri $mirrorUrl -OutFile $dlTarget -TimeoutSec 20 -UseBasicParsing
-                if (Test-Path $dlTarget) { $zipPath = $dlTarget }
-            } catch {
-                Write-Warn "Mirror download unreachable offline: $($_.Exception.Message)"
+    if (-not $zipPath -and -not $OfflineOnly) {
+        $mirrorUrl = if ($envMap["PG_OFFLINE_ZIP_URL"]) { $envMap["PG_OFFLINE_ZIP_URL"] } else { "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64-binaries.zip" }
+        $dlTarget = Join-Path $PgOfflineDir "postgresql-16.4-1-windows-x64-binaries.zip"
+        Write-Info "Downloading portable PostgreSQL binaries directly to $dlTarget (Drive $InstallDrive)..."
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $mirrorUrl -OutFile $dlTarget -TimeoutSec 180 -UseBasicParsing
+            if ((Test-Path $dlTarget) -and ((Get-Item $dlTarget).Length -gt 10000000)) {
+                $zipPath = $dlTarget
+            } else {
+                if (Test-Path $dlTarget) { Remove-Item -Force $dlTarget -ErrorAction SilentlyContinue }
             }
+        } catch {
+            Write-Warn "Portable PostgreSQL download unreachable: $($_.Exception.Message)"
+            if (Test-Path $dlTarget) { Remove-Item -Force $dlTarget -ErrorAction SilentlyContinue }
         }
     }
 

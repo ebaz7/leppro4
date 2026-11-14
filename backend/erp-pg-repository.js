@@ -666,10 +666,74 @@ const schemaBundle = pgModulesLoaded
 export const isPostgresConfigured = () =>
   Boolean(pgModulesLoaded && process.env.SQL_HOST && process.env.SQL_DB_NAME && process.env.SQL_USER);
 
-// Lazy pg.Pool creation strictly using Object Method (no startup probes or reconnect loops)
+export const normalizeErpCompanyName = (name) => {
+  if (!name) return '';
+  return String(name)
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/ة/g, 'ه')
+    .replace(/\u200c/g, ' ')
+    .replace(/^شرکت\s+تولیدی\s+/i, '')
+    .replace(/^شرکت\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const makeStableHashId = (nameStr) => {
+  const clean = String(nameStr || '').trim();
+  let hash = 0;
+  for (let i = 0; i < clean.length; i++) {
+    hash = ((hash << 5) - hash) + clean.charCodeAt(i);
+    hash |= 0;
+  }
+  return 'comp_' + Math.abs(hash).toString(36);
+};
+
+export const getCompanyLegacyAliasIds = (companyId, companyName) => {
+  const aliases = new Set();
+  const cleanName = String(companyName || '')
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .trim();
+  const norm = normalizeErpCompanyName(cleanName);
+  if (cleanName.includes('لپان') || cleanName.includes('لیان')) {
+    aliases.add('comp_lepan');
+    aliases.add(makeStableHashId('شرکت لپان بافت'));
+    aliases.add(makeStableHashId('شرکت تولیدی لپان بافت'));
+  } else if (cleanName.includes('پارس')) {
+    aliases.add('comp_pars');
+  } else if (cleanName.includes('آریان')) {
+    aliases.add('comp_arian');
+  }
+  if (cleanName) {
+    aliases.add(`comp_${cleanName.replace(/\s+/g, '_')}`);
+    aliases.add(makeStableHashId(cleanName));
+  }
+  if (norm) {
+    aliases.add(makeStableHashId(norm));
+    aliases.add(makeStableHashId(`شرکت ${norm}`));
+    aliases.add(makeStableHashId(`شرکت تولیدی ${norm}`));
+  }
+  if (companyId) {
+    aliases.delete(String(companyId).trim());
+  }
+  return Array.from(aliases);
+};
+
+// Lazy pg.Pool creation strictly using Object Method
 export const getErpPgPool = () => {
   if (!isPostgresConfigured()) return null;
+  const sig = `${process.env.SQL_HOST}|${process.env.SQL_PORT || ''}|${process.env.SQL_DB_NAME}|${process.env.SQL_USER}`;
+  if (globalThis._erpPostgresPool && globalThis._erpPostgresPoolSig !== sig) {
+    try {
+      globalThis._erpPostgresPool.end().catch(() => {});
+    } catch {}
+    globalThis._erpPostgresPool = null;
+    globalThis._erpDrizzleDb = null;
+    globalThis._erpPgSchemaReady = false;
+  }
   if (!globalThis._erpPostgresPool) {
+    globalThis._erpPostgresPoolSig = sig;
     globalThis._erpPostgresPool = new Pool({
       host: process.env.SQL_HOST,
       user: process.env.SQL_USER,
@@ -678,13 +742,48 @@ export const getErpPgPool = () => {
       ...(process.env.SQL_PORT ? { port: Number(process.env.SQL_PORT) } : {}),
       max: 15,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 15000,
+      connectionTimeoutMillis: 6000,
     });
     globalThis._erpPostgresPool.on('error', (err) => {
       console.error('[ERP PostgreSQL] Unexpected error on idle pool client:', err.message);
     });
   }
   return globalThis._erpPostgresPool;
+};
+
+export const getErpPgAdminPool = () => {
+  if (!isPostgresConfigured()) return null;
+  const adminUser = process.env.SQL_ADMIN_USER || process.env.SQL_USER;
+  const adminPassword = process.env.SQL_ADMIN_USER
+    ? process.env.SQL_ADMIN_PASSWORD
+    : process.env.SQL_PASSWORD;
+  if (!process.env.SQL_ADMIN_USER || adminUser === process.env.SQL_USER) {
+    return getErpPgPool();
+  }
+  const sig = `${process.env.SQL_HOST}|${process.env.SQL_PORT || ''}|${process.env.SQL_DB_NAME}|${adminUser}`;
+  if (globalThis._erpPostgresAdminPool && globalThis._erpPostgresAdminPoolSig !== sig) {
+    try {
+      globalThis._erpPostgresAdminPool.end().catch(() => {});
+    } catch {}
+    globalThis._erpPostgresAdminPool = null;
+  }
+  if (!globalThis._erpPostgresAdminPool) {
+    globalThis._erpPostgresAdminPoolSig = sig;
+    globalThis._erpPostgresAdminPool = new Pool({
+      host: process.env.SQL_HOST,
+      user: adminUser,
+      password: adminPassword,
+      database: process.env.SQL_DB_NAME,
+      ...(process.env.SQL_PORT ? { port: Number(process.env.SQL_PORT) } : {}),
+      max: 4,
+      idleTimeoutMillis: 20000,
+      connectionTimeoutMillis: 6000,
+    });
+    globalThis._erpPostgresAdminPool.on('error', (err) => {
+      console.error('[ERP PostgreSQL Admin] Unexpected error on idle pool client:', err.message);
+    });
+  }
+  return globalThis._erpPostgresAdminPool;
 };
 
 export const getErpPgDb = () => {
@@ -695,6 +794,125 @@ export const getErpPgDb = () => {
   }
   return globalThis._erpDrizzleDb;
 };
+
+export async function ensureErpPostgresSchemaReady(forceRetry = false) {
+  if (!isPostgresConfigured()) {
+    globalThis._erpPgHealth = {
+      configured: false,
+      connected: false,
+      schemaReady: false,
+      lastError: null,
+      lastCheckedAt: Date.now(),
+    };
+    return false;
+  }
+
+  if (globalThis._erpPgSchemaReady && !forceRetry) {
+    return true;
+  }
+
+  // Avoid hammering an offline local PostgreSQL instance more than once every 8 seconds unless forced
+  if (
+    !forceRetry &&
+    globalThis._erpPgLastFailedAt &&
+    Date.now() - globalThis._erpPgLastFailedAt < 8000
+  ) {
+    return false;
+  }
+
+  if (globalThis._erpPgSchemaInitInFlight) {
+    return globalThis._erpPgSchemaInitInFlight;
+  }
+
+  globalThis._erpPgSchemaInitInFlight = (async () => {
+    const adminPool = getErpPgAdminPool();
+    const appPool = getErpPgPool();
+    if (!appPool) return false;
+
+    try {
+      const schemaMod = await import('../scripts/setup-local-postgres-schema.mjs');
+      try {
+        await schemaMod.applyIdempotentErpSchema(adminPool || appPool, process.env.SQL_USER);
+      } catch (ddlErr) {
+        // If DDL failed due to non-admin privileges, verify if required tables already exist and are readable
+        await appPool.query('SELECT company_id FROM erp_companies LIMIT 1');
+        await appPool.query('SELECT id FROM erp_warehouse_documents LIMIT 1');
+      }
+
+      globalThis._erpPgSchemaReady = true;
+      globalThis._erpPgLastFailedAt = 0;
+      globalThis._erpPgHealth = {
+        configured: true,
+        connected: true,
+        schemaReady: true,
+        lastError: null,
+        lastCheckedAt: Date.now(),
+      };
+      return true;
+    } catch (err) {
+      globalThis._erpPgSchemaReady = false;
+      globalThis._erpPgLastFailedAt = Date.now();
+      globalThis._erpPgHealth = {
+        configured: true,
+        connected: false,
+        schemaReady: false,
+        lastError: err?.message || 'خطا در اتصال یا آماده‌سازی جداول PostgreSQL',
+        lastCheckedAt: Date.now(),
+      };
+      console.warn('[ERP PostgreSQL] Schema/connection check warning:', err?.message);
+      return false;
+    } finally {
+      globalThis._erpPgSchemaInitInFlight = null;
+    }
+  })();
+
+  return globalThis._erpPgSchemaInitInFlight;
+}
+
+export function getErpPostgresHealth() {
+  const configured = isPostgresConfigured();
+  const h = globalThis._erpPgHealth || {};
+  const connected = Boolean(configured && (globalThis._erpPgSchemaReady || h.connected));
+  return {
+    configured,
+    connected,
+    schemaReady: Boolean(globalThis._erpPgSchemaReady),
+    storageEngine: connected ? 'postgresql' : 'json',
+    host: process.env.SQL_HOST || null,
+    port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : 5432,
+    database: process.env.SQL_DB_NAME || null,
+    user: process.env.SQL_USER || null,
+    lastError: h.lastError || null,
+    lastCheckedAt: h.lastCheckedAt || null,
+  };
+}
+
+export async function probeErpPostgresHealth() {
+  const ok = await ensureErpPostgresSchemaReady(true);
+  const base = getErpPostgresHealth();
+  if (!ok) return base;
+  try {
+    const pool = getErpPgPool();
+    const [tablesRes, compsRes] = await Promise.all([
+      pool.query(
+        "SELECT count(*)::int AS cnt FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'erp_%'"
+      ),
+      pool.query('SELECT count(*)::int AS cnt FROM erp_companies'),
+    ]);
+    return {
+      ...base,
+      connected: true,
+      tablesCount: Number(tablesRes.rows?.[0]?.cnt || 0),
+      companiesCount: Number(compsRes.rows?.[0]?.cnt || 0),
+    };
+  } catch (err) {
+    return {
+      ...base,
+      connected: false,
+      lastError: err?.message || base.lastError,
+    };
+  }
+}
 
 export const DEFAULT_ERP_CHART_OF_ACCOUNTS = [
   { id: 'acc_10', code: '10', title: 'دارایی‌های جاری', level: 'KOL', nature: 'DEBIT' },
@@ -1993,12 +2211,73 @@ async function writeCompanyStateInsideTx(tx, companyId, state, nextRevision) {
   await insertBatched(tx, erpVoucherLines, voucherLineRows);
 }
 
+const CRITICAL_COLLECTIONS_FOR_RECONCILIATION = [
+  'productionVouchers',
+  'cartonLabels',
+  'warehouseDocuments',
+  'warehouseDocs',
+  'salesOrders',
+  'remittances',
+  'tradeDocs',
+  'treasuryDocs',
+  'vouchers',
+  'payrollSlips',
+  'fixedAssets',
+  'chequeBooks',
+  'parties',
+  'boms',
+  'items',
+  'warehouses',
+  'productionLines',
+  'commodityGroups',
+];
+
+function stateHasMissingRecordsFromCandidate(targetState, candidateState) {
+  if (!candidateState || typeof candidateState !== 'object') return false;
+  if (!targetState || typeof targetState !== 'object') return true;
+  for (const col of CRITICAL_COLLECTIONS_FOR_RECONCILIATION) {
+    const candArr = Array.isArray(candidateState[col]) ? candidateState[col] : [];
+    if (candArr.length === 0) continue;
+    const targArr = Array.isArray(targetState[col]) ? targetState[col] : [];
+    const targIds = new Set(targArr.map((x) => x?.id).filter(Boolean));
+    for (const item of candArr) {
+      if (item?.id && !targIds.has(item.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function findMatchingAliasCompanyIdsInTx(tx, companyId, companyName) {
+  const allRows = await tx
+    .select({ companyId: erpCompanies.companyId, companyName: erpCompanies.companyName })
+    .from(erpCompanies);
+  const normTarget = normalizeErpCompanyName(companyName);
+  const knownAliases = new Set(getCompanyLegacyAliasIds(companyId, companyName));
+  const matchedIds = [];
+
+  for (const row of allRows) {
+    if (!row.companyId || row.companyId === companyId) continue;
+    const normRow = normalizeErpCompanyName(row.companyName);
+    if (
+      knownAliases.has(row.companyId) ||
+      (normTarget && normRow && (normTarget === normRow || normTarget.includes(normRow) || normRow.includes(normTarget)))
+    ) {
+      matchedIds.push(row.companyId);
+    }
+  }
+  return matchedIds;
+}
+
 export async function getCompanyErpStateFromPg(
   companyId,
   companyName = 'شرکت تولیدی',
   settingsCompany = null,
   legacyFallbackState = null
 ) {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return null;
   const db = getErpPgDb();
   if (!db) return null;
 
@@ -2006,18 +2285,31 @@ export async function getCompanyErpStateFromPg(
     return await db.transaction(async (tx) => {
       await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${companyId}))`);
       let state = await readCompanyStateInsideTx(tx, companyId);
+      const effectiveCompanyName =
+        companyName || state?.companyName || legacyFallbackState?.companyName || 'شرکت تولیدی';
+
+      // Check if same company has records under a legacy/alias company_id in PostgreSQL (e.g. comp_lepan vs ms4r33kfd64d2iqaszb)
+      const aliasIds = await findMatchingAliasCompanyIdsInTx(tx, companyId, effectiveCompanyName);
+      let aliasMergedState = null;
+      for (const aliasId of aliasIds) {
+        const aliasSt = await readCompanyStateInsideTx(tx, aliasId);
+        if (aliasSt) {
+          aliasMergedState = aliasMergedState
+            ? mergeConcurrentErpStates(aliasMergedState, aliasSt, 0, safeInt(aliasSt._revision, 1))
+            : aliasSt;
+        }
+      }
 
       if (!state) {
-        // First-time lazy initialization / seamless migration from legacy database.json state
-        const initial = legacyFallbackState
+        let initial = legacyFallbackState
           ? {
               ...legacyFallbackState,
               companyId,
-              companyName: companyName || legacyFallbackState.companyName || 'شرکت تولیدی',
+              companyName: effectiveCompanyName,
             }
           : {
               companyId,
-              companyName,
+              companyName: effectiveCompanyName,
               activeFiscalYear: '1405',
               fiscalYears: ['1405', '1404', '1403'],
               nextCartonSeq: 10001,
@@ -2029,15 +2321,74 @@ export async function getCompanyErpStateFromPg(
               chartOfAccounts: DEFAULT_ERP_CHART_OF_ACCOUNTS,
             };
 
+        if (aliasMergedState) {
+          initial = mergeConcurrentErpStates(
+            aliasMergedState,
+            initial,
+            0,
+            Math.max(safeInt(aliasMergedState._revision, 1), safeInt(initial._revision, 1))
+          );
+          initial.companyId = companyId;
+          initial.companyName = effectiveCompanyName;
+        }
+
         initial.bankAccounts = syncSettingsBanksIntoAccounts(initial.bankAccounts, settingsCompany);
         initial.chartOfAccounts = hydrateChartOfAccounts(initial.chartOfAccounts);
-        await writeCompanyStateInsideTx(tx, companyId, initial, 1);
+        const startRev = Math.max(
+          safeInt(initial._revision, 1),
+          safeInt(aliasMergedState?._revision, 1),
+          1
+        );
+        await writeCompanyStateInsideTx(tx, companyId, initial, startRev);
         state = await readCompanyStateInsideTx(tx, companyId);
-      } else if (settingsCompany) {
-        const syncedBanks = syncSettingsBanksIntoAccounts(state.bankAccounts, settingsCompany);
-        if (syncedBanks.length !== state.bankAccounts.length) {
-          state.bankAccounts = syncedBanks;
-          await writeCompanyStateInsideTx(tx, companyId, state, (state._revision || 1) + 1);
+      } else {
+        let needsWrite = false;
+        let workingState = { ...state };
+
+        if (aliasMergedState && stateHasMissingRecordsFromCandidate(workingState, aliasMergedState)) {
+          workingState = mergeConcurrentErpStates(
+            workingState,
+            aliasMergedState,
+            0,
+            safeInt(workingState._revision, 1)
+          );
+          workingState.companyId = companyId;
+          workingState.companyName = effectiveCompanyName;
+          needsWrite = true;
+        }
+
+        if (legacyFallbackState && stateHasMissingRecordsFromCandidate(workingState, legacyFallbackState)) {
+          workingState = mergeConcurrentErpStates(
+            workingState,
+            legacyFallbackState,
+            0,
+            safeInt(workingState._revision, 1)
+          );
+          workingState.companyId = companyId;
+          workingState.companyName = effectiveCompanyName;
+          needsWrite = true;
+        }
+
+        if (settingsCompany) {
+          const syncedBanks = syncSettingsBanksIntoAccounts(workingState.bankAccounts, settingsCompany);
+          if (syncedBanks.length !== (workingState.bankAccounts || []).length) {
+            workingState.bankAccounts = syncedBanks;
+            needsWrite = true;
+          }
+        }
+
+        if (needsWrite) {
+          workingState.chartOfAccounts = hydrateChartOfAccounts(workingState.chartOfAccounts);
+          const nextRev = safeInt(workingState._revision, 1) + 1;
+          await writeCompanyStateInsideTx(tx, companyId, workingState, nextRev);
+          for (const aliasId of aliasIds) {
+            await writeCompanyStateInsideTx(
+              tx,
+              aliasId,
+              { ...workingState, companyId: aliasId },
+              nextRev
+            );
+          }
           state = await readCompanyStateInsideTx(tx, companyId);
         }
       }
@@ -2046,7 +2397,15 @@ export async function getCompanyErpStateFromPg(
     });
   } catch (error) {
     console.error(`[ERP PostgreSQL] Failed loading state for company ${companyId}:`, error.message);
-    throw new Error('خطا در واکشی اطلاعات حسابداری شرکت از دیتابیس PostgreSQL.', { cause: error });
+    globalThis._erpPgSchemaReady = false;
+    globalThis._erpPgHealth = {
+      ...(globalThis._erpPgHealth || {}),
+      configured: true,
+      connected: false,
+      lastError: error.message,
+      lastCheckedAt: Date.now(),
+    };
+    return null;
   }
 }
 
@@ -2056,6 +2415,8 @@ export async function saveCompanyErpStateToPg(
   companyName = 'شرکت تولیدی',
   options = {}
 ) {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return null;
   const db = getErpPgDb();
   if (!db) return null;
 
@@ -2064,7 +2425,22 @@ export async function saveCompanyErpStateToPg(
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${companyId}))`);
-      const currentServerState = await readCompanyStateInsideTx(tx, companyId);
+      let currentServerState = await readCompanyStateInsideTx(tx, companyId);
+      const effectiveCompanyName =
+        companyName || incomingState?.companyName || currentServerState?.companyName || 'شرکت تولیدی';
+
+      const aliasIds = await findMatchingAliasCompanyIdsInTx(tx, companyId, effectiveCompanyName);
+      if (!forceReplace) {
+        for (const aliasId of aliasIds) {
+          const aliasSt = await readCompanyStateInsideTx(tx, aliasId);
+          if (aliasSt && (!currentServerState || stateHasMissingRecordsFromCandidate(currentServerState, aliasSt))) {
+            currentServerState = currentServerState
+              ? mergeConcurrentErpStates(currentServerState, aliasSt, 0, safeInt(currentServerState._revision, 1))
+              : { ...aliasSt, companyId };
+          }
+        }
+      }
+
       const currentRevision = currentServerState ? safeInt(currentServerState._revision, 1) : 0;
       const clientBaseRevision =
         incomingState && incomingState._revision != null ? safeInt(incomingState._revision, 0) : null;
@@ -2076,7 +2452,7 @@ export async function saveCompanyErpStateToPg(
           ...base,
           ...incomingState,
           companyId,
-          companyName: companyName || incomingState?.companyName || currentServerState?.companyName || 'شرکت تولیدی',
+          companyName: effectiveCompanyName,
         };
       } else {
         stateToPersist = mergeConcurrentErpStates(
@@ -2084,7 +2460,7 @@ export async function saveCompanyErpStateToPg(
           {
             ...incomingState,
             companyId,
-            companyName: companyName || incomingState?.companyName || currentServerState.companyName,
+            companyName: effectiveCompanyName,
           },
           clientBaseRevision,
           currentRevision
@@ -2098,6 +2474,15 @@ export async function saveCompanyErpStateToPg(
 
       const nextRevision = currentRevision + 1;
       await writeCompanyStateInsideTx(tx, companyId, stateToPersist, nextRevision);
+      // Keep any legacy alias company rows synchronized so deletions or updates never diverge
+      for (const aliasId of aliasIds) {
+        await writeCompanyStateInsideTx(
+          tx,
+          aliasId,
+          { ...stateToPersist, companyId: aliasId },
+          nextRevision
+        );
+      }
       const savedState = await readCompanyStateInsideTx(tx, companyId);
 
       return {
@@ -2110,7 +2495,15 @@ export async function saveCompanyErpStateToPg(
     });
   } catch (error) {
     console.error(`[ERP PostgreSQL] Failed saving state for company ${companyId}:`, error.message);
-    throw new Error('خطا در ثبت تراکنش حسابداری در دیتابیس PostgreSQL.', { cause: error });
+    globalThis._erpPgSchemaReady = false;
+    globalThis._erpPgHealth = {
+      ...(globalThis._erpPgHealth || {}),
+      configured: true,
+      connected: false,
+      lastError: error.message,
+      lastCheckedAt: Date.now(),
+    };
+    return null;
   }
 }
 
@@ -2121,6 +2514,8 @@ export async function mutateCompanyErpTransactionally(
   legacyFallbackState,
   mutatorFn
 ) {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return null;
   const db = getErpPgDb();
   if (!db) return null;
 
@@ -2128,6 +2523,7 @@ export async function mutateCompanyErpTransactionally(
     return await db.transaction(async (tx) => {
       await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${companyId}))`);
       let current = await readCompanyStateInsideTx(tx, companyId);
+      const aliasIds = await findMatchingAliasCompanyIdsInTx(tx, companyId, companyName);
       if (!current) {
         const seed = legacyFallbackState
           ? { ...legacyFallbackState, companyId, companyName }
@@ -2156,16 +2552,21 @@ export async function mutateCompanyErpTransactionally(
       const nextState = mutationResult?.state || current;
       const nextRev = safeInt(current._revision, 1) + 1;
       await writeCompanyStateInsideTx(tx, companyId, nextState, nextRev);
+      for (const aliasId of aliasIds) {
+        await writeCompanyStateInsideTx(tx, aliasId, { ...nextState, companyId: aliasId }, nextRev);
+      }
       const committed = await readCompanyStateInsideTx(tx, companyId);
       return { aborted: false, ...mutationResult, state: committed };
     });
   } catch (error) {
     console.error(`[ERP PostgreSQL] Transactional mutation failed for ${companyId}:`, error.message);
-    throw error;
+    return null;
   }
 }
 
 export async function resetCompanyErpStateInPg(companyId, companyName, freshState) {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return null;
   const db = getErpPgDb();
   if (!db) return null;
 
@@ -2175,15 +2576,21 @@ export async function resetCompanyErpStateInPg(companyId, companyName, freshStat
       const existing = await readCompanyStateInsideTx(tx, companyId);
       const nextRev = (existing ? safeInt(existing._revision, 1) : 0) + 1;
       await writeCompanyStateInsideTx(tx, companyId, { ...freshState, companyId, companyName }, nextRev);
+      const aliasIds = await findMatchingAliasCompanyIdsInTx(tx, companyId, companyName);
+      for (const aliasId of aliasIds) {
+        await writeCompanyStateInsideTx(tx, aliasId, { ...freshState, companyId: aliasId, companyName }, nextRev);
+      }
       return await readCompanyStateInsideTx(tx, companyId);
     });
   } catch (error) {
     console.error(`[ERP PostgreSQL] Reset failed for ${companyId}:`, error.message);
-    throw new Error('خطا در خام‌سازی دیتابیس شرکت در PostgreSQL.', { cause: error });
+    return null;
   }
 }
 
 export async function getAllCompanyStatsFromPg() {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return null;
   const db = getErpPgDb();
   if (!db) return null;
 
@@ -2230,6 +2637,7 @@ export async function getAllCompanyStatsFromPg() {
     const statsByCompany = new Map();
     for (const c of companiesRows) {
       statsByCompany.set(c.companyId, {
+        companyName: c.companyName,
         activeFiscalYear: c.activeFiscalYear,
         fiscalYears: Array.isArray(c.fiscalYears) ? c.fiscalYears : ['1405', '1404'],
         stats: {
@@ -2249,42 +2657,12 @@ export async function getAllCompanyStatsFromPg() {
   }
 }
 
-let backupTableEnsured = false;
-
-async function ensureBackupTableInPg() {
-  if (backupTableEnsured) return;
-  const pool = getErpPgPool();
-  if (!pool) return;
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS erp_company_backups (
-        id TEXT PRIMARY KEY,
-        company_id TEXT NOT NULL,
-        company_name TEXT NOT NULL,
-        file_name TEXT NOT NULL,
-        format TEXT NOT NULL DEFAULT 'json.gz',
-        backup_kind TEXT NOT NULL DEFAULT 'manual',
-        size_bytes INTEGER NOT NULL DEFAULT 0,
-        compressed_size_bytes INTEGER NOT NULL DEFAULT 0,
-        record_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
-        checksum_sha256 TEXT NOT NULL DEFAULT '',
-        created_by TEXT NOT NULL DEFAULT 'system',
-        created_at_ms BIGINT NOT NULL DEFAULT 0,
-        created_date_jalali TEXT NOT NULL DEFAULT ''
-      );
-      CREATE INDEX IF NOT EXISTS idx_erp_backups_company_time ON erp_company_backups (company_id, created_at_ms);
-    `);
-    backupTableEnsured = true;
-  } catch (error) {
-    console.warn('[ERP PostgreSQL] Auto-create erp_company_backups warning:', error.message);
-  }
-}
-
 export async function recordCompanyBackupMetadataInPg(record) {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return null;
   const db = getErpPgDb();
   if (!db) return null;
   try {
-    await ensureBackupTableInPg();
     await db
       .insert(erpCompanyBackups)
       .values(record)
@@ -2300,10 +2678,11 @@ export async function recordCompanyBackupMetadataInPg(record) {
 }
 
 export async function listCompanyBackupsFromPg(companyId) {
+  const ready = await ensureErpPostgresSchemaReady();
+  if (!ready) return [];
   const db = getErpPgDb();
   if (!db) return [];
   try {
-    await ensureBackupTableInPg();
     return await db
       .select()
       .from(erpCompanyBackups)

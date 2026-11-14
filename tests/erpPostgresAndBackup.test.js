@@ -304,11 +304,80 @@ test('Offline PostgreSQL DDL initializer is 100% idempotent, covers all 26 table
     }),
   };
 
-  const res = await applyIdempotentErpSchema(fakePool);
+  const res = await applyIdempotentErpSchema(fakePool, null);
   assert.equal(res.appliedStatements, ERP_SCHEMA_DDL_STATEMENTS.length);
   assert.equal(executed[0], 'BEGIN');
   assert.equal(executed[executed.length - 1], 'COMMIT');
   assert.equal(released, true);
+});
+
+test('PostgreSQL runtime auto-schema, health probe, and company ID alias reconciliation (comp_lepan <-> ms4r33kfd64d2iqaszb)', async () => {
+  const {
+    isPostgresConfigured,
+    ensureErpPostgresSchemaReady,
+    probeErpPostgresHealth,
+    normalizeErpCompanyName,
+    getCompanyLegacyAliasIds,
+    saveCompanyErpStateToPg,
+    getCompanyErpStateFromPg,
+  } = await import('../backend/erp-pg-repository.js');
+
+  assert.equal(normalizeErpCompanyName('شرکت تولیدی لپان بافت'), normalizeErpCompanyName('شرکت لپان بافت'));
+  const aliases = getCompanyLegacyAliasIds('ms4r33kfd64d2iqaszb', 'شرکت لپان بافت');
+  assert.ok(aliases.includes('comp_lepan'), 'comp_lepan must be recognized as legacy alias for شرکت لپان بافت');
+
+  if (isPostgresConfigured()) {
+    const schemaReady = await ensureErpPostgresSchemaReady(true);
+    assert.equal(schemaReady, true, 'PostgreSQL schema should initialize cleanly');
+
+    const health = await probeErpPostgresHealth();
+    assert.equal(health.connected, true);
+    assert.equal(health.storageEngine, 'postgresql');
+    assert.ok(health.tablesCount >= 25, `Expected at least 25 erp_* tables, found ${health.tablesCount}`);
+
+    // Simulate Web saving production voucher PRD-14050823-0001 under legacy ID comp_lepan
+    const legacyStateWithProd = makeCompanyState('comp_lepan', 'شرکت تولیدی لپان بافت', {
+      productionVouchers: [
+        {
+          id: 'pv_test_lepan_1',
+          voucherNo: 'PRD-14050823-0001',
+          archiveCode: 'ARC-14050823-0001',
+          dateJalali: '1405/08/23',
+          timeExact: '12:02:16',
+          lineId: 'comp_lepan_line_1',
+          lineName: 'خط ۱',
+          itemId: 'comp_lepan_item_1',
+          itemCode: 'IT-1',
+          itemName: 'نخ لپان',
+          cartonsCount: 1,
+          totalGrossWeightKg: 26.25,
+          totalTareKg: 1.45,
+          totalNetWeightKg: 24.8,
+          operatorName: 'محمد ابراهیم حیدری',
+          cartonIds: ['comp_lepan_ctn_1'],
+          status: 'DELIVERED_TO_WAREHOUSE',
+          notes: 'تست همگام‌سازی وب و ویندوز',
+        },
+      ],
+    });
+
+    await saveCompanyErpStateToPg('comp_lepan', legacyStateWithProd, 'شرکت تولیدی لپان بافت');
+
+    // Now simulate Windows Desktop querying with settings company ID ms4r33kfd64d2iqaszb for شرکت لپان بافت
+    const reconciledState = await getCompanyErpStateFromPg(
+      'ms4r33kfd64d2iqaszb',
+      'شرکت لپان بافت',
+      null,
+      null
+    );
+
+    assert.ok(reconciledState, 'State must be returned from PostgreSQL');
+    assert.equal(reconciledState.companyId, 'ms4r33kfd64d2iqaszb');
+    assert.ok(
+      reconciledState.productionVouchers.some((pv) => pv.voucherNo === 'PRD-14050823-0001'),
+      'Production voucher PRD-14050823-0001 saved under comp_lepan must automatically reconcile into ms4r33kfd64d2iqaszb!'
+    );
+  }
 });
 
 test('Windows install-drive PostgreSQL script protects C: drive, existing .env/pgdata, and organizational SQL processes', () => {

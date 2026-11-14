@@ -9269,6 +9269,35 @@ function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی ل�
     return target;
 }
 
+function getCompanyAliasKeysInDb(db, compId, compName) {
+    const aliasSet = new Set(erpPg.getCompanyLegacyAliasIds(compId, compName));
+    const normTarget = erpPg.normalizeErpCompanyName(compName);
+    const map = db?.industrialErp?.companiesData || {};
+    for (const [k, val] of Object.entries(map)) {
+        if (!k || k === compId) continue;
+        const normKeyName = erpPg.normalizeErpCompanyName(val?.companyName || '');
+        if (normTarget && normKeyName && (normTarget === normKeyName || normTarget.includes(normKeyName) || normKeyName.includes(normTarget))) {
+            aliasSet.add(k);
+        }
+    }
+    return Array.from(aliasSet);
+}
+
+function syncCompanyStateAcrossAliasesInDb(db, compId, compName, finalState) {
+    if (!db.industrialErp) db.industrialErp = {};
+    if (!db.industrialErp.companiesData) db.industrialErp.companiesData = {};
+    db.industrialErp.companiesData[compId] = finalState;
+    const aliases = getCompanyAliasKeysInDb(db, compId, compName || finalState?.companyName);
+    for (const aliasKey of aliases) {
+        if (db.industrialErp.companiesData[aliasKey]) {
+            db.industrialErp.companiesData[aliasKey] = {
+                ...finalState,
+                companyId: compId
+            };
+        }
+    }
+}
+
 function ensureIndustrialErpStructure(db, requestedCompanyId = null, requestedCompanyName = null) {
     const companies = getErpCompaniesList(db);
     const primaryCompany = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
@@ -9288,7 +9317,7 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null, requestedCo
         db.industrialErp.companiesData[primaryCompany.id] = hydrateCompanyErpState(rootClone, primaryCompany.name, true, primaryCompany);
     }
 
-    // Ensure every company in settings.companies has an isolated ERP state
+    // Ensure every company in settings.companies has an isolated ERP state & absorbs any legacy alias keys (e.g. comp_lepan -> ms4r33kfd64d2iqaszb)
     companies.forEach((comp, idx) => {
         if (!db.industrialErp.companiesData[comp.id]) {
             db.industrialErp.companiesData[comp.id] = hydrateCompanyErpState(
@@ -9300,22 +9329,49 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null, requestedCo
         } else {
             hydrateCompanyErpState(db.industrialErp.companiesData[comp.id], comp.name, idx === 0, comp);
         }
+
+        const aliases = getCompanyAliasKeysInDb(db, comp.id, comp.name);
+        for (const aliasKey of aliases) {
+            const aliasState = db.industrialErp.companiesData[aliasKey];
+            if (aliasState && typeof aliasState === 'object') {
+                const curState = db.industrialErp.companiesData[comp.id];
+                const merged = erpPg.mergeConcurrentErpStates(
+                    curState,
+                    aliasState,
+                    0,
+                    Math.max(Number(curState?._revision || 1), Number(aliasState?._revision || 1))
+                );
+                merged.companyId = comp.id;
+                merged.companyName = comp.name;
+                delete merged.companiesData;
+                delete merged._deletedIds;
+                db.industrialErp.companiesData[comp.id] = hydrateCompanyErpState(merged, comp.name, idx === 0, comp);
+                db.industrialErp.companiesData[aliasKey] = db.industrialErp.companiesData[comp.id];
+            }
+        }
     });
 
-    // Resolve requested company strictly by ID first, then by exact/partial companyName
+    // Resolve requested company by canonical ID, alias ID, or normalized Persian companyName
     let targetCompanyId = primaryCompany.id;
     const cleanId = requestedCompanyId ? String(requestedCompanyId).trim() : '';
     const cleanName = requestedCompanyName ? String(requestedCompanyName).trim() : '';
-    if (cleanId && db.industrialErp.companiesData[cleanId]) {
-        targetCompanyId = cleanId;
-    } else if (cleanId || cleanName) {
-        const matched = companies.find(c =>
-            (cleanId && (c.id === cleanId || c.name === cleanId)) ||
-            (cleanName && (c.name === cleanName || c.name?.trim() === cleanName || c.name?.includes(cleanName) || cleanName.includes(c.name)))
-        );
-        if (matched && db.industrialErp.companiesData[matched.id]) {
-            targetCompanyId = matched.id;
+    const normReqName = erpPg.normalizeErpCompanyName(cleanName || cleanId);
+
+    const matchedInSettings = companies.find(c => {
+        if (cleanId && (c.id === cleanId || c.name === cleanId)) return true;
+        const cAliases = erpPg.getCompanyLegacyAliasIds(c.id, c.name);
+        if (cleanId && cAliases.includes(cleanId)) return true;
+        const normComp = erpPg.normalizeErpCompanyName(c.name);
+        if (normReqName && normComp && (normReqName === normComp || normComp.includes(normReqName) || normReqName.includes(normComp))) {
+            return true;
         }
+        return false;
+    });
+
+    if (matchedInSettings && db.industrialErp.companiesData[matchedInSettings.id]) {
+        targetCompanyId = matchedInSettings.id;
+    } else if (cleanId && db.industrialErp.companiesData[cleanId]) {
+        targetCompanyId = cleanId;
     }
 
     const companyState = db.industrialErp.companiesData[targetCompanyId];
@@ -9335,6 +9391,28 @@ function broadcastErpStateUpdated(companyId, companyName, revision) {
         console.warn('[Industrial ERP] SSE broadcast warning:', err?.message);
     }
 }
+
+// Health & storage engine diagnostics for Industrial Accounting ERP (PostgreSQL + Central Server)
+app.get('/api/industrial-erp/health', async (req, res) => {
+    try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        const pgHealth = await erpPg.probeErpPostgresHealth();
+        res.json({
+            ok: true,
+            ...pgHealth,
+            serverTime: Date.now()
+        });
+    } catch (e) {
+        res.status(200).json({
+            ok: true,
+            configured: erpPg.isPostgresConfigured(),
+            connected: false,
+            storageEngine: 'json',
+            lastError: e.message,
+            serverTime: Date.now()
+        });
+    }
+});
 
 // Get list of all ERP Companies (directly synced from Settings) with isolated PostgreSQL/DB KPIs
 app.get('/api/industrial-erp/companies', async (req, res) => {
@@ -9359,12 +9437,21 @@ app.get('/api/industrial-erp/companies', async (req, res) => {
         const result = [];
         for (let idx = 0; idx < targetList.length; idx++) {
             const comp = targetList[idx];
-            const st = ensureIndustrialErpStructure(db, comp.id);
+            const st = ensureIndustrialErpStructure(db, comp.id, comp.name);
             let pgEntry = pgStatsMap ? pgStatsMap.get(comp.id) : null;
+            if (!pgEntry && pgStatsMap) {
+                for (const aliasId of erpPg.getCompanyLegacyAliasIds(comp.id, comp.name)) {
+                    if (pgStatsMap.get(aliasId)) {
+                        pgEntry = pgStatsMap.get(aliasId);
+                        break;
+                    }
+                }
+            }
 
             if (erpPg.isPostgresConfigured() && !pgEntry) {
                 const hydrated = await erpPg.getCompanyErpStateFromPg(comp.id, comp.name, comp, st).catch(() => null);
                 if (hydrated) {
+                    syncCompanyStateAcrossAliasesInDb(db, comp.id, comp.name, hydrated);
                     pgEntry = {
                         activeFiscalYear: hydrated.activeFiscalYear,
                         fiscalYears: hydrated.fiscalYears,
@@ -9514,20 +9601,18 @@ app.post('/api/industrial-erp/clear-company-data', async (req, res) => {
         }).catch(() => {});
 
         const freshState = getDefaultIndustrialErpState(comp.name, false);
-        freshState.companyId = companyId;
+        freshState.companyId = legacyCurrent.companyId || companyId;
         freshState.employees = [];
 
         let finalState = freshState;
         if (erpPg.isPostgresConfigured()) {
-            const pgFresh = await erpPg.resetCompanyErpStateInPg(companyId, comp.name, freshState);
+            const pgFresh = await erpPg.resetCompanyErpStateInPg(freshState.companyId, comp.name, freshState);
             if (pgFresh) finalState = pgFresh;
         }
 
-        if (!db.industrialErp) db.industrialErp = {};
-        if (!db.industrialErp.companiesData) db.industrialErp.companiesData = {};
-        db.industrialErp.companiesData[companyId] = finalState;
+        syncCompanyStateAcrossAliasesInDb(db, freshState.companyId, comp.name, finalState);
         saveDb(db);
-        broadcastErpStateUpdated(companyId, comp.name, finalState?._revision);
+        broadcastErpStateUpdated(freshState.companyId, comp.name, finalState?._revision);
         res.json({ success: true, message: 'داده‌های حسابداری و انبار شرکت با موفقیت خام و صفر گردید. دیتابیس اصلی نرم‌افزار کاملاً دست‌نخورده باقی ماند.', state: finalState });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -9826,8 +9911,14 @@ app.get('/api/industrial-erp/state', async (req, res) => {
             settingsCompany: comp,
             legacyState: legacyErp
         });
+        syncCompanyStateAcrossAliasesInDb(db, legacyErp.companyId, comp?.name || legacyErp.companyName, state);
         saveDb(db);
-        res.json(state);
+        const pgHealth = erpPg.getErpPostgresHealth();
+        res.json({
+            ...state,
+            _storageEngine: pgHealth.storageEngine,
+            _pgConnected: pgHealth.connected
+        });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -9843,7 +9934,7 @@ app.post('/api/industrial-erp/save-state', async (req, res) => {
         const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
         const payload = req.body?.state ? req.body.state : req.body;
 
-        let finalState;
+        let finalState = null;
         let mergedConcurrently = false;
         if (erpPg.isPostgresConfigured()) {
             const pgResult = await erpPg.saveCompanyErpStateToPg(
@@ -9855,9 +9946,12 @@ app.post('/api/industrial-erp/save-state', async (req, res) => {
                     legacyFallbackState: currentLegacy
                 }
             );
-            finalState = pgResult.state;
-            mergedConcurrently = pgResult.mergedConcurrently;
-        } else {
+            if (pgResult?.state) {
+                finalState = pgResult.state;
+                mergedConcurrently = Boolean(pgResult.mergedConcurrently);
+            }
+        }
+        if (!finalState) {
             const incomingRev = payload?._revision;
             const currentRev = Number(currentLegacy._revision || 1) || 1;
             const merged = erpPg.mergeConcurrentErpStates(currentLegacy, payload, incomingRev, currentRev);
@@ -9867,10 +9961,21 @@ app.post('/api/industrial-erp/save-state', async (req, res) => {
             delete finalState._deletedIds;
         }
 
-        db.industrialErp.companiesData[targetId] = finalState;
+        syncCompanyStateAcrossAliasesInDb(db, targetId, comp?.name || currentLegacy.companyName, finalState);
         saveDb(db);
         broadcastErpStateUpdated(targetId, finalState.companyName, finalState._revision);
-        res.json({ success: true, mergedConcurrently, state: finalState });
+        const pgHealth = erpPg.getErpPostgresHealth();
+        res.json({
+            success: true,
+            storageEngine: pgHealth.storageEngine,
+            pgConnected: pgHealth.connected,
+            mergedConcurrently,
+            state: {
+                ...finalState,
+                _storageEngine: pgHealth.storageEngine,
+                _pgConnected: pgHealth.connected
+            }
+        });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -9885,7 +9990,7 @@ app.post('/api/industrial-erp/update-cutover-config', async (req, res) => {
         const targetId = legacyErp.companyId;
         const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
 
-        let updatedState;
+        let updatedState = null;
         if (erpPg.isPostgresConfigured()) {
             const txRes = await erpPg.mutateCompanyErpTransactionally(
                 targetId,
@@ -9899,14 +10004,17 @@ app.post('/api/industrial-erp/update-cutover-config', async (req, res) => {
                     }
                 })
             );
-            updatedState = txRes.state;
-        } else {
+            if (txRes?.state) {
+                updatedState = txRes.state;
+            }
+        }
+        if (!updatedState) {
             legacyErp.cutoverConfig = { ...(legacyErp.cutoverConfig || {}), ...cutoverConfig };
             legacyErp._revision = (Number(legacyErp._revision || 1) || 1) + 1;
             updatedState = legacyErp;
         }
 
-        db.industrialErp.companiesData[targetId] = updatedState;
+        syncCompanyStateAcrossAliasesInDb(db, targetId, comp?.name || legacyErp.companyName, updatedState);
         saveDb(db);
         broadcastErpStateUpdated(targetId, updatedState.companyName, updatedState._revision);
         res.json({ success: true, state: updatedState });
