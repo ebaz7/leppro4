@@ -73,7 +73,7 @@ const generateUUID = utils.generateUUID || (() => Date.now().toString(36) + Math
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = process.cwd(); 
+const ROOT_DIR = fs.existsSync(path.join(process.cwd(), 'package.json')) ? process.cwd() : __dirname; 
 
 // --- CRITICAL FIX FOR PUPPETEER PATH ---
 const PUPPETEER_CACHE = path.join(ROOT_DIR, '.puppeteer');
@@ -765,11 +765,81 @@ app.post(['/api/delete-file', '/delete-file'], (req, res) => {
 
 // --- AUTOMATIC BACKUP LOGIC ---
 let activeBackupJob = null;
+let activeBackupIntervalTimer = null;
+let activePerCompanyBackupTimer = null;
+
+const resolveBackupChatIds = (db) => {
+    const settings = db?.settings || {};
+    const tgIds = new Set();
+    const baleIds = new Set();
+
+    const pushIds = (setRef, rawVal) => {
+        if (!rawVal) return;
+        String(rawVal)
+            .split(/[,،;\n\r]+/)
+            .map(s => s.trim())
+            .filter(Boolean)
+            .forEach(v => setRef.add(utils.sanitizeGroupId ? utils.sanitizeGroupId(v) : v));
+    };
+
+    pushIds(tgIds, settings.backupAdminTelegramChatId || settings.telegramChatId || settings.telegramAdminId || settings.telegramChannelId || settings.telegram_chat_id || settings.defaultTelegramId || settings.telegramGroupId);
+    pushIds(baleIds, settings.backupAdminBaleChatId || settings.baleChatId || settings.baleAdminId || settings.baleChannelId || settings.bale_chat_id || settings.defaultBaleId || settings.baleGroupId);
+
+    // Fallback to configured admin users or general bot targets if dedicated backup admin chat IDs are empty
+    if (tgIds.size === 0 || baleIds.size === 0) {
+        try {
+            const adminUsers = Array.isArray(db?.users)
+                ? db.users.filter(u => String(u?.role || '').toLowerCase() === 'admin' || String(u?.username || '').toLowerCase() === 'admin')
+                : [];
+            adminUsers.forEach(u => {
+                if (tgIds.size === 0 && u?.telegramChatId) pushIds(tgIds, u.telegramChatId);
+                if (baleIds.size === 0 && u?.baleChatId) pushIds(baleIds, u.baleChatId);
+            });
+        } catch {}
+    }
+
+    if ((tgIds.size === 0 || baleIds.size === 0) && typeof collectBotTargets === 'function') {
+        try {
+            const allTargets = collectBotTargets(db, { category: 'all', platforms: ['telegram', 'bale'] });
+            allTargets.forEach(t => {
+                if (t.platform === 'telegram' && tgIds.size === 0) tgIds.add(t.id);
+                if (t.platform === 'bale' && baleIds.size === 0) baleIds.add(t.id);
+            });
+        } catch {}
+    }
+
+    return {
+        tgChatIds: Array.from(tgIds),
+        baleChatIds: Array.from(baleIds)
+    };
+};
+
+const syncPgStatesIntoLegacyDbSnapshot = async (db) => {
+    if (!erpPg.isPostgresConfigured()) return;
+    try {
+        const companies = getErpCompaniesList(db);
+        if (!db.industrialErp) db.industrialErp = {};
+        if (!db.industrialErp.companiesData) db.industrialErp.companiesData = {};
+        for (const comp of companies) {
+            try {
+                const legacySt = ensureIndustrialErpStructure(db, comp.id, comp.name);
+                const fresh = await erpPg.getCompanyErpStateFromPg(comp.id, comp.name, comp, legacySt).catch(() => null);
+                if (fresh) {
+                    db.industrialErp.companiesData[comp.id] = fresh;
+                }
+            } catch {}
+        }
+        saveDb(db);
+    } catch {}
+};
 
 const createDbOnlyBackupZip = async (timestamp) => {
     const filename = `Backup_DB_${timestamp}.zip`;
     const filePath = path.join(BACKUPS_DIR, filename);
     if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+
+    const db = getDb();
+    await syncPgStatesIntoLegacyDbSnapshot(db);
 
     return new Promise((resolve, reject) => {
         const output = fs.createWriteStream(filePath);
@@ -779,149 +849,128 @@ const createDbOnlyBackupZip = async (timestamp) => {
             resolve({ filePath, filename, size: archive.pointer() });
         });
 
+        output.on('error', (err) => reject(err));
         archive.on('error', (err) => reject(err));
         archive.pipe(output);
 
         if (fs.existsSync(DB_FILE)) {
             archive.file(DB_FILE, { name: 'database.json' });
+        } else {
+            archive.append(JSON.stringify(db, null, 2), { name: 'database.json' });
         }
 
         archive.finalize();
     });
 };
 
-const sendBackupToBots = async (filePath, filename, reason = "بکاپ خودکار دیتابیس سیستم", force = false) => {
+const dispatchSpecificBufferToBots = async (buffer, filename, captionText, force = false) => {
     const db = getDb();
     const settings = db.settings || {};
-    
+
     if (!force && !settings.backupBotSendEnabled) {
-        console.log("Bot Backup send is not enabled in settings.");
         return { success: false, message: "ارسال بکاپ به بات در تنظیمات غیرفعال است." };
     }
+    if (!buffer || buffer.length === 0) {
+        return { success: false, message: "محتوای فایل پشتیبان خالی است." };
+    }
 
-    let tgSent = false;
-    let baleSent = false;
-    const errors = [];
+    const { tgChatIds, baleChatIds } = resolveBackupChatIds(db);
+    const hasTgToken = Boolean(settings.telegramBotToken && String(settings.telegramBotToken).trim());
+    const hasBaleToken = Boolean(settings.baleBotToken && String(settings.baleBotToken).trim());
 
-    try {
-        // We ALWAYS send the clean complete database archive (DB-only) to bots to guarantee fast delivery without size/timeout issues
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const dbBackup = await createDbOnlyBackupZip(timestamp);
-        const fileToSend = dbBackup.filePath;
-        const filenameToSend = dbBackup.filename;
-
-        if (!fs.existsSync(fileToSend)) {
-            console.error("Backup file not found to send to bots:", fileToSend);
-            return { success: false, message: "فایل بکاپ یافت نشد" };
-        }
-
-        const buffer = fs.readFileSync(fileToSend);
-        const caption = `📁 نسخه پشتیبان دیتابیس کامل سامانه (${reason})\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 نام فایل: ${filenameToSend}\n✨ شامل کلیه اطلاعات مالی، حواله‌ها، کاربران، چت‌ها و تنظیمات`;
-
-        // Detect Telegram Chat ID from various config fields
-        const tgChatId = settings.backupAdminTelegramChatId || settings.telegramChatId || settings.telegramAdminId || settings.telegramChannelId || settings.telegram_chat_id;
-        if (settings.telegramBotToken && tgChatId) {
-            try {
-                console.log(`Sending DB backup to Telegram admin chat: ${tgChatId}`);
-                const tg = await safeImport('./backend/telegram.js');
-                if (tg && tg.sendBotDocument) {
-                    await tg.sendBotDocument(tgChatId, buffer, filenameToSend, caption);
-                    tgSent = true;
-                    console.log("Backup sent to Telegram successfully ✅");
-                }
-            } catch (tgErr) {
-                console.error("Failed to send backup to Telegram:", tgErr.message);
-                errors.push(`تلگرام: ${tgErr.message}`);
-            }
-        }
-
-        // Detect Bale Chat ID from various config fields
-        const baleChatId = settings.backupAdminBaleChatId || settings.baleChatId || settings.baleAdminId || settings.baleChannelId || settings.bale_chat_id;
-        if (settings.baleBotToken && baleChatId) {
-            try {
-                console.log(`Sending DB backup to Bale admin chat: ${baleChatId}`);
-                const bale = await safeImport('./backend/bale.js');
-                if (bale && bale.sendBotDocument) {
-                    await bale.sendBotDocument(baleChatId, buffer, filenameToSend, caption);
-                    baleSent = true;
-                    console.log("Backup sent to Bale successfully ✅");
-                }
-            } catch (baleErr) {
-                console.error("Failed to send backup to Bale:", baleErr.message);
-                errors.push(`بله: ${baleErr.message}`);
-            }
-        }
-
+    if (!hasTgToken && !hasBaleToken) {
         return {
-            success: tgSent || baleSent,
-            tgSent,
-            baleSent,
-            errors,
-            filenameSent: filenameToSend
+            success: false,
+            tgSent: false,
+            baleSent: false,
+            errors: ['توکن ربات تلگرام یا بله در بخش تنظیمات سیستم -> تب ربات‌ها وارد نشده است.'],
+            message: 'توکن ربات تلگرام یا بله در تنظیمات وارد نشده است.'
         };
-    } catch (e) {
-        console.error("Error in sendBackupToBots:", e);
-        return { success: false, error: e.message };
-    }
-};
-
-// Dispatch a specific isolated file (such as an isolated per-company ERP backup ZIP) to Telegram/Bale bots
-const sendSpecificFileToBots = async (filePath, filename, captionText, force = false) => {
-    const db = getDb();
-    const settings = db.settings || {};
-
-    if (!force && !settings.backupBotSendEnabled) {
-        return { success: false, message: "ارسال بکاپ به بات در تنظیمات غیرفعال است." };
-    }
-    if (!fs.existsSync(filePath)) {
-        return { success: false, message: "فایل پشتیبان یافت نشد." };
     }
 
     let tgSent = false;
     let baleSent = false;
     const errors = [];
-    const buffer = fs.readFileSync(filePath);
+    const tasks = [];
 
-    const tgChatId = settings.backupAdminTelegramChatId || settings.telegramChatId || settings.telegramAdminId || settings.telegramChannelId || settings.telegram_chat_id;
-    if (settings.telegramBotToken && tgChatId) {
-        try {
+    if (hasTgToken && tgChatIds.length > 0) {
+        tasks.push((async () => {
             const tg = await safeImport('./backend/telegram.js');
-            if (tg && tg.sendBotDocument) {
-                await tg.sendBotDocument(tgChatId, buffer, filename, captionText);
-                tgSent = true;
+            if (!tg || !tg.sendBotDocument) throw new Error('ماژول تلگرام در دسترس نیست');
+            for (const chatId of tgChatIds) {
+                try {
+                    await tg.sendBotDocument(chatId, buffer, filename, captionText);
+                    tgSent = true;
+                    break;
+                } catch (err) {
+                    errors.push(`تلگرام (${chatId}): ${err.message}`);
+                }
             }
-        } catch (tgErr) {
-            errors.push(`تلگرام: ${tgErr.message}`);
-        }
-    } else if (!settings.telegramBotToken && !settings.baleBotToken) {
-        errors.push('توکن ربات تلگرام یا بله در تنظیمات وارد نشده است.');
+        })());
+    } else if (hasTgToken) {
+        errors.push('شناسه چت ادمین تلگرام برای بکاپ تنظیم نشده است.');
     }
 
-    const baleChatId = settings.backupAdminBaleChatId || settings.baleChatId || settings.baleAdminId || settings.baleChannelId || settings.bale_chat_id;
-    if (settings.baleBotToken && baleChatId) {
-        try {
+    if (hasBaleToken && baleChatIds.length > 0) {
+        tasks.push((async () => {
             const bale = await safeImport('./backend/bale.js');
-            if (bale && bale.sendBotDocument) {
-                await bale.sendBotDocument(baleChatId, buffer, filename, captionText);
-                baleSent = true;
+            if (!bale || !bale.sendBotDocument) throw new Error('ماژول بله در دسترس نیست');
+            for (const chatId of baleChatIds) {
+                try {
+                    await bale.sendBotDocument(chatId, buffer, filename, captionText);
+                    baleSent = true;
+                    break;
+                } catch (err) {
+                    errors.push(`بله (${chatId}): ${err.message}`);
+                }
             }
-        } catch (baleErr) {
-            errors.push(`بله: ${baleErr.message}`);
-        }
+        })());
+    } else if (hasBaleToken) {
+        errors.push('شناسه چت ادمین بله برای بکاپ تنظیم نشده است.');
     }
 
-    if (!tgSent && !baleSent && errors.length === 0) {
-        errors.push('شناسه چت ادمین (بله یا تلگرام) در تنظیمات بکاپ وارد نشده است.');
-    }
+    await Promise.allSettled(tasks);
 
     return {
         success: tgSent || baleSent,
         tgSent,
         baleSent,
         errors,
-        message: (tgSent || baleSent) ? 'ارسال با موفقیت انجام شد.' : errors.join(' | '),
+        message: (tgSent || baleSent)
+            ? `ارسال با موفقیت انجام شد (${[baleSent ? 'بله ✅' : '', tgSent ? 'تلگرام ✅' : ''].filter(Boolean).join(' | ')})`
+            : (errors.join(' | ') || 'ارسال به بات ناموفق بود.'),
         filenameSent: filename
     };
+};
+
+const sendBackupToBots = async (filePath, filename, reason = "بکاپ خودکار دیتابیس سیستم", force = false) => {
+    try {
+        const db = getDb();
+        const settings = db.settings || {};
+        if (!force && !settings.backupBotSendEnabled) {
+            return { success: false, message: "ارسال بکاپ به بات در تنظیمات غیرفعال است." };
+        }
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const dbBackup = await createDbOnlyBackupZip(timestamp);
+        if (!fs.existsSync(dbBackup.filePath)) {
+            return { success: false, message: "فایل بکاپ یافت نشد" };
+        }
+        const buffer = fs.readFileSync(dbBackup.filePath);
+        const caption = `📁 نسخه پشتیبان دیتابیس کامل سامانه (${reason})\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 نام فایل: ${dbBackup.filename}\n✨ شامل کلیه اطلاعات مالی، حواله‌ها، کاربران، چت‌ها و تنظیمات`;
+        return await dispatchSpecificBufferToBots(buffer, dbBackup.filename, caption, force);
+    } catch (e) {
+        console.error("Error in sendBackupToBots:", e);
+        return { success: false, error: e.message, message: e.message };
+    }
+};
+
+// Dispatch a specific isolated file (such as an isolated per-company ERP backup ZIP) to Telegram/Bale bots
+const sendSpecificFileToBots = async (filePath, filename, captionText, force = false) => {
+    if (!fs.existsSync(filePath)) {
+        return { success: false, message: "فایل پشتیبان یافت نشد." };
+    }
+    const buffer = fs.readFileSync(filePath);
+    return await dispatchSpecificBufferToBots(buffer, filename, captionText, force);
 };
 
 // Automated isolated per-company compressed ERP snapshots (.json.gz with SHA-256 deduplication)
@@ -934,7 +983,7 @@ const performPerCompanyErpAutoBackups = async () => {
         const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
         for (const comp of companies) {
             try {
-                const legacySt = ensureIndustrialErpStructure(db, comp.id);
+                const legacySt = ensureIndustrialErpStructure(db, comp.id, comp.name);
                 const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
                     companyId: comp.id,
                     companyName: comp.name,
@@ -955,21 +1004,20 @@ const performPerCompanyErpAutoBackups = async () => {
                     console.log(`✅ [Per-Company ERP AutoBackup] ${comp.name} -> ${snap.fileName} (${(snap.compressedSizeBytes / 1024).toFixed(1)} KB)`);
                     if (settings.backupBotSendEnabled) {
                         try {
-                            const zipBackup = await erpBackupMgr.createIsolatedCompanyBackupZip({
-                                backupsRootDir: BACKUPS_DIR,
+                            const zipBuf = erpBackupMgr.createIsolatedCompanyBackupZipBuffer({
                                 companyId: comp.id,
                                 companyName: comp.name,
                                 state
                             });
-                            const caption = `🤖 بکاپ خودکار و مجزای حسابداری شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 کارتن‌ها: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBackup.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
-                            const botRes = await sendSpecificFileToBots(
-                                zipBackup.filePath,
-                                zipBackup.filename,
+                            const caption = `🤖 بکاپ خودکار و مجزای حسابداری شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 کارتن‌ها: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBuf.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
+                            const botRes = await dispatchSpecificBufferToBots(
+                                zipBuf.buffer,
+                                zipBuf.filename,
                                 caption,
                                 false
                             );
                             if (botRes?.success) {
-                                console.log(`📤 [Per-Company ERP BotAutoBackup] Sent isolated ZIP for ${comp.name} (${zipBackup.filename})`);
+                                console.log(`📤 [Per-Company ERP BotAutoBackup] Sent isolated ZIP for ${comp.name} (${zipBuf.filename})`);
                             }
                         } catch (botSendErr) {
                             console.warn(`⚠️ [Per-Company ERP BotAutoBackup] Safe offline/bot skip for ${comp.name}:`, botSendErr.message);
@@ -985,68 +1033,101 @@ const performPerCompanyErpAutoBackups = async () => {
     }
 };
 
-const performAutoBackup = () => {
+const performAutoBackup = async () => {
     const db = getDb();
     const settings = db.settings || {};
     const mode = settings.backupMode || 'full'; // 'full' or 'db-only'
-    
+
     console.log(`>>> Starting Automatic Backup (Mode: ${mode})...`);
     try {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16); 
+        if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+        await syncPgStatesIntoLegacyDbSnapshot(db);
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
         const filename = `AutoBackup_${mode === 'full' ? 'Full' : 'DB'}_${timestamp}.zip`;
         const filePath = path.join(BACKUPS_DIR, filename);
-        
-        const output = fs.createWriteStream(filePath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
 
-        output.on('close', () => {
-            console.log(`✅ Auto Backup Created: ${filename} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`);
-            sendBackupToBots(filePath, filename, "بکاپ خودکار دوره‌ای");
-            performPerCompanyErpAutoBackups().catch(() => {});
+        await new Promise((resolve, reject) => {
+            const output = fs.createWriteStream(filePath);
+            const archive = archiver('zip', { zlib: { level: 9 } });
+
+            output.on('close', () => {
+                console.log(`✅ Auto Backup Created: ${filename} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`);
+                resolve(true);
+            });
+
+            output.on('error', reject);
+            archive.on('error', reject);
+            archive.pipe(output);
+
+            if (fs.existsSync(DB_FILE)) {
+                archive.file(DB_FILE, { name: 'database.json' });
+            } else {
+                archive.append(JSON.stringify(db, null, 2), { name: 'database.json' });
+            }
+
+            if (mode === 'full' && fs.existsSync(UPLOADS_DIR)) {
+                archive.directory(UPLOADS_DIR, 'uploads');
+            }
+
+            archive.finalize();
         });
 
-        archive.on('error', (err) => { throw err; });
-        archive.pipe(output);
+        sendBackupToBots(filePath, filename, "بکاپ خودکار دوره‌ای").catch(() => {});
+        await performPerCompanyErpAutoBackups().catch(() => {});
 
-        if (fs.existsSync(DB_FILE)) {
-            archive.file(DB_FILE, { name: 'database.json' });
-        }
-
-        if (mode === 'full' && fs.existsSync(UPLOADS_DIR)) {
-            archive.directory(UPLOADS_DIR, 'uploads');
-        }
-
-        archive.finalize();
-        
-        // Cleanup old backups (keep last 20)
+        // Cleanup old full backups (keep last 20)
         setTimeout(() => {
             try {
                 const files = fs.readdirSync(BACKUPS_DIR).filter(f => f.startsWith('AutoBackup_')).sort();
                 if (files.length > 20) {
                     const toDelete = files.slice(0, files.length - 20);
-                    toDelete.forEach(f => fs.unlinkSync(path.join(BACKUPS_DIR, f)));
+                    toDelete.forEach(f => { try { fs.unlinkSync(path.join(BACKUPS_DIR, f)); } catch {} });
                     console.log(`🧹 Cleaned up ${toDelete.length} old backups.`);
                 }
-            } catch(e) { console.error("Cleanup error", e); }
-        }, 10000); 
-
+            } catch (e) { console.error("Cleanup error", e); }
+        }, 5000);
     } catch (e) {
-        console.error("❌ Automatic Backup Failed:", e);
+        console.error("❌ Automatic Backup Failed:", e?.message || e);
+        // Still attempt per-company ERP backup even if global full archive failed
+        performPerCompanyErpAutoBackups().catch(() => {});
     }
 };
 
 const setupAutoBackup = () => {
     if (activeBackupJob) {
-        activeBackupJob.stop();
+        try { activeBackupJob.stop(); } catch {}
         activeBackupJob = null;
     }
-    
+    if (activeBackupIntervalTimer) {
+        clearInterval(activeBackupIntervalTimer);
+        activeBackupIntervalTimer = null;
+    }
+    if (activePerCompanyBackupTimer) {
+        clearInterval(activePerCompanyBackupTimer);
+        activePerCompanyBackupTimer = null;
+    }
+
     const db = getDb();
-    const intervalHours = Number(db.settings.backupIntervalHours) || 3;
+    const intervalHours = Math.max(1, Math.min(168, Number(db.settings?.backupIntervalHours) || 3));
     console.log(`>>> Scheduling Auto Backup every ${intervalHours} hours.`);
-    
-    // Convert hours to cron expression: 0 */X * * *
-    activeBackupJob = cron.schedule(`0 */${intervalHours} * * *`, performAutoBackup);
+
+    // Use cron for <= 23h schedules, and reliable interval timer for ALL schedules (including 24h/48h)
+    if (intervalHours <= 23) {
+        activeBackupJob = cron.schedule(`0 */${intervalHours} * * *`, () => { performAutoBackup().catch(() => {}); });
+    } else {
+        const intervalMs = intervalHours * 60 * 60 * 1000;
+        activeBackupIntervalTimer = setInterval(() => { performAutoBackup().catch(() => {}); }, intervalMs);
+    }
+
+    // Independent per-company SHA-256 deduplicated snapshot every 30 minutes + 15s after startup
+    activePerCompanyBackupTimer = setInterval(() => {
+        performPerCompanyErpAutoBackups().catch(() => {});
+    }, 30 * 60 * 1000);
+
+    setTimeout(() => {
+        performPerCompanyErpAutoBackups().catch(() => {});
+    }, 15000);
 };
 
 
@@ -9188,7 +9269,7 @@ function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی ل�
     return target;
 }
 
-function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
+function ensureIndustrialErpStructure(db, requestedCompanyId = null, requestedCompanyName = null) {
     const companies = getErpCompaniesList(db);
     const primaryCompany = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
 
@@ -9221,17 +9302,19 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
         }
     });
 
-    // Resolve requested company by ID or by Name
+    // Resolve requested company strictly by ID first, then by exact/partial companyName
     let targetCompanyId = primaryCompany.id;
-    if (requestedCompanyId) {
-        const cleanReq = String(requestedCompanyId).trim();
-        if (db.industrialErp.companiesData[cleanReq]) {
-            targetCompanyId = cleanReq;
-        } else {
-            const matchedByName = companies.find(c => c.id === cleanReq || c.name === cleanReq || c.name?.includes(cleanReq));
-            if (matchedByName && db.industrialErp.companiesData[matchedByName.id]) {
-                targetCompanyId = matchedByName.id;
-            }
+    const cleanId = requestedCompanyId ? String(requestedCompanyId).trim() : '';
+    const cleanName = requestedCompanyName ? String(requestedCompanyName).trim() : '';
+    if (cleanId && db.industrialErp.companiesData[cleanId]) {
+        targetCompanyId = cleanId;
+    } else if (cleanId || cleanName) {
+        const matched = companies.find(c =>
+            (cleanId && (c.id === cleanId || c.name === cleanId)) ||
+            (cleanName && (c.name === cleanName || c.name?.trim() === cleanName || c.name?.includes(cleanName) || cleanName.includes(c.name)))
+        );
+        if (matched && db.industrialErp.companiesData[matched.id]) {
+            targetCompanyId = matched.id;
         }
     }
 
@@ -9240,9 +9323,23 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
     return companyState;
 }
 
+function broadcastErpStateUpdated(companyId, companyName, revision) {
+    try {
+        notificationQueue.dispatchSSEEvent('erp_state_updated', {
+            companyId,
+            companyName: companyName || '',
+            revision: Number(revision) || 1,
+            timestamp: Date.now()
+        }, null, null);
+    } catch (err) {
+        console.warn('[Industrial ERP] SSE broadcast warning:', err?.message);
+    }
+}
+
 // Get list of all ERP Companies (directly synced from Settings) with isolated PostgreSQL/DB KPIs
 app.get('/api/industrial-erp/companies', async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
         const db = getDb();
         const companies = getErpCompaniesList(db);
         ensureIndustrialErpStructure(db);
@@ -9430,6 +9527,7 @@ app.post('/api/industrial-erp/clear-company-data', async (req, res) => {
         if (!db.industrialErp.companiesData) db.industrialErp.companiesData = {};
         db.industrialErp.companiesData[companyId] = finalState;
         saveDb(db);
+        broadcastErpStateUpdated(companyId, comp.name, finalState?._revision);
         res.json({ success: true, message: 'داده‌های حسابداری و انبار شرکت با موفقیت خام و صفر گردید. دیتابیس اصلی نرم‌افزار کاملاً دست‌نخورده باقی ماند.', state: finalState });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -9441,12 +9539,13 @@ app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body && req.body.companyId;
-        if (!companyId) {
+        const companyName = req.body && req.body.companyName;
+        if (!companyId && !companyName) {
             return res.status(400).json({ success: false, error: 'شناسه شرکت برای بکاپ‌گیری اختصاصی الزامی است.' });
         }
         const compList = getErpCompaniesList(db);
-        const comp = compList.find(c => c.id === companyId) || { id: companyId, name: 'شرکت انتخابی' };
-        const legacySt = ensureIndustrialErpStructure(db, comp.id);
+        const legacySt = ensureIndustrialErpStructure(db, companyId, companyName);
+        const comp = compList.find(c => c.id === legacySt.companyId) || { id: legacySt.companyId, name: companyName || legacySt.companyName || 'شرکت انتخابی' };
         const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
             companyId: comp.id,
             companyName: comp.name,
@@ -9454,49 +9553,54 @@ app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
             legacyState: legacySt
         });
 
-        const zipBackup = await erpBackupMgr.createIsolatedCompanyBackupZip({
-            backupsRootDir: BACKUPS_DIR,
+        const zipBuf = erpBackupMgr.createIsolatedCompanyBackupZipBuffer({
             companyId: comp.id,
             companyName: comp.name,
             state
         });
 
         const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
-        const snap = await erpBackupMgr.createIsolatedCompanySnapshot({
-            backupsRootDir: BACKUPS_DIR,
-            companyId: comp.id,
-            companyName: comp.name,
-            state,
-            backupKind: 'bot',
-            createdBy: req.body?.createdBy || 'bot-export',
-            createdDateJalali: todayJalali
-        });
+        let snapFileName = '';
+        try {
+            const snap = await erpBackupMgr.createIsolatedCompanySnapshot({
+                backupsRootDir: BACKUPS_DIR,
+                companyId: comp.id,
+                companyName: comp.name,
+                state,
+                backupKind: 'bot',
+                createdBy: req.body?.createdBy || 'bot-export',
+                createdDateJalali: todayJalali
+            });
+            snapFileName = snap.fileName;
+        } catch (snapErr) {
+            console.warn('[Backup-to-Bot] Snapshot disk warning (continuing bot send):', snapErr?.message);
+        }
 
-        const caption = `📁 نسخه پشتیبان اختصاصی و مجزای شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 تعداد کارتن: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBackup.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
-        const botResult = await sendSpecificFileToBots(
-            zipBackup.filePath,
-            zipBackup.filename,
+        const caption = `📁 نسخه پشتیبان اختصاصی و مجزای شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 تعداد کارتن: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBuf.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
+        const botResult = await dispatchSpecificBufferToBots(
+            zipBuf.buffer,
+            zipBuf.filename,
             caption,
             true
         );
         if (!botResult.success) {
-            return res.status(400).json({
+            return res.status(200).json({
                 success: false,
                 message: botResult.message || 'ارسال به بات ناموفق بود (لطفاً توکن ربات و شناسه چت ادمین را بررسی کنید).',
-                filename: zipBackup.filename,
-                snapshotFileName: snap.fileName,
+                filename: zipBuf.filename,
+                snapshotFileName: snapFileName,
                 botResult
             });
         }
         res.json({
             success: true,
-            message: `بکاپ اختصاصی شرکت «${comp.name}» با موفقیت تهیه و به‌صورت کاملاً مجزا به بات ارسال گردید.`,
-            filename: zipBackup.filename,
-            snapshotFileName: snap.fileName,
+            message: `بکاپ اختصاصی شرکت «${comp.name}» با موفقیت تهیه و به‌صورت کاملاً مجزا به بات ارسال گردید (${[botResult.baleSent ? 'بله ✅' : '', botResult.tgSent ? 'تلگرام ✅' : ''].filter(Boolean).join(' و ')}).`,
+            filename: zipBuf.filename,
+            snapshotFileName: snapFileName,
             botResult
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ success: false, error: e.message, message: e.message });
     }
 });
 
@@ -9505,8 +9609,9 @@ app.get('/api/industrial-erp/download-backup', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.query.companyId;
+        const companyName = req.query.companyName;
         const format = String(req.query.format || 'json').toLowerCase();
-        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const legacySt = ensureIndustrialErpStructure(db, companyId, companyName);
         const targetId = legacySt.companyId;
         const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
         const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
@@ -9520,15 +9625,15 @@ app.get('/api/industrial-erp/download-backup', async (req, res) => {
         const ts = Date.now();
 
         if (format === 'zip') {
-            const zipRes = await erpBackupMgr.createIsolatedCompanyBackupZip({
-                backupsRootDir: BACKUPS_DIR,
+            const zipBuf = erpBackupMgr.createIsolatedCompanyBackupZipBuffer({
                 companyId: targetId,
                 companyName: state.companyName,
                 state
             });
-            res.setHeader('Content-Disposition', `attachment; filename="${zipRes.filename}"`);
+            res.setHeader('Content-Disposition', `attachment; filename="${zipBuf.filename}"`);
             res.setHeader('Content-Type', 'application/zip');
-            return res.sendFile(zipRes.filePath);
+            res.setHeader('Content-Length', String(zipBuf.buffer.length));
+            return res.send(zipBuf.buffer);
         }
 
         const envelope = erpBackupMgr.buildIsolatedCompanyBackupEnvelope(
@@ -9543,13 +9648,16 @@ app.get('/api/industrial-erp/download-backup', async (req, res) => {
             const filename = `ERP_Backup_${safeComp}_${ts}.json.gz`;
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
             res.setHeader('Content-Type', 'application/gzip');
+            res.setHeader('Content-Length', String(gzBuf.length));
             return res.send(gzBuf);
         }
 
         const filename = `ERP_Backup_${safeComp}_${ts}.json`;
+        const jsonBuf = Buffer.from(JSON.stringify(envelope, null, 2), 'utf8');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.send(JSON.stringify(envelope, null, 2));
+        res.setHeader('Content-Length', String(jsonBuf.length));
+        res.send(jsonBuf);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -9560,8 +9668,9 @@ app.get('/api/industrial-erp/company-backups', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.query.companyId;
-        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
-        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const companyName = req.query.companyName;
+        if (!companyId && !companyName) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
+        const legacySt = ensureIndustrialErpStructure(db, companyId, companyName);
         const list = await erpBackupMgr.listIsolatedCompanySnapshots(BACKUPS_DIR, legacySt.companyId);
         res.json({ success: true, companyId: legacySt.companyId, backups: list });
     } catch (e) {
@@ -9572,16 +9681,23 @@ app.get('/api/industrial-erp/company-backups', async (req, res) => {
 // Download a specific isolated snapshot file for this company (path traversal protected)
 app.get('/api/industrial-erp/company-backups/download', (req, res) => {
     try {
+        const db = getDb();
         const companyId = req.query.companyId;
+        const companyName = req.query.companyName;
         const fileName = path.basename(String(req.query.fileName || ''));
-        if (!companyId || !fileName) return res.status(400).json({ error: 'پارامترهای شرکت و فایل الزامی است.' });
-        const companyDir = erpBackupMgr.getCompanyBackupDir(BACKUPS_DIR, companyId);
+        if ((!companyId && !companyName) || !fileName) return res.status(400).json({ error: 'پارامترهای شرکت و فایل الزامی است.' });
+        const legacySt = ensureIndustrialErpStructure(db, companyId, companyName);
+        const companyDir = erpBackupMgr.getCompanyBackupDir(BACKUPS_DIR, legacySt.companyId);
         const fullPath = path.resolve(companyDir, fileName);
         if (!fullPath.startsWith(path.resolve(companyDir)) || !fs.existsSync(fullPath)) {
             return res.status(404).json({ error: 'فایل پشتیبان در بایگانی اختصاصی این شرکت یافت نشد.' });
         }
+        const fileBuf = fs.readFileSync(fullPath);
+        const mime = fileName.endsWith('.zip') ? 'application/zip' : fileName.endsWith('.gz') ? 'application/gzip' : 'application/json; charset=utf-8';
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.sendFile(fullPath);
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Length', String(fileBuf.length));
+        res.send(fileBuf);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -9591,9 +9707,9 @@ app.get('/api/industrial-erp/company-backups/download', (req, res) => {
 app.post('/api/industrial-erp/create-company-backup', async (req, res) => {
     try {
         const db = getDb();
-        const { companyId, createdBy = 'کاربر سیستم' } = req.body || {};
-        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
-        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const { companyId, companyName, createdBy = 'کاربر سیستم' } = req.body || {};
+        if (!companyId && !companyName) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
+        const legacySt = ensureIndustrialErpStructure(db, companyId, companyName);
         const targetId = legacySt.companyId;
         const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
         const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
@@ -9630,15 +9746,16 @@ app.post('/api/industrial-erp/restore-company-backup', async (req, res) => {
         const db = getDb();
         const {
             companyId,
+            companyName,
             fileName,
             backupContentBase64,
             backupData,
             allowCrossCompanyImport = false,
             restoredBy = 'کاربر سیستم'
         } = req.body || {};
-        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
+        if (!companyId && !companyName) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
 
-        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const legacySt = ensureIndustrialErpStructure(db, companyId, companyName);
         const targetId = legacySt.companyId;
         const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
         const targetName = comp?.name || legacySt.companyName;
@@ -9689,6 +9806,7 @@ app.post('/api/industrial-erp/restore-company-backup', async (req, res) => {
             recordCounts: restored.recordCounts,
             message: `بکاپ اختصاصی شرکت «${targetName}» با موفقیت بازیابی گردید (سایر شرکت‌ها و دیتابیس اصلی کاملاً دست‌نخورده ماندند).`
         });
+        broadcastErpStateUpdated(targetId, targetName, restored?.state?._revision);
     } catch (e) {
         res.status(400).json({ success: false, error: e.message });
     }
@@ -9696,9 +9814,11 @@ app.post('/api/industrial-erp/restore-company-backup', async (req, res) => {
 
 app.get('/api/industrial-erp/state', async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
         const db = getDb();
         const companyId = req.query.companyId || null;
-        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const companyName = req.query.companyName || null;
+        const legacyErp = ensureIndustrialErpStructure(db, companyId, companyName);
         const comp = getErpCompaniesList(db).find(c => c.id === legacyErp.companyId) || null;
         const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
             companyId: legacyErp.companyId,
@@ -9717,7 +9837,8 @@ app.post('/api/industrial-erp/save-state', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body?.companyId || req.query?.companyId || null;
-        const currentLegacy = ensureIndustrialErpStructure(db, companyId);
+        const companyName = req.body?.companyName || req.body?.state?.companyName || req.query?.companyName || null;
+        const currentLegacy = ensureIndustrialErpStructure(db, companyId, companyName);
         const targetId = currentLegacy.companyId;
         const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
         const payload = req.body?.state ? req.body.state : req.body;
@@ -9737,12 +9858,18 @@ app.post('/api/industrial-erp/save-state', async (req, res) => {
             finalState = pgResult.state;
             mergedConcurrently = pgResult.mergedConcurrently;
         } else {
-            finalState = { ...currentLegacy, ...payload, companyId: targetId };
+            const incomingRev = payload?._revision;
+            const currentRev = Number(currentLegacy._revision || 1) || 1;
+            const merged = erpPg.mergeConcurrentErpStates(currentLegacy, payload, incomingRev, currentRev);
+            const nextRev = currentRev + 1;
+            finalState = { ...merged, companyId: targetId, _revision: nextRev };
             delete finalState.companiesData;
+            delete finalState._deletedIds;
         }
 
         db.industrialErp.companiesData[targetId] = finalState;
         saveDb(db);
+        broadcastErpStateUpdated(targetId, finalState.companyName, finalState._revision);
         res.json({ success: true, mergedConcurrently, state: finalState });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -9775,11 +9902,13 @@ app.post('/api/industrial-erp/update-cutover-config', async (req, res) => {
             updatedState = txRes.state;
         } else {
             legacyErp.cutoverConfig = { ...(legacyErp.cutoverConfig || {}), ...cutoverConfig };
+            legacyErp._revision = (Number(legacyErp._revision || 1) || 1) + 1;
             updatedState = legacyErp;
         }
 
         db.industrialErp.companiesData[targetId] = updatedState;
         saveDb(db);
+        broadcastErpStateUpdated(targetId, updatedState.companyName, updatedState._revision);
         res.json({ success: true, state: updatedState });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -10000,6 +10129,7 @@ app.post('/api/industrial-erp/sync-sayan-inventory-barcodes', async (req, res) =
         }
         db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
+        broadcastErpStateUpdated(erp.companyId, finalErp.companyName, finalErp._revision);
 
         res.json({
             success: true,
@@ -10098,6 +10228,7 @@ app.post('/api/industrial-erp/lookup-any-barcode', async (req, res) => {
                 }
                 db.industrialErp.companiesData[erp.companyId] = finalErp;
                 saveDb(db);
+                broadcastErpStateUpdated(erp.companyId, finalErp.companyName, finalErp._revision);
                 return res.json({ success: true, carton: importedCarton, source: 'SAYAN_LIVE', state: finalErp });
             }
         } catch (sayanErr) {
@@ -10269,6 +10400,7 @@ app.post('/api/industrial-erp/factory-exit-remittance', async (req, res) => {
         }
         db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
+        broadcastErpStateUpdated(erp.companyId, finalErp.companyName, finalErp._revision);
 
         res.json({
             success: true,
@@ -10438,6 +10570,7 @@ app.post('/api/industrial-erp/tehran-price-and-invoice', async (req, res) => {
         }
         db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
+        broadcastErpStateUpdated(erp.companyId, finalErp.companyName, finalErp._revision);
 
         res.json({
             success: true,
@@ -10601,6 +10734,7 @@ app.post('/api/industrial-erp/import-sayan-trial-balance', async (req, res) => {
         }
         db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
+        broadcastErpStateUpdated(erp.companyId, finalErp.companyName, finalErp._revision);
 
         res.json({
             success: true,
@@ -14510,8 +14644,10 @@ app.get('/api/backups/download/:filename', (req, res) => {
 });
 
 // FULL BACKUP (ZIP with DB + UPLOADS) - MANUAL TRIGGER
-app.get('/api/full-backup', (req, res) => {
+app.get('/api/full-backup', async (req, res) => {
     try {
+        const db = getDb();
+        await syncPgStatesIntoLegacyDbSnapshot(db);
         const archive = archiver('zip', { zlib: { level: 9 } });
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         const filename = `Full_Backup_${timestamp}.zip`;
@@ -14520,12 +14656,13 @@ app.get('/api/full-backup', (req, res) => {
         archive.pipe(res);
         
         if (fs.existsSync(DB_FILE)) archive.file(DB_FILE, { name: 'database.json' });
+        else archive.append(JSON.stringify(db, null, 2), { name: 'database.json' });
         if (fs.existsSync(UPLOADS_DIR)) archive.directory(UPLOADS_DIR, 'uploads');
         
         archive.finalize();
     } catch (e) {
         console.error("Manual Backup Error:", e);
-        res.status(500).send("Backup Generation Failed");
+        if (!res.headersSent) res.status(500).send("Backup Generation Failed");
     }
 });
 

@@ -13,10 +13,13 @@ import {
 } from './erp-pg-repository.js';
 
 export const sanitizeCompanyFolderName = (companyId) => {
-  const clean = String(companyId || 'default_company')
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, '_');
-  return clean || 'default_company';
+  const raw = String(companyId || 'default_company').trim();
+  const clean = raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!clean || /^_+$/.test(clean)) {
+    const hash = crypto.createHash('sha1').update(raw, 'utf8').digest('hex').slice(0, 10);
+    return `comp_${hash}`;
+  }
+  return clean;
 };
 
 export const getCompanyBackupDir = (backupsRootDir, companyId) => {
@@ -211,6 +214,31 @@ export async function listIsolatedCompanySnapshots(backupsRootDir, companyId) {
   });
 }
 
+// Builds an in-memory ZIP buffer for a single company's ERP backup (works even if disk write fails)
+export function createIsolatedCompanyBackupZipBuffer({
+  companyId,
+  companyName,
+  state,
+}) {
+  const engine = isPostgresConfigured() ? 'postgresql' : 'json';
+  const envelope = buildIsolatedCompanyBackupEnvelope(companyId, companyName, state, engine);
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const safeComp = sanitizeCompanyFolderName(companyId);
+  const zipFileName = `ERP_Backup_${safeComp}_${ts}.zip`;
+  const innerJsonName = `ERP_${safeComp}_${ts}.json`;
+
+  const zip = new AdmZip();
+  zip.addFile(innerJsonName, Buffer.from(JSON.stringify(envelope, null, 2), 'utf8'));
+  const buffer = zip.toBuffer();
+
+  return {
+    buffer,
+    filename: zipFileName,
+    size: buffer.length,
+    envelope,
+  };
+}
+
 // Creates a compact ZIP file containing ONLY a single company's ERP backup JSON
 export async function createIsolatedCompanyBackupZip({
   backupsRootDir,
@@ -232,6 +260,7 @@ export async function createIsolatedCompanyBackupZip({
     const archive = archiver('zip', { zlib: { level: 9 } });
     output.on('close', () => resolve({ filePath: zipFilePath, filename: zipFileName, size: archive.pointer() }));
     archive.on('error', reject);
+    output.on('error', reject);
     archive.pipe(output);
     archive.append(JSON.stringify(envelope, null, 2), { name: innerJsonName });
     archive.finalize();

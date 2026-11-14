@@ -236,6 +236,20 @@ function connectSSE(currentUser: User) {
             }
         });
 
+        // Listen for Industrial ERP cross-client state updates (Web <-> Windows <-> Android)
+        eventSourceInstance.addEventListener('erp_state_updated', (event: MessageEvent) => {
+            resetWatchdog(currentUser);
+            try {
+                const payload = JSON.parse(event.data);
+                if (!payload || !payload.companyId) return;
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('ERP_STATE_UPDATED_REALTIME', { detail: payload }));
+                }
+            } catch (err) {
+                console.warn('[SSE] Error handling erp_state_updated event:', err);
+            }
+        });
+
         eventSourceInstance.onerror = (err) => {
             console.warn('[SSE] Stream disconnected or network interrupted:', err);
             reconnectSSE(currentUser);

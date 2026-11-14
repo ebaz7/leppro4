@@ -33,9 +33,12 @@ import {
   RotateCcw,
   FileArchive,
   History,
-  ShieldCheck
+  ShieldCheck,
+  Server,
+  FileSpreadsheet
 } from 'lucide-react';
-import { apiCall, getEffectiveApiUrl, getAuthToken } from '../services/apiService';
+import { apiCall, getEffectiveApiUrl, getAuthToken, getServerHost } from '../services/apiService';
+import { saveBlobAndOpenFile } from '../services/fileService';
 import { getSettings } from '../services/storageService';
 import { User, UserRole } from '../types';
 import {
@@ -116,7 +119,7 @@ const getCachedCompanyErpState = (companyId: string, companyName: string): Indus
     const raw = localStorage.getItem(`delcom_erp_state_${companyId}`);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+      if (parsed && Array.isArray(parsed.items)) {
         return {
           ...createDefaultIndustrialErpState(companyId, companyName),
           ...parsed,
@@ -127,6 +130,17 @@ const getCachedCompanyErpState = (companyId: string, companyName: string): Indus
     }
   } catch {}
   return createDefaultIndustrialErpState(companyId, companyName);
+};
+
+const getPendingSyncStorageKey = (companyId: string) => `delcom_erp_pending_sync_${companyId}`;
+
+const getConnectedCentralServerLabel = (): string => {
+  const configured = getServerHost();
+  if (configured) return configured;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return 'سرور مرکزی';
 };
 
 export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModuleProps> = ({
@@ -183,7 +197,16 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   });
   const [loading, setLoading] = useState<boolean>(false);
   const [, setSaving] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'pending' | 'offline'>('synced');
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [syncErrorMsg, setSyncErrorMsg] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const erpStateRef = React.useRef<IndustrialErpState | null>(erpState);
+  erpStateRef.current = erpState;
+  const selectedCompanyRef = React.useRef<ErpCompanySummary | null>(selectedCompany);
+  selectedCompanyRef.current = selectedCompany;
+  const syncInFlightRef = React.useRef<boolean>(false);
 
   // Sayan Cutover & Barcode Sync Shared Handlers
   const [cutoffDateInput, setCutoffDateInput] = useState<string>('1405/08/20');
@@ -214,18 +237,25 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   const [restoringCompanyBackup, setRestoringCompanyBackup] = useState<boolean>(false);
   const [confirmRestoreFileName, setConfirmRestoreFileName] = useState<string | null>(null);
   const [pendingUploadBackup, setPendingUploadBackup] = useState<{ fileName: string; base64: string; allowCrossCompany: boolean } | null>(null);
+  const [backupModalStatus, setBackupModalStatus] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  const loadCompanyBackupsList = async (compId: string) => {
+  const loadCompanyBackupsList = async (compId: string, compName?: string) => {
     setLoadingCompanyBackups(true);
     try {
-      const res = await apiCall<{ success: boolean; backups: CompanyBackupSnapshotMeta[] }>(
-        `/industrial-erp/company-backups?companyId=${encodeURIComponent(compId)}`
+      const targetName = compName || selectedCompanyRef.current?.name || '';
+      const res = await apiCall<{ success: boolean; backups?: CompanyBackupSnapshotMeta[]; error?: string }>(
+        `/industrial-erp/company-backups?companyId=${encodeURIComponent(compId)}&companyName=${encodeURIComponent(targetName)}&_t=${Date.now()}`
       );
       if (res?.success && Array.isArray(res.backups)) {
         setCompanyBackupsList(res.backups);
+      } else if (res?.error) {
+        setBackupModalStatus({ type: 'error', text: res.error });
       }
-    } catch {
-      // Intranet offline fallback
+    } catch (err: any) {
+      setBackupModalStatus({
+        type: 'error',
+        text: err?.message || 'خطا در دریافت فهرست آرشیو بکاپ‌های شرکت از سرور مرکزی'
+      });
     } finally {
       setLoadingCompanyBackups(false);
     }
@@ -235,27 +265,45 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     if (!selectedCompany) return;
     setConfirmRestoreFileName(null);
     setPendingUploadBackup(null);
+    setBackupModalStatus(null);
     setShowCompanyBackupModal(true);
-    loadCompanyBackupsList(selectedCompany.id);
+    loadCompanyBackupsList(selectedCompany.id, selectedCompany.name);
   };
 
   const handleBackupToBot = async () => {
     if (!selectedCompany) return;
     setBackingUpToBot(true);
+    setBackupModalStatus({ type: 'info', text: 'در حال آماده‌سازی فایل فشرده اختصاصی شرکت و ارسال همزمان به بات‌های بله و تلگرام...' });
     try {
-      const res = await apiCall<{ success: boolean; message?: string; error?: string; filename?: string; botResult?: any }>(
-        '/industrial-erp/backup-to-bot',
-        'POST',
-        { companyId: selectedCompany.id, createdBy: currentUser.fullName }
-      );
+      const res = await apiCall<{
+        success: boolean;
+        message?: string;
+        error?: string;
+        filename?: string;
+        snapshotFileName?: string;
+        botResult?: any;
+      }>('/industrial-erp/backup-to-bot', 'POST', {
+        companyId: selectedCompany.id,
+        companyName: selectedCompany.name,
+        createdBy: currentUser.fullName
+      });
       if (res && res.success) {
-        showToast('success', res.message || `بکاپ اختصاصی شرکت با موفقیت به بات ارسال گردید (${res.filename || ''})`);
-        if (showCompanyBackupModal) loadCompanyBackupsList(selectedCompany.id);
+        const msg = res.message || `بکاپ اختصاصی شرکت با موفقیت به بات ارسال گردید (${res.filename || ''})`;
+        setBackupModalStatus({ type: 'success', text: msg });
+        showToast('success', msg);
+        await loadCompanyBackupsList(selectedCompany.id, selectedCompany.name);
       } else {
-        showToast('error', res?.message || res?.error || 'خطا در ارسال فایل پشتیبان به بات');
+        const errText = res?.message || res?.error || 'خطا در ارسال فایل پشتیبان به بات';
+        setBackupModalStatus({ type: 'error', text: errText });
+        showToast('error', errText);
+        if (res?.snapshotFileName) {
+          await loadCompanyBackupsList(selectedCompany.id, selectedCompany.name);
+        }
       }
     } catch (err: any) {
-      showToast('error', err?.message || 'خطا در برقراری ارتباط با سرور پشتیبان‌گیری');
+      const errText = err?.message || 'خطا در برقراری ارتباط با سرور پشتیبان‌گیری';
+      setBackupModalStatus({ type: 'error', text: errText });
+      showToast('error', errText);
     } finally {
       setBackingUpToBot(false);
     }
@@ -264,20 +312,31 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   const handleCreateIsolatedSnapshot = async () => {
     if (!selectedCompany) return;
     setCreatingCompanyBackup(true);
+    setBackupModalStatus({ type: 'info', text: 'در حال ثبت نسخه بکاپ فشرده اختصاصی شرکت روی سرور مرکزی...' });
     try {
-      const res = await apiCall<{ success: boolean; message?: string; snapshot?: CompanyBackupSnapshotMeta }>(
+      const res = await apiCall<{ success: boolean; message?: string; error?: string; snapshot?: CompanyBackupSnapshotMeta }>(
         '/industrial-erp/create-company-backup',
         'POST',
-        { companyId: selectedCompany.id, createdBy: currentUser.fullName }
+        {
+          companyId: selectedCompany.id,
+          companyName: selectedCompany.name,
+          createdBy: currentUser.fullName
+        }
       );
       if (res?.success) {
-        showToast('success', res.message || 'نسخه پشتیبان فشرده اختصاصی این شرکت ذخیره شد.');
-        await loadCompanyBackupsList(selectedCompany.id);
+        const msg = res.message || 'نسخه پشتیبان فشرده اختصاصی این شرکت روی سرور ذخیره شد.';
+        setBackupModalStatus({ type: 'success', text: msg });
+        showToast('success', msg);
+        await loadCompanyBackupsList(selectedCompany.id, selectedCompany.name);
       } else {
-        showToast('error', 'خطا در ثبت نسخه پشتیبان شرکت');
+        const errText = res?.error || res?.message || 'خطا در ثبت نسخه پشتیبان شرکت';
+        setBackupModalStatus({ type: 'error', text: errText });
+        showToast('error', errText);
       }
     } catch (err: any) {
-      showToast('error', err?.message || 'خطا در ایجاد فایل پشتیبان');
+      const errText = err?.message || 'خطا در ایجاد فایل پشتیبان روی سرور';
+      setBackupModalStatus({ type: 'error', text: errText });
+      showToast('error', errText);
     } finally {
       setCreatingCompanyBackup(false);
     }
@@ -285,29 +344,75 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
   const handleDownloadBackup = async (format: 'json' | 'zip' | 'gz' = 'zip', specificFileName?: string) => {
     if (!selectedCompany) return;
+    setBackupModalStatus({ type: 'info', text: 'در حال آماده‌سازی و دریافت فایل پشتیبان از سرور مرکزی...' });
     try {
+      const compNameParam = `&companyName=${encodeURIComponent(selectedCompany.name)}`;
       const relativeEndpoint = specificFileName
-        ? `/industrial-erp/company-backups/download?companyId=${encodeURIComponent(selectedCompany.id)}&fileName=${encodeURIComponent(specificFileName)}`
-        : `/industrial-erp/download-backup?companyId=${encodeURIComponent(selectedCompany.id)}&format=${format}`;
+        ? `/industrial-erp/company-backups/download?companyId=${encodeURIComponent(selectedCompany.id)}${compNameParam}&fileName=${encodeURIComponent(specificFileName)}`
+        : `/industrial-erp/download-backup?companyId=${encodeURIComponent(selectedCompany.id)}${compNameParam}&format=${format}`;
       const targetUrl = getEffectiveApiUrl(relativeEndpoint);
       const token = getAuthToken();
       const response = await fetch(targetUrl, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
-      if (!response.ok) throw new Error('دانلود ناموفق بود');
+      if (!response.ok) {
+        let serverError = '';
+        try {
+          const ct = response.headers.get('content-type') || '';
+          if (ct.includes('application/json')) {
+            const errJson = await response.json();
+            serverError = errJson?.error || errJson?.message || '';
+          } else {
+            serverError = (await response.text()).slice(0, 180);
+          }
+        } catch {}
+        throw new Error(serverError || `خطای سرور هنگام دانلود (کد ${response.status})`);
+      }
+
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
+      if (!blob || blob.size === 0) {
+        throw new Error('فایل دریافت‌شده از سرور خالی است.');
+      }
+
       const ext = format === 'gz' ? 'json.gz' : format;
-      a.download = specificFileName || `ERP_Backup_${selectedCompany.id}_${Date.now()}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      showToast('success', `فایل پشتیبان اختصاصی شرکت «${selectedCompany.name}» دانلود شد`);
+      const downloadFileName =
+        specificFileName ||
+        `ERP_Backup_${selectedCompany.id}_${new Date().toISOString().slice(0, 10)}.${ext}`;
+
+      const savedOk = await saveBlobAndOpenFile(blob, downloadFileName);
+      if (!savedOk) {
+        throw new Error('ذخیره فایل در حافظه دستگاه با خطا مواجه شد.');
+      }
+      const msg = `فایل پشتیبان اختصاصی شرکت «${selectedCompany.name}» (${downloadFileName}) با موفقیت ذخیره شد.`;
+      setBackupModalStatus({ type: 'success', text: msg });
+      showToast('success', msg);
     } catch (err: any) {
-      showToast('error', err?.message || 'خطا در دانلود فایل پشتیبان');
+      // Offline emergency fallback when exporting raw JSON of current active state
+      if (format === 'json' && !specificFileName && erpStateRef.current) {
+        try {
+          const emergencyEnvelope = {
+            schema: 'DELKAM_ERP_COMPANY_BACKUP_V1',
+            companyId: selectedCompany.id,
+            companyName: selectedCompany.name,
+            exportedAt: Date.now(),
+            exportedDateJalali: getTodayJalali(),
+            source: 'client-cache-fallback',
+            state: erpStateRef.current
+          };
+          const fallbackBlob = new Blob([JSON.stringify(emergencyEnvelope, null, 2)], { type: 'application/json' });
+          const fallbackName = `ERP_Backup_${selectedCompany.id}_${new Date().toISOString().slice(0, 10)}_offline.json`;
+          const savedOk = await saveBlobAndOpenFile(fallbackBlob, fallbackName);
+          if (savedOk) {
+            const warnMsg = `سرور پاسخ نداد (${err?.message || 'خطای شبکه'})، اما نسخه JSON از داده‌های فعلی شرکت دانلود شد.`;
+            setBackupModalStatus({ type: 'info', text: warnMsg });
+            showToast('success', warnMsg);
+            return;
+          }
+        } catch {}
+      }
+      const errText = err?.message || 'خطا در دانلود فایل پشتیبان';
+      setBackupModalStatus({ type: 'error', text: errText });
+      showToast('error', errText);
     }
   };
 
@@ -320,6 +425,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         'POST',
         {
           companyId: selectedCompany.id,
+          companyName: selectedCompany.name,
           fileName,
           restoredBy: currentUser.fullName
         }
@@ -330,13 +436,19 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(res.state));
         } catch {}
         setConfirmRestoreFileName(null);
-        await loadCompanyBackupsList(selectedCompany.id);
-        showToast('success', res.message || `داده‌های شرکت «${selectedCompany.name}» با موفقیت بازیابی شد.`);
+        await loadCompanyBackupsList(selectedCompany.id, selectedCompany.name);
+        const msg = res.message || `داده‌های شرکت «${selectedCompany.name}» با موفقیت بازیابی شد.`;
+        setBackupModalStatus({ type: 'success', text: msg });
+        showToast('success', msg);
       } else {
-        showToast('error', res?.error || 'خطا در بازیابی بکاپ شرکت');
+        const errText = res?.error || 'خطا در بازیابی بکاپ شرکت';
+        setBackupModalStatus({ type: 'error', text: errText });
+        showToast('error', errText);
       }
     } catch (err: any) {
-      showToast('error', err?.message || 'خطا در بازیابی نسخه پشتیبان');
+      const errText = err?.message || 'خطا در بازیابی نسخه پشتیبان';
+      setBackupModalStatus({ type: 'error', text: errText });
+      showToast('error', errText);
     } finally {
       setRestoringCompanyBackup(false);
     }
@@ -366,6 +478,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         'POST',
         {
           companyId: selectedCompany.id,
+          companyName: selectedCompany.name,
           backupContentBase64: pendingUploadBackup.base64,
           allowCrossCompanyImport: pendingUploadBackup.allowCrossCompany,
           restoredBy: currentUser.fullName
@@ -377,13 +490,19 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(res.state));
         } catch {}
         setPendingUploadBackup(null);
-        await loadCompanyBackupsList(selectedCompany.id);
-        showToast('success', res.message || 'فایل پشتیبان اختصاصی با موفقیت روی همین شرکت بازیابی شد.');
+        await loadCompanyBackupsList(selectedCompany.id, selectedCompany.name);
+        const msg = res.message || 'فایل پشتیبان اختصاصی با موفقیت روی همین شرکت بازیابی شد.';
+        setBackupModalStatus({ type: 'success', text: msg });
+        showToast('success', msg);
       } else {
-        showToast('error', res?.error || 'فایل پشتیبان با این شرکت همخوانی ندارد یا معتبر نیست.');
+        const errText = res?.error || 'فایل پشتیبان با این شرکت همخوانی ندارد یا معتبر نیست.';
+        setBackupModalStatus({ type: 'error', text: errText });
+        showToast('error', errText);
       }
     } catch (err: any) {
-      showToast('error', err?.message || 'خطا در بازیابی فایل انتخاب‌شده');
+      const errText = err?.message || 'خطا در بازیابی فایل انتخاب‌شده';
+      setBackupModalStatus({ type: 'error', text: errText });
+      showToast('error', errText);
     } finally {
       setRestoringCompanyBackup(false);
     }
@@ -552,8 +671,8 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             ec => ec.id === sc.id || ec.name === sc.name || ec.name?.trim() === sc.name?.trim()
           );
           return {
-            id: sc.id || matchedErp?.id || makeStableCompanyId(sc.name),
-            name: sc.name,
+            id: matchedErp?.id || sc.id || makeStableCompanyId(sc.name),
+            name: matchedErp?.name || sc.name,
             logo: sc.logo || matchedErp?.logo || undefined,
             registrationNumber: sc.registrationNumber || matchedErp?.registrationNumber || '-',
             nationalId: sc.nationalId || matchedErp?.nationalId || '-',
@@ -567,13 +686,138 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           };
         });
         setCompanies(syncedList);
+
+        // Reconcile cached selectedCompany with authoritative central server ID if name matches
+        const curSel = selectedCompanyRef.current;
+        if (curSel) {
+          const reconciled = syncedList.find(
+            c => c.id === curSel.id || c.name.trim() === curSel.name.trim()
+          );
+          if (reconciled && reconciled.id !== curSel.id) {
+            setSelectedCompany(reconciled);
+            try {
+              localStorage.setItem('delcom_erp_selected_company', JSON.stringify(reconciled));
+              localStorage.setItem('delcom_erp_last_selected_company_id', reconciled.id);
+              localStorage.setItem('delcom_erp_last_selected_company_name', reconciled.name);
+            } catch {}
+          }
+        }
       } else if (erpList.length > 0) {
         setCompanies(erpList);
+        const curSel = selectedCompanyRef.current;
+        if (curSel) {
+          const reconciled = erpList.find(
+            c => c.id === curSel.id || c.name.trim() === curSel.name.trim()
+          );
+          if (reconciled && reconciled.id !== curSel.id) {
+            setSelectedCompany(reconciled);
+            try {
+              localStorage.setItem('delcom_erp_selected_company', JSON.stringify(reconciled));
+            } catch {}
+          }
+        }
       }
     } catch {
-      // Quietly ignore network failures in offline intranet environment
+      // Quietly ignore network failures when listing companies offline
     } finally {
       setLoading(false);
+    }
+  };
+
+  const syncCompanyStateFromServer = async (
+    compId: string,
+    compName: string,
+    options?: { silent?: boolean; force?: boolean }
+  ) => {
+    if (!compId || syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    const silent = Boolean(options?.silent);
+    const force = Boolean(options?.force);
+
+    try {
+      setSyncStatus('syncing');
+
+      // 1. If there are unsent local changes queued for this company, push & merge them first!
+      let hasPendingLocal = false;
+      try {
+        hasPendingLocal = localStorage.getItem(getPendingSyncStorageKey(compId)) === '1';
+      } catch {}
+
+      if (hasPendingLocal) {
+        const queuedState = getCachedCompanyErpState(compId, compName);
+        const pushRes = await apiCall<{ success: boolean; state?: IndustrialErpState }>(
+          '/industrial-erp/save-state',
+          'POST',
+          { companyId: compId, companyName: compName, state: queuedState }
+        );
+        if (pushRes?.success) {
+          try {
+            localStorage.removeItem(getPendingSyncStorageKey(compId));
+          } catch {}
+          const resolvedId = pushRes.state?.companyId || compId;
+          if (pushRes.state) {
+            setErpState(pushRes.state);
+            try {
+              localStorage.setItem(`delcom_erp_state_${resolvedId}`, JSON.stringify(pushRes.state));
+            } catch {}
+            setSyncStatus('synced');
+            setLastSyncedAt(Date.now());
+            setSyncErrorMsg(null);
+            if (!silent) {
+              showToast('success', 'تغییرات معوق این دستگاه به سرور مرکزی ارسال و با موفقیت همگام شد.');
+            }
+            return;
+          }
+        }
+      }
+
+      // 2. Fetch authoritative state from central server (PostgreSQL / Server DB) with cache-buster + companyName fallback
+      const serverData = await apiCall<IndustrialErpState>(
+        `/industrial-erp/state?companyId=${encodeURIComponent(compId)}&companyName=${encodeURIComponent(compName)}&_t=${Date.now()}`
+      );
+
+      if (serverData && typeof serverData === 'object' && Array.isArray(serverData.items)) {
+        const canonicalId = serverData.companyId || compId;
+        if (canonicalId !== compId && selectedCompanyRef.current && selectedCompanyRef.current.id === compId) {
+          const reconciled = { ...selectedCompanyRef.current, id: canonicalId };
+          setSelectedCompany(reconciled);
+          try {
+            localStorage.setItem('delcom_erp_selected_company', JSON.stringify(reconciled));
+            localStorage.setItem('delcom_erp_last_selected_company_id', canonicalId);
+          } catch {}
+        }
+
+        const currentLocal = erpStateRef.current;
+        const serverRev = Number(serverData._revision || 0);
+        const localRev = Number(currentLocal?._revision || 0);
+        const companyChanged = !currentLocal || currentLocal.companyId !== canonicalId;
+
+        if (force || companyChanged || serverRev === 0 || localRev === 0 || serverRev !== localRev) {
+          setErpState(serverData);
+          try {
+            localStorage.setItem(`delcom_erp_state_${canonicalId}`, JSON.stringify(serverData));
+          } catch {}
+        }
+        setSyncStatus('synced');
+        setLastSyncedAt(Date.now());
+        setSyncErrorMsg(null);
+        if (!silent) {
+          showToast('success', `اطلاعات شرکت «${compName}» با سرور مرکزی همگام شد (نسخه سرور: v${serverRev || 1}).`);
+        }
+      }
+    } catch (err: any) {
+      let hasPending = false;
+      try {
+        hasPending = localStorage.getItem(getPendingSyncStorageKey(compId)) === '1';
+      } catch {}
+      setSyncStatus(hasPending ? 'pending' : 'offline');
+      const errText = err?.message || 'خطا در اتصال به سرور مرکزی';
+      setSyncErrorMsg(errText);
+      if (!silent) {
+        showToast('error', `خطا در همگام‌سازی با سرور مرکزی: ${errText}`);
+      }
+    } finally {
+      syncInFlightRef.current = false;
     }
   };
 
@@ -585,26 +829,13 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       localStorage.setItem('delcom_erp_last_selected_company_name', comp.name);
     } catch {}
 
-    // 1. Instant 0ms offline hydration - NEVER show a blocking spinner
+    // 1. Instant local cache hydration for zero blank screen
     const local = getCachedCompanyErpState(comp.id, comp.name);
     setErpState(local);
     setLoading(false);
 
-    // 2. Non-blocking silent background update from local/central server
-    apiCall<IndustrialErpState>(
-      `/industrial-erp/state?companyId=${encodeURIComponent(comp.id)}`
-    )
-      .then(serverData => {
-        if (serverData && typeof serverData === 'object' && Array.isArray(serverData.items)) {
-          setErpState(serverData);
-          try {
-            localStorage.setItem(`delcom_erp_state_${comp.id}`, JSON.stringify(serverData));
-          } catch {}
-        }
-      })
-      .catch(() => {
-        // Intranet / Offline mode: server unavailable or offline, keep local state smoothly
-      });
+    // 2. Authoritative central server sync (with queued upload flush if any)
+    syncCompanyStateFromServer(comp.id, comp.name, { silent: true, force: true });
   };
 
   useEffect(() => {
@@ -612,29 +843,84 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   }, [settings?.companies, settings?.companyNames]);
 
   useEffect(() => {
-    if (selectedCompany) {
-      if (!erpState || erpState.companyId !== selectedCompany.id) {
-        const local = getCachedCompanyErpState(selectedCompany.id, selectedCompany.name);
-        setErpState(local);
-      }
-      setLoading(false);
+    if (!selectedCompany) return;
 
-      // Non-blocking background sync
-      apiCall<IndustrialErpState>(
-        `/industrial-erp/state?companyId=${encodeURIComponent(selectedCompany.id)}`
-      )
-        .then(serverData => {
-          if (serverData && typeof serverData === 'object' && Array.isArray(serverData.items)) {
-            setErpState(serverData);
-            try {
-              localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(serverData));
-            } catch {}
-          }
-        })
-        .catch(() => {
-          // Intranet / Offline safe
-        });
+    if (!erpState || erpState.companyId !== selectedCompany.id) {
+      const local = getCachedCompanyErpState(selectedCompany.id, selectedCompany.name);
+      setErpState(local);
     }
+    setLoading(false);
+
+    // Initial sync when entering company or switching company
+    syncCompanyStateFromServer(selectedCompany.id, selectedCompany.name, { silent: true, force: true });
+
+    const triggerSilentSync = () => {
+      const cur = selectedCompanyRef.current;
+      if (!cur) return;
+      syncCompanyStateFromServer(cur.id, cur.name, { silent: true });
+    };
+
+    // Real-time SSE event listener from server (instant push when Web / Windows / Android saves)
+    const handleRealtimeErpUpdate = (ev: Event) => {
+      const detail = (ev as CustomEvent)?.detail;
+      const cur = selectedCompanyRef.current;
+      if (!cur || !detail) return;
+      const sameId = detail.companyId === cur.id;
+      const sameName =
+        detail.companyName && cur.name && String(detail.companyName).trim() === String(cur.name).trim();
+      if (!sameId && !sameName) return;
+
+      const incomingRev = Number(detail.revision || 0);
+      const localRev = Number(erpStateRef.current?._revision || 0);
+      if (!incomingRev || incomingRev > localRev) {
+        syncCompanyStateFromServer(cur.id, cur.name, { silent: true, force: true });
+        fetchCompaniesList();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        triggerSilentSync();
+      }
+    };
+
+    const handleCrossTabStorageSync = (ev: StorageEvent) => {
+      const cur = selectedCompanyRef.current;
+      if (!cur || !ev.key) return;
+      if (ev.key === `delcom_erp_state_${cur.id}` && ev.newValue) {
+        try {
+          const parsed = JSON.parse(ev.newValue);
+          if (parsed && Array.isArray(parsed.items)) {
+            setErpState(parsed);
+          }
+        } catch {}
+      }
+    };
+
+    window.addEventListener('ERP_STATE_UPDATED_REALTIME', handleRealtimeErpUpdate);
+    window.addEventListener('focus', triggerSilentSync);
+    window.addEventListener('online', triggerSilentSync);
+    window.addEventListener('storage', handleCrossTabStorageSync);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    // Periodic central-server sync fallback every 8 seconds while workspace is visible
+    const pollInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      triggerSilentSync();
+    }, 8000);
+
+    return () => {
+      window.removeEventListener('ERP_STATE_UPDATED_REALTIME', handleRealtimeErpUpdate);
+      window.removeEventListener('focus', triggerSilentSync);
+      window.removeEventListener('online', triggerSilentSync);
+      window.removeEventListener('storage', handleCrossTabStorageSync);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      clearInterval(pollInterval);
+    };
   }, [selectedCompany?.id]);
 
   const ERP_TRACKED_COLLECTIONS = [
@@ -663,13 +949,15 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   ] as const;
 
   const persistErpState = async (nextState: IndustrialErpState, successToast?: string) => {
-    if (!selectedCompany) return;
+    const activeComp = selectedCompanyRef.current || selectedCompany;
+    if (!activeComp) return;
 
     // Diff deleted record IDs compared to previous in-memory state of same company
     const deletedIds: Record<string, string[]> = {};
-    if (erpState && erpState.companyId === selectedCompany.id) {
+    const prevState = erpStateRef.current;
+    if (prevState && prevState.companyId === activeComp.id) {
       for (const col of ERP_TRACKED_COLLECTIONS) {
-        const prevArr: any[] = Array.isArray((erpState as any)[col]) ? (erpState as any)[col] : [];
+        const prevArr: any[] = Array.isArray((prevState as any)[col]) ? (prevState as any)[col] : [];
         const nextArr: any[] = Array.isArray((nextState as any)[col]) ? (nextState as any)[col] : [];
         if (prevArr.length > 0) {
           const nextIdSet = new Set(nextArr.map(r => r?.id).filter(Boolean));
@@ -683,42 +971,62 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
     const stateToSave: IndustrialErpState = {
       ...nextState,
-      companyId: selectedCompany.id,
-      _revision: nextState._revision ?? erpState?._revision,
+      companyId: activeComp.id,
+      _revision: nextState._revision ?? prevState?._revision,
       ...(Object.keys(deletedIds).length > 0 ? { _deletedIds: deletedIds } : {})
     };
 
-    // 1. Immediate memory update
+    // 1. Immediate memory update & local backup + pending flag
     setErpState(stateToSave);
-    // 2. Immediate local storage persistence (Never lose data even with no network)
     try {
-      localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(stateToSave));
+      localStorage.setItem(`delcom_erp_state_${activeComp.id}`, JSON.stringify(stateToSave));
+      localStorage.setItem(getPendingSyncStorageKey(activeComp.id), '1');
     } catch {}
 
-    // 3. Background server save with authoritative revision & concurrent merge sync
+    // 2. Central Server save with authoritative revision & concurrent merge sync
     try {
       setSaving(true);
+      setSyncStatus('syncing');
       const saveRes = await apiCall<{ success: boolean; mergedConcurrently?: boolean; state?: IndustrialErpState }>(
         '/industrial-erp/save-state',
         'POST',
         {
-          companyId: selectedCompany.id,
+          companyId: activeComp.id,
+          companyName: activeComp.name,
           state: stateToSave
         }
       );
-      if (saveRes?.state && saveRes.state.companyId === selectedCompany.id) {
+      if (!saveRes?.success) {
+        throw new Error('پاسخ معتبر از سرور مرکزی دریافت نشد');
+      }
+      try {
+        localStorage.removeItem(getPendingSyncStorageKey(activeComp.id));
+      } catch {}
+      if (saveRes?.state && saveRes.state.companyId === activeComp.id) {
         setErpState(saveRes.state);
         try {
-          localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(saveRes.state));
+          localStorage.setItem(`delcom_erp_state_${activeComp.id}`, JSON.stringify(saveRes.state));
         } catch {}
       }
-      if (successToast) showToast('success', successToast);
-      fetchCompaniesList();
-    } catch {
-      // Offline fallback
+      setSyncStatus('synced');
+      setLastSyncedAt(Date.now());
+      setSyncErrorMsg(null);
       if (successToast) {
-        showToast('success', `${successToast} (ذخیره در حافظه محلی آفلاین)`);
+        showToast(
+          'success',
+          saveRes.mergedConcurrently
+            ? `${successToast} (ادغام همزمان با سرور مرکزی انجام شد)`
+            : successToast
+        );
       }
+      fetchCompaniesList();
+    } catch (err: any) {
+      setSyncStatus('pending');
+      setSyncErrorMsg(err?.message || 'عدم ارتباط با سرور مرکزی');
+      showToast(
+        'error',
+        `خطا در ارسال به سرور مرکزی (${err?.message || 'قطع شبکه'}). تغییرات موقتاً در این دستگاه صف‌بندی شد تا پس از اتصال مجدد همگام شود.`
+      );
     } finally {
       setSaving(false);
     }
@@ -851,9 +1159,13 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold">
                   همگام با شرکت‌های تعریف‌شده در تنظیمات سیستم
                 </span>
+                <span className="px-2.5 py-0.5 rounded-md bg-blue-500/20 border border-blue-400/30 text-blue-200 text-[11px] font-mono font-bold flex items-center gap-1">
+                  <Server size={12} />
+                  <span>سرور مرکزی: {getConnectedCentralServerLabel()}</span>
+                </span>
               </div>
               <p className="text-xs md:text-sm text-slate-300 mt-1.5 leading-relaxed">
-                فهرست زیر مستقیماً از شرکت‌های تعریف‌شده در بخش «تنظیمات سیستم» خوانده می‌شود. شرکت مورد نظر را جهت ورود به محیط مستقل حسابداری انتخاب نمایید.
+                کلیه کاربران در وب، ویندوز و اندروید مستقیماً به دیتابیس همین سرور مرکزی متصل هستند. شرکت مورد نظر را جهت ورود انتخاب نمایید.
               </p>
             </div>
           </div>
@@ -1050,18 +1362,21 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       : getCachedCompanyErpState(selectedCompany.id, selectedCompany.name);
 
   const quickRibbonShortcuts: { id: ErpSubViewId; label: string; icon: any; color: string }[] = [
-    { id: 'prd_line_perf', label: 'عملکرد خط و باسکول (چاپ لیبل)', icon: Scale, color: 'text-orange-700 bg-orange-50 border-orange-200' },
-    { id: 'wh_sales_remittance', label: 'حواله فروش کارخانه (خروج بدون فی)', icon: Truck, color: 'text-blue-600 bg-blue-50 border-blue-200' },
-    { id: 'wh_receipt_production', label: 'رسید تحویل از خط تولید', icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-    { id: 'wh_inter_remittance', label: 'حواله بین‌انبار (انتقال)', icon: ArrowLeftRight, color: 'text-purple-600 bg-purple-50 border-purple-200' },
-    { id: 'wh_inter_receipt', label: 'رسید حواله بین‌انبار (تایید ورود)', icon: CheckCircle2, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
-    { id: 'wh_tracking', label: 'رهگیری جامع کارتن با کد ارجاع / بارکد', icon: Layers, color: 'text-teal-700 bg-teal-50 border-teal-200' },
-    { id: 'prd_lines', label: 'تعریف خطوط تولید', icon: Factory, color: 'text-orange-600 bg-orange-50 border-orange-200' },
-    { id: 'prd_items', label: 'تعریف کالاها و اوزان دوک/کارتن', icon: Package, color: 'text-slate-700 bg-slate-100 border-slate-300' },
-    { id: 'wh_warehouses', label: 'تعریف انبارها و تخصیص', icon: Boxes, color: 'text-teal-600 bg-teal-50 border-teal-200' },
+    { id: 'prd_line_perf', label: 'عملکرد خط و باسکول (ورود به انبار تولید)', icon: Scale, color: 'text-orange-700 bg-orange-50 border-orange-200' },
+    { id: 'wh_production_delivery', label: 'تحویل تولید به انبار مقصد', icon: Truck, color: 'text-teal-700 bg-teal-50 border-teal-200' },
+    { id: 'wh_receipt_production', label: 'رسید دریافت از تولید', icon: CheckCircle2, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+    { id: 'wh_sales_remittance', label: 'حواله فروش (قفل بارکد)', icon: Truck, color: 'text-blue-700 bg-blue-50 border-blue-200' },
+    { id: 'wh_opening_balance', label: 'موجودی ابتدای دوره', icon: Plus, color: 'text-cyan-700 bg-cyan-50 border-cyan-200' },
+    { id: 'wh_stock_adjustment', label: 'اصلاح دستی مانده انبار', icon: ArrowLeftRight, color: 'text-amber-700 bg-amber-50 border-amber-200' },
+    { id: 'wh_kardex', label: 'کاردکس کالا (مانده وزن)', icon: Layers, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' },
+    { id: 'wh_inter_remittance', label: 'حواله بین‌انبار', icon: ArrowLeftRight, color: 'text-purple-700 bg-purple-50 border-purple-200' },
+    { id: 'wh_inter_receipt', label: 'رسید حواله بین‌انبار', icon: CheckCircle2, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+    { id: 'wh_tracking', label: 'رهگیری بارکد/ارجاع', icon: Layers, color: 'text-teal-700 bg-teal-50 border-teal-200' },
+    { id: 'wh_warehouses', label: 'انبارها (ویرایش/حذف)', icon: Boxes, color: 'text-teal-600 bg-teal-50 border-teal-200' },
+    { id: 'wh_stock_report', label: 'موجودی و نقطه سفارش', icon: Boxes, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+    { id: 'wacc_pricing', label: 'حسابداری انبار (میانگین موزون)', icon: FileSpreadsheet, color: 'text-cyan-700 bg-cyan-50 border-cyan-200' },
     { id: 'prd_archive', label: 'بایگانی تولید', icon: FolderKanban, color: 'text-amber-600 bg-amber-50 border-amber-200' },
-    { id: 'wh_archive', label: 'بایگانی اسناد انبار', icon: FolderKanban, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
-    { id: 'wh_stock_report', label: 'گزارش موجودی کالا', icon: Boxes, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' }
+    { id: 'wh_archive', label: 'بایگانی اسناد انبار', icon: FolderKanban, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' }
   ];
 
   // Determine which isolated domain module handles the activeSubView
@@ -1100,27 +1415,53 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       {/* TOP ERP SYSTEM TITLE BAR */}
       <div className="bg-slate-900 text-white px-3 md:px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-black text-sm">
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-black text-sm shrink-0">
             {selectedCompany.name.charAt(0)}
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-black text-xs md:text-sm text-white">{selectedCompany.name}</span>
               <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold">
                 دوره مالی {currentErpState.activeFiscalYear || selectedCompany.activeFiscalYear || '1405'}
               </span>
-              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold">
-                <Layers size={11} />
-                <span>کامپوننت‌های ماژولار مجزا</span>
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                  syncStatus === 'synced'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    : syncStatus === 'syncing'
+                    ? 'bg-blue-500/20 text-blue-200 border-blue-400/30'
+                    : syncStatus === 'pending'
+                    ? 'bg-amber-500/20 text-amber-200 border-amber-400/40'
+                    : 'bg-rose-500/20 text-rose-200 border-rose-400/40'
+                }`}
+                title={syncErrorMsg || `سرور: ${getConnectedCentralServerLabel()}`}
+              >
+                {syncStatus === 'synced'
+                  ? `همگام با سرور مرکزی (v${currentErpState._revision || 1})`
+                  : syncStatus === 'syncing'
+                  ? 'در حال همگام‌سازی...'
+                  : syncStatus === 'pending'
+                  ? 'تغییرات در صف ارسال به سرور'
+                  : 'عدم ارتباط با سرور مرکزی'}
               </span>
             </div>
-            <div className="text-[10px] text-slate-400 font-mono">
-              DELKAM ENTERPRISE RESOURCE PLANNING — کاربر فعال: {currentUser.fullName}
+            <div className="text-[10px] text-slate-400 font-mono truncate max-w-[340px] sm:max-w-none">
+              سرور: {getConnectedCentralServerLabel()} | شناسه: {selectedCompany.id} | کاربر: {currentUser.fullName}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+          <button
+            onClick={() => syncCompanyStateFromServer(selectedCompany.id, selectedCompany.name, { silent: false, force: true })}
+            disabled={syncStatus === 'syncing'}
+            className="px-2.5 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-100 border border-emerald-400/40 text-[11px] font-black flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+            title="دریافت آخرین داده‌ها از دیتابیس سرور مرکزی و ارسال تغییرات معوق"
+          >
+            <RefreshCw size={13} className={syncStatus === 'syncing' ? 'animate-spin' : ''} />
+            <span>همگام‌سازی با سرور</span>
+          </button>
+
           {/* Switch to Main Program Sidebar Toggle Button */}
           <button
             onClick={() => {
@@ -1421,17 +1762,24 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             )}
           </div>
 
-          {/* BOTTOM STATUS BAR (LIKE SAYAN ENTERPRISE STATUS BAR) */}
-          <div className="bg-slate-200 dark:bg-slate-900 border-t border-slate-300 dark:border-slate-800 px-4 py-1.5 flex flex-wrap items-center justify-between text-[11px] text-slate-600 dark:text-slate-400 shrink-0">
-            <div className="flex items-center gap-3">
-              <span className="font-black text-slate-900 dark:text-white flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                {selectedCompany.name} (دیتابیس مستقل)
+          {/* BOTTOM STATUS BAR */}
+          <div className="bg-slate-200 dark:bg-slate-900 border-t border-slate-300 dark:border-slate-800 px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 shrink-0">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="font-black text-slate-900 dark:text-white">
+                {selectedCompany.name} (دیتابیس مرکزی مستقل)
               </span>
               <span>|</span>
               <span>سال مالی فعال: {currentErpState.activeFiscalYear || '1405'}</span>
               <span>|</span>
               <span>بخش فعال: {SUBVIEW_TITLES[activeSubView]}</span>
+              {lastSyncedAt && (
+                <>
+                  <span>|</span>
+                  <span className="font-mono">
+                    آخرین همگام‌سازی: {new Date(lastSyncedAt).toLocaleTimeString('fa-IR')} (v{currentErpState._revision || 1})
+                  </span>
+                </>
+              )}
             </div>
             <div className="font-mono">
               امروز: {getTodayJalali()} | کاربر: {currentUser.fullName}
@@ -1518,12 +1866,33 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
             {/* Body */}
             <div className="p-4 sm:p-5 overflow-y-auto space-y-5 flex-1">
+              {backupModalStatus && (
+                <div
+                  className={`p-3 rounded-2xl border text-xs font-bold flex items-start gap-2 ${
+                    backupModalStatus.type === 'success'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                      : backupModalStatus.type === 'error'
+                      ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                      : 'bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200'
+                  }`}
+                >
+                  {backupModalStatus.type === 'success' ? (
+                    <CheckCircle2 size={16} className="shrink-0 mt-0.5" />
+                  ) : backupModalStatus.type === 'error' ? (
+                    <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                  ) : (
+                    <RefreshCw size={16} className="shrink-0 mt-0.5 animate-spin" />
+                  )}
+                  <span className="flex-1 leading-relaxed">{backupModalStatus.text}</span>
+                </div>
+              )}
+
               {/* Quick Export / Snapshot Actions */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <button
                   onClick={handleCreateIsolatedSnapshot}
                   disabled={creatingCompanyBackup}
-                  className="px-4 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-sm transition-colors"
+                  className="min-h-[44px] px-4 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
                 >
                   <History size={16} className={creatingCompanyBackup ? 'animate-spin' : ''} />
                   <span>{creatingCompanyBackup ? 'در حال ایجاد نسخه فشرده...' : 'ثبت نسخه بکاپ آنی روی سرور'}</span>
@@ -1532,7 +1901,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 <button
                   onClick={handleBackupToBot}
                   disabled={backingUpToBot}
-                  className="px-4 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-sm transition-colors"
+                  className="min-h-[44px] px-4 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
                 >
                   <Bot size={16} className={backingUpToBot ? 'animate-spin' : ''} />
                   <span>{backingUpToBot ? 'در حال ارسال...' : 'ارسال بکاپ فشرده این شرکت به بات'}</span>
@@ -1540,7 +1909,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
                 <button
                   onClick={() => handleDownloadBackup('zip')}
-                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                  className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
                 >
                   <FileArchive size={15} className="text-indigo-600 dark:text-indigo-400" />
                   <span>دانلود بکاپ فشرده (ZIP)</span>
@@ -1548,7 +1917,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
                 <button
                   onClick={() => handleDownloadBackup('json')}
-                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                  className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
                 >
                   <Download size={15} className="text-emerald-600 dark:text-emerald-400" />
                   <span>دانلود مستقیم فایل (JSON)</span>

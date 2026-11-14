@@ -58,9 +58,11 @@ export interface ErpWarehouse {
   id: string;
   code: string;
   name: string;
-  type: 'RAW_MATERIAL' | 'PACKAGING' | 'FINISHED_YARN' | 'WASTE' | 'GENERAL';
+  type: 'RAW_MATERIAL' | 'PACKAGING' | 'FINISHED_YARN' | 'PRODUCTION_FLOOR' | 'WASTE' | 'GENERAL';
   location: string;
   managerName?: string;
+  isProductionFloor?: boolean;
+  minStockKg?: number;
   assignedGroupIds?: string[];
   assignedItemIds?: string[];
 }
@@ -143,7 +145,16 @@ export interface ErpProductionOrder {
 
 export interface ErpCartonHistoryEvent {
   id: string;
-  stage: 'PRODUCTION_WEIGHING' | 'WAREHOUSE_RECEIPT' | 'INTER_WH_TRANSFER' | 'INTER_WH_RECEIPT' | 'SALES_REMITTANCE' | 'SALES_RETURN';
+  stage:
+    | 'PRODUCTION_WEIGHING'
+    | 'PRODUCTION_DELIVERY'
+    | 'WAREHOUSE_RECEIPT'
+    | 'INTER_WH_TRANSFER'
+    | 'INTER_WH_RECEIPT'
+    | 'SALES_REMITTANCE'
+    | 'SALES_RETURN'
+    | 'OPENING_BALANCE'
+    | 'STOCK_ADJUSTMENT';
   title: string;
   dateJalali: string;
   timeExact: string;
@@ -156,7 +167,7 @@ export interface ErpCartonHistoryEvent {
 export interface ErpCartonLabel {
   id: string;
   serialNumber: string;
-  referenceCode: string; // e.g. DLK-405-10023
+  referenceCode: string; // e.g. PO-01001-24.835
   qrPayload: string;
   productId: string;
   productCode: string;
@@ -176,7 +187,7 @@ export interface ErpCartonLabel {
   unitCostPerKg: number;
   totalCostRials: number;
   warehouseId: string;
-  status: 'IN_STOCK' | 'REMITTED' | 'SOLD' | 'RETURNED' | 'VOID';
+  status: 'IN_STOCK' | 'IN_TRANSIT' | 'REMITTED' | 'SOLD' | 'RETURNED' | 'ADJUSTED_OUT' | 'VOID';
   createdAt: number;
   createdDateJalali: string;
   createdTimeExact?: string;
@@ -186,6 +197,12 @@ export interface ErpCartonLabel {
   productionVoucherNo?: string;
   productionArchiveCode?: string;
   remittanceId?: string;
+  isSalesLocked?: boolean;
+  lockedByDocNo?: string;
+  lockedAt?: number;
+  inTransitDocId?: string;
+  openingDocId?: string;
+  isOpeningLot?: boolean;
   sourceSystem?: 'DELKAM' | 'SAYAN';
   barcodeType?: ErpBarcodeType;
   history?: ErpCartonHistoryEvent[];
@@ -208,7 +225,10 @@ export interface ErpProductionVoucher {
   totalNetWeightKg: number;
   operatorName: string;
   cartonIds: string[];
-  status: 'PENDING_WAREHOUSE_DELIVERY' | 'DELIVERED_TO_WAREHOUSE';
+  status: 'IN_PRODUCTION_WAREHOUSE' | 'PENDING_WAREHOUSE_DELIVERY' | 'PENDING_RECEIPT' | 'DELIVERED_TO_WAREHOUSE';
+  productionWarehouseId?: string;
+  deliveryDocId?: string;
+  deliveryDocNo?: string;
   deliveredWarehouseId?: string;
   deliveredWarehouseName?: string;
   deliveredDocNo?: string;
@@ -216,11 +236,31 @@ export interface ErpProductionVoucher {
 }
 
 export type ErpWarehouseDocType =
+  | 'OPENING_BALANCE'
+  | 'PRODUCTION_DELIVERY'
   | 'RECEIPT_PRODUCTION'
+  | 'RECEIPT_PURCHASE'
+  | 'ISSUE_PRODUCTION'
   | 'SALES_REMITTANCE'
   | 'INTER_WH_TRANSFER'
   | 'INTER_WH_RECEIPT'
-  | 'SALES_RETURN';
+  | 'SALES_RETURN'
+  | 'STOCK_ADJUSTMENT_IN'
+  | 'STOCK_ADJUSTMENT_OUT';
+
+export interface ErpWarehouseDocItemLine {
+  id: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  grade: 'A' | 'B' | 'C';
+  cartonsCount: number;
+  grossWeightKg: number;
+  netWeightKg: number;
+  unitCostRials?: number;
+  totalCostRials?: number;
+  notes?: string;
+}
 
 export interface ErpWarehouseDocument {
   id: string;
@@ -229,6 +269,7 @@ export interface ErpWarehouseDocument {
   docType: ErpWarehouseDocType;
   dateJalali: string;
   timeExact: string;
+  createdAtMs?: number;
   sourceWarehouseId?: string;
   sourceWarehouseName?: string;
   targetWarehouseId?: string;
@@ -240,10 +281,15 @@ export interface ErpWarehouseDocument {
   productionVoucherId?: string;
   referenceDocId?: string;
   cartonIds: string[];
+  docItems?: ErpWarehouseDocItemLine[];
   cartonsCount: number;
   totalGrossWeightKg: number;
   totalNetWeightKg: number;
-  status: 'COMPLETED' | 'PENDING_RECEIPT';
+  unitCostRials?: number;
+  totalCostRials?: number;
+  accountingVoucherNo?: number;
+  adjustmentReason?: string;
+  status: 'COMPLETED' | 'PENDING_RECEIPT' | 'CANCELLED';
   receiverUserName?: string;
   createdBy: string;
   notes?: string;
@@ -636,11 +682,14 @@ export type ErpSubViewId =
   | 'com_purchases'
   | 'com_returns'
   | 'wh_warehouses'
+  | 'wh_opening_balance'
+  | 'wh_production_delivery'
   | 'wh_receipt_production'
   | 'wh_sales_remittance'
   | 'wh_inter_remittance'
   | 'wh_inter_receipt'
   | 'wh_sales_return'
+  | 'wh_stock_adjustment'
   | 'wh_archive'
   | 'wh_stock_report'
   | 'wh_kardex'
@@ -716,19 +765,23 @@ export const ERP_SIDEBAR_TREE: ErpSidebarCategory[] = [
       {
         groupTitle: 'اسناد و عملیات انبار',
         items: [
-          { id: 'wh_receipt_production', label: 'رسید تحویل کالا از تولید' },
-          { id: 'wh_sales_remittance', label: 'حواله فروش (خروج بدون فی)' },
+          { id: 'wh_opening_balance', label: 'ثبت موجودی ابتدای دوره انبار' },
+          { id: 'wh_production_delivery', label: 'تحویل کالا از تولید به انبار مقصد' },
+          { id: 'wh_receipt_production', label: 'رسید دریافت کالا از تولید' },
+          { id: 'wh_sales_remittance', label: 'حواله فروش (خروج بدون فی + قفل بارکد)' },
           { id: 'wh_inter_remittance', label: 'حواله بین انبار (انتقال)' },
           { id: 'wh_inter_receipt', label: 'رسید حواله بین انبار (تایید ورود)' },
           { id: 'wh_sales_return', label: 'رسید مرجوعی از فروش' },
-          { id: 'wh_archive', label: 'بایگانی اسناد انبار' }
+          { id: 'wh_stock_adjustment', label: 'اصلاح دستی مانده انبار (افزایش / کاهش)' },
+          { id: 'wh_receipt_issue', label: 'رسید خرید و حواله مصرف خط تولید' },
+          { id: 'wh_archive', label: 'بایگانی و چاپ اسناد انبار' }
         ]
       },
       {
-        groupTitle: 'گزارش و رهگیری',
+        groupTitle: 'گزارش، کاردکس و رهگیری',
         items: [
-          { id: 'wh_stock_report', label: 'گزارش انبار' },
-          { id: 'wh_kardex', label: 'کاردکس کالا' },
+          { id: 'wh_stock_report', label: 'گزارش موجودی انبار و نقطه سفارش' },
+          { id: 'wh_kardex', label: 'کاردکس کالا (ورود / خروج / مانده وزن)' },
           { id: 'wh_tracking', label: 'رهگیری جامع کارتن با کد ارجاع / بارکد' }
         ]
       }
@@ -886,24 +939,27 @@ export const SUBVIEW_TITLES: Record<ErpSubViewId, string> = {
   prd_line_perf: 'عملکرد خط تولید (توزین باسکول و چاپ لیبل کارتن)',
   prd_archive: 'بایگانی تولید',
   prd_bom: 'تعریف فرمول‌های تولید (BOM)',
-  wh_warehouses: 'تعریف انبارها و تخصیص کالا و گروه',
-  wh_receipt_production: 'رسید تحویل کالا از تولید',
-  wh_sales_remittance: 'حواله فروش کارخانه (خروج بدون فی)',
+  wh_warehouses: 'تعریف، ویرایش و حذف انبارها و تخصیص کالا',
+  wh_opening_balance: 'ثبت موجودی ابتدای دوره انبار',
+  wh_production_delivery: 'سند تحویل کالا از انبار تولید به انبار مقصد',
+  wh_receipt_production: 'رسید دریافت کالا از تولید (تایید انبار مقصد)',
+  wh_sales_remittance: 'حواله فروش کارخانه (خروج بدون فی + قفل بارکد)',
   wh_inter_remittance: 'حواله بین انبار (انتقال)',
   wh_inter_receipt: 'رسید حواله بین انبار (تایید ورود مقصد)',
   wh_sales_return: 'رسید مرجوعی از فروش',
-  wh_archive: 'بایگانی اسناد انبار',
-  wh_stock_report: 'گزارش موجودی انبار',
-  wh_kardex: 'کاردکس کالا و گردش انبار',
+  wh_stock_adjustment: 'اصلاح دستی مانده انبار (افزایش / کاهش و انبارگردانی)',
+  wh_archive: 'بایگانی و چاپ اسناد انبار',
+  wh_stock_report: 'گزارش موجودی انبار و نقطه سفارش',
+  wh_kardex: 'کاردکس کالا (ورود، خروج و مانده وزن نهایی)',
   wh_tracking: 'رهگیری جامع کارتن با کد ارجاع / بارکد',
   wh_items: 'تعریف سرفصل کالاها و وزن دوک/کارتن',
   wh_weighbridge: 'توزین باسکول، محاسبه خالص و چاپ بارکد/QR',
   wh_exit_remittance: 'حواله خروج کارخانه (اسکن بارکد - بدون فی)',
-  wh_receipt_issue: 'صدور و ویرایش سند انبار (رسید/حواله)',
+  wh_receipt_issue: 'رسید خرید مواد و حواله مصرف خط تولید',
   wh_cartable: 'کارتابل اسناد انبار و بیجک‌های دلکام',
   wh_stocktaking: 'کنترل موجودی و انبارگردانی',
   wacc_pricing: 'قیمت‌گذاری اسناد انبار (میانگین موزون)',
-  wacc_riali_kardex: 'کاردکس ریالی-تعدادی انبار',
+  wacc_riali_kardex: 'کاردکس ریالی-تعدادی و صدور سند حسابداری انبار',
   fin_chart: 'درختواره حساب‌ها (کل / معین)',
   fin_tafsili: 'معرفی تفصیلی‌های شناور و اشخاص',
   fin_voucher_new: 'صدور و ویرایش سند حسابداری',

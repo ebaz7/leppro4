@@ -2249,10 +2249,42 @@ export async function getAllCompanyStatsFromPg() {
   }
 }
 
+let backupTableEnsured = false;
+
+async function ensureBackupTableInPg() {
+  if (backupTableEnsured) return;
+  const pool = getErpPgPool();
+  if (!pool) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS erp_company_backups (
+        id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        format TEXT NOT NULL DEFAULT 'json.gz',
+        backup_kind TEXT NOT NULL DEFAULT 'manual',
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        compressed_size_bytes INTEGER NOT NULL DEFAULT 0,
+        record_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+        checksum_sha256 TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL DEFAULT 'system',
+        created_at_ms BIGINT NOT NULL DEFAULT 0,
+        created_date_jalali TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_erp_backups_company_time ON erp_company_backups (company_id, created_at_ms);
+    `);
+    backupTableEnsured = true;
+  } catch (error) {
+    console.warn('[ERP PostgreSQL] Auto-create erp_company_backups warning:', error.message);
+  }
+}
+
 export async function recordCompanyBackupMetadataInPg(record) {
   const db = getErpPgDb();
   if (!db) return null;
   try {
+    await ensureBackupTableInPg();
     await db
       .insert(erpCompanyBackups)
       .values(record)
@@ -2271,6 +2303,7 @@ export async function listCompanyBackupsFromPg(companyId) {
   const db = getErpPgDb();
   if (!db) return [];
   try {
+    await ensureBackupTableInPg();
     return await db
       .select()
       .from(erpCompanyBackups)

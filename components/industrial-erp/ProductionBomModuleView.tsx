@@ -36,7 +36,8 @@ import {
   Palette,
   Settings2,
   Home,
-  Barcode
+  Barcode,
+  Truck
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -63,6 +64,11 @@ import {
   getNextPlainSequentialNumber,
   matchesSearchQuery
 } from './erpCodeUtils';
+import {
+  ensureProductionFloorWarehouse,
+  PRODUCTION_FLOOR_WAREHOUSE_ID,
+  PRODUCTION_FLOOR_WAREHOUSE_NAME
+} from './warehouseLogic';
 import { User } from '../../types';
 
 interface ProductionBomModuleViewProps {
@@ -726,8 +732,9 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       netWeightKg: effectiveNetKg,
       unitCostPerKg: currentItem.unitCost,
       totalCostRials: Math.round(currentItem.unitCost * effectiveNetKg),
-      warehouseId: currentItem.warehouseId || 'wh_finished',
+      warehouseId: PRODUCTION_FLOOR_WAREHOUSE_ID,
       status: 'IN_STOCK',
+      isSalesLocked: false,
       createdAt: Date.now(),
       createdDateJalali: dateToday,
       createdTimeExact: exactTime,
@@ -739,11 +746,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
         {
           id: `hist_${Date.now()}`,
           stage: 'PRODUCTION_WEIGHING',
-          title: 'توزین باسکول و ثبت عملکرد خط تولید',
+          title: `توزین باسکول خط و ورود خودکار به ${PRODUCTION_FLOOR_WAREHOUSE_NAME}`,
           dateJalali: dateToday,
           timeExact: exactTime,
           actor: currentUser?.fullName || 'اپراتور خط',
-          details: `توزین در ${currentLine?.name || 'خط'} | وزن ناخالص: ${grossWeightKg} کیلو | خالص: ${effectiveNetKg} کیلو | دوک: ${effectiveConesCount}`
+          details: `توزین در ${currentLine?.name || 'خط'} | ناخالص: ${grossWeightKg} Kg | خالص: ${effectiveNetKg} Kg | دوک: ${effectiveConesCount} | انبار: ${PRODUCTION_FLOOR_WAREHOUSE_NAME}`
         }
       ]
     };
@@ -768,7 +775,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     return Number(currentBatchCartons.reduce((sum, c) => sum + c.grossWeightKg, 0).toFixed(3));
   }, [currentBatchCartons]);
 
-  // Finalize Batch & Generate Production Voucher with Archive Code and exact time
+  // Finalize Batch & Generate Production Voucher with automatic placement in Production Floor Warehouse
   const handleFinalizeBatchAndIssueVoucher = async () => {
     if (currentBatchCartons.length === 0) {
       showToast?.('error', 'هیچ کارتنی برای ثبت نهایی در این نوبت وزن‌کشی نشده است');
@@ -783,9 +790,17 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const voucherNo = getNextPlainSequentialNumber(existingVouchers.map(v => v.voucherNo), 1);
     const archiveCode = getNextPlainSequentialNumber(existingVouchers.map(v => v.archiveCode), 1001);
 
-    // Stamp cartons with voucher & archive code
+    const { warehouses: nextWarehouses, productionWarehouse } = ensureProductionFloorWarehouse(
+      erpState.warehouses || [],
+      currentUser?.fullName || 'سرپرست تولید'
+    );
+
+    // Stamp cartons with voucher, archive code, and automatic entry into Production Floor Warehouse
     const finalizedCartons = currentBatchCartons.map(c => ({
       ...c,
+      warehouseId: productionWarehouse.id,
+      status: 'IN_STOCK' as const,
+      isSalesLocked: false,
       productionVoucherNo: voucherNo,
       productionArchiveCode: archiveCode
     }));
@@ -807,18 +822,23 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       totalNetWeightKg: batchTotalNetWeight,
       operatorName: currentUser?.fullName || 'اپراتور خط تولید',
       cartonIds: finalizedCartons.map(c => c.id),
-      status: 'PENDING_WAREHOUSE_DELIVERY',
-      notes: `تولید نوبت ${shiftName} در ${currentLine?.name}`
+      status: 'IN_PRODUCTION_WAREHOUSE',
+      productionWarehouseId: productionWarehouse.id,
+      notes: `تولید نوبت ${shiftName} در ${currentLine?.name} — ورود خودکار به ${productionWarehouse.name}`
     };
 
     const nextState: IndustrialErpState = {
       ...erpState,
+      warehouses: nextWarehouses,
       cartonLabels: [...finalizedCartons, ...erpState.cartonLabels],
       productionVouchers: [newVoucher, ...(erpState.productionVouchers || [])],
       nextSerialCounter: (erpState.nextSerialCounter || 1000) + finalizedCartons.length
     };
 
-    await persistErpState(nextState, `سند تولید ${voucherNo} با ${finalizedCartons.length} کارتن و کد بایگانی ${archiveCode} ثبت گردید`);
+    await persistErpState(
+      nextState,
+      `سند تولید ${voucherNo} (${finalizedCartons.length} کارتن) ثبت و موجودی وارد «${productionWarehouse.name}» شد.`
+    );
     setCurrentBatchCartons([]);
   };
 
@@ -851,7 +871,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
         if (!hasGrade) return false;
       }
       if (!archiveSearch.trim()) return true;
-      const statusText = v.status === 'DELIVERED_TO_WAREHOUSE' ? 'تحویل انبار شده' : 'در انتظار تحویل به انبار';
+      const statusText =
+        v.status === 'DELIVERED_TO_WAREHOUSE'
+          ? 'رسید شده در انبار مقصد'
+          : v.status === 'PENDING_RECEIPT'
+          ? 'تحویل صادر شده (در انتظار رسید انبار)'
+          : 'موجود در انبار تولید (آماده تحویل به انبار)';
       const cartonFields: unknown[] = [];
       for (const c of linkedCartons) {
         cartonFields.push(
@@ -2377,18 +2402,42 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       </td>
                       <td className="p-3 text-center text-slate-500">{v.operatorName}</td>
                       <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${v.status === 'DELIVERED_TO_WAREHOUSE' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                          {v.status === 'DELIVERED_TO_WAREHOUSE' ? 'تحویل انبار شده' : 'در انتظار تحویل به انبار'}
+                        <span
+                          className={`text-[11px] font-black ${
+                            v.status === 'DELIVERED_TO_WAREHOUSE'
+                              ? 'text-emerald-600'
+                              : v.status === 'PENDING_RECEIPT'
+                              ? 'text-indigo-600'
+                              : 'text-amber-600'
+                          }`}
+                        >
+                          {v.status === 'DELIVERED_TO_WAREHOUSE'
+                            ? `رسید در ${v.deliveredWarehouseName || 'انبار مقصد'}`
+                            : v.status === 'PENDING_RECEIPT'
+                            ? 'ارسال‌شده (در انتظار تایید رسید انبار)'
+                            : 'در انبار تولید (آماده تحویل به انبار)'}
                         </span>
                       </td>
                       <td className="p-3 text-center">
-                        <button
-                          onClick={() => setSelectedVoucherForView(v)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 text-xs font-bold inline-flex items-center gap-1"
-                        >
-                          <Eye size={13} />
-                          مشاهده کارتن‌ها
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                          <button
+                            onClick={() => setSelectedVoucherForView(v)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye size={13} />
+                            مشاهده کارتن‌ها
+                          </button>
+                          {(v.status === 'IN_PRODUCTION_WAREHOUSE' || v.status === 'PENDING_WAREHOUSE_DELIVERY') && openSubViewTab && (
+                            <button
+                              onClick={() => openSubViewTab('wh_production_delivery')}
+                              className="px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-black inline-flex items-center gap-1 cursor-pointer"
+                              title="صدور سند تحویل از انبار تولید به انبار مقصد"
+                            >
+                              <Truck size={13} />
+                              تحویل به انبار
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     );
@@ -3081,8 +3130,16 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         <td className="p-2 text-center font-mono">{c.grossWeightKg.toFixed(2)}</td>
                         <td className="p-2 text-center font-mono font-black text-emerald-600">{c.netWeightKg.toFixed(3)} Kg</td>
                         <td className="p-2 text-center">
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
-                            {c.status === 'IN_STOCK' ? 'در انبار' : c.status === 'SOLD' ? 'تحویل مشتری' : 'آماده تحویل'}
+                          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                            {c.isSalesLocked || c.status === 'SOLD'
+                              ? 'حواله فروش (قفل)'
+                              : c.status === 'IN_TRANSIT'
+                              ? 'در انتظار تایید رسید انبار'
+                              : c.status === 'ADJUSTED_OUT'
+                              ? 'کسر تعدیل انبار'
+                              : c.warehouseId === PRODUCTION_FLOOR_WAREHOUSE_ID
+                              ? 'در انبار تولید'
+                              : 'موجود در انبار'}
                           </span>
                         </td>
                       </tr>
