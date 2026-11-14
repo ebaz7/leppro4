@@ -40,3 +40,37 @@ test('Settings and updateService use getEffectiveApiUrl and real downloads witho
   assert.ok(settingsSrc.includes("getEffectiveApiUrl(`/api/desktop/updater.json?runtime=${runtime}`)"), 'Settings must resolve updater.json via getEffectiveApiUrl');
   assert.ok(updateSvcSrc.includes('electronBridge?.downloadAndSaveFile'), 'updateService must prefer native streaming downloadAndSaveFile for Electron');
 });
+
+test('Atomic build swaps staging directory into dist without deleting live dist during compilation', async () => {
+  const os = await import('os');
+  const { swapStagingIntoDist } = await import('../scripts/atomic-build.mjs');
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'delkam-atomic-build-'));
+  try {
+    const liveDist = path.join(tmpBase, 'dist');
+    const staging = path.join(tmpBase, 'dist-staging');
+    fs.mkdirSync(liveDist, { recursive: true });
+    fs.mkdirSync(staging, { recursive: true });
+    fs.writeFileSync(path.join(liveDist, 'index.html'), 'old-version', 'utf8');
+    fs.writeFileSync(path.join(staging, 'index.html'), 'new-version', 'utf8');
+
+    const res = swapStagingIntoDist(staging, liveDist);
+    assert.ok(['atomic-rename', 'copy-fallback'].includes(res.mode));
+    assert.equal(fs.readFileSync(path.join(liveDist, 'index.html'), 'utf8'), 'new-version');
+    assert.equal(fs.existsSync(staging), false);
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test('server.js never runs Vite dev middleware in NODE_ENV=production and checks dist/index.html dynamically', () => {
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  assert.ok(
+    serverSrc.includes("(!process.env.NODE_ENV && checkIsDistOutdated())"),
+    'isExplicitDev must not trigger checkIsDistOutdated when NODE_ENV=production'
+  );
+  assert.ok(
+    serverSrc.includes("const indexPath = path.join(DIST_DIR, 'index.html');\n        if (fs.existsSync(indexPath))"),
+    'Production server must check dist/index.html dynamically per request'
+  );
+});
+

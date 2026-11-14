@@ -14,33 +14,41 @@ const isAndroid =
 export default defineConfig({
   plugins: [
     react(),
-    {
-      name: 'exclude-heavy-public-downloads-from-dist',
-      closeBundle() {
-        try {
-          const distDownloads = path.resolve('dist', 'downloads');
-          if (fs.existsSync(distDownloads)) {
-            fs.rmSync(distDownloads, { recursive: true, force: true });
+    (() => {
+      let resolvedOutDir = path.resolve('dist');
+      return {
+        name: 'exclude-heavy-public-downloads-from-dist',
+        configResolved(config: any) {
+          if (config?.build?.outDir) {
+            resolvedOutDir = path.resolve(config.root || process.cwd(), config.build.outDir);
           }
-          const distAiStudio = path.resolve('dist', 'assets', 'aistudio');
-          if (fs.existsSync(distAiStudio)) {
-            fs.rmSync(distAiStudio, { recursive: true, force: true });
-          }
-          // Remove unused raw .wasm files and non-LSTM files from dist/tesseract (worker.min.js only loads *-lstm.wasm.js)
-          const distTesseract = path.resolve('dist', 'tesseract');
-          if (fs.existsSync(distTesseract)) {
-            for (const f of fs.readdirSync(distTesseract)) {
-              if (
-                f.endsWith('.wasm') ||
-                (f.startsWith('tesseract-core') && !f.includes('-lstm.wasm.js'))
-              ) {
-                fs.rmSync(path.join(distTesseract, f), { force: true });
+        },
+        closeBundle() {
+          try {
+            const distDownloads = path.join(resolvedOutDir, 'downloads');
+            if (fs.existsSync(distDownloads)) {
+              fs.rmSync(distDownloads, { recursive: true, force: true });
+            }
+            const distAiStudio = path.join(resolvedOutDir, 'assets', 'aistudio');
+            if (fs.existsSync(distAiStudio)) {
+              fs.rmSync(distAiStudio, { recursive: true, force: true });
+            }
+            // Remove unused raw .wasm files and non-LSTM files from outDir/tesseract (worker.min.js only loads *-lstm.wasm.js)
+            const distTesseract = path.join(resolvedOutDir, 'tesseract');
+            if (fs.existsSync(distTesseract)) {
+              for (const f of fs.readdirSync(distTesseract)) {
+                if (
+                  f.endsWith('.wasm') ||
+                  (f.startsWith('tesseract-core') && !f.includes('-lstm.wasm.js'))
+                ) {
+                  fs.rmSync(path.join(distTesseract, f), { force: true });
+                }
               }
             }
-          }
-        } catch (_) {}
-      }
-    }
+          } catch (_) {}
+        }
+      };
+    })()
   ],
   base: './', // Relative path for universal support across Web, CDN, Android, and Desktop (Tauri)
   optimizeDeps: {

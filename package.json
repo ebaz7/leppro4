@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "dev": "node server.js --dev",
-    "build": "node -e \"import('fs').then(fs => { if(fs.existsSync('dist')) fs.rmSync('dist', {recursive: true, force: true}); })\" && node ./node_modules/vite/bin/vite.js build",
+    "build": "node scripts/atomic-build.mjs",
     "preview": "vite preview",
     "lint": "tsc --noEmit --skipLibCheck",
     "start": "node server.js",

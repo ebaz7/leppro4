@@ -389,15 +389,13 @@ echo.
 echo [6/7] Updating ^& Restarting Windows Service...
 if exist install-service.js (
     node install-service.js >nul 2>&1
-    timeout /t 3 /nobreak >nul 2>&1
+    timeout /t 4 /nobreak >nul 2>&1
 )
-sc query PaymentSystem | findstr "RUNNING" >nul 2>&1
+sc query PaymentSystem | findstr /R "RUNNING START_PENDING" >nul 2>&1
 if !errorlevel! neq 0 (
     net start PaymentSystem
 ) else (
-    net stop PaymentSystem >nul 2>&1
-    timeout /t 2 /nobreak >nul 2>&1
-    net start PaymentSystem
+    echo [OK] PaymentSystem Windows Service is running.
 )
 
 echo.

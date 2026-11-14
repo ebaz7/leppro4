@@ -128,7 +128,7 @@ const checkIsDistOutdated = () => {
         return false;
     }
 };
-const isExplicitDev = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'dev' || process.argv.includes('--dev') || !process.env.NODE_ENV || checkIsDistOutdated();
+const isExplicitDev = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'dev' || process.argv.includes('--dev') || (!process.env.NODE_ENV && checkIsDistOutdated());
 
 
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -17771,11 +17771,15 @@ if (isExplicitDev) {
             next(e);
         }
     });
-} else if (fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
-    let buildTime = "Unknown";
+} else {
+    let buildTime = "Not built yet";
     try {
-        const stats = fs.statSync(path.join(DIST_DIR, 'index.html'));
-        buildTime = stats.mtime.toLocaleString('fa-IR');
+        if (fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+            const stats = fs.statSync(path.join(DIST_DIR, 'index.html'));
+            buildTime = stats.mtime.toLocaleString('fa-IR');
+        } else {
+            console.warn("⚠️ [توجه] فایل dist/index.html در لحظه راه‌اندازی یافت نشد؛ سرور پس از پایان بیلد به صورت خودکار آن را سرو خواهد کرد.");
+        }
     } catch(e){}
     console.log(`Starting in Production mode serving built assets from dist (Build Date: ${buildTime})...`);
     
@@ -17794,20 +17798,20 @@ if (isExplicitDev) {
         if (req.path.startsWith('/assets/') || /\.(js|mjs|css|map|woff2?|ttf|wasm|png|jpe?g|svg|ico)$/i.test(req.path)) {
             return res.status(404).end();
         }
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-        res.sendFile(path.join(DIST_DIR, 'index.html'));
-    });
-} else {
-    console.warn("⚠️ [توجه] فایل dist/index.html روی سرور یافت نشد. برای فعال‌سازی کامل وب‌اپ، لطفاً یکبار دستور npm run build را در پوشه اصلی پروژه اجرا کنید.");
-    app.get('*', (req, res) => {
-        if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API endpoint not found' });
+        const indexPath = path.join(DIST_DIR, 'index.html');
+        if (fs.existsSync(indexPath)) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+            return res.sendFile(indexPath);
+        }
+        res.setHeader('Retry-After', '5');
         res.status(503).send(`
             <!DOCTYPE html>
             <html dir="rtl" lang="fa">
             <head>
                 <meta charset="UTF-8">
+                <meta http-equiv="refresh" content="5">
                 <title>سیستم در حال به‌روزرسانی</title>
                 <style>
                     body { font-family: Tahoma, sans-serif; text-align: center; padding: 50px; background: #f8fafc; color: #1e293b; }
@@ -17819,8 +17823,7 @@ if (isExplicitDev) {
             <body>
                 <div class="card">
                     <h2>در حال آماده‌سازی نسخه وب...</h2>
-                    <p>فایل‌های نسخه وب در حال بیلد مجدد می‌باشند.</p>
-                    <p>لطفاً در CMD سرور دستور زیر را اجرا نمایید:</p>
+                    <p>فایل‌های نسخه وب در حال بیلد مجدد می‌باشند. صفحه تا چند ثانیه دیگر به صورت خودکار بارگذاری می‌شود.</p>
                     <code>npm run build</code>
                 </div>
             </body>
