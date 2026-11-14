@@ -1,5 +1,5 @@
-import { getEffectiveApiUrl } from './apiService';
-import { isTauriDesktop, isMobileApp, isWebApp, isElectronDesktop, getDesktopRuntime } from '../utils/platformDetection';
+import { getEffectiveApiUrl, getAuthToken } from './apiService';
+import { isTauriDesktop, isMobileApp, isWebApp, isElectronDesktop, isTauriDesktopOnly, getDesktopRuntime } from '../utils/platformDetection';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
 import toast from 'react-hot-toast';
@@ -160,17 +160,20 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
   try {
     if (isTauriDesktop()) {
       const runtime = getDesktopRuntime();
+      let hasAuthoritativeBinaryVer = false;
       if (win.electronAPI?.getVersion) {
         const ver = await win.electronAPI.getVersion();
         if (ver) {
           detectedVersion = String(ver).trim();
           detectedBuild = detectedVersion;
+          hasAuthoritativeBinaryVer = true;
         }
       } else if (win.electron?.getVersion) {
         const ver = await win.electron.getVersion();
         if (ver) {
           detectedVersion = String(ver).trim();
           detectedBuild = detectedVersion;
+          hasAuthoritativeBinaryVer = true;
         }
       } else {
         let tauriVer: string | null = null;
@@ -194,14 +197,17 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
         if (tauriVer) {
           detectedVersion = String(tauriVer).trim();
           detectedBuild = detectedVersion;
+          hasAuthoritativeBinaryVer = true;
         }
       }
 
-      // Also honor recorded installed version if higher (e.g. right after running installer)
-      const recordedVer = getRecordedInstalledVersion(runtime);
-      if (recordedVer && compareSemVer(recordedVer, detectedVersion) > 0) {
-        detectedVersion = recordedVer;
-        detectedBuild = recordedVer;
+      // Only fall back to localStorage recorded version if native binary version could not be read
+      if (!hasAuthoritativeBinaryVer) {
+        const recordedVer = getRecordedInstalledVersion(runtime);
+        if (recordedVer && compareSemVer(recordedVer, detectedVersion) > 0) {
+          detectedVersion = recordedVer;
+          detectedBuild = recordedVer;
+        }
       }
 
       return { version: detectedVersion, buildNumber: detectedBuild };
@@ -348,9 +354,13 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
       const defaultDesktopUrl = getEffectiveApiUrl(`/api/downloads/latest-desktop?v=${encodeURIComponent(actualDesktopVer)}&ext=exe&runtime=${runtime}`);
       data.version = actualDesktopVer;
       const rawUrl = desktopDownloadUrl || data.downloadUrl || '';
-      data.downloadUrl = rawUrl
+      let resolvedUrl = rawUrl
         ? (rawUrl.startsWith('http') ? rawUrl : getEffectiveApiUrl(rawUrl))
         : defaultDesktopUrl;
+      if (resolvedUrl && !/[?&]runtime=/i.test(resolvedUrl)) {
+        resolvedUrl += (resolvedUrl.includes('?') ? '&' : '?') + `runtime=${encodeURIComponent(runtime)}`;
+      }
+      data.downloadUrl = resolvedUrl;
 
       // Runtime-specific signature so Electron and Tauri don't collide
       const currentServerSig = `${runtime}_desktop_${actualDesktopVer}`;
@@ -365,21 +375,8 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
         return { hasUpdate: false, serverInfo: data };
       }
 
-      // Check if this exact installer file is ALREADY present in DlkamFiles from a prior session's save_and_open_local_file!
-      // Because save_and_open_local_file downloads AND immediately executes the installer, if the file is already sitting
-      // in DlkamFiles on startup, the user already downloaded and ran this installer!
-      const exeFileName = data.desktopFileName || (isElectron ? `dlkam-electron-setup-v${actualDesktopVer}.exe` : `dlkam-desktop-v${actualDesktopVer}.exe`);
-      const justDownloadedInSession = sessionStorage.getItem('dlkam_just_downloaded_exe');
-      if (justDownloadedInSession !== exeFileName) {
-        try {
-          const alreadyDownloadedAndLaunched = await isDesktopUpdateFileReady(exeFileName);
-          if (alreadyDownloadedAndLaunched) {
-            markPlatformUpdateInstalled(actualDesktopVer, runtime);
-            return { hasUpdate: false, serverInfo: data };
-          }
-        } catch (_) {}
-      }
-
+      // Note: Do NOT auto-hide the update banner just because the .exe exists in Downloads;
+      // UpdateBanner probes isDesktopUpdateFileReady() and displays "اجرا و نصب فایل آپدیت" if downloaded.
       return { hasUpdate: true, serverInfo: data };
     }
 
@@ -487,7 +484,11 @@ async function fetchBinaryWithProgress(
   expectedSize: number = 0,
   onProgress?: (pct: number, statusText: string) => void
 ): Promise<Blob> {
-  const response = await fetch(url, { cache: 'no-store' });
+  const runtime = getDesktopRuntime();
+  const response = await fetch(url, {
+    cache: 'no-store',
+    headers: { 'X-Client-Runtime': runtime }
+  });
   if (!response.ok) {
     throw new Error(`HTTP_${response.status}`);
   }
@@ -552,16 +553,18 @@ export async function openDirectUpdateLink(rawUrl: string): Promise<void> {
     try {
       const electronBridge = win.electronAPI || win.electron;
       if (electronBridge?.openExternal) {
-        await electronBridge.openExternal(cacheBustedUrl);
+        const opened = await electronBridge.openExternal(cacheBustedUrl);
+        if (opened !== false) return;
+      }
+      if (!isElectronDesktop()) {
+        if (win.__TAURI__?.shell?.open) {
+          await win.__TAURI__.shell.open(cacheBustedUrl);
+          return;
+        }
+        const { open } = await import('@tauri-apps/api/shell');
+        await open(cacheBustedUrl);
         return;
       }
-      if (win.__TAURI__?.shell?.open) {
-        await win.__TAURI__.shell.open(cacheBustedUrl);
-        return;
-      }
-      const { open } = await import('@tauri-apps/api/shell');
-      await open(cacheBustedUrl);
-      return;
     } catch (_) {}
   }
 
@@ -698,47 +701,93 @@ export async function applyApplicationUpdate(
     if (!rawDesktop.startsWith('http://') && !rawDesktop.startsWith('https://')) {
       rawDesktop = getEffectiveApiUrl(rawDesktop);
     }
+    if (!/[?&]runtime=/i.test(rawDesktop)) {
+      rawDesktop += (rawDesktop.includes('?') ? '&' : '?') + `runtime=${encodeURIComponent(runtime)}`;
+    }
     const downloadUrl = rawDesktop.includes('?') ? `${rawDesktop}&t=${Date.now()}` : `${rawDesktop}?t=${Date.now()}`;
 
-    const win = window as any;
     const electronBridge = win.electronAPI || win.electron;
 
-    // A. ELECTRON DESKTOP BRIDGE (Identical flow to Tauri)
-    if (electronBridge?.saveAndOpenLocalFile || electronBridge?.openLocalFile) {
+    // A. ELECTRON DESKTOP BRIDGE
+    if (isElectronDesktop() || electronBridge?.downloadAndSaveFile || electronBridge?.saveAndOpenLocalFile || electronBridge?.openLocalFile) {
       try {
         let fileExists = false;
         try {
-          if (electronBridge.checkLocalFileExists) {
+          if (electronBridge?.checkLocalFileExists) {
             fileExists = await electronBridge.checkLocalFileExists(exeFileName);
           }
         } catch (_) {}
 
-        if (fileExists) {
-          onProgress?.(80, 'فایل نصبی موجود است — در حال اجرای نصاب...');
-          if (electronBridge.openLocalFile) {
+        if (fileExists && electronBridge?.openLocalFile) {
+          onProgress?.(85, 'فایل نصبی در پوشه دانلود موجود است — در حال اجرای نصاب...');
+          try {
             await electronBridge.openLocalFile(exeFileName);
-          }
-        } else {
-          onProgress?.(2, `در حال دانلود نسخه جدید ویندوز (v${targetVer})...`);
-          const exeBlob = await fetchBinaryWithProgress(downloadUrl, serverInfo?.desktopFileSize || 15000000, onProgress);
-          const arrayBuffer = await exeBlob.arrayBuffer();
-          const bytes = new Uint8Array(arrayBuffer);
-
-          onProgress?.(95, 'ذخیره فایل و اجرای نصاب ویندوز...');
-          if (electronBridge.saveAndOpenLocalFile) {
-            await electronBridge.saveAndOpenLocalFile(exeFileName, bytes);
-          } else if (electronBridge.openLocalFile) {
-            await electronBridge.openLocalFile(exeFileName);
+            onProgress?.(100, 'پنجره نصاب ویندوز باز شد ✓');
+            toast.success(`فایل نصبی نسخه v${targetVer} از پوشه Downloads اجرا شد ✓`, { duration: 9000 });
+            return;
+          } catch (openExistingErr) {
+            console.warn('Existing installer launch failed, re-downloading fresh copy:', openExistingErr);
           }
         }
 
-        markPlatformUpdateInstalled(targetVer, 'electron');
-        onProgress?.(100, 'پنجره نصاب ویندوز باز شد ✓');
-        toast.success(`فایل نصبی نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل فرمایید.`, { duration: 9000 });
+        // Preferred path: Native Node streaming download directly to C:\Users\...\Downloads (zero renderer memory bloat)
+        if (electronBridge?.downloadAndSaveFile) {
+          onProgress?.(2, `در حال دانلود نسخه جدید ویندوز (v${targetVer}) به پوشه Downloads...`);
+          const unsubscribe = typeof electronBridge.onDownloadProgress === 'function'
+            ? electronBridge.onDownloadProgress((p: any) => {
+                if (!p || typeof p.pct !== 'number') return;
+                const loadedMB = ((Number(p.loadedBytes) || 0) / (1024 * 1024)).toFixed(1);
+                const totalMB = ((Number(p.totalBytes) || Number(serverInfo?.desktopFileSize) || 0) / (1024 * 1024)).toFixed(1);
+                const sizeText = Number(totalMB) > 0 ? ` (${loadedMB} از ${totalMB} مگابایت)` : ` (${loadedMB} مگابایت)`;
+                onProgress?.(p.pct, `در حال دانلود: ${p.pct}%${sizeText}`);
+              })
+            : null;
+          try {
+            const savedPath = await electronBridge.downloadAndSaveFile({
+              url: downloadUrl,
+              fileName: exeFileName,
+              openAfter: true,
+              authToken: getAuthToken() || '',
+              expectedSize: serverInfo?.desktopFileSize || 0
+            });
+            onProgress?.(100, 'فایل در پوشه Downloads ذخیره و نصاب اجرا شد ✓');
+            toast.success(`فایل ${exeFileName} در پوشه Downloads ذخیره و اجرا شد ✓ (${savedPath || 'Downloads'})`, { duration: 9000 });
+            return;
+          } finally {
+            if (unsubscribe) unsubscribe();
+          }
+        }
+
+        // Fallback path for older Electron shell builds: fetch in renderer -> save via IPC
+        if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
+          onProgress?.(2, `در حال دانلود نسخه جدید ویندوز (v${targetVer})...`);
+          const exeBlob = await fetchBinaryWithProgress(downloadUrl, serverInfo?.desktopFileSize || 80000000, onProgress);
+          const arrayBuffer = await exeBlob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+
+          onProgress?.(95, 'ذخیره فایل در پوشه Downloads و اجرای نصاب...');
+          if (electronBridge.saveLocalFile) {
+            await electronBridge.saveLocalFile(exeFileName, bytes, true);
+          } else {
+            await electronBridge.saveAndOpenLocalFile(exeFileName, bytes);
+          }
+          onProgress?.(100, 'پنجره نصاب ویندوز باز شد ✓');
+          toast.success(`فایل نصبی نسخه v${targetVer} در پوشه Downloads ذخیره و اجرا شد ✓`, { duration: 9000 });
+          return;
+        }
+
+        // Last-resort fallback if Electron preload bridge is unavailable
+        onProgress?.(100, 'در حال باز کردن دانلود مستقیم...');
+        await openDirectUpdateLink(downloadUrl);
+        toast('لینک دانلود در مرورگر سیستم باز شد — فایل در پوشه Downloads ذخیره می‌شود.');
         return;
-      } catch (electronErr) {
-        console.warn('Electron in-app update download/exec failed:', electronErr);
-        toast.error('خطا در دانلود درون‌برنامه‌ای — از دکمه «لینک مستقیم» استفاده کنید.');
+      } catch (electronErr: any) {
+        console.warn('Electron in-app update download/exec failed, opening direct fallback:', electronErr);
+        toast.error(`دانلود درون‌برنامه‌ای با خطا مواجه شد — در حال باز کردن لینک مستقیم دانلود...`);
+        try {
+          await openDirectUpdateLink(downloadUrl);
+          return;
+        } catch (_) {}
         throw electronErr;
       }
     }

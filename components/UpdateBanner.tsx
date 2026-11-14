@@ -33,6 +33,7 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
   const [downloadPct, setDownloadPct] = useState<number>(0);
   const [progressText, setProgressText] = useState<string>('');
   const [isLocalFileReady, setIsLocalFileReady] = useState(false);
+  const [downloadError, setDownloadError] = useState<string>('');
 
   if (!updateInfo) return null;
 
@@ -70,22 +71,25 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
     return () => { isMounted = false; };
   }, [isDesktop, targetVer, exeFileName]);
 
+  const runtimeName = isElectron ? 'electron' : isTauri ? 'tauri' : isAndroid ? 'android' : 'web';
   let rawDownloadUrl = isAndroid
     ? (updateInfo.androidDownloadUrl || updateInfo.downloadUrl || `/api/downloads/latest-android?v=${encodeURIComponent(targetVer || 'latest')}`)
-    : (updateInfo.downloadUrl || `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer || 'latest')}&ext=exe`);
+    : (updateInfo.downloadUrl || `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer || 'latest')}&ext=exe&runtime=${runtimeName}`);
 
   if (rawDownloadUrl && !rawDownloadUrl.startsWith('http://') && !rawDownloadUrl.startsWith('https://')) {
     rawDownloadUrl = getEffectiveApiUrl(rawDownloadUrl);
+  }
+  if (rawDownloadUrl && !isAndroid && !/[?&]runtime=/i.test(rawDownloadUrl)) {
+    rawDownloadUrl += (rawDownloadUrl.includes('?') ? '&' : '?') + `runtime=${encodeURIComponent(runtimeName)}`;
   }
 
   const handleDirectLinkClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (!rawDownloadUrl) return;
-    if (targetVer) {
-      markPlatformUpdateInstalled(targetVer);
-    }
+    setDownloadError('');
     await openDirectUpdateLink(rawDownloadUrl);
+    toast.success('لینک دانلود مستقیم باز شد — فایل در پوشه Downloads ذخیره می‌شود.', { duration: 5000 });
     setTimeout(() => {
       onDismiss?.();
     }, 2000);
@@ -105,6 +109,7 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
 
   const handleUpdateClick = async () => {
     if (isUpdating) return;
+    setDownloadError('');
 
     // Fast-path for desktop: if file was already downloaded, directly run and execute it immediately!
     if (isDesktop && isLocalFileReady) {
@@ -125,13 +130,8 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
         }, 2200);
         return;
       } catch (err) {
-        console.warn('Execution error, opening folder fallback:', err);
-        try {
-          await openDesktopUpdateFolder(exeFileName);
-          toast('پوشه فایل نصبی باز شد — لطفاً روی فایل نصبی کلیک نمایید.');
-        } catch {}
-        setIsUpdating(false);
-        return;
+        console.warn('Execution error, re-downloading fresh installer:', err);
+        setIsLocalFileReady(false);
       }
     }
 
@@ -161,8 +161,11 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
           onDismiss?.();
         }
       }, 2500);
-    } catch (e) {
+    } catch (e: any) {
       console.error('Update failed:', e);
+      const errText = e?.message || 'خطا در دانلود فایل آپدیت — از دکمه «لینک مستقیم» استفاده نمایید.';
+      setDownloadError(errText);
+      toast.error(errText, { duration: 6000 });
       setIsUpdating(false);
     }
   };
@@ -321,6 +324,12 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
                 style={{ width: `${Math.max(4, downloadPct)}%` }}
               />
             </div>
+          </div>
+        )}
+
+        {downloadError && !isUpdating && (
+          <div className="text-[11px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50/80 dark:bg-rose-950/40 px-2.5 py-1.5 rounded-xl border border-rose-200/70 dark:border-rose-900/50">
+            خطا در دانلود: {downloadError}
           </div>
         )}
       </div>

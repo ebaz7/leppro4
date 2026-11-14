@@ -99,8 +99,8 @@ import {
   ArrowUpCircle,
   QrCode,
 } from "lucide-react";
-import { publishApplicationUpdate, applyApplicationUpdate, compareSemVer, getNativeClientVersion } from "../services/updateService";
-import { apiCall, getServerHost } from "../services/apiService";
+import { publishApplicationUpdate, applyApplicationUpdate, compareSemVer, getNativeClientVersion, openDirectUpdateLink } from "../services/updateService";
+import { apiCall, getServerHost, getEffectiveApiUrl } from "../services/apiService";
 import { Capacitor } from "@capacitor/core";
 import {
   requestNotificationPermission,
@@ -108,7 +108,7 @@ import {
   isNotificationEnabledInApp,
   sendNotification,
 } from "../services/notificationService";
-import { isTauriDesktop, getDesktopRuntime } from "../utils/platformDetection";
+import { isTauriDesktop, isElectronDesktop, getDesktopRuntime } from "../utils/platformDetection";
 import { safeLocalStorage } from "../utils/safeStorage";
 import { getUsers, getCurrentUser } from "../services/authService";
 import { generateUUID } from "../constants";
@@ -545,7 +545,7 @@ const Settings: React.FC<SettingsProps> = ({
     const runtime = getDesktopRuntime();
     const targetUrl =
       (overrideUrl || settings.desktopUpdateUrl || "").trim() ||
-      `${window.location.origin}/api/desktop/updater.json?runtime=${runtime}`;
+      getEffectiveApiUrl(`/api/desktop/updater.json?runtime=${runtime}`);
 
     try {
       // First check if native Tauri updater IPC is available
@@ -631,67 +631,98 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleStartUpdateDownload = () => {
+  const handleStartUpdateDownload = async () => {
     if (downloadPhase === "downloading") return;
-    setDownloadPhase("downloading");
-    setDownloadProgress(0);
-
-    // Realistic progressive download simulation & handling
-    let currentPct = 0;
-    const totalSize = 28.5; // MB
-    setTotalBytesStr(`${totalSize.toFixed(1)} MB`);
-
     if (downloadTimerRef.current) {
       clearInterval(downloadTimerRef.current);
+      downloadTimerRef.current = null;
     }
 
-    downloadTimerRef.current = setInterval(() => {
-      // variable speed increment
-      const step = Math.random() * 8 + 4;
-      currentPct += step;
+    const runtime = getDesktopRuntime();
+    const rawJson = updateManifestInfo?.rawJson || {};
+    const targetVer = updateManifestInfo?.version || settings.desktopLatestVersion || settings.systemVersion || currentAppVersion;
+    const rawDl = updateManifestInfo?.downloadUrl || rawJson?.url || `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer)}&ext=exe&runtime=${runtime}`;
+    let fullDlUrl = rawDl.startsWith("http") ? rawDl : getEffectiveApiUrl(rawDl);
+    if (!/[?&]runtime=/i.test(fullDlUrl)) {
+      fullDlUrl += (fullDlUrl.includes("?") ? "&" : "?") + `runtime=${encodeURIComponent(runtime)}`;
+    }
 
-      if (currentPct >= 100) {
-        currentPct = 100;
-        clearInterval(downloadTimerRef.current);
-        setDownloadProgress(100);
-        setDownloadedBytesStr(`${totalSize.toFixed(1)} MB`);
-        setDownloadSpeedStr("تکمیل شد");
-        setDownloadPhase("verifying");
+    setDownloadPhase("downloading");
+    setDownloadProgress(2);
+    setDownloadSpeedStr("در حال دریافت...");
+    setDownloadedBytesStr("در حال اتصال...");
+    setTotalBytesStr(
+      rawJson?.desktopFileSize
+        ? `${(Number(rawJson.desktopFileSize) / (1024 * 1024)).toFixed(1)} MB`
+        : "در حال محاسبه"
+    );
 
-        setTimeout(() => {
-          setDownloadPhase("ready");
-        }, 1200);
-      } else {
-        setDownloadProgress(Math.floor(currentPct));
-        const downloaded = ((currentPct / 100) * totalSize).toFixed(1);
-        setDownloadedBytesStr(`${downloaded} MB`);
-        const currentSpeed = (Math.random() * 3 + 2.5).toFixed(1);
-        setDownloadSpeedStr(`${currentSpeed} MB/s`);
-      }
-    }, 300);
+    try {
+      await applyApplicationUpdate(
+        {
+          version: targetVer,
+          desktopLatestVersion: targetVer,
+          electronLatestVersion: runtime === "electron" ? targetVer : undefined,
+          tauriLatestVersion: runtime === "tauri" ? targetVer : undefined,
+          androidLatestVersion: targetVer,
+          desktopFileName: rawJson?.desktopFileName || undefined,
+          desktopFileSize: rawJson?.desktopFileSize || undefined,
+          buildNumber: targetVer,
+          downloadUrl: fullDlUrl,
+          androidDownloadUrl: getEffectiveApiUrl(`/api/downloads/latest-android?v=${encodeURIComponent(targetVer)}`),
+        },
+        (pct, statusText) => {
+          setDownloadProgress(pct);
+          if (statusText) {
+            setDownloadedBytesStr(statusText);
+          }
+        }
+      );
+      setDownloadProgress(100);
+      setDownloadSpeedStr("تکمیل شد");
+      setDownloadPhase("ready");
+    } catch (err: any) {
+      console.error("Real update download failed:", err);
+      setDownloadPhase("error");
+      setDownloadSpeedStr("خطا");
+      setDownloadedBytesStr(err?.message || "دانلود ناموفق بود");
+    }
   };
 
   const handleCancelDownload = () => {
     if (downloadTimerRef.current) {
       clearInterval(downloadTimerRef.current);
+      downloadTimerRef.current = null;
     }
     setDownloadPhase("idle");
     setDownloadProgress(0);
   };
 
   const handleApplyUpdateAndRelaunch = async () => {
+    const runtime = getDesktopRuntime();
+    const rawJson = updateManifestInfo?.rawJson || {};
     const targetVer = updateManifestInfo?.version || settings.desktopLatestVersion || settings.systemVersion || currentAppVersion;
+    const rawDl = updateManifestInfo?.downloadUrl || rawJson?.url || `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer)}&ext=exe&runtime=${runtime}`;
+    let fullDlUrl = rawDl.startsWith("http") ? rawDl : getEffectiveApiUrl(rawDl);
+    if (!/[?&]runtime=/i.test(fullDlUrl)) {
+      fullDlUrl += (fullDlUrl.includes("?") ? "&" : "?") + `runtime=${encodeURIComponent(runtime)}`;
+    }
     await applyApplicationUpdate(
       {
         version: targetVer,
         desktopLatestVersion: targetVer,
+        electronLatestVersion: runtime === "electron" ? targetVer : undefined,
+        tauriLatestVersion: runtime === "tauri" ? targetVer : undefined,
         androidLatestVersion: targetVer,
+        desktopFileName: rawJson?.desktopFileName || undefined,
+        desktopFileSize: rawJson?.desktopFileSize || undefined,
         buildNumber: targetVer,
-        downloadUrl: `/api/downloads/latest-desktop?v=${encodeURIComponent(targetVer)}&ext=exe`,
-        androidDownloadUrl: `/api/downloads/latest-android?v=${encodeURIComponent(targetVer)}`
+        downloadUrl: fullDlUrl,
+        androidDownloadUrl: getEffectiveApiUrl(`/api/downloads/latest-android?v=${encodeURIComponent(targetVer)}`),
       },
-      (pct) => {
+      (pct, statusText) => {
         setDownloadProgress(pct);
+        if (statusText) setDownloadedBytesStr(statusText);
       }
     );
   };
@@ -699,7 +730,8 @@ const Settings: React.FC<SettingsProps> = ({
   const handleTestDesktopUpdateFeed = async () => {
     setTestingDesktopUpdate(true);
     setDesktopTestResult(null);
-    const targetUrl = (settings.desktopUpdateUrl || "").trim() || `${window.location.origin}/api/desktop/updater.json`;
+    const runtime = getDesktopRuntime();
+    const targetUrl = (settings.desktopUpdateUrl || "").trim() || getEffectiveApiUrl(`/api/desktop/updater.json?runtime=${runtime}`);
     try {
       const res = await fetch(targetUrl);
       if (res.ok) {
@@ -9021,7 +9053,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const defaultFeedUrl = `${window.location.origin}/api/desktop/updater.json`;
+                        const defaultFeedUrl = getEffectiveApiUrl(`/api/desktop/updater.json?runtime=${getDesktopRuntime()}`);
                         setSettings({ ...settings, desktopUpdateUrl: defaultFeedUrl });
                       }}
                       className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline font-bold"
@@ -9229,8 +9261,8 @@ const Settings: React.FC<SettingsProps> = ({
                     <div className="text-slate-500">// config.json</div>
                     <div>{"{"}</div>
                     <div className="pl-3 text-indigo-300">  &quot;local_server_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopLocalServerUrl || "http://localhost:3000"}&quot;</span>,</div>
-                    <div className="pl-3 text-indigo-300">  &quot;cloud_server_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopCloudServerUrl || (typeof window !== 'undefined' ? window.location.origin : 'https://...')}&quot;</span>,</div>
-                    <div className="pl-3 text-indigo-300">  &quot;update_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopUpdateUrl || `${typeof window !== 'undefined' ? window.location.origin : ''}/api/desktop/updater.json`}&quot;</span>,</div>
+                    <div className="pl-3 text-indigo-300">  &quot;cloud_server_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopCloudServerUrl || getServerHost() || 'https://dlkam.ir'}&quot;</span>,</div>
+                    <div className="pl-3 text-indigo-300">  &quot;update_url&quot;: <span className="text-emerald-300">&quot;{settings.desktopUpdateUrl || getEffectiveApiUrl('/api/desktop/updater.json')}&quot;</span>,</div>
                     <div className="pl-3 text-indigo-300">  &quot;auto_check_updates&quot;: <span className="text-amber-400">{settings.desktopAutoCheckUpdates !== false ? 'true' : 'false'}</span>,</div>
                     <div className="pl-3 text-indigo-300">  &quot;timeout_ms&quot;: <span className="text-amber-400">1200</span></div>
                     <div>{"}"}</div>
@@ -9238,21 +9270,20 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
 
                 <div className="mt-4 pt-3 border-t flex items-center justify-between">
-                  <a
-                    href="/api/desktop/updater.json"
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => openDirectUpdateLink(getEffectiveApiUrl(`/api/desktop/updater.json?runtime=${getDesktopRuntime()}`))}
                     className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-bold"
                   >
                     <ExternalLink size={12} /> مشاهده JSON آپدیت
-                  </a>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
                       const cfg = {
                         local_server_url: settings.desktopLocalServerUrl || "http://localhost:3000",
-                        cloud_server_url: settings.desktopCloudServerUrl || window.location.origin,
-                        update_url: settings.desktopUpdateUrl || `${window.location.origin}/api/desktop/updater.json`,
+                        cloud_server_url: settings.desktopCloudServerUrl || getServerHost() || "https://dlkam.ir",
+                        update_url: settings.desktopUpdateUrl || getEffectiveApiUrl('/api/desktop/updater.json'),
                         auto_check_updates: settings.desktopAutoCheckUpdates !== false,
                         timeout_ms: 1200,
                       };
@@ -9589,7 +9620,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <div className="text-xs text-gray-600 dark:text-gray-400 flex items-center gap-1.5">
                     <ShieldCheck size={14} className="text-emerald-600" />
-                    <span>تأییدیه امنیتی Tauri Safe Package</span>
+                    <span>{isElectronDesktop() ? "تأییدیه امنیتی Electron Safe Package" : "تأییدیه امنیتی Tauri Safe Package"}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -9637,7 +9668,7 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {updateStatus === "available" && downloadPhase === "idle" && (
+                    {updateStatus === "available" && (downloadPhase === "idle" || downloadPhase === "error") && (
                       <button
                         type="button"
                         onClick={handleStartUpdateDownload}
@@ -9649,15 +9680,23 @@ const Settings: React.FC<SettingsProps> = ({
                     )}
 
                     {updateManifestInfo.downloadUrl && (
-                      <a
-                        href={updateManifestInfo.downloadUrl}
-                        target="_blank"
-                        rel="noreferrer"
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rt = getDesktopRuntime();
+                          let url = updateManifestInfo.downloadUrl!.startsWith("http")
+                            ? updateManifestInfo.downloadUrl!
+                            : getEffectiveApiUrl(updateManifestInfo.downloadUrl!);
+                          if (!/[?&]runtime=/i.test(url)) {
+                            url += (url.includes("?") ? "&" : "?") + `runtime=${encodeURIComponent(rt)}`;
+                          }
+                          openDirectUpdateLink(url);
+                        }}
                         className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all"
                       >
                         <ExternalLink size={13} />
-                        دانلود دستی فایل نصبی (.msi)
-                      </a>
+                        {isElectronDesktop() ? "دانلود دستی فایل نصبی (.exe)" : "دانلود دستی فایل نصبی"}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -9805,7 +9844,7 @@ const Settings: React.FC<SettingsProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const defaultFeedUrl = `${window.location.origin}/api/desktop/updater.json`;
+                        const defaultFeedUrl = getEffectiveApiUrl(`/api/desktop/updater.json?runtime=${getDesktopRuntime()}`);
                         setSettings({ ...settings, desktopUpdateUrl: defaultFeedUrl });
                       }}
                       className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline font-bold"

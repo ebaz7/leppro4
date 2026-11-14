@@ -175,7 +175,8 @@ app.use(cors({
     origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Client-Runtime', 'Accept', 'Cache-Control', 'Pragma']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Client-Runtime', 'Accept', 'Cache-Control', 'Pragma'],
+    exposedHeaders: ['Content-Disposition', 'Content-Length', 'Content-Type']
 }));
 
 // --- URL NORMALIZATION FOR REVERSE PROXIES & ACCIDENTAL DOUBLE PREFIXES ---

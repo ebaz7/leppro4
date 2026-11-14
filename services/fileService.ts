@@ -3,7 +3,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { resolveImageUrl, getAuthToken } from './apiService';
 import { FileOpener } from '@capacitor-community/file-opener';
 import { Share } from '@capacitor/share';
-import { isTauriDesktop } from '../utils/platformDetection';
+import { isTauriDesktop, isElectronDesktop, isTauriDesktopOnly } from '../utils/platformDetection';
 import toast from 'react-hot-toast';
 
 declare global {
@@ -42,6 +42,10 @@ const guessMimeType = (fileName: string): string => {
     if (lower.endsWith('.mp4')) return 'video/mp4';
     if (lower.endsWith('.mp3')) return 'audio/mpeg';
     if (lower.endsWith('.txt')) return 'text/plain';
+    if (lower.endsWith('.zip')) return 'application/zip';
+    if (lower.endsWith('.sql')) return 'application/sql';
+    if (lower.endsWith('.json')) return 'application/json';
+    if (lower.endsWith('.gz')) return 'application/gzip';
     return 'application/octet-stream';
 };
 
@@ -118,8 +122,22 @@ export const checkFileExists = async (fileName: string): Promise<boolean> => {
         return false;
     }
 
-    // 3. Check Windows Tauri Desktop App Folder
-    if (isTauriDesktop()) {
+    // 3. Check Windows Electron Desktop Downloads Folder
+    if (isElectronDesktop()) {
+        const electronBridge = (window as any).electronAPI || (window as any).electron;
+        if (electronBridge?.checkLocalFileExists) {
+            try {
+                const exists = await electronBridge.checkLocalFileExists(safeName);
+                if (exists) {
+                    markFileAsSavedInRegistry(fileName, 'electron_downloads');
+                    return true;
+                }
+            } catch {}
+        }
+    }
+
+    // 4. Check Windows Tauri Desktop App Folder
+    if (isTauriDesktopOnly()) {
         try {
             const { invoke } = await import('@tauri-apps/api/tauri');
             const exists = await invoke<boolean>('check_local_file_exists', { fileName: safeName });
@@ -239,8 +257,26 @@ export const saveImageToGallery = async (
             }
         }
 
-        // 3. Windows Tauri Desktop
-        if (isTauriDesktop()) {
+        // 3. Windows Electron Desktop (Saves directly to Windows Downloads folder)
+        if (isElectronDesktop()) {
+            const electronBridge = (window as any).electronAPI || (window as any).electron;
+            if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
+                try {
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const bytes = new Uint8Array(arrayBuffer);
+                    const savedPath = electronBridge.saveLocalFile
+                        ? await electronBridge.saveLocalFile(finalImageName, bytes, false)
+                        : await electronBridge.saveAndOpenLocalFile(finalImageName, bytes);
+                    if (onProgress) onProgress(100);
+                    markFileAsSavedInRegistry(fileName || finalImageName, savedPath || 'electron_downloads');
+                    toast.success('تصویر در پوشه دانلودهای ویندوز (Downloads) ذخیره شد ✓');
+                    return true;
+                } catch {}
+            }
+        }
+
+        // 4. Windows Tauri Desktop
+        if (isTauriDesktopOnly()) {
             try {
                 const { invoke } = await import('@tauri-apps/api/tauri');
                 const arrayBuffer = await blob.arrayBuffer();
@@ -403,8 +439,66 @@ export const downloadAndOpenFile = async (
             return true;
         }
 
-        // 3. Windows Desktop (Tauri) - Dedicated App Folder Storage
-        if (isTauriDesktop()) {
+        // 3. Windows Electron Desktop - Save directly to Windows Downloads folder
+        if (isElectronDesktop()) {
+            const electronBridge = (window as any).electronAPI || (window as any).electron;
+            try {
+                if (allowCache && electronBridge?.checkLocalFileExists && electronBridge?.openLocalFile) {
+                    const exists = await electronBridge.checkLocalFileExists(safeName);
+                    if (exists) {
+                        if (onProgress) onProgress(100);
+                        markFileAsSavedInRegistry(fileName, 'electron_downloads');
+                        await electronBridge.openLocalFile(safeName);
+                        return true;
+                    }
+                }
+
+                const fetchUrl = resolveImageUrl(url);
+                if (electronBridge?.downloadAndSaveFile && (fetchUrl.startsWith('http://') || fetchUrl.startsWith('https://'))) {
+                    if (onProgress) onProgress(20);
+                    const unsubscribe = typeof electronBridge.onDownloadProgress === 'function'
+                        ? electronBridge.onDownloadProgress((p: any) => {
+                            if (p && typeof p.pct === 'number' && onProgress) {
+                                onProgress(p.pct);
+                            }
+                        })
+                        : null;
+                    try {
+                        const savedPath = await electronBridge.downloadAndSaveFile({
+                            url: fetchUrl,
+                            fileName: safeName,
+                            openAfter: true,
+                            authToken: getAuthToken() || ''
+                        });
+                        if (onProgress) onProgress(100);
+                        markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
+                        toast.success(`فایل ${safeName} در پوشه Downloads ویندوز ذخیره شد ✓`);
+                        return true;
+                    } finally {
+                        if (unsubscribe) unsubscribe();
+                    }
+                }
+
+                if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
+                    if (onProgress) onProgress(20);
+                    const blob = await fetchUrlAsBlob(url, onProgress);
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const bytes = new Uint8Array(arrayBuffer);
+                    const savedPath = electronBridge.saveLocalFile
+                        ? await electronBridge.saveLocalFile(safeName, bytes, true)
+                        : await electronBridge.saveAndOpenLocalFile(safeName, bytes);
+                    if (onProgress) onProgress(100);
+                    markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
+                    toast.success(`فایل ${safeName} در پوشه Downloads ویندوز ذخیره شد ✓`);
+                    return true;
+                }
+            } catch (electronErr) {
+                console.warn('Electron local file save fallback to web:', electronErr);
+            }
+        }
+
+        // 4. Windows Tauri Desktop - Dedicated App Folder Storage
+        if (isTauriDesktopOnly()) {
             try {
                 const { invoke } = await import('@tauri-apps/api/tauri');
                 if (allowCache) {
@@ -540,8 +634,27 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
         }
     }
 
-    // 3. Windows Tauri Desktop
-    if (isTauriDesktop()) {
+    // 3. Windows Electron Desktop - Save directly to Windows Downloads folder
+    if (isElectronDesktop()) {
+        const electronBridge = (window as any).electronAPI || (window as any).electron;
+        if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
+            try {
+                const arrayBuffer = await blob.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                const savedPath = electronBridge.saveLocalFile
+                    ? await electronBridge.saveLocalFile(safeName, bytes, true)
+                    : await electronBridge.saveAndOpenLocalFile(safeName, bytes);
+                markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
+                toast.success(`فایل ${safeName} در پوشه Downloads ویندوز ذخیره شد ✓`);
+                return true;
+            } catch (electronSaveErr) {
+                console.warn('Electron blob save error, falling back to browser download:', electronSaveErr);
+            }
+        }
+    }
+
+    // 4. Windows Tauri Desktop
+    if (isTauriDesktopOnly()) {
         try {
             const { invoke } = await import('@tauri-apps/api/tauri');
             const arrayBuffer = await blob.arrayBuffer();
