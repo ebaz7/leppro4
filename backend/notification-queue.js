@@ -186,6 +186,27 @@ export async function enqueueNotification({
     syncQueueToDb();
 
     // 1. Instant Zero-Latency Dispatch via active SSE streams
+    let sseTargetUsernames = queueItem.targetUsernames;
+    if (queueItem.targetRoles && queueItem.targetRoles.length > 0) {
+        const lowerRoles = new Set(queueItem.targetRoles.map(r => String(r).toLowerCase().trim()).filter(Boolean));
+        const db = dbManagerRef ? dbManagerRef.getDb() : null;
+        if (db && Array.isArray(db.users)) {
+            const combinedTargets = new Set(
+                (queueItem.targetUsernames || []).map(u => String(u).toLowerCase().trim()).filter(Boolean)
+            );
+            for (const u of db.users) {
+                if (!u || !u.username) continue;
+                const uRoles = [u.role, ...(Array.isArray(u.roles) ? u.roles : [])]
+                    .filter(Boolean)
+                    .map(r => String(r).toLowerCase().trim());
+                if (uRoles.some(r => lowerRoles.has(r))) {
+                    combinedTargets.add(String(u.username).toLowerCase().trim());
+                }
+            }
+            sseTargetUsernames = Array.from(combinedTargets);
+        }
+    }
+
     const sseDeliveredCount = dispatchSSEEvent('notification', {
         id: queueItem.id,
         type: queueItem.type,
@@ -195,7 +216,7 @@ export async function enqueueNotification({
         createdAt: queueItem.createdAt,
         priority: queueItem.priority,
         metadata: queueItem.metadata
-    }, queueItem.targetUsernames, queueItem.excludeUsernames);
+    }, sseTargetUsernames, queueItem.excludeUsernames);
 
     if (sseDeliveredCount > 0) {
         queueItem.deliveredChannels.push(`sse (${sseDeliveredCount} streams)`);
@@ -368,18 +389,29 @@ export function acknowledgeNotification(notifId, username) {
 /**
  * Get pending undelivered notifications for a user (offline queue drainage)
  */
-export function getPendingNotificationsForUser(username) {
+export function getPendingNotificationsForUser(username, userRoles = []) {
     if (!username) return [];
     const lowerU = String(username).toLowerCase().trim();
+    const roleList = Array.isArray(userRoles) ? userRoles : (userRoles ? [userRoles] : []);
+    const lowerRoles = new Set(roleList.map(r => String(r).toLowerCase().trim()).filter(Boolean));
+
     return queueItems.filter(item => {
         if (item.status === 'failed') return false;
-        if (item.excludeUsernames && item.excludeUsernames.some(u => String(u).toLowerCase() === lowerU)) return false;
-        
+        if (item.excludeUsernames && item.excludeUsernames.some(u => String(u).toLowerCase().trim() === lowerU)) return false;
+
+        const hasUserTargets = Boolean(item.targetUsernames && item.targetUsernames.length > 0);
+        const hasRoleTargets = Boolean(item.targetRoles && item.targetRoles.length > 0);
+
         let targeted = false;
-        if (!item.targetUsernames && !item.targetRoles) {
+        if (!hasUserTargets && !hasRoleTargets) {
             targeted = true;
-        } else if (item.targetUsernames && item.targetUsernames.some(u => String(u).toLowerCase() === lowerU)) {
-            targeted = true;
+        } else {
+            if (hasUserTargets && item.targetUsernames.some(u => String(u).toLowerCase().trim() === lowerU)) {
+                targeted = true;
+            }
+            if (!targeted && hasRoleTargets && lowerRoles.size > 0) {
+                targeted = item.targetRoles.some(r => lowerRoles.has(String(r).toLowerCase().trim()));
+            }
         }
 
         if (!targeted) return false;

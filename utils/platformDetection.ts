@@ -103,16 +103,14 @@ export const isAndroidApp = (): boolean => {
 };
 
 /**
- * Checks if the current client is an installed persistent app (Android APK or Windows Desktop app).
- * Installed clients MUST NEVER have idle session timeouts or automatic logouts.
+ * Checks if the current client is an installed persistent native app (Android APK or Windows Desktop app).
+ * Native installed clients NEVER have idle session timeouts or automatic timeouts.
+ * Standard Web browsers (including browser-installed standalone shortcuts/PWAs) MUST enforce Web security rules.
  */
 export const isPersistentClientApp = (): boolean => {
   if (typeof window === 'undefined') return false;
   if (isAndroidApp() || isWindowsDesktopApp() || Capacitor.isNativePlatform()) return true;
   if (isElectronDesktop() || isTauriDesktop()) return true;
-  // Installed PWA standalone mode
-  if (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches) return true;
-  if ((navigator as any)?.standalone === true) return true;
   return false;
 };
 
@@ -126,7 +124,7 @@ export const shouldEnforceIdleTimeout = (): boolean => {
 };
 
 /**
- * Checks if running as standard web browser app (not desktop client and not mobile native container).
+ * Checks if running as web browser app (not Windows desktop native container and not Android native container).
  */
 export const isWebApp = (): boolean => {
   return !isPersistentClientApp();
@@ -145,7 +143,7 @@ export const getPlatform = (): AppPlatform => {
  * Human-readable Persian platform badge title
  */
 export const getPlatformBadgeLabel = (): { title: string; subtitle: string; iconType: 'desktop' | 'mobile' | 'web'; colorClass: string } => {
-  if (isTauriDesktop()) {
+  if (isWindowsDesktopApp()) {
     return {
       title: 'نسخه دسکتاپ ویندوز',
       subtitle: 'دلکام کلاینت بومی',
@@ -153,7 +151,7 @@ export const getPlatformBadgeLabel = (): { title: string; subtitle: string; icon
       colorClass: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
     };
   }
-  if (isMobileApp()) {
+  if (isAndroidApp() || isMobileApp()) {
     return {
       title: 'نسخه اندروید',
       subtitle: 'اپلیکیشن موبایل',

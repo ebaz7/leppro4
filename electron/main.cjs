@@ -105,7 +105,7 @@ function createWindow() {
       sandbox: false,
       webSecurity: false,
       spellcheck: false,
-      backgroundThrottling: true
+      backgroundThrottling: false
     }
   });
 
@@ -144,7 +144,7 @@ function createWindow() {
       if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send('desktop-auto-logout');
         mainWindow.webContents.executeJavaScript(
-          "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); window.dispatchEvent(new CustomEvent('desktop-auto-logout')); } catch(e) {}",
+          "try { localStorage.removeItem('app_current_user'); localStorage.removeItem('app_auth_token'); localStorage.removeItem('app_refresh_token'); sessionStorage.removeItem('dlkam_desktop_session_active'); window.dispatchEvent(new CustomEvent('desktop-auto-logout')); } catch(e) {}",
           true
         ).catch(() => {});
       }

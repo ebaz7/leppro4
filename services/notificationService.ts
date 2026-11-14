@@ -3,8 +3,9 @@ import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Preferences } from '@capacitor/preferences';
-import { isTauriDesktop, isElectronDesktop } from '../utils/platformDetection';
+import { isTauriDesktop, isElectronDesktop, isWebApp } from '../utils/platformDetection';
 import { apiCall } from './apiService';
+import { getCurrentUser } from './authService';
 
 const PREF_KEY = 'app_notification_pref';
 
@@ -143,10 +144,13 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
   try {
       const permission = await Notification.requestPermission();
       if (permission === 'granted') {
-          // Run push subscription in background so unreachable FCM (without international internet) never blocks UI permission flow
-          subscribeToPushNotifications().catch(err => {
-              console.warn('[Push] Background push subscription skipped (using SSE/Local notification fallback):', err?.message || err);
-          });
+          // On Web browsers, do NOT subscribe persistent PushManager background push;
+          // Web receives foreground/open-tab alerts only while logged in.
+          if (!isWebApp()) {
+              subscribeToPushNotifications().catch(err => {
+                  console.warn('[Push] Background push subscription skipped (using SSE/Local notification fallback):', err?.message || err);
+              });
+          }
           return true;
       }
       return false;
@@ -436,13 +440,13 @@ export const setupNativePushNotifications = async (username: string, role: strin
 
 export const subscribeToPushNotifications = async () => {
     if (Capacitor.isNativePlatform()) return; // Native handled by Capacitor plugin
+    if (isWebApp()) return; // Security policy: Web browsers never register persistent background PushManager subscriptions
     if (typeof window === 'undefined' || typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
         return;
     }
 
     // CRITICAL: Only allow subscribing if there is an authenticated user!
-    const userStr = localStorage.getItem('app_current_user');
-    const user = userStr ? JSON.parse(userStr) : null;
+    const user = getCurrentUser();
     if (!user || !user.username) {
         console.log('[Push] Aborted push subscription: No user is currently logged in.');
         return;

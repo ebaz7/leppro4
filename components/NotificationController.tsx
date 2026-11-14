@@ -9,6 +9,7 @@ import { User, UserRole } from '../types';
 import { getSettings } from '../services/storageService';
 import { getRolePermissions } from '../services/authService';
 import { markNotificationAsShown, hasNotificationBeenShown, syncServiceWorkerAuth } from '../services/notificationService';
+import { isWebApp } from '../utils/platformDetection';
 
 interface Props {
     currentUser?: User | null;
@@ -102,6 +103,28 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
                 
                 await PushNotifications.register();
             } else {
+                // Web Security Policy:
+                // Never register persistent background WebPush subscriptions on Web browsers.
+                // Web receives notifications ONLY while an authenticated tab is actively open (via SSE/polling).
+                if (isWebApp()) {
+                    try {
+                        if ('serviceWorker' in navigator && 'PushManager' in window) {
+                            const reg = await navigator.serviceWorker.getRegistration();
+                            const existingSub = await reg?.pushManager?.getSubscription();
+                            if (existingSub) {
+                                const endpoint = existingSub.endpoint;
+                                await existingSub.unsubscribe().catch(() => {});
+                                apiCall('/unsubscribe', 'POST', {
+                                    endpoint,
+                                    username: currentUser.username
+                                }).catch(() => {});
+                            }
+                        }
+                        localStorage.removeItem('push_endpoint');
+                    } catch (_) {}
+                    return;
+                }
+
                 if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
                     console.log('WebPush not supported');
                     return;
@@ -131,23 +154,28 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
                         ...JSON.parse(JSON.stringify(existingSub)),
                         username: currentUser.username,
                         role: currentUser.role,
-                        deviceType: 'web'
+                        deviceType: 'desktop'
                     };
                     localStorage.setItem('push_endpoint', existingSub.endpoint);
                     await apiCall('/subscribe', 'POST', payload);
                 } else {
-                    // 4. Subscribe New
-                    const subscription = await registration.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: convertedVapidKey
-                    });
+                    // 4. Subscribe New (with 3.5s timeout for National Internet / LAN resilience)
+                    const subscription = await Promise.race([
+                        registration.pushManager.subscribe({
+                            userVisibleOnly: true,
+                            applicationServerKey: convertedVapidKey
+                        }),
+                        new Promise<PushSubscription>((_, reject) =>
+                            setTimeout(() => reject(new Error('PushManager subscribe timeout')), 3500)
+                        )
+                    ]);
 
                     if (subscription) {
                         const payload = {
                             ...JSON.parse(JSON.stringify(subscription)),
                             username: currentUser.username,
                             role: currentUser.role,
-                            deviceType: 'web'
+                            deviceType: 'desktop'
                         };
                         localStorage.setItem('push_endpoint', subscription.endpoint);
                         await apiCall('/subscribe', 'POST', payload);

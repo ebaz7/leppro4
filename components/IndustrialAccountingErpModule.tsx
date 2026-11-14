@@ -208,10 +208,24 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
   };
 
-  const handleDownloadBackup = () => {
+  const handleDownloadBackup = async () => {
     if (!selectedCompany) return;
-    window.open(`/api/industrial-erp/download-backup?companyId=${selectedCompany.id}`, '_blank');
-    showToast('success', 'فایل JSON پشتیبان اختصاصی شرکت دانلود شد');
+    try {
+      const response = await fetch(`/api/industrial-erp/download-backup?companyId=${encodeURIComponent(selectedCompany.id)}`);
+      if (!response.ok) throw new Error('دانلود ناموفق بود');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ERP_Backup_${selectedCompany.id}_${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('success', 'فایل JSON پشتیبان اختصاصی شرکت دانلود شد');
+    } catch (err: any) {
+      showToast('error', err?.message || 'خطا در دانلود فایل پشتیبان');
+    }
   };
 
   const handleClearCompanyData = async () => {
@@ -420,7 +434,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       `/industrial-erp/state?companyId=${encodeURIComponent(comp.id)}`
     )
       .then(serverData => {
-        if (serverData && Array.isArray(serverData.items) && serverData.items.length > 0) {
+        if (serverData && typeof serverData === 'object' && Array.isArray(serverData.items)) {
           setErpState(serverData);
           try {
             localStorage.setItem(`delcom_erp_state_${comp.id}`, JSON.stringify(serverData));
@@ -449,7 +463,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         `/industrial-erp/state?companyId=${encodeURIComponent(selectedCompany.id)}`
       )
         .then(serverData => {
-          if (serverData && Array.isArray(serverData.items) && serverData.items.length > 0) {
+          if (serverData && typeof serverData === 'object' && Array.isArray(serverData.items)) {
             setErpState(serverData);
             try {
               localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(serverData));

@@ -216,8 +216,9 @@ self.addEventListener('push', (event) => {
     (async () => {
       try {
         const isAuth = await checkIsUserLoggedIn();
-        if (!isAuth) {
-          console.warn('[SW Push] User is logged out. Notification suppressed and unsubscribing...');
+        const openClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        if (!isAuth || !openClients || openClients.length === 0) {
+          console.warn('[SW Push] User is logged out or Web window is closed. Notification suppressed and unsubscribing...');
           
           // Security hardening: Automatically unsubscribe this device
           try {

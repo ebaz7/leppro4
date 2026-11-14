@@ -48,6 +48,8 @@ export interface ErpCommodityGroup {
   id: string;
   code: string;
   name: string;
+  parentId?: string | null;
+  isActive?: boolean;
   description?: string;
 }
 
@@ -83,6 +85,8 @@ export interface ErpItem {
   coneWeightGrams: number;
   cartonWeightGrams: number;
   defaultConesPerCarton: number;
+  isActive?: boolean;
+  isTareLocked?: boolean;
 }
 
 export interface ErpBomComponent {
@@ -182,6 +186,7 @@ export interface ErpCartonLabel {
   productionArchiveCode?: string;
   remittanceId?: string;
   sourceSystem?: 'DELKAM' | 'SAYAN';
+  barcodeType?: ErpBarcodeType;
   history?: ErpCartonHistoryEvent[];
 }
 
@@ -481,6 +486,88 @@ export interface ErpCutoverConfig {
   defaultPayableAccountCode: string;
 }
 
+export type ErpBarcodeType = 'LINEAR_1D' | 'QR_2D' | 'BOTH';
+export type ErpBarcodeValueSource = 'referenceCode' | 'serialNumber' | 'productCode';
+
+export interface ErpLabelTemplateFields {
+  showCompanyName: boolean;
+  showHeaderSubtitle: boolean;
+  showProductName: boolean;
+  showProductCode: boolean;
+  showYarnCount: boolean;
+  showColorName: boolean;
+  showMachineLine: boolean;
+  showShift: boolean;
+  showLotNumber: boolean;
+  showConesCount: boolean;
+  showGrade: boolean;
+  showGrossWeight: boolean;
+  showTareWeight: boolean;
+  showNetWeight: boolean;
+  showReferenceCode: boolean;
+  showSerialNumber: boolean;
+  showDate: boolean;
+  showTime: boolean;
+  showOperator: boolean;
+  showFooterNote: boolean;
+}
+
+export interface ErpLabelTemplateConfig {
+  barcodeType: ErpBarcodeType;
+  barcodeValueSource: ErpBarcodeValueSource;
+  showBarcodeHumanText: boolean;
+  linearBarcodeHeightPx: number;
+  labelWidthMm: number;
+  labelHeightMm: number;
+  fontSizeScale: 'SMALL' | 'MEDIUM' | 'LARGE';
+  borderStyle: 'SOLID' | 'DOUBLE' | 'NONE';
+  headerTitle: string;
+  headerSubtitle: string;
+  footerNote: string;
+  fields: ErpLabelTemplateFields;
+}
+
+export interface ErpScaleConfig {
+  lockTareWeightsGlobally: boolean;
+  lockConesCountGlobally?: boolean;
+}
+
+export const DEFAULT_LABEL_TEMPLATE_CONFIG: ErpLabelTemplateConfig = {
+  barcodeType: 'LINEAR_1D',
+  barcodeValueSource: 'referenceCode',
+  showBarcodeHumanText: true,
+  linearBarcodeHeightPx: 44,
+  labelWidthMm: 100,
+  labelHeightMm: 70,
+  fontSizeScale: 'MEDIUM',
+  borderStyle: 'SOLID',
+  headerTitle: '',
+  headerSubtitle: 'لیبل شناسنامه کارتن نخ صنعتی',
+  footerNote: '',
+  fields: {
+    showCompanyName: true,
+    showHeaderSubtitle: true,
+    showProductName: true,
+    showProductCode: true,
+    showYarnCount: true,
+    showColorName: true,
+    showMachineLine: true,
+    showShift: true,
+    showLotNumber: true,
+    showConesCount: true,
+    showGrade: true,
+    showGrossWeight: true,
+    showTareWeight: true,
+    showNetWeight: true,
+    showReferenceCode: true,
+    showSerialNumber: false,
+    showDate: true,
+    showTime: true,
+    showOperator: false,
+    showFooterNote: false
+  }
+};
+
 export interface IndustrialErpState {
   companyId?: string;
   companyName?: string;
@@ -510,6 +597,8 @@ export interface IndustrialErpState {
   nextVoucherNo: number;
   nextSerialCounter: number;
   cutoverConfig?: ErpCutoverConfig;
+  labelTemplateConfig?: ErpLabelTemplateConfig;
+  scaleConfig?: ErpScaleConfig;
 }
 
 export type ErpMainCategoryId =

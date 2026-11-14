@@ -502,7 +502,7 @@ fn main() {
             win.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
                     let _ = win_for_close.eval(
-                        "try { localStorage.removeItem('app_current_user'); sessionStorage.removeItem('dlkam_desktop_session_active'); } catch(e) {}",
+                        "try { localStorage.removeItem('app_current_user'); localStorage.removeItem('app_auth_token'); localStorage.removeItem('app_refresh_token'); sessionStorage.removeItem('dlkam_desktop_session_active'); window.dispatchEvent(new CustomEvent('desktop-auto-logout')); } catch(e) {}",
                     );
                 }
                 if let tauri::WindowEvent::Destroyed = event {

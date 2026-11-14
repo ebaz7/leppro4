@@ -24,7 +24,19 @@ import {
   Copy,
   Sliders,
   Package,
-  Boxes
+  Boxes,
+  Lock,
+  Unlock,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  ChevronDown,
+  ChevronLeft,
+  Power,
+  Palette,
+  Settings2,
+  Home,
+  Barcode
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import {
@@ -38,9 +50,13 @@ import {
   ErpProductionVoucher,
   ErpBom,
   ErpBomComponent,
+  ErpBarcodeType,
+  ErpLabelTemplateConfig,
+  DEFAULT_LABEL_TEMPLATE_CONFIG,
   getTodayJalali,
   getExactTimeNow
 } from './types';
+import { CartonLabelCard } from './BarcodeRenderer';
 import { User } from '../../types';
 
 interface ProductionBomModuleViewProps {
@@ -69,15 +85,40 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     return erpState.productionLines || [];
   }, [erpState.productionLines]);
 
+  const activeLines: ErpProductionLine[] = useMemo(() => {
+    return lines.filter(l => l.isActive !== false);
+  }, [lines]);
+
   // Commodity groups (Clean/Raw from ERP state)
   const groups: ErpCommodityGroup[] = useMemo(() => {
     return erpState.commodityGroups || [];
   }, [erpState.commodityGroups]);
 
-  // Filter yarn items for production
+  // All yarn / production items & active-only yarn items for weighing
   const yarnItems: ErpItem[] = useMemo(() => {
     return erpState.items.filter(i => i.category === 'FINISHED_YARN' || i.category === 'RAW_MATERIAL');
   }, [erpState.items]);
+
+  const activeYarnItems: ErpItem[] = useMemo(() => {
+    return yarnItems.filter(i => i.isActive !== false);
+  }, [yarnItems]);
+
+  // Label Template & Scale Config (Persisted in ERP state per company)
+  const labelTemplate: ErpLabelTemplateConfig = useMemo(() => {
+    const saved = erpState.labelTemplateConfig;
+    if (!saved) return DEFAULT_LABEL_TEMPLATE_CONFIG;
+    return {
+      ...DEFAULT_LABEL_TEMPLATE_CONFIG,
+      ...saved,
+      fields: {
+        ...DEFAULT_LABEL_TEMPLATE_CONFIG.fields,
+        ...(saved.fields || {})
+      }
+    };
+  }, [erpState.labelTemplateConfig]);
+
+  const lockTareWeightsGlobally = Boolean(erpState.scaleConfig?.lockTareWeightsGlobally);
+  const lockConesCountGlobally = Boolean(erpState.scaleConfig?.lockConesCountGlobally);
 
   // -------------------------------------------------------------
   // TAB 1: PRODUCTION LINES STATE
@@ -109,7 +150,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const currentLines = erpState.productionLines && erpState.productionLines.length > 0 ? erpState.productionLines : lines;
     const exists = currentLines.some(l => l.id === newLine.id);
     const updatedLines = exists ? currentLines.map(l => l.id === newLine.id ? newLine : l) : [...currentLines, newLine];
-    
+
     await persistErpState({ ...erpState, productionLines: updatedLines }, 'خط تولید با موفقیت ذخیره شد');
     setShowAddLineModal(false);
     setLineForm({ code: '', name: '', machineType: '', supervisorName: currentUser?.fullName || '', isActive: true, notes: '' });
@@ -123,11 +164,22 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   };
 
   // -------------------------------------------------------------
-  // TAB 2: COMMODITY GROUPS & ITEMS STATE
+  // TAB 2: HIERARCHICAL COMMODITY TREE & ITEMS STATE
   // -------------------------------------------------------------
-  const [itemsSubTab, setItemsSubTab] = useState<'ITEMS' | 'GROUPS'>('ITEMS');
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
+  const [itemSearch, setItemSearch] = useState<string>('');
+  const [itemStatusFilter, setItemStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [includeChildGroupsItems, setIncludeChildGroupsItems] = useState<boolean>(true);
+
   const [showAddGroupModal, setShowAddGroupModal] = useState(false);
-  const [groupForm, setGroupForm] = useState<Partial<ErpCommodityGroup>>({ code: '', name: '', description: '' });
+  const [groupForm, setGroupForm] = useState<Partial<ErpCommodityGroup>>({
+    code: '',
+    name: '',
+    parentId: null,
+    isActive: true,
+    description: ''
+  });
 
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [itemForm, setItemForm] = useState<Partial<ErpItem>>({
@@ -144,40 +196,186 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     coneWeightGrams: 110,
     stockQty: 0,
     unitCost: 1250000,
-    salesPrice: 1450000
+    salesPrice: 1450000,
+    isActive: true,
+    isTareLocked: false
   });
 
+  // Tree hierarchy helpers
+  const getGroupPath = (groupId: string | null | undefined): ErpCommodityGroup[] => {
+    if (!groupId) return [];
+    const path: ErpCommodityGroup[] = [];
+    const visited = new Set<string>();
+    let currId: string | null | undefined = groupId;
+    while (currId && !visited.has(currId)) {
+      visited.add(currId);
+      const found = groups.find(g => g.id === currId);
+      if (!found) break;
+      path.unshift(found);
+      currId = found.parentId || null;
+    }
+    return path;
+  };
+
+  const getDescendantGroupIds = (rootId: string): string[] => {
+    const result: string[] = [rootId];
+    const queue: string[] = [rootId];
+    const visited = new Set<string>([rootId]);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const children = groups.filter(g => (g.parentId || null) === current);
+      for (const ch of children) {
+        if (!visited.has(ch.id)) {
+          visited.add(ch.id);
+          result.push(ch.id);
+          queue.push(ch.id);
+        }
+      }
+    }
+    return result;
+  };
+
+  const getGroupHierarchyLabel = (g: ErpCommodityGroup): string => {
+    const path = getGroupPath(g.id);
+    return path.map(p => p.name).join(' / ');
+  };
+
+  const toggleGroupExpand = (groupId: string) => {
+    setExpandedGroupIds(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
+  const childGroupsAtSelected = useMemo(() => {
+    return groups.filter(g => (g.parentId || null) === selectedGroupId);
+  }, [groups, selectedGroupId]);
+
+  const filteredItemsInTree = useMemo(() => {
+    let list = erpState.items || [];
+    if (selectedGroupId) {
+      if (includeChildGroupsItems) {
+        const allowedIds = new Set(getDescendantGroupIds(selectedGroupId));
+        list = list.filter(i => i.groupId && allowedIds.has(i.groupId));
+      } else {
+        list = list.filter(i => i.groupId === selectedGroupId);
+      }
+    }
+    if (itemStatusFilter === 'ACTIVE') {
+      list = list.filter(i => i.isActive !== false);
+    } else if (itemStatusFilter === 'INACTIVE') {
+      list = list.filter(i => i.isActive === false);
+    }
+    if (itemSearch.trim()) {
+      const q = itemSearch.trim().toLowerCase();
+      list = list.filter(i =>
+        i.code.toLowerCase().includes(q) ||
+        i.name.toLowerCase().includes(q) ||
+        (i.yarnCount || '').toLowerCase().includes(q) ||
+        (i.colorName || '').toLowerCase().includes(q) ||
+        (i.groupName || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [erpState.items, selectedGroupId, includeChildGroupsItems, itemStatusFilter, itemSearch, groups]);
+
+  const openCreateGroupAt = (parentId: string | null) => {
+    const parentGroup = parentId ? groups.find(g => g.id === parentId) : null;
+    const siblingCount = groups.filter(g => (g.parentId || null) === parentId).length + 1;
+    const suggestedCode = parentGroup
+      ? `${parentGroup.code}-${String(siblingCount).padStart(2, '0')}`
+      : `GRP-${String(siblingCount).padStart(2, '0')}`;
+    setGroupForm({
+      code: suggestedCode,
+      name: '',
+      parentId: parentId || null,
+      isActive: true,
+      description: ''
+    });
+    setShowAddGroupModal(true);
+  };
+
+  const openCreateItemAt = (groupId: string | null) => {
+    const seq = (erpState.items?.length || 0) + 1;
+    setItemForm({
+      code: `YN-${String(3000 + seq)}`,
+      name: '',
+      category: 'FINISHED_YARN',
+      groupId: groupId || '',
+      unit: 'کیلوگرم',
+      yarnCount: '150/48',
+      grade: 'A',
+      colorName: 'سفید خام',
+      defaultConesPerCarton: 6,
+      cartonWeightGrams: 1450,
+      coneWeightGrams: 110,
+      stockQty: 0,
+      unitCost: 1250000,
+      salesPrice: 1450000,
+      isActive: true,
+      isTareLocked: false
+    });
+    setShowAddItemModal(true);
+  };
+
   const handleSaveGroup = async () => {
-    if (!groupForm.name || !groupForm.code) {
+    if (!groupForm.name?.trim() || !groupForm.code?.trim()) {
       showToast?.('error', 'لطفاً کد و نام گروه را وارد نمایید');
       return;
     }
+    // Prevent circular parent assignment
+    if (groupForm.id && groupForm.parentId) {
+      const descendants = getDescendantGroupIds(groupForm.id);
+      if (descendants.includes(groupForm.parentId)) {
+        showToast?.('error', 'امکان انتخاب زیرگروه یا خود گروه به عنوان گروه والد وجود ندارد');
+        return;
+      }
+    }
     const newGroup: ErpCommodityGroup = {
       id: groupForm.id || `grp_${Date.now()}`,
-      code: groupForm.code,
-      name: groupForm.name,
+      code: groupForm.code.trim(),
+      name: groupForm.name.trim(),
+      parentId: groupForm.parentId || null,
+      isActive: groupForm.isActive !== false,
       description: groupForm.description || ''
     };
     const currentGroups = erpState.commodityGroups && erpState.commodityGroups.length > 0 ? erpState.commodityGroups : groups;
     const exists = currentGroups.some(g => g.id === newGroup.id);
     const updatedGroups = exists ? currentGroups.map(g => g.id === newGroup.id ? newGroup : g) : [...currentGroups, newGroup];
-    await persistErpState({ ...erpState, commodityGroups: updatedGroups }, 'گروه کالایی با موفقیت ذخیره شد');
+    if (newGroup.parentId) {
+      setExpandedGroupIds(prev => ({ ...prev, [newGroup.parentId!]: true }));
+    }
+    await persistErpState({ ...erpState, commodityGroups: updatedGroups }, 'گروه / زیرگروه کالایی با موفقیت ذخیره شد');
     setShowAddGroupModal(false);
-    setGroupForm({ code: '', name: '', description: '' });
+    setGroupForm({ code: '', name: '', parentId: null, isActive: true, description: '' });
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    const hasChildren = groups.some(g => (g.parentId || null) === groupId);
+    const hasItems = erpState.items.some(i => i.groupId === groupId);
+    if (hasChildren) {
+      showToast?.('error', 'این گروه دارای زیرگروه است. ابتدا زیرگروه‌ها را حذف یا منتقل کنید.');
+      return;
+    }
+    if (hasItems) {
+      showToast?.('error', 'در این گروه کالا تعریف شده است. ابتدا کالاها را منتقل یا حذف کنید.');
+      return;
+    }
+    if (!confirm('آیا از حذف این گروه کالایی اطمینان دارید؟')) return;
+    const updatedGroups = groups.filter(g => g.id !== groupId);
+    if (selectedGroupId === groupId) setSelectedGroupId(null);
+    await persistErpState({ ...erpState, commodityGroups: updatedGroups }, 'گروه کالایی حذف شد');
   };
 
   const handleSaveItem = async () => {
-    if (!itemForm.name || !itemForm.code) {
+    if (!itemForm.name?.trim() || !itemForm.code?.trim()) {
       showToast?.('error', 'لطفاً کد و نام کالا را وارد نمایید');
       return;
     }
     const selGroup = groups.find(g => g.id === itemForm.groupId);
     const newItem: ErpItem = {
       id: itemForm.id || `itm_${Date.now()}`,
-      code: itemForm.code,
-      name: itemForm.name,
+      code: itemForm.code.trim(),
+      name: itemForm.name.trim(),
       category: itemForm.category || 'FINISHED_YARN',
-      groupId: itemForm.groupId,
+      groupId: itemForm.groupId || '',
       groupName: selGroup?.name || '',
       unit: itemForm.unit || 'کیلوگرم',
       warehouseId: itemForm.warehouseId || erpState.warehouses?.[0]?.id || 'wh_finished',
@@ -188,8 +386,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       grade: itemForm.grade || 'A',
       colorName: itemForm.colorName || '',
       defaultConesPerCarton: Number(itemForm.defaultConesPerCarton || 6),
-      cartonWeightGrams: Number(itemForm.cartonWeightGrams || 1450),
-      coneWeightGrams: Number(itemForm.coneWeightGrams || 110)
+      cartonWeightGrams: Number(itemForm.cartonWeightGrams ?? 1450),
+      coneWeightGrams: Number(itemForm.coneWeightGrams ?? 110),
+      isActive: itemForm.isActive !== false,
+      isTareLocked: Boolean(itemForm.isTareLocked)
     };
     const exists = erpState.items.some(i => i.id === newItem.id);
     const updatedItems = exists ? erpState.items.map(i => i.id === newItem.id ? newItem : i) : [...erpState.items, newItem];
@@ -209,20 +409,46 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       coneWeightGrams: 110,
       stockQty: 0,
       unitCost: 1250000,
-      salesPrice: 1450000
+      salesPrice: 1450000,
+      isActive: true,
+      isTareLocked: false
     });
+  };
+
+  const handleToggleItemActive = async (item: ErpItem) => {
+    const nextActive = item.isActive === false;
+    const updatedItems = erpState.items.map(i => i.id === item.id ? { ...i, isActive: nextActive } : i);
+    await persistErpState(
+      { ...erpState, items: updatedItems },
+      nextActive ? `کالای «${item.name}» فعال شد` : `کالای «${item.name}» غیرفعال شد و از لیست توزین خارج گردید`
+    );
+  };
+
+  const handleToggleItemTareLock = async (item: ErpItem) => {
+    const nextLock = !item.isTareLocked;
+    const updatedItems = erpState.items.map(i => i.id === item.id ? { ...i, isTareLocked: nextLock } : i);
+    await persistErpState(
+      { ...erpState, items: updatedItems },
+      nextLock ? `وزن دوک و کارتن «${item.name}» قفل شد` : `قفل وزن دوک و کارتن «${item.name}» باز شد`
+    );
+  };
+
+  const handleDeleteItem = async (item: ErpItem) => {
+    if (!confirm(`آیا از حذف کالای «${item.name}» اطمینان دارید؟`)) return;
+    const updatedItems = erpState.items.filter(i => i.id !== item.id);
+    await persistErpState({ ...erpState, items: updatedItems }, 'کالا با موفقیت حذف شد');
   };
 
   // -------------------------------------------------------------
   // TAB 3: WEIGHBRIDGE & SEQUENTIAL CARTON WEIGHING & LABEL PRINT
   // -------------------------------------------------------------
   // Step 1: Line Selection
-  const [selectedLineId, setSelectedLineId] = useState<string>(lines[0]?.id || '');
-  // Step 2: Commodity Selection
-  const [selectedItemId, setSelectedItemId] = useState<string>(yarnItems[0]?.id || '');
+  const [selectedLineId, setSelectedLineId] = useState<string>(activeLines[0]?.id || lines[0]?.id || '');
+  // Step 2: Commodity Selection (Active items only)
+  const [selectedItemId, setSelectedItemId] = useState<string>(activeYarnItems[0]?.id || '');
   // Step 3: Cones Count
   const [conesCount, setConesCount] = useState<number>(6);
-  // Step 4: Tare weights (editable/auto-populated)
+  // Step 4: Tare weights (editable unless locked)
   const [cartonTareGrams, setCartonTareGrams] = useState<number>(1450);
   const [coneTareGrams, setConeTareGrams] = useState<number>(110);
   const [lotNumber, setLotNumber] = useState<string>('L405-88');
@@ -233,16 +459,90 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const [grossWeightKg, setGrossWeightKg] = useState<number>(25.61);
   const [isScaleReadingLive, setIsScaleReadingLive] = useState<boolean>(false);
 
-  // Auto-populate tare & cones when item changes
+  // Label Designer Modal State
+  const [showLabelDesignerModal, setShowLabelDesignerModal] = useState<boolean>(false);
+  const [designerDraft, setDesignerDraft] = useState<ErpLabelTemplateConfig>(labelTemplate);
+
+  // Keep selected line & selected active item synced if state updates
+  useEffect(() => {
+    const candidateLines = activeLines.length > 0 ? activeLines : lines;
+    if (candidateLines.length === 0) {
+      if (selectedLineId) setSelectedLineId('');
+    } else if (!candidateLines.some(l => l.id === selectedLineId)) {
+      setSelectedLineId(candidateLines[0].id);
+    }
+  }, [activeLines, lines, selectedLineId]);
+
+  useEffect(() => {
+    if (activeYarnItems.length === 0) {
+      if (selectedItemId) setSelectedItemId('');
+    } else if (!activeYarnItems.some(i => i.id === selectedItemId)) {
+      setSelectedItemId(activeYarnItems[0].id);
+    }
+  }, [activeYarnItems, selectedItemId]);
+
+  const selectedItemObj = useMemo(() => {
+    return activeYarnItems.find(i => i.id === selectedItemId) || null;
+  }, [activeYarnItems, selectedItemId]);
+
+  // Tare weights are locked if the item itself is locked OR global scale lock is active
+  const isTareLocked = Boolean(selectedItemObj?.isTareLocked || lockTareWeightsGlobally);
+  const isConesLocked = Boolean(selectedItemObj?.isTareLocked && lockConesCountGlobally) || lockConesCountGlobally;
+
+  // Auto-populate tare & cones when item changes or lock turns on
   useEffect(() => {
     const itm = erpState.items.find(i => i.id === selectedItemId);
     if (itm) {
-      if (itm.defaultConesPerCarton) setConesCount(itm.defaultConesPerCarton);
-      if (itm.cartonWeightGrams) setCartonTareGrams(itm.cartonWeightGrams);
-      if (itm.coneWeightGrams) setConeTareGrams(itm.coneWeightGrams);
+      if (itm.defaultConesPerCarton !== undefined) setConesCount(itm.defaultConesPerCarton);
+      if (itm.cartonWeightGrams !== undefined) setCartonTareGrams(itm.cartonWeightGrams);
+      if (itm.coneWeightGrams !== undefined) setConeTareGrams(itm.coneWeightGrams);
       if (itm.grade) setGrade(itm.grade);
     }
-  }, [selectedItemId, erpState.items]);
+  }, [selectedItemId, erpState.items, isTareLocked]);
+
+  const handleToggleGlobalTareLock = async () => {
+    const nextLocked = !lockTareWeightsGlobally;
+    await persistErpState(
+      {
+        ...erpState,
+        scaleConfig: {
+          ...(erpState.scaleConfig || { lockTareWeightsGlobally: false }),
+          lockTareWeightsGlobally: nextLocked
+        }
+      },
+      nextLocked
+        ? 'وزن کارتن خالی و وزن دوک روی باسکول برای همه کالاها قفل شد'
+        : 'قفل سراسری وزن کارتن و دوک روی باسکول برداشته شد'
+    );
+  };
+
+  const handleQuickChangeBarcodeType = async (nextType: ErpBarcodeType) => {
+    const updatedTemplate: ErpLabelTemplateConfig = {
+      ...labelTemplate,
+      barcodeType: nextType
+    };
+    const labelName = nextType === 'LINEAR_1D' ? 'بارکد خطی (قدیمی کارخانه)' : nextType === 'QR_2D' ? 'بارکد دوبعدی QR' : 'ترکیبی (خطی + QR)';
+    await persistErpState(
+      { ...erpState, labelTemplateConfig: updatedTemplate },
+      `نوع بارکد لیبل به «${labelName}» تغییر یافت`
+    );
+  };
+
+  const handleOpenLabelDesigner = () => {
+    setDesignerDraft({
+      ...labelTemplate,
+      fields: { ...labelTemplate.fields }
+    });
+    setShowLabelDesignerModal(true);
+  };
+
+  const handleSaveLabelTemplate = async () => {
+    await persistErpState(
+      { ...erpState, labelTemplateConfig: designerDraft },
+      'قالب و تنظیمات اختصاصی چاپ لیبل با موفقیت ذخیره شد'
+    );
+    setShowLabelDesignerModal(false);
+  };
 
   // Net weight auto-calculation:
   // Tare (Kg) = (CartonTare + Cones * ConeTare) / 1000
@@ -278,7 +578,6 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const handleReadFromScale = () => {
     setIsScaleReadingLive(true);
     setTimeout(() => {
-      // Simulate slight digital scale variation around 25.40 - 25.80 kg
       const base = 25.5;
       const variation = (Math.floor(Math.random() * 40) - 20) / 100;
       setGrossWeightKg(Number((base + variation).toFixed(2)));
@@ -289,14 +588,27 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
 
   // Add carton to current batch (توزین متوالی)
   const handleAddCartonToBatch = async () => {
-    if (grossWeightKg <= calculatedTareKg) {
-      showToast?.('error', 'وزن ناخالص باید از مجموع وزن ظرف و دوک‌ها بیشتر باشد');
-      return;
-    }
     const currentLine = lines.find(l => l.id === selectedLineId);
     const currentItem = erpState.items.find(i => i.id === selectedItemId);
     if (!currentItem) {
-      showToast?.('error', 'لطفاً کالا را انتخاب نمایید');
+      showToast?.('error', 'لطفاً کالای فعال را انتخاب نمایید');
+      return;
+    }
+    if (currentItem.isActive === false) {
+      showToast?.('error', 'این کالا غیرفعال است و مجاز به ثبت توزین نمی‌باشد');
+      return;
+    }
+
+    // Enforce locked tare weights & cones count from master item definition
+    const lockedByItemOrGlobal = Boolean(currentItem.isTareLocked || lockTareWeightsGlobally);
+    const effectiveCartonGrams = lockedByItemOrGlobal ? Number(currentItem.cartonWeightGrams ?? 1450) : cartonTareGrams;
+    const effectiveConeGrams = lockedByItemOrGlobal ? Number(currentItem.coneWeightGrams ?? 110) : coneTareGrams;
+    const effectiveConesCount = lockConesCountGlobally ? Number(currentItem.defaultConesPerCarton ?? 6) : conesCount;
+    const effectiveTareKg = Number(((effectiveCartonGrams + effectiveConesCount * effectiveConeGrams) / 1000).toFixed(3));
+    const effectiveNetKg = Number(Math.max(0, grossWeightKg - effectiveTareKg).toFixed(3));
+
+    if (grossWeightKg <= effectiveTareKg) {
+      showToast?.('error', 'وزن ناخالص باید از مجموع وزن ظرف و دوک‌ها بیشتر باشد');
       return;
     }
 
@@ -306,7 +618,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const cleanDateParts = dateToday.replace(/\//g, '').slice(2); // e.g. 050820
     const serialNumber = `SN-${cleanDateParts}-${String(nextCounter).padStart(5, '0')}`;
     const referenceCode = `DLK-${currentLine?.code || 'L01'}-${String(nextCounter).padStart(5, '0')}`;
-    const qrPayload = `DLKAM-ERP|REF:${referenceCode}|ITEM:${currentItem.code}|LOT:${lotNumber}|NET:${calculatedNetKg}KG|CONES:${conesCount}|TIME:${exactTime}`;
+    const qrPayload = `DLKAM-ERP|REF:${referenceCode}|ITEM:${currentItem.code}|LOT:${lotNumber}|NET:${effectiveNetKg}KG|CONES:${effectiveConesCount}|TIME:${exactTime}`;
 
     const newCarton: ErpCartonLabel = {
       id: `carton_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -323,13 +635,13 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       shift: shiftName,
       grade,
       grossWeightKg,
-      conesCount,
-      coneWeightGrams: coneTareGrams,
-      cartonWeightGrams: cartonTareGrams,
-      totalTareKg: calculatedTareKg,
-      netWeightKg: calculatedNetKg,
+      conesCount: effectiveConesCount,
+      coneWeightGrams: effectiveConeGrams,
+      cartonWeightGrams: effectiveCartonGrams,
+      totalTareKg: effectiveTareKg,
+      netWeightKg: effectiveNetKg,
       unitCostPerKg: currentItem.unitCost,
-      totalCostRials: Math.round(currentItem.unitCost * calculatedNetKg),
+      totalCostRials: Math.round(currentItem.unitCost * effectiveNetKg),
       warehouseId: currentItem.warehouseId || 'wh_finished',
       status: 'IN_STOCK',
       createdAt: Date.now(),
@@ -338,6 +650,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       createdBy: currentUser?.fullName || 'اپراتور خط تولید',
       productionLineId: selectedLineId,
       productionLineName: currentLine?.name || '',
+      barcodeType: labelTemplate.barcodeType,
       history: [
         {
           id: `hist_${Date.now()}`,
@@ -346,7 +659,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
           dateJalali: dateToday,
           timeExact: exactTime,
           actor: currentUser?.fullName || 'اپراتور خط',
-          details: `توزین در ${currentLine?.name} | وزن ناخالص: ${grossWeightKg} کیلو | خالص: ${calculatedNetKg} کیلو | دوک: ${conesCount}`
+          details: `توزین در ${currentLine?.name || 'خط'} | وزن ناخالص: ${grossWeightKg} کیلو | خالص: ${effectiveNetKg} کیلو | دوک: ${effectiveConesCount}`
         }
       ]
     };
@@ -630,34 +943,73 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     setEditingBom(null);
   };
 
-  // Print helper
-  const handlePrintElement = (id: string) => {
+  // Offline Thermal & Document Print Helper (hidden iframe - avoids window.open popup blockers & preserves Tailwind + SVG)
+  const handlePrintElement = (id: string, isThermalLabel = false) => {
     const el = document.getElementById(id);
     if (!el) return;
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-    printWindow.document.write(`
-      <html dir="rtl">
+
+    const existingFrame = document.getElementById('erp-hidden-print-frame') as HTMLIFrameElement | null;
+    if (existingFrame) existingFrame.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = 'erp-hidden-print-frame';
+    iframe.className = 'fixed -top-[9999px] -left-[9999px] w-0 h-0 opacity-0 pointer-events-none';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) return;
+
+    const headStyles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map(node => node.outerHTML)
+      .join('\n');
+
+    const pageRule = isThermalLabel
+      ? `@page { size: ${labelTemplate.labelWidthMm || 100}mm ${labelTemplate.labelHeightMm || 70}mm; margin: 2mm; }`
+      : `@page { size: auto; margin: 10mm; }`;
+
+    doc.open();
+    doc.write(`
+      <!doctype html>
+      <html dir="rtl" lang="fa">
         <head>
-          <title>چاپ لیبل صنعتی کارخانه</title>
+          <meta charset="utf-8" />
+          <title>چاپ صنعتی کارخانه</title>
+          ${headStyles}
           <style>
-            body { font-family: Tahoma, 'IRANSans', sans-serif; margin: 0; padding: 12px; }
-            .label-card { border: 2px solid #000; padding: 12px; border-radius: 8px; margin-bottom: 12px; page-break-inside: avoid; }
-            .header { text-align: center; border-bottom: 1px solid #ccc; padding-bottom: 6px; margin-bottom: 8px; font-weight: bold; }
-            .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; }
-            .code-box { font-family: monospace; font-weight: bold; font-size: 14px; }
-            .weights-row { display: flex; justify-content: space-between; background: #f0f0f0; padding: 6px; border-radius: 4px; font-weight: bold; margin-top: 6px; }
+            ${pageRule}
+            html, body {
+              background: #ffffff !important;
+              color: #0f172a !important;
+              font-family: Tahoma, 'Vazirmatn', sans-serif !important;
+              margin: 0 !important;
+              padding: ${isThermalLabel ? '0' : '8px'} !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            .label-card {
+              break-inside: avoid;
+              page-break-inside: avoid;
+              ${isThermalLabel ? `width: 100%; box-sizing: border-box; margin-bottom: 4mm;` : 'margin-bottom: 12px;'}
+            }
+            ${isThermalLabel ? `.label-card:not(:last-child) { page-break-after: always; break-after: page; }` : ''}
           </style>
         </head>
         <body>${el.innerHTML}</body>
       </html>
     `);
-    printWindow.document.close();
-    printWindow.focus();
+    doc.close();
+
     setTimeout(() => {
-      printWindow.print();
-      printWindow.close();
-    }, 250);
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch {
+        window.print();
+      }
+      setTimeout(() => {
+        iframe.remove();
+      }, 1500);
+    }, 300);
   };
 
   return (
@@ -756,124 +1108,482 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       )}
 
       {/* --------------------------------------------------------------------------------- */}
-      {/* 2. SUBVIEW: PRD_ITEMS (تعریف کالاها و گروه‌ها) */}
+      {/* 2. SUBVIEW: PRD_ITEMS (نمای درختی سلسله‌مراتبی کالاها و گروه‌ها + فعال/غیرفعال + قفل وزن) */}
       {/* --------------------------------------------------------------------------------- */}
-      {activeSubView === 'prd_items' && (
-        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-            <div>
-              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <Layers className="w-5 h-5 text-orange-600" />
-                تعریف گروه‌های کالایی و سرفصل محصولات تولیدی
-              </h2>
-              <p className="text-xs text-slate-500 mt-1">تنظیم وزن ظرف کارتن خالی، وزن هر دوک و تعداد پیش‌فرض دوک در کارتن</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="bg-slate-100 dark:bg-slate-800 p-1 rounded-xl flex items-center gap-1">
-                <button
-                  onClick={() => setItemsSubTab('ITEMS')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-colors ${itemsSubTab === 'ITEMS' ? 'bg-white dark:bg-slate-700 text-orange-600 shadow-sm' : 'text-slate-600 dark:text-slate-400'}`}
-                >
-                  کالاها ({erpState.items.length})
-                </button>
-                <button
-                  onClick={() => setItemsSubTab('GROUPS')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-colors ${itemsSubTab === 'GROUPS' ? 'bg-white dark:bg-slate-700 text-orange-600 shadow-sm' : 'text-slate-600 dark:text-slate-400'}`}
-                >
-                  گروه‌های کالا ({groups.length})
-                </button>
-              </div>
-              {itemsSubTab === 'ITEMS' ? (
-                <button
-                  onClick={() => setShowAddItemModal(true)}
-                  className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black flex items-center gap-1 shadow-sm transition-colors"
-                >
-                  <Plus size={15} />
-                  تعریف کالا
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowAddGroupModal(true)}
-                  className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black flex items-center gap-1 shadow-sm transition-colors"
-                >
-                  <Plus size={15} />
-                  تعریف گروه
-                </button>
-              )}
-            </div>
-          </div>
+      {activeSubView === 'prd_items' && (() => {
+        const currentPath = getGroupPath(selectedGroupId);
+        const currentSelectedGroup = selectedGroupId ? groups.find(g => g.id === selectedGroupId) || null : null;
 
-          {itemsSubTab === 'ITEMS' ? (
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
-                    <tr>
-                      <th className="p-3">کد کالا</th>
-                      <th className="p-3">نام و مشخصات کالا</th>
-                      <th className="p-3">گروه کالایی</th>
-                      <th className="p-3 text-center">نمره نخ / گرید</th>
-                      <th className="p-3 text-center">تعداد دوک در کارتن</th>
-                      <th className="p-3 text-center">وزن کارتن خالی (گرم)</th>
-                      <th className="p-3 text-center">وزن هر دوک (گرم)</th>
-                      <th className="p-3 text-left">موجودی فعلی</th>
-                      <th className="p-3 text-center">عملیات</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {erpState.items.map(item => (
-                      <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
-                        <td className="p-3 font-mono font-bold text-orange-600">{item.code}</td>
-                        <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{item.name}</td>
-                        <td className="p-3 text-slate-500">{item.groupName || groups.find(g => g.id === item.groupId)?.name || 'نخ‌های DTY'}</td>
-                        <td className="p-3 text-center">
-                          <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono font-bold">{item.yarnCount || '—'}</span>
-                          <span className="mr-1 text-[10px] text-amber-600 font-bold">({item.grade || 'A'})</span>
-                        </td>
-                        <td className="p-3 text-center font-bold">{item.defaultConesPerCarton || 6} دوک</td>
-                        <td className="p-3 text-center font-mono">{item.cartonWeightGrams || 1450} g</td>
-                        <td className="p-3 text-center font-mono">{item.coneWeightGrams || 110} g</td>
-                        <td className="p-3 text-left font-mono font-black text-emerald-600" dir="ltr">{item.stockQty?.toLocaleString() || 0} {item.unit}</td>
-                        <td className="p-3 text-center">
-                          <button
-                            onClick={() => {
-                              setItemForm(item);
-                              setShowAddItemModal(true);
-                            }}
-                            className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        const renderTreeBranch = (parentId: string | null, depth: number): React.ReactNode => {
+          const branchGroups = groups.filter(g => (g.parentId || null) === parentId);
+          if (branchGroups.length === 0) return null;
+
+          return (
+            <div className={depth > 0 ? 'mr-3 pr-2 border-r border-slate-200 dark:border-slate-700 space-y-1 mt-1' : 'space-y-1'}>
+              {branchGroups.map(g => {
+                const children = groups.filter(ch => (ch.parentId || null) === g.id);
+                const hasChildren = children.length > 0;
+                const isExpanded = Boolean(expandedGroupIds[g.id]);
+                const isSelected = selectedGroupId === g.id;
+                const descIds = new Set(getDescendantGroupIds(g.id));
+                const totalBranchItems = erpState.items.filter(i => i.groupId && descIds.has(i.groupId)).length;
+
+                return (
+                  <div key={g.id}>
+                    <div
+                      className={`group flex items-center justify-between gap-1 px-2 py-1.5 rounded-xl text-xs cursor-pointer transition-colors ${
+                        isSelected
+                          ? 'bg-orange-50 dark:bg-orange-950/50 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800 font-black'
+                          : 'hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-300 font-bold'
+                      }`}
+                    >
+                      <div
+                        className="flex items-center gap-1.5 flex-1 min-w-0"
+                        onClick={() => {
+                          setSelectedGroupId(g.id);
+                          setExpandedGroupIds(prev => ({ ...prev, [g.id]: true }));
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            toggleGroupExpand(g.id);
+                          }}
+                          className={`p-0.5 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700 ${hasChildren ? 'opacity-100' : 'opacity-20'}`}
+                          title={isExpanded ? 'بستن شاخه' : 'باز کردن زیرگروه‌ها'}
+                        >
+                          {isExpanded ? <ChevronDown size={13} /> : <ChevronLeft size={13} />}
+                        </button>
+                        {isExpanded || isSelected ? (
+                          <FolderOpen size={15} className={isSelected ? 'text-orange-600 shrink-0' : 'text-amber-500 shrink-0'} />
+                        ) : (
+                          <Folder size={15} className="text-amber-500 shrink-0" />
+                        )}
+                        <span className="truncate">{g.name}</span>
+                        <span className="text-[10px] font-mono text-slate-400 shrink-0">({totalBranchItems})</span>
+                      </div>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            openCreateGroupAt(g.id);
+                          }}
+                          className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/40 text-orange-600"
+                          title="افزودن زیرگروه در این شاخه"
+                        >
+                          <FolderPlus size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setGroupForm(g);
+                            setShowAddGroupModal(true);
+                          }}
+                          className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-400 hover:text-blue-600"
+                          title="ویرایش گروه"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && hasChildren && renderTreeBranch(g.id, depth + 1)}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        };
+
+        return (
+          <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+            {/* Top Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div>
+                <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-orange-600" />
+                  تعریف درختی کالاها، زیرگروه‌ها، قفل وزن دوک و وضعیت فعال/غیرفعال
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  امکان حرکت پله‌پله در شاخه‌های درخت کالا، تعریف زیرگروه و کالا در هر سطح، قفل کردن وزن ظرف/دوک و فعال یا غیرفعال‌سازی کالا
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openCreateGroupAt(selectedGroupId)}
+                  className="px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+                >
+                  <FolderPlus size={15} className="text-amber-600" />
+                  <span>{selectedGroupId ? 'افزودن زیرگروه همینجا' : 'تعریف گروه اصلی'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCreateItemAt(selectedGroupId)}
+                  className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                >
+                  <Plus size={15} />
+                  <span>{selectedGroupId ? 'افزودن کالا در این شاخه' : 'تعریف کالای جدید'}</span>
+                </button>
               </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {groups.map(g => (
-                <div key={g.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-mono text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/40 px-2 py-0.5 rounded">
-                      {g.code}
-                    </span>
-                    <span className="text-xs text-slate-400 font-bold">
-                      {erpState.items.filter(i => i.groupId === g.id).length} کالا
+
+            {/* Split Tree Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0">
+              {/* Tree Panel */}
+              <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col min-h-[320px]">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5 mb-3">
+                  <span className="text-xs font-black text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                    <FolderOpen size={15} className="text-orange-600" />
+                    ساختار درختی گروه‌ها ({groups.length})
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allExpanded: Record<string, boolean> = {};
+                        groups.forEach(g => { allExpanded[g.id] = true; });
+                        setExpandedGroupIds(allExpanded);
+                      }}
+                      className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                    >
+                      باز کردن همه
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedGroupIds({})}
+                      className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                    >
+                      بستن
+                    </button>
+                  </div>
+                </div>
+
+                {/* Root Node */}
+                <div
+                  onClick={() => setSelectedGroupId(null)}
+                  className={`flex items-center justify-between px-2.5 py-2 rounded-xl text-xs cursor-pointer mb-2 transition-colors ${
+                    selectedGroupId === null
+                      ? 'bg-orange-600 text-white font-black shadow-sm'
+                      : 'bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 text-slate-700 dark:text-slate-200 font-bold'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Home size={14} />
+                    <span>ریشه درخت (همه کالاها و گروه‌ها)</span>
+                  </div>
+                  <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${selectedGroupId === null ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                    {erpState.items.length}
+                  </span>
+                </div>
+
+                {/* Tree Nodes */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
+                  {groups.length === 0 ? (
+                    <div className="text-center py-8 px-3 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                      <FolderPlus size={24} className="mx-auto text-slate-300" />
+                      <p className="text-xs text-slate-400 font-bold">هنوز گروهی تعریف نشده است.</p>
+                      <button
+                        type="button"
+                        onClick={() => openCreateGroupAt(null)}
+                        className="px-3 py-1.5 rounded-lg bg-orange-50 text-orange-600 text-[11px] font-black hover:bg-orange-100"
+                      >
+                        + ساخت اولین گروه اصلی
+                      </button>
+                    </div>
+                  ) : (
+                    renderTreeBranch(null, 0)
+                  )}
+                </div>
+              </div>
+
+              {/* Right Workspace: Breadcrumb + Direct Children + Items Table */}
+              <div className="lg:col-span-8 space-y-4 flex flex-col min-w-0">
+                {/* Breadcrumb & Child Sub-Groups Cards */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGroupId(null)}
+                        className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors ${
+                          selectedGroupId === null ? 'bg-orange-100 text-orange-700 dark:bg-orange-950/60 dark:text-orange-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        <Home size={12} />
+                        <span>ریشه</span>
+                      </button>
+                      {currentPath.map((node, idx) => (
+                        <React.Fragment key={node.id}>
+                          <ChevronLeft size={13} className="text-slate-400" />
+                          <button
+                            type="button"
+                            onClick={() => setSelectedGroupId(node.id)}
+                            className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
+                              idx === currentPath.length - 1
+                                ? 'bg-orange-600 text-white'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200'
+                            }`}
+                          >
+                            {node.name}
+                          </button>
+                        </React.Fragment>
+                      ))}
+                    </div>
+
+                    {currentSelectedGroup && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGroupId(currentSelectedGroup.parentId || null)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs font-bold text-slate-600 dark:text-slate-300 flex items-center gap-1"
+                      >
+                        <ArrowRight size={13} />
+                        <span>بازگشت یک سطح به بالا</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Direct Subgroups in current branch */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-black text-slate-500">
+                        {selectedGroupId ? `زیرگروه‌های «${currentSelectedGroup?.name}» (${childGroupsAtSelected.length})` : `گروه‌های اصلی سطح اول (${childGroupsAtSelected.length})`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openCreateGroupAt(selectedGroupId)}
+                        className="text-[11px] font-black text-orange-600 hover:underline flex items-center gap-1"
+                      >
+                        <Plus size={12} />
+                        <span>ایجاد زیرگروه جدید در این مسیر</span>
+                      </button>
+                    </div>
+
+                    {childGroupsAtSelected.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                        {childGroupsAtSelected.map(cg => {
+                          const childBranchCount = groups.filter(x => (x.parentId || null) === cg.id).length;
+                          const descIds = new Set(getDescendantGroupIds(cg.id));
+                          const itemCount = erpState.items.filter(i => i.groupId && descIds.has(i.groupId)).length;
+                          return (
+                            <div
+                              key={cg.id}
+                              onClick={() => {
+                                setSelectedGroupId(cg.id);
+                                setExpandedGroupIds(prev => ({ ...prev, [cg.id]: true }));
+                              }}
+                              className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/50 hover:border-orange-400 hover:bg-orange-50/40 dark:hover:bg-orange-950/20 cursor-pointer transition-all flex items-center justify-between gap-2"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <Folder size={15} className="text-amber-500 shrink-0" />
+                                  <span className="font-black text-xs text-slate-800 dark:text-slate-100 truncate">{cg.name}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-2 font-bold">
+                                  <span className="font-mono text-orange-600">{cg.code}</span>
+                                  <span>• {childBranchCount} زیرگروه</span>
+                                  <span>• {itemCount} کالا</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setGroupForm(cg);
+                                    setShowAddGroupModal(true);
+                                  }}
+                                  className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+                                  title="ویرایش"
+                                >
+                                  <Edit2 size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteGroup(cg.id)}
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                  title="حذف گروه"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 bg-slate-50 dark:bg-slate-800/30 rounded-xl px-3 py-2 border border-dashed border-slate-200 dark:border-slate-800">
+                        زیرگروهی در این سطح وجود ندارد. می‌توانید همینجا زیرگروه بسازید یا مستقیماً کالا تعریف کنید.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Items Filter & Table */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+                  <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[200px]">
+                      <div className="relative flex-1 max-w-xs">
+                        <Search size={14} className="absolute right-3 top-2.5 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="جستجو کد، نام، نمره، رنگ..."
+                          value={itemSearch}
+                          onChange={e => setItemSearch(e.target.value)}
+                          className="w-full pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                        />
+                      </div>
+
+                      <select
+                        value={itemStatusFilter}
+                        onChange={e => setItemStatusFilter(e.target.value as any)}
+                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                      >
+                        <option value="ALL">همه وضعیت‌ها</option>
+                        <option value="ACTIVE">فقط کالاهای فعال</option>
+                        <option value="INACTIVE">فقط کالاهای غیرفعال</option>
+                      </select>
+
+                      {selectedGroupId && (
+                        <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer select-none bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={includeChildGroupsItems}
+                            onChange={e => setIncludeChildGroupsItems(e.target.checked)}
+                            className="accent-orange-600 rounded"
+                          />
+                          <span>نمایش کالاهای زیرمجموعه</span>
+                        </label>
+                      )}
+                    </div>
+
+                    <span className="text-[11px] font-bold text-slate-400">
+                      تعداد: <strong className="text-slate-700 dark:text-slate-200 font-mono">{filteredItemsInTree.length}</strong> کالا
                     </span>
                   </div>
-                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 mb-1">{g.name}</h3>
-                  <p className="text-xs text-slate-500 mb-3">{g.description || '—'}</p>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-right text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                          <th className="p-3">کد کالا</th>
+                          <th className="p-3">نام کالا</th>
+                          <th className="p-3">مسیر گروه</th>
+                          <th className="p-3 text-center">نمره / گرید</th>
+                          <th className="p-3 text-center">دوک</th>
+                          <th className="p-3 text-center">کارتن / دوک (گرم)</th>
+                          <th className="p-3 text-center">قفل وزن</th>
+                          <th className="p-3 text-center">وضعیت</th>
+                          <th className="p-3 text-center">عملیات</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {filteredItemsInTree.map(item => {
+                          const isItemActive = item.isActive !== false;
+                          const itemGroup = groups.find(g => g.id === item.groupId);
+                          const groupLabel = itemGroup ? getGroupHierarchyLabel(itemGroup) : (item.groupName || 'بدون گروه');
+
+                          return (
+                            <tr
+                              key={item.id}
+                              className={`transition-colors ${
+                                isItemActive
+                                  ? 'hover:bg-slate-50/50 dark:hover:bg-slate-800/30'
+                                  : 'bg-slate-50/80 dark:bg-slate-900/60 opacity-60'
+                              }`}
+                            >
+                              <td className="p-3 font-mono font-bold text-orange-600">{item.code}</td>
+                              <td className="p-3 font-bold text-slate-800 dark:text-slate-200">
+                                <div>{item.name}</div>
+                                {item.colorName && <span className="text-[10px] text-slate-400">رنگ: {item.colorName}</span>}
+                              </td>
+                              <td className="p-3 text-[11px] text-slate-500">{groupLabel}</td>
+                              <td className="p-3 text-center">
+                                <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono font-bold">{item.yarnCount || '—'}</span>
+                                <span className="mr-1 text-[10px] text-amber-600 font-bold">({item.grade || 'A'})</span>
+                              </td>
+                              <td className="p-3 text-center font-bold">{item.defaultConesPerCarton || 6}</td>
+                              <td className="p-3 text-center font-mono text-[11px]">
+                                <span>{item.cartonWeightGrams ?? 1450}g</span>
+                                <span className="text-slate-400 mx-1">/</span>
+                                <span>{item.coneWeightGrams ?? 110}g</span>
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleItemTareLock(item)}
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-black inline-flex items-center gap-1 border transition-colors ${
+                                    item.isTareLocked
+                                      ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
+                                      : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 hover:bg-slate-100'
+                                  }`}
+                                  title={item.isTareLocked ? 'کلیک برای باز کردن قفل وزن دوک و کارتن' : 'کلیک برای قفل کردن وزن دوک و کارتن روی باسکول'}
+                                >
+                                  {item.isTareLocked ? <Lock size={11} /> : <Unlock size={11} />}
+                                  <span>{item.isTareLocked ? 'قفل' : 'آزاد'}</span>
+                                </button>
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleItemActive(item)}
+                                  className={`px-2.5 py-1 rounded-full text-[10px] font-black inline-flex items-center gap-1 border transition-colors ${
+                                    isItemActive
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                                      : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800'
+                                  }`}
+                                  title={isItemActive ? 'کلیک برای غیرفعال کردن کالا' : 'کلیک برای فعال کردن کالا'}
+                                >
+                                  <Power size={11} />
+                                  <span>{isItemActive ? 'فعال' : 'غیرفعال'}</span>
+                                </button>
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setItemForm({ ...item, isActive: item.isActive !== false, isTareLocked: Boolean(item.isTareLocked) });
+                                      setShowAddItemModal(true);
+                                    }}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800"
+                                    title="ویرایش کالا"
+                                  >
+                                    <Edit2 size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteItem(item)}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800"
+                                    title="حذف کالا"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {filteredItemsInTree.length === 0 && (
+                          <tr>
+                            <td colSpan={9} className="p-8 text-center text-slate-400 font-bold">
+                              هیچ کالایی در این شاخه یا فیلتر یافت نشد. از دکمه «افزودن کالا» استفاده فرمایید.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              ))}
+              </div>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       {/* --------------------------------------------------------------------------------- */}
-      {/* 3. SUBVIEW: PRD_LINE_PERF (عملکرد خط تولید و توزین باسکول و چاپ لیبل) */}
+      {/* 3. SUBVIEW: PRD_LINE_PERF (عملکرد خط تولید و توزین باسکول و چاپ لیبل 1D/2D) */}
       {/* --------------------------------------------------------------------------------- */}
       {activeSubView === 'prd_line_perf' && (
         <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
@@ -882,34 +1592,93 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             {/* Left/Middle Column: Digital Weighing Station */}
             <div className="lg:col-span-8 space-y-4">
               <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <div className="p-2 rounded-xl bg-orange-600 text-white shadow-sm">
                       <Scale size={20} />
                     </div>
                     <div>
                       <h2 className="text-sm font-black text-slate-800 dark:text-slate-100">
-                        میز توزین دیجیتال خط تولید، کسر خودکار وزن دوک و کارتن و چاپ لیبل QR
+                        میز توزین دیجیتال خط تولید، کسر خودکار وزن دوک و کارتن و چاپ لیبل
                       </h2>
-                      <span className="text-xs text-slate-500">فرآیند دقیق ثبت عملکرد روزانه خطوط کارخانه</span>
+                      <span className="text-xs text-slate-500">پشتیبانی از بارکد خطی قدیم کارخانه (1D Code128) و بارکد دوبعدی QR به صورت کاملاً آفلاین</span>
                     </div>
                   </div>
-                  <button
-                    onClick={handleReadFromScale}
-                    disabled={isScaleReadingLive}
-                    className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-black flex items-center gap-1.5 transition-colors border border-slate-200/80 dark:border-slate-700"
-                  >
-                    <RefreshCw size={14} className={isScaleReadingLive ? 'animate-spin text-orange-600' : ''} />
-                    <span>{isScaleReadingLive ? 'در حال خواندن از ترازو...' : 'خواندن زنده از ترازو / باسکول'}</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleToggleGlobalTareLock}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                        lockTareWeightsGlobally
+                          ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-700'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
+                      }`}
+                      title="قفل سراسری وزن کارتن خالی و وزن هر دوک تا اپراتور نتواند روی باسکول تغییر دهد"
+                    >
+                      {lockTareWeightsGlobally ? <Lock size={14} /> : <Unlock size={14} />}
+                      <span>{lockTareWeightsGlobally ? 'وزن دوک و کارتن قفل است' : 'قفل وزن دوک و کارتن'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenLabelDesigner}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 text-xs font-black flex items-center gap-1.5 border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer"
+                    >
+                      <Palette size={14} />
+                      <span>طراحی خاص لیبل</span>
+                    </button>
+
+                    <button
+                      onClick={handleReadFromScale}
+                      disabled={isScaleReadingLive}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-black flex items-center gap-1.5 transition-colors border border-slate-200/80 dark:border-slate-700"
+                    >
+                      <RefreshCw size={14} className={isScaleReadingLive ? 'animate-spin text-orange-600' : ''} />
+                      <span>{isScaleReadingLive ? 'در حال خواندن...' : 'خواندن از باسکول'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Barcode Mode Quick Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-700 text-xs">
+                  <div className="flex items-center gap-1.5 font-black text-slate-700 dark:text-slate-200">
+                    <Barcode size={16} className="text-orange-600" />
+                    <span>نوع بارکد لیبل کارخانه:</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[
+                      { id: 'LINEAR_1D' as ErpBarcodeType, label: 'خطی 1D (لیبل قدیم کارخانه)' },
+                      { id: 'QR_2D' as ErpBarcodeType, label: 'دوبعدی (QR Code)' },
+                      { id: 'BOTH' as ErpBarcodeType, label: 'ترکیبی (خطی + QR)' }
+                    ].map(mode => (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() => handleQuickChangeBarcodeType(mode.id)}
+                        className={`px-3 py-1 rounded-lg text-[11px] font-black transition-all cursor-pointer ${
+                          labelTemplate.barcodeType === mode.id
+                            ? 'bg-orange-600 text-white shadow-sm'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-orange-400'
+                        }`}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Step 1 & 2: Line & Commodity Selection */}
-                {(lines.length === 0 || yarnItems.length === 0) && (
+                {(lines.length === 0 || activeYarnItems.length === 0) && (
                   <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30 p-3 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300">
                     <div className="flex items-center gap-2">
                       <AlertCircle size={16} className="text-amber-600 shrink-0" />
-                      <span>دیتابیس در وضعیت خام اولیه قرار دارد. برای شروع توزین، ابتدا خط تولید و کالا را تعریف فرمایید.</span>
+                      <span>
+                        {lines.length === 0
+                          ? 'هیچ خط تولیدی تعریف نشده است.'
+                          : yarnItems.length === 0
+                          ? 'هیچ کالایی تعریف نشده است. ابتدا کالا را تعریف فرمایید.'
+                          : 'همه کالاهای تعریف‌شده در وضعیت غیرفعال هستند. حداقل یک کالا را فعال نمایید.'}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {lines.length === 0 && (
@@ -921,13 +1690,13 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                           + تعریف خط تولید
                         </button>
                       )}
-                      {yarnItems.length === 0 && (
+                      {activeYarnItems.length === 0 && (
                         <button
                           type="button"
                           onClick={() => openSubViewTab?.('prd_items')}
                           className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] cursor-pointer"
                         >
-                          + تعریف کالا
+                          + مدیریت کالاها
                         </button>
                       )}
                     </div>
@@ -944,12 +1713,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       onChange={e => setSelectedLineId(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      {lines.length === 0 ? (
+                      {(activeLines.length > 0 ? activeLines : lines).length === 0 ? (
                         <option value="">(هیچ خط تولیدی تعریف نشده است - محیط خام)</option>
                       ) : (
-                        lines.map(line => (
+                        (activeLines.length > 0 ? activeLines : lines).map(line => (
                           <option key={line.id} value={line.id}>
-                            {line.code} — {line.name} ({line.machineType})
+                            {line.code} — {line.name} {line.machineType ? `(${line.machineType})` : ''}
                           </option>
                         ))
                       )}
@@ -958,19 +1727,19 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
 
                   <div>
                     <label className="font-black text-slate-700 dark:text-slate-300 block mb-1">
-                      ۲. انتخاب کالای تولیدی (نخ روی باسکول):
+                      ۲. انتخاب کالای فعال تولیدی (نخ روی باسکول):
                     </label>
                     <select
                       value={selectedItemId}
                       onChange={e => setSelectedItemId(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      {yarnItems.length === 0 ? (
-                        <option value="">(هیچ کالایی تعریف نشده است - محیط خام)</option>
+                      {activeYarnItems.length === 0 ? (
+                        <option value="">(هیچ کالای فعالی در دسترس نیست)</option>
                       ) : (
-                        yarnItems.map(item => (
+                        activeYarnItems.map(item => (
                           <option key={item.id} value={item.id}>
-                            {item.code} — {item.name} ({item.yarnCount} {item.colorName})
+                            {item.code} — {item.name} ({item.yarnCount} {item.colorName}) {item.isTareLocked ? '🔒' : ''}
                           </option>
                         ))
                       )}
@@ -978,33 +1747,72 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   </div>
                 </div>
 
-                {/* Step 3, 4, 5: Cones, Tare & Scale Reading */}
+                {/* Step 3, 4, 5: Cones, Locked/Unlocked Tare & Scale Reading */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <label className="font-bold text-slate-600 dark:text-slate-400 block mb-1">تعداد دوک در کارتن</label>
+                    <label className="font-bold text-slate-600 dark:text-slate-400 flex items-center justify-between mb-1">
+                      <span>تعداد دوک در کارتن</span>
+                      {isConesLocked && <Lock size={12} className="text-amber-600" />}
+                    </label>
                     <input
                       type="number"
                       value={conesCount}
+                      disabled={isConesLocked}
+                      readOnly={isConesLocked}
                       onChange={e => setConesCount(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-black text-center"
+                      className={`w-full px-3 py-2 rounded-xl border font-black text-center ${
+                        isConesLocked
+                          ? 'border-amber-300 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 cursor-not-allowed'
+                          : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-600 dark:text-slate-400 block mb-1">وزن کارتن خالی (گرم)</label>
+                    <label className="font-bold text-slate-600 dark:text-slate-400 flex items-center justify-between mb-1">
+                      <span>وزن کارتن خالی (گرم)</span>
+                      {isTareLocked && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-black text-amber-600">
+                          <Lock size={11} /> قفل
+                        </span>
+                      )}
+                    </label>
                     <input
                       type="number"
                       value={cartonTareGrams}
-                      onChange={e => setCartonTareGrams(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                      disabled={isTareLocked}
+                      readOnly={isTareLocked}
+                      onChange={e => {
+                        if (!isTareLocked) setCartonTareGrams(Math.max(0, parseInt(e.target.value) || 0));
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl border font-mono font-bold text-center ${
+                        isTareLocked
+                          ? 'border-amber-300 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 cursor-not-allowed'
+                          : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-600 dark:text-slate-400 block mb-1">وزن هر دوک (گرم)</label>
+                    <label className="font-bold text-slate-600 dark:text-slate-400 flex items-center justify-between mb-1">
+                      <span>وزن هر دوک (گرم)</span>
+                      {isTareLocked && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-black text-amber-600">
+                          <Lock size={11} /> قفل
+                        </span>
+                      )}
+                    </label>
                     <input
                       type="number"
                       value={coneTareGrams}
-                      onChange={e => setConeTareGrams(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                      disabled={isTareLocked}
+                      readOnly={isTareLocked}
+                      onChange={e => {
+                        if (!isTareLocked) setConeTareGrams(Math.max(0, parseInt(e.target.value) || 0));
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl border font-mono font-bold text-center ${
+                        isTareLocked
+                          ? 'border-amber-300 bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 cursor-not-allowed'
+                          : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800'
+                      }`}
                     />
                   </div>
                   <div>
@@ -1017,6 +1825,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     />
                   </div>
                 </div>
+
+                {isTareLocked && (
+                  <div className="text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2 flex items-center gap-2">
+                    <Lock size={14} className="shrink-0" />
+                    <span>
+                      وزن کارتن خالی ({cartonTareGrams} گرم) و وزن هر دوک ({coneTareGrams} گرم) قفل شده است و اپراتور باسکول مجاز به تغییر آن نمی‌باشد.
+                    </span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
                   <div>
@@ -1087,46 +1904,57 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </div>
             </div>
 
-            {/* Right Column: Single Label Preview */}
+            {/* Right Column: Live Thermal Label Preview */}
             <div className="lg:col-span-4 space-y-4">
               <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
                   <h3 className="text-xs font-black text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
-                    <QrCode size={16} className="text-orange-600" />
-                    پیش‌نمایش لیبل حرارتی کارتن
+                    {labelTemplate.barcodeType === 'QR_2D' ? (
+                      <QrCode size={16} className="text-orange-600" />
+                    ) : (
+                      <Barcode size={16} className="text-orange-600" />
+                    )}
+                    پیش‌نمایش زنده لیبل کارتن
                   </h3>
-                  <span className="text-[10px] font-bold text-slate-400">سایز استاندارد 100x70 mm</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono font-bold text-slate-400">
+                      {labelTemplate.labelWidthMm}x{labelTemplate.labelHeightMm} mm
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleOpenLabelDesigner}
+                      className="text-[10px] font-black text-indigo-600 hover:underline flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Settings2 size={12} />
+                      <span>سفارشی‌سازی</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div id="single-carton-label-preview" className="border-2 border-slate-800 rounded-xl p-3 bg-white text-slate-900 space-y-2 select-none shadow-sm">
-                  <div className="text-center border-b border-slate-300 pb-1">
-                    <h4 className="font-black text-xs">{selectedCompany?.name || 'شرکت تولیدی و صنعتی لیان بافت'}</h4>
-                    <span className="text-[9px] font-bold text-slate-500">لیبل شناسنامه کارتن نخ صنعتی</span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="space-y-1 text-[11px] flex-1">
-                      <div>کالا: <strong className="font-black text-xs">{erpState.items.find(i => i.id === selectedItemId)?.name}</strong></div>
-                      <div>کد کالا: <span className="font-mono font-bold">{erpState.items.find(i => i.id === selectedItemId)?.code}</span></div>
-                      <div>خط: <strong>{lines.find(l => l.id === selectedLineId)?.name}</strong></div>
-                      <div>لات: <span className="font-mono font-bold">{lotNumber}</span> | شیفت: <strong>{shiftName}</strong></div>
-                      <div>تعداد دوک: <strong>{conesCount} عدد</strong> | گرید: <strong className="text-orange-600">{grade}</strong></div>
-                    </div>
-                    <div className="w-20 h-20 bg-slate-50 border border-slate-300 rounded flex items-center justify-center shrink-0">
-                      <QrCode size={64} className="text-slate-800" />
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-100 p-2 rounded flex items-center justify-between font-mono font-bold text-xs border border-slate-300">
-                    <div>Gross: {grossWeightKg.toFixed(2)} Kg</div>
-                    <div>Tare: {calculatedTareKg.toFixed(3)} Kg</div>
-                    <div className="text-emerald-700 font-black">Net: {calculatedNetKg.toFixed(3)} Kg</div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[9px] text-slate-500 pt-1 border-t border-slate-200">
-                    <div>کد ارجاع: <span className="font-mono font-bold">DLK-{lines.find(l => l.id === selectedLineId)?.code}-PROD</span></div>
-                    <div>تاریخ: {getTodayJalali()}</div>
-                  </div>
+                <div id="single-carton-label-preview">
+                  <CartonLabelCard
+                    companyName={selectedCompany?.name || 'شرکت تولیدی و صنعتی'}
+                    template={labelTemplate}
+                    carton={{
+                      productName: selectedItemObj?.name || 'کالای انتخاب نشده',
+                      productCode: selectedItemObj?.code || 'YN-0000',
+                      yarnCount: selectedItemObj?.yarnCount || '150/48',
+                      colorName: selectedItemObj?.colorName || 'سفید خام',
+                      machineCode: lines.find(l => l.id === selectedLineId)?.name || 'خط تولید ۱',
+                      shift: shiftName,
+                      lotNumber,
+                      conesCount,
+                      grade,
+                      grossWeightKg,
+                      totalTareKg: calculatedTareKg,
+                      netWeightKg: calculatedNetKg,
+                      referenceCode: `DLK-${lines.find(l => l.id === selectedLineId)?.code || 'L01'}-${String((erpState.nextSerialCounter || 1000) + currentBatchCartons.length + 1).padStart(5, '0')}`,
+                      serialNumber: `SN-05-${String((erpState.nextSerialCounter || 1000) + currentBatchCartons.length + 1).padStart(5, '0')}`,
+                      createdDateJalali: getTodayJalali(),
+                      createdTimeExact: getExactTimeNow(),
+                      createdBy: currentUser?.fullName || 'اپراتور خط'
+                    }}
+                  />
                 </div>
               </div>
             </div>
@@ -1626,6 +2454,89 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       )}
 
       {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT COMMODITY GROUP (HIERARCHICAL) */}
+      {/* --------------------------------------------------------------------------------- */}
+      {showAddGroupModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <FolderPlus size={17} className="text-orange-600" />
+                {groupForm.id ? 'ویرایش گروه / زیرگروه کالایی' : 'تعریف گروه / زیرگروه جدید'}
+              </h3>
+              <button onClick={() => setShowAddGroupModal(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1">گروه والد (سلسله‌مراتب درختی)</label>
+                <select
+                  value={groupForm.parentId || ''}
+                  onChange={e => setGroupForm({ ...groupForm, parentId: e.target.value || null })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                >
+                  <option value="">(گروه ریشه - سطح اول)</option>
+                  {groups
+                    .filter(g => g.id !== groupForm.id)
+                    .map(g => (
+                      <option key={g.id} value={g.id}>
+                        {getGroupHierarchyLabel(g)} ({g.code})
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-1">
+                  <label className="font-bold block mb-1">کد گروه *</label>
+                  <input
+                    type="text"
+                    value={groupForm.code || ''}
+                    onChange={e => setGroupForm({ ...groupForm, code: e.target.value })}
+                    placeholder="GRP-01"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="font-bold block mb-1">عنوان گروه / زیرگروه *</label>
+                  <input
+                    type="text"
+                    value={groupForm.name || ''}
+                    onChange={e => setGroupForm({ ...groupForm, name: e.target.value })}
+                    placeholder="مثال: نخ DTY سفید ۱۰۰/۳۶"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="font-bold block mb-1">توضیحات</label>
+                <textarea
+                  rows={2}
+                  value={groupForm.description || ''}
+                  onChange={e => setGroupForm({ ...groupForm, description: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowAddGroupModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-600"
+              >
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveGroup}
+                className="px-5 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black shadow-sm"
+              >
+                ذخیره گروه
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
       {/* MODAL: ADD / EDIT ITEM */}
       {/* --------------------------------------------------------------------------------- */}
       {showAddItemModal && (
@@ -1645,22 +2556,22 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <label className="font-bold block mb-1">کد کالا</label>
                   <input
                     type="text"
-                    value={itemForm.code}
+                    value={itemForm.code || ''}
                     onChange={e => setItemForm({ ...itemForm, code: e.target.value })}
                     placeholder="مثال: YN-3005"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
                   />
                 </div>
                 <div>
-                  <label className="font-bold block mb-1">گروه کالایی</label>
+                  <label className="font-bold block mb-1">شاخه / گروه در درخت کالا</label>
                   <select
-                    value={itemForm.groupId}
+                    value={itemForm.groupId || ''}
                     onChange={e => setItemForm({ ...itemForm, groupId: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                   >
                     <option value="">انتخاب گروه کالایی...</option>
                     {groups.map(g => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
+                      <option key={g.id} value={g.id}>{getGroupHierarchyLabel(g)}</option>
                     ))}
                   </select>
                 </div>
@@ -1670,7 +2581,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 <label className="font-bold block mb-1">نام و عنوان کامل کالا</label>
                 <input
                   type="text"
-                  value={itemForm.name}
+                  value={itemForm.name || ''}
                   onChange={e => setItemForm({ ...itemForm, name: e.target.value })}
                   placeholder="مثال: نخ تکسچره پلی‌استر DTY 150/48 NIM سفید"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
@@ -1682,7 +2593,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <label className="font-bold block mb-1">نمره نخ</label>
                   <input
                     type="text"
-                    value={itemForm.yarnCount}
+                    value={itemForm.yarnCount || ''}
                     onChange={e => setItemForm({ ...itemForm, yarnCount: e.target.value })}
                     placeholder="150/48"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
@@ -1692,7 +2603,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <label className="font-bold block mb-1">رنگ نخ</label>
                   <input
                     type="text"
-                    value={itemForm.colorName}
+                    value={itemForm.colorName || ''}
                     onChange={e => setItemForm({ ...itemForm, colorName: e.target.value })}
                     placeholder="سفید خام"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
@@ -1712,8 +2623,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 </div>
               </div>
 
-              {/* Crucial tare weights */}
-              <div className="p-3 bg-orange-50/50 dark:bg-orange-950/20 rounded-2xl border border-orange-200 dark:border-orange-800 space-y-2">
+              {/* Crucial tare weights & Lock */}
+              <div className="p-3 bg-orange-50/50 dark:bg-orange-950/20 rounded-2xl border border-orange-200 dark:border-orange-800 space-y-2.5">
                 <span className="font-black text-orange-800 dark:text-orange-300 block text-[11px]">
                   پارامترهای محاسباتی کسر ظرف خودکار هنگام توزین:
                 </span>
@@ -1722,7 +2633,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <label className="text-[10px] text-slate-500 block mb-1">تعداد دوک پیش‌فرض</label>
                     <input
                       type="number"
-                      value={itemForm.defaultConesPerCarton}
+                      value={itemForm.defaultConesPerCarton ?? 6}
                       onChange={e => setItemForm({ ...itemForm, defaultConesPerCarton: parseInt(e.target.value) || 6 })}
                       className="w-full px-2 py-1.5 rounded-lg border bg-white dark:bg-slate-900 font-bold text-center text-xs"
                     />
@@ -1731,8 +2642,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <label className="text-[10px] text-slate-500 block mb-1">وزن کارتن خالی (گرم)</label>
                     <input
                       type="number"
-                      value={itemForm.cartonWeightGrams}
-                      onChange={e => setItemForm({ ...itemForm, cartonWeightGrams: parseInt(e.target.value) || 1450 })}
+                      value={itemForm.cartonWeightGrams ?? 1450}
+                      onChange={e => setItemForm({ ...itemForm, cartonWeightGrams: parseInt(e.target.value) || 0 })}
                       className="w-full px-2 py-1.5 rounded-lg border bg-white dark:bg-slate-900 font-mono font-bold text-center text-xs"
                     />
                   </div>
@@ -1740,12 +2651,41 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <label className="text-[10px] text-slate-500 block mb-1">وزن هر دوک (گرم)</label>
                     <input
                       type="number"
-                      value={itemForm.coneWeightGrams}
-                      onChange={e => setItemForm({ ...itemForm, coneWeightGrams: parseInt(e.target.value) || 110 })}
+                      value={itemForm.coneWeightGrams ?? 110}
+                      onChange={e => setItemForm({ ...itemForm, coneWeightGrams: parseInt(e.target.value) || 0 })}
                       className="w-full px-2 py-1.5 rounded-lg border bg-white dark:bg-slate-900 font-mono font-bold text-center text-xs"
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* Active & Tare Lock switches */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={itemForm.isActive !== false}
+                    onChange={e => setItemForm({ ...itemForm, isActive: e.target.checked })}
+                    className="accent-emerald-600 w-4 h-4"
+                  />
+                  <div>
+                    <span className="font-black block text-slate-800 dark:text-slate-100">کالا فعال است</span>
+                    <span className="text-[10px] text-slate-500">نمایش در لیست توزین باسکول</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(itemForm.isTareLocked)}
+                    onChange={e => setItemForm({ ...itemForm, isTareLocked: e.target.checked })}
+                    className="accent-amber-600 w-4 h-4"
+                  />
+                  <div>
+                    <span className="font-black block text-amber-800 dark:text-amber-300">قفل وزن دوک و کارتن</span>
+                    <span className="text-[10px] text-amber-700/80 dark:text-amber-400/80">اپراتور نتواند تغییر دهد</span>
+                  </div>
+                </label>
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -1854,48 +2794,36 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <Printer className="w-5 h-5 text-orange-600" />
                   چاپ دسته‌ای کلیه لیبل‌های کارتن ({currentBatchCartons.length} کارتن)
                 </h3>
-                <span className="text-xs text-slate-500">طرح چاپ لیبل حرارتی استاندارد صنعتی ۱۰ در ۷ سانتیمتر</span>
+                <span className="text-xs text-slate-500">
+                  سایز لیبل: {labelTemplate.labelWidthMm}x{labelTemplate.labelHeightMm} mm | نوع بارکد:{' '}
+                  {labelTemplate.barcodeType === 'LINEAR_1D' ? 'خطی 1D' : labelTemplate.barcodeType === 'QR_2D' ? 'دوبعدی QR' : 'خطی + QR'}
+                </span>
               </div>
-              <button onClick={() => setIsBatchPrinting(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
-                <X size={16} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenLabelDesigner}
+                  className="px-2.5 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 text-xs font-black flex items-center gap-1 hover:bg-indigo-100"
+                >
+                  <Palette size={13} />
+                  <span>طراحی لیبل</span>
+                </button>
+                <button onClick={() => setIsBatchPrinting(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
 
             <div id="batch-labels-print-container" className="space-y-4">
               {currentBatchCartons.map((carton, idx) => (
-                <div key={carton.id} className="label-card border-2 border-slate-800 rounded-2xl p-4 bg-white text-slate-900 space-y-2 shadow-sm page-break-inside-avoid">
-                  <div className="text-center border-b border-slate-300 pb-1">
-                    <h4 className="font-black text-sm">{selectedCompany?.name || 'شرکت تولیدی و صنعتی لیان بافت'}</h4>
-                    <span className="text-[10px] font-bold text-slate-500">شناسنامه کارتن تولید - ردیف {idx + 1} از {currentBatchCartons.length}</span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1 text-xs flex-1">
-                      <div>محصول: <strong className="font-black text-sm">{carton.productName}</strong></div>
-                      <div>کد کالا: <span className="font-mono font-bold text-orange-600">{carton.productCode}</span></div>
-                      <div>خط: <strong>{carton.machineCode}</strong> | شیفت: <strong>{carton.shift}</strong></div>
-                      <div>لات: <span className="font-mono font-bold">{carton.lotNumber}</span> | دوک: <strong>{carton.conesCount} عدد</strong> | درجه: <strong>{carton.grade}</strong></div>
-                    </div>
-                    <div className="w-24 h-24 bg-slate-50 border border-slate-300 rounded-xl flex items-center justify-center p-1 shrink-0">
-                      {qrCodeDataUrls[carton.id] ? (
-                        <img src={qrCodeDataUrls[carton.id]} alt="QR" className="w-full h-full object-contain" />
-                      ) : (
-                        <QrCode size={70} className="text-slate-800" />
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-100 p-2.5 rounded-xl flex items-center justify-between font-mono font-bold text-xs border border-slate-300">
-                    <div>Gross: {carton.grossWeightKg.toFixed(2)} Kg</div>
-                    <div>Tare: {carton.totalTareKg.toFixed(3)} Kg</div>
-                    <div className="text-emerald-700 font-black text-sm">Net: {carton.netWeightKg.toFixed(3)} Kg</div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200">
-                    <div>کد ارجاع: <span className="font-mono font-black text-slate-900">{carton.referenceCode}</span></div>
-                    <div>ساعت: <span className="font-mono font-bold">{carton.createdTimeExact}</span> | تاریخ: {carton.createdDateJalali}</div>
-                  </div>
-                </div>
+                <CartonLabelCard
+                  key={carton.id}
+                  carton={carton}
+                  companyName={selectedCompany?.name || 'شرکت تولیدی و صنعتی'}
+                  template={labelTemplate}
+                  qrDataUrl={qrCodeDataUrls[carton.id]}
+                  batchIndexLabel={`ردیف ${idx + 1} از ${currentBatchCartons.length}`}
+                />
               ))}
             </div>
 
@@ -1907,7 +2835,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 انصراف
               </button>
               <button
-                onClick={() => handlePrintElement('batch-labels-print-container')}
+                onClick={() => handlePrintElement('batch-labels-print-container', true)}
                 className="px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black shadow-md flex items-center gap-1.5"
               >
                 <Printer size={15} />
@@ -1929,44 +2857,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 <Printer size={16} className="text-orange-600" />
                 چاپ لیبل کارتن {singlePrintCarton.referenceCode}
               </h3>
-              <button onClick={() => setSinglePrintCarton(null)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
-                <X size={16} />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleOpenLabelDesigner}
+                  className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-[11px] font-black flex items-center gap-1 hover:bg-indigo-100"
+                >
+                  <Palette size={12} />
+                  <span>طراحی</span>
+                </button>
+                <button onClick={() => setSinglePrintCarton(null)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
 
-            <div id="single-carton-print-box" className="border-2 border-slate-800 rounded-2xl p-4 bg-white text-slate-900 space-y-2 shadow-sm">
-              <div className="text-center border-b border-slate-300 pb-1">
-                <h4 className="font-black text-sm">{selectedCompany?.name || 'شرکت تولیدی و صنعتی لیان بافت'}</h4>
-                <span className="text-[10px] font-bold text-slate-500">لیبل شناسنامه کارتن نخ صنعتی</span>
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <div className="space-y-1 text-xs flex-1">
-                  <div>محصول: <strong className="font-black">{singlePrintCarton.productName}</strong></div>
-                  <div>کد کالا: <span className="font-mono font-bold text-orange-600">{singlePrintCarton.productCode}</span></div>
-                  <div>خط: <strong>{singlePrintCarton.machineCode}</strong></div>
-                  <div>لات: <span className="font-mono font-bold">{singlePrintCarton.lotNumber}</span> | شیفت: <strong>{singlePrintCarton.shift}</strong></div>
-                  <div>تعداد دوک: <strong>{singlePrintCarton.conesCount}</strong> | گرید: <strong>{singlePrintCarton.grade}</strong></div>
-                </div>
-                <div className="w-24 h-24 bg-slate-50 border border-slate-300 rounded-xl flex items-center justify-center p-1 shrink-0">
-                  {qrCodeDataUrls[singlePrintCarton.id] ? (
-                    <img src={qrCodeDataUrls[singlePrintCarton.id]} alt="QR" className="w-full h-full object-contain" />
-                  ) : (
-                    <QrCode size={70} className="text-slate-800" />
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-slate-100 p-2 rounded-xl flex items-center justify-between font-mono font-bold text-xs border border-slate-300">
-                <div>Gross: {singlePrintCarton.grossWeightKg.toFixed(2)} Kg</div>
-                <div>Tare: {singlePrintCarton.totalTareKg.toFixed(3)} Kg</div>
-                <div className="text-emerald-700 font-black">Net: {singlePrintCarton.netWeightKg.toFixed(3)} Kg</div>
-              </div>
-
-              <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200">
-                <div>کد ارجاع: <span className="font-mono font-black text-slate-900">{singlePrintCarton.referenceCode}</span></div>
-                <div>ساعت: <span className="font-mono font-bold">{singlePrintCarton.createdTimeExact}</span> | تاریخ: {singlePrintCarton.createdDateJalali}</div>
-              </div>
+            <div id="single-carton-print-box">
+              <CartonLabelCard
+                carton={singlePrintCarton}
+                companyName={selectedCompany?.name || 'شرکت تولیدی و صنعتی'}
+                template={labelTemplate}
+                qrDataUrl={qrCodeDataUrls[singlePrintCarton.id]}
+              />
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
@@ -1977,11 +2889,370 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 انصراف
               </button>
               <button
-                onClick={() => handlePrintElement('single-carton-print-box')}
+                onClick={() => handlePrintElement('single-carton-print-box', true)}
                 className="px-6 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black shadow-md flex items-center gap-1.5"
               >
                 <Printer size={15} />
                 چاپ لیبل
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: CUSTOM LABEL DESIGNER & PRINT FIELD SELECTOR */}
+      {/* --------------------------------------------------------------------------------- */}
+      {showLabelDesignerModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-5xl w-full p-5 sm:p-6 shadow-2xl space-y-4 my-6 max-h-[92vh] overflow-y-auto custom-scrollbar">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 flex items-center justify-center border border-indigo-200 dark:border-indigo-800">
+                  <Palette size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                    طراح اختصاصی لیبل کارتن و تعیین دقیق اقلام چاپی
+                  </h3>
+                  <p className="text-xs text-slate-400">انتخاب نوع بارکد (خطی قدیم کارخانه / دوبعدی QR)، ابعاد برچسب و مشخص کردن فیلدهای روی چاپ</p>
+                </div>
+              </div>
+              <button onClick={() => setShowLabelDesignerModal(false)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 self-end sm:self-auto">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="flex flex-wrap items-center gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 rounded-2xl border border-slate-200/70 dark:border-slate-700 text-xs">
+              <span className="font-black text-slate-600 dark:text-slate-300">الگوهای آماده:</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setDesignerDraft({
+                    ...DEFAULT_LABEL_TEMPLATE_CONFIG,
+                    barcodeType: 'LINEAR_1D',
+                    fields: {
+                      ...DEFAULT_LABEL_TEMPLATE_CONFIG.fields,
+                      showHeaderSubtitle: false,
+                      showYarnCount: true,
+                      showColorName: true,
+                      showShift: false,
+                      showOperator: false,
+                      showSerialNumber: false,
+                      showFooterNote: false
+                    }
+                  })
+                }
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-orange-500 font-bold"
+              >
+                طرح قدیم کارخانه (خطی 1D مینیمال)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setDesignerDraft({
+                    ...DEFAULT_LABEL_TEMPLATE_CONFIG,
+                    barcodeType: 'BOTH'
+                  })
+                }
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-orange-500 font-bold"
+              >
+                طرح کامل صنعتی (خطی + QR)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setDesignerDraft({
+                    ...DEFAULT_LABEL_TEMPLATE_CONFIG,
+                    barcodeType: 'QR_2D'
+                  })
+                }
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-orange-500 font-bold"
+              >
+                طرح استاندارد دوبعدی (QR 2D)
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+              {/* Settings & Field Checkboxes */}
+              <div className="lg:col-span-7 space-y-4 text-xs">
+                {/* Barcode & Dimensions */}
+                <div className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+                  <h4 className="font-black text-slate-800 dark:text-slate-100">۱. تنظیمات بارکد و ابعاد لیبل حرارتی</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">نوع بارکد</label>
+                      <select
+                        value={designerDraft.barcodeType}
+                        onChange={e => setDesignerDraft({ ...designerDraft, barcodeType: e.target.value as ErpBarcodeType })}
+                        className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      >
+                        <option value="LINEAR_1D">بارکد خطی 1D (قدیم کارخانه)</option>
+                        <option value="QR_2D">بارکد دوبعدی (QR)</option>
+                        <option value="BOTH">هر دو (خطی + QR)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">محتوای بارکد خطی</label>
+                      <select
+                        value={designerDraft.barcodeValueSource}
+                        onChange={e => setDesignerDraft({ ...designerDraft, barcodeValueSource: e.target.value as any })}
+                        className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      >
+                        <option value="referenceCode">کد ارجاع (DLK-...)</option>
+                        <option value="serialNumber">شماره سریال (SN-...)</option>
+                        <option value="productCode">کد کالا</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">ارتفاع بارکد خطی (px)</label>
+                      <input
+                        type="number"
+                        min={24}
+                        max={84}
+                        value={designerDraft.linearBarcodeHeightPx}
+                        onChange={e => setDesignerDraft({ ...designerDraft, linearBarcodeHeightPx: Math.max(24, Math.min(84, parseInt(e.target.value) || 44)) })}
+                        className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">عرض لیبل (mm)</label>
+                      <input
+                        type="number"
+                        min={40}
+                        max={210}
+                        value={designerDraft.labelWidthMm}
+                        onChange={e => setDesignerDraft({ ...designerDraft, labelWidthMm: parseInt(e.target.value) || 100 })}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">طول لیبل (mm)</label>
+                      <input
+                        type="number"
+                        min={30}
+                        max={297}
+                        value={designerDraft.labelHeightMm}
+                        onChange={e => setDesignerDraft({ ...designerDraft, labelHeightMm: parseInt(e.target.value) || 70 })}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">سایز فونت</label>
+                      <select
+                        value={designerDraft.fontSizeScale}
+                        onChange={e => setDesignerDraft({ ...designerDraft, fontSizeScale: e.target.value as any })}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      >
+                        <option value="SMALL">کوچک (فشرده)</option>
+                        <option value="MEDIUM">متوسط (استاندارد)</option>
+                        <option value="LARGE">بزرگ (خوانا)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">نوع کادر</label>
+                      <select
+                        value={designerDraft.borderStyle}
+                        onChange={e => setDesignerDraft({ ...designerDraft, borderStyle: e.target.value as any })}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      >
+                        <option value="SOLID">خط ممتد استاندارد</option>
+                        <option value="DOUBLE">کادر دوخطه ضخیم</option>
+                        <option value="NONE">حاشیه نازک</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">تیتر سفارشی بالا (اختیاری)</label>
+                      <input
+                        type="text"
+                        value={designerDraft.headerTitle}
+                        onChange={e => setDesignerDraft({ ...designerDraft, headerTitle: e.target.value })}
+                        placeholder={selectedCompany?.name || 'نام شرکت'}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">زیرتیتر لیبل</label>
+                      <input
+                        type="text"
+                        value={designerDraft.headerSubtitle}
+                        onChange={e => setDesignerDraft({ ...designerDraft, headerSubtitle: e.target.value })}
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-500 block mb-1">متن پاورقی (Footer)</label>
+                      <input
+                        type="text"
+                        value={designerDraft.footerNote}
+                        onChange={e => setDesignerDraft({ ...designerDraft, footerNote: e.target.value })}
+                        placeholder="مثال: ساخت ایران - کنترل کیفیت تایید شده"
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs font-bold cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={designerDraft.showBarcodeHumanText}
+                      onChange={e => setDesignerDraft({ ...designerDraft, showBarcodeHumanText: e.target.checked })}
+                      className="accent-orange-600 w-4 h-4"
+                    />
+                    <span>نمایش حروف و اعداد خوانای کد زیر بارکد خطی</span>
+                  </label>
+                </div>
+
+                {/* Toggleable Fields */}
+                <div className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-black text-slate-800 dark:text-slate-100">۲. تعیین فیلدهایی که روی لیبل پرینت می‌شوند</h4>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const allOn = { ...designerDraft.fields };
+                          (Object.keys(allOn) as (keyof typeof allOn)[]).forEach(k => { allOn[k] = true; });
+                          setDesignerDraft({ ...designerDraft, fields: allOn });
+                        }}
+                        className="text-[10px] font-black text-emerald-600 hover:underline"
+                      >
+                        انتخاب همه
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const minFields = { ...designerDraft.fields };
+                          (Object.keys(minFields) as (keyof typeof minFields)[]).forEach(k => { minFields[k] = false; });
+                          minFields.showCompanyName = true;
+                          minFields.showProductName = true;
+                          minFields.showNetWeight = true;
+                          minFields.showReferenceCode = true;
+                          setDesignerDraft({ ...designerDraft, fields: minFields });
+                        }}
+                        className="text-[10px] font-black text-slate-500 hover:underline"
+                      >
+                        حداقل فیلدها
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {[
+                      { key: 'showCompanyName', label: 'نام شرکت / کارخانه' },
+                      { key: 'showHeaderSubtitle', label: 'زیرتیتر بالای لیبل' },
+                      { key: 'showProductName', label: 'نام کالا (نخ)' },
+                      { key: 'showProductCode', label: 'کد کالا' },
+                      { key: 'showYarnCount', label: 'نمره نخ' },
+                      { key: 'showColorName', label: 'رنگ نخ' },
+                      { key: 'showMachineLine', label: 'خط تولید / ماشین' },
+                      { key: 'showShift', label: 'شیفت کاری' },
+                      { key: 'showLotNumber', label: 'شماره لات (Lot)' },
+                      { key: 'showConesCount', label: 'تعداد دوک' },
+                      { key: 'showGrade', label: 'گرید کیفی (A/B/C)' },
+                      { key: 'showGrossWeight', label: 'وزن ناخالص (Gross)' },
+                      { key: 'showTareWeight', label: 'وزن ظرف و دوک (Tare)' },
+                      { key: 'showNetWeight', label: 'وزن خالص (Net)' },
+                      { key: 'showReferenceCode', label: 'کد ارجاع کارتن' },
+                      { key: 'showSerialNumber', label: 'شماره سریال (SN)' },
+                      { key: 'showDate', label: 'تاریخ تولید' },
+                      { key: 'showTime', label: 'ساعت دقیق توزین' },
+                      { key: 'showOperator', label: 'نام اپراتور توزین' },
+                      { key: 'showFooterNote', label: 'متن پاورقی دلخواه' }
+                    ].map(item => {
+                      const k = item.key as keyof ErpLabelTemplateConfig['fields'];
+                      return (
+                        <label
+                          key={item.key}
+                          className={`flex items-center gap-2 p-2 rounded-xl border text-[11px] font-bold cursor-pointer transition-colors ${
+                            designerDraft.fields[k]
+                              ? 'bg-orange-50/70 dark:bg-orange-950/30 border-orange-300 dark:border-orange-800 text-slate-800 dark:text-slate-100'
+                              : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 text-slate-500'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(designerDraft.fields[k])}
+                            onChange={e =>
+                              setDesignerDraft({
+                                ...designerDraft,
+                                fields: { ...designerDraft.fields, [k]: e.target.checked }
+                              })
+                            }
+                            className="accent-orange-600 w-3.5 h-3.5"
+                          />
+                          <span>{item.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Live WYSIWYG Label Preview */}
+              <div className="lg:col-span-5 flex flex-col justify-between bg-slate-100/70 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                <div className="flex items-center justify-between text-xs font-black text-slate-700 dark:text-slate-200">
+                  <span>پیش‌نمایش زنده خروجی چاپ:</span>
+                  <span className="font-mono text-[11px] text-slate-500">
+                    {designerDraft.labelWidthMm} × {designerDraft.labelHeightMm} mm
+                  </span>
+                </div>
+
+                <div className="my-auto">
+                  <CartonLabelCard
+                    companyName={selectedCompany?.name || 'شرکت تولیدی و صنعتی'}
+                    template={designerDraft}
+                    carton={{
+                      productName: selectedItemObj?.name || 'نخ تکسچره پلی‌استر DTY 150/48 NIM',
+                      productCode: selectedItemObj?.code || 'YN-3001',
+                      yarnCount: selectedItemObj?.yarnCount || '150/48',
+                      colorName: selectedItemObj?.colorName || 'سفید خام',
+                      machineCode: lines.find(l => l.id === selectedLineId)?.name || 'خط تکسچره ۱',
+                      shift: shiftName || 'شیفت صبح A',
+                      lotNumber: lotNumber || 'L405-88',
+                      conesCount: conesCount || 6,
+                      grade: grade || 'A',
+                      grossWeightKg: grossWeightKg || 25.61,
+                      totalTareKg: calculatedTareKg || 2.11,
+                      netWeightKg: calculatedNetKg || 23.5,
+                      referenceCode: `DLK-${lines.find(l => l.id === selectedLineId)?.code || 'L01'}-01001`,
+                      serialNumber: 'SN-050820-01001',
+                      createdDateJalali: getTodayJalali(),
+                      createdTimeExact: getExactTimeNow(),
+                      createdBy: currentUser?.fullName || 'اپراتور خط'
+                    }}
+                  />
+                </div>
+
+                <div className="text-[11px] text-slate-500 leading-relaxed bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                  بارکد خطی با استاندارد صنعتی <strong>Code 128B</strong> و بارکد دوبعدی <strong>QR</strong> به صورت کاملاً آفلاین بدون نیاز به اینترنت رندر و چاپ می‌شوند.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowLabelDesignerModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveLabelTemplate}
+                className="px-6 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black shadow-md flex items-center gap-1.5"
+              >
+                <CheckCircle2 size={15} />
+                <span>ذخیره طراحی و اعمال در چاپ لیبل‌ها</span>
               </button>
             </div>
           </div>

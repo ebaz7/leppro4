@@ -1,10 +1,15 @@
 
 import { User, UserRole, SystemSettings, RolePermissions } from '../types';
-import { apiCall } from './apiService';
-import { isWindowsDesktopApp } from '../utils/platformDetection';
+import { apiCall, setAuthToken, setRefreshToken } from './apiService';
+import { isWindowsDesktopApp, isWebApp } from '../utils/platformDetection';
 
 const CURRENT_USER_KEY = 'app_current_user';
 export const DESKTOP_SESSION_ACTIVE_KEY = 'dlkam_desktop_session_active';
+export const WEB_SESSION_ACTIVE_KEY = 'dlkam_web_session_active';
+export const WEB_SESSION_USER_KEY = 'dlkam_web_session_user';
+export const WEB_LAST_ACTIVITY_KEY = 'dlkam_web_last_activity';
+export const LOGOUT_REASON_KEY = 'dlkam_logout_reason';
+export const WEB_IDLE_LIMIT_MS = 60 * 60 * 1000;
 export const SAVED_ACCOUNTS_STORAGE_KEY = 'dlkam_saved_accounts_v2';
 
 export interface SavedAccountEntry {
@@ -160,10 +165,67 @@ export const saveUser = async (user: User): Promise<User[]> => {
     return await apiCall<User[]>('/users', 'POST', user);
 };
 
+export const setLogoutReason = (reason: string | null): void => {
+    try {
+        if (typeof sessionStorage === 'undefined') return;
+        if (reason) {
+            sessionStorage.setItem(LOGOUT_REASON_KEY, reason);
+        } else {
+            sessionStorage.removeItem(LOGOUT_REASON_KEY);
+        }
+    } catch {}
+};
+
+export const consumeLogoutReason = (): string => {
+    try {
+        if (typeof sessionStorage === 'undefined') return '';
+        const msg = sessionStorage.getItem(LOGOUT_REASON_KEY) || '';
+        if (msg) sessionStorage.removeItem(LOGOUT_REASON_KEY);
+        return msg;
+    } catch {
+        return '';
+    }
+};
+
+export const touchWebActivity = (): number => {
+    const now = Date.now();
+    try {
+        if (typeof sessionStorage !== 'undefined' && isWebApp()) {
+            sessionStorage.setItem(WEB_LAST_ACTIVITY_KEY, String(now));
+        }
+    } catch {}
+    return now;
+};
+
+const clearAuthStorage = (): void => {
+    try {
+        localStorage.removeItem(CURRENT_USER_KEY);
+    } catch {}
+    setAuthToken(null);
+    setRefreshToken(null);
+    try {
+        if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.removeItem(DESKTOP_SESSION_ACTIVE_KEY);
+            sessionStorage.removeItem(WEB_SESSION_ACTIVE_KEY);
+            sessionStorage.removeItem(WEB_SESSION_USER_KEY);
+            sessionStorage.removeItem(WEB_LAST_ACTIVITY_KEY);
+        }
+    } catch {}
+};
+
 export const updateUser = async (user: User): Promise<User[]> => {
     const current = getCurrentUser();
     if (current && String(current.id) === String(user.id)) {
-        localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+        const serialized = JSON.stringify(user);
+        if (isWebApp()) {
+            try {
+                if (typeof sessionStorage !== 'undefined') {
+                    sessionStorage.setItem(WEB_SESSION_USER_KEY, serialized);
+                }
+            } catch {}
+        } else {
+            localStorage.setItem(CURRENT_USER_KEY, serialized);
+        }
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('current-user-updated', { detail: user }));
         }
@@ -177,38 +239,81 @@ export const deleteUser = async (id: string): Promise<User[]> => {
 
 export const login = async (username: string, password: string): Promise<User | null> => {
     const user = await apiCall<User>('/login', 'POST', { username, password });
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
-    try {
-        if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.setItem(DESKTOP_SESSION_ACTIVE_KEY, 'true');
-        }
-    } catch {}
+    setLogoutReason(null);
+    if (isWebApp()) {
+        // Web Security Policy: Store session ONLY in sessionStorage (never persist across browser close/reopen)
+        try {
+            localStorage.removeItem(CURRENT_USER_KEY);
+        } catch {}
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem(WEB_SESSION_USER_KEY, JSON.stringify(user));
+                sessionStorage.setItem(WEB_SESSION_ACTIVE_KEY, 'true');
+                sessionStorage.setItem(WEB_LAST_ACTIVITY_KEY, String(Date.now()));
+            }
+        } catch {}
+    } else {
+        localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+        try {
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem(DESKTOP_SESSION_ACTIVE_KEY, 'true');
+            }
+        } catch {}
+    }
     return user;
 };
 
 export const logout = (): void => {
-    localStorage.removeItem(CURRENT_USER_KEY);
-    try {
-        if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.removeItem(DESKTOP_SESSION_ACTIVE_KEY);
-        }
-    } catch {}
+    clearAuthStorage();
 };
 
 export const getCurrentUser = (): User | null => {
-    // Windows Desktop Security Policy:
-    // When the Windows Desktop app (Tauri / Electron) is closed and reopened, sessionStorage is cleared.
-    // Require an active unlocked window session so closing the Windows app always logs out and shows the Login screen.
+    // 1. Windows Desktop Security Policy:
+    // Closing the Windows Desktop app (Tauri / Electron) clears sessionStorage; require active window session.
     if (isWindowsDesktopApp()) {
         try {
             if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(DESKTOP_SESSION_ACTIVE_KEY) !== 'true') {
-                localStorage.removeItem(CURRENT_USER_KEY);
+                clearAuthStorage();
                 return null;
             }
         } catch {}
     }
-    const stored = localStorage.getItem(CURRENT_USER_KEY);
-    return stored ? JSON.parse(stored) : null;
+
+    // 2. Web Browser Security Policy:
+    // - Never auto-login when browser/tab is reopened (sessionStorage is empty on reopen)
+    // - Strictly expire session after 1 hour (3600000 ms) of inactivity
+    if (isWebApp()) {
+        try {
+            if (typeof sessionStorage === 'undefined' || sessionStorage.getItem(WEB_SESSION_ACTIVE_KEY) !== 'true') {
+                clearAuthStorage();
+                return null;
+            }
+            const lastActivityRaw = sessionStorage.getItem(WEB_LAST_ACTIVITY_KEY);
+            const lastActivity = lastActivityRaw ? Number(lastActivityRaw) : 0;
+            if (!lastActivity || isNaN(lastActivity) || (Date.now() - lastActivity >= WEB_IDLE_LIMIT_MS)) {
+                clearAuthStorage();
+                setLogoutReason('نشست کاربری شما در مرورگر وب به دلیل گذشت ۱ ساعت منقضی شد. لطفاً مجدداً وارد شوید.');
+                return null;
+            }
+            const sessionUserRaw = sessionStorage.getItem(WEB_SESSION_USER_KEY);
+            if (!sessionUserRaw) {
+                clearAuthStorage();
+                return null;
+            }
+            return JSON.parse(sessionUserRaw);
+        } catch {
+            clearAuthStorage();
+            return null;
+        }
+    }
+
+    // 3. Android & Active Windows Desktop:
+    try {
+        const stored = localStorage.getItem(CURRENT_USER_KEY);
+        return stored ? JSON.parse(stored) : null;
+    } catch {
+        return null;
+    }
 };
 
 export const hasPermission = (user: User | null, permissionType: string): boolean => {

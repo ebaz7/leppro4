@@ -1,4 +1,4 @@
-import { IndustrialErpState } from './types';
+import { IndustrialErpState, DEFAULT_LABEL_TEMPLATE_CONFIG } from './types';
 
 /**
  * Clean & Raw (خام) Initial Industrial ERP State
@@ -71,6 +71,14 @@ export const createDefaultIndustrialErpState = (
       defaultPaymentBankAccountCode: '110101',
       defaultReceivableAccountCode: '110201',
       defaultPayableAccountCode: '210101'
+    },
+    labelTemplateConfig: {
+      ...DEFAULT_LABEL_TEMPLATE_CONFIG,
+      fields: { ...DEFAULT_LABEL_TEMPLATE_CONFIG.fields }
+    },
+    scaleConfig: {
+      lockTareWeightsGlobally: false,
+      lockConesCountGlobally: false
     }
   };
 };

@@ -120,7 +120,7 @@ public class MainActivity extends BridgeActivity {
             if (this.getBridge() != null && this.getBridge().getWebView() != null) {
                 WebView webView = this.getBridge().getWebView();
                 webView.evaluateJavascript(
-                        "(function(){ try { var u = localStorage.getItem('app_current_user'); var h = localStorage.getItem('app_server_host') || window.location.origin; if (u && window.DlkamAndroid && window.DlkamAndroid.syncSessionCredentialsNative) { var p = JSON.parse(u); if (p && p.username) { window.DlkamAndroid.syncSessionCredentialsNative(p.username, p.role || '', h || 'https://dlkam.ir'); } } } catch(e){} })();",
+                        "(function(){ try { var u = localStorage.getItem('app_current_user'); var h = localStorage.getItem('app_server_host') || localStorage.getItem('sayan_remote_server_url') || localStorage.getItem('sayan_active_api_url') || ''; var lowerH = String(h).toLowerCase(); if (!h || lowerH.indexOf('localhost') !== -1 || lowerH.indexOf('127.0.0.1') !== -1 || lowerH.indexOf('capacitor://') === 0 || lowerH.indexOf('http') !== 0) { h = 'https://dlkam.ir'; } if (u && window.DlkamAndroid && window.DlkamAndroid.syncSessionCredentialsNative) { var p = JSON.parse(u); if (p && p.username) { window.DlkamAndroid.syncSessionCredentialsNative(p.username, p.role || '', h); } } } catch(e){} })();",
                         null
                 );
             }
@@ -128,21 +128,36 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        syncWebViewUserToNativePrefsIfNeeded();
+    }
+
+    @Override
     public void onPause() {
         syncWebViewUserToNativePrefsIfNeeded();
         try {
-            SyncWorker.scheduleNextPeriodicWorkPulse(getApplicationContext(), 60L);
+            Context appCtx = getApplicationContext();
+            if (SyncWorker.hasLoggedInUser(appCtx)) {
+                SyncWorker.scheduleNextPeriodicWorkPulse(appCtx, 60L);
+                SyncWorker.scheduleNextBackgroundAlarm(appCtx, 60L);
+            }
         } catch (Exception ignored) {}
         super.onPause();
     }
 
     @Override
     public void onStop() {
+        syncWebViewUserToNativePrefsIfNeeded();
         try {
-            SyncWorker.scheduleNextPeriodicWorkPulse(
-                    getApplicationContext(),
-                    SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
-            );
+            Context appCtx = getApplicationContext();
+            if (SyncWorker.hasLoggedInUser(appCtx)) {
+                SyncWorker.scheduleNextPeriodicWorkPulse(
+                        appCtx,
+                        SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+                );
+                SyncWorker.scheduleNextBackgroundAlarm(appCtx, 60L);
+            }
         } catch (Exception ignored) {}
         super.onStop();
     }
@@ -153,10 +168,14 @@ public class MainActivity extends BridgeActivity {
             nativePollExecutor.shutdownNow();
         }
         try {
-            SyncWorker.scheduleNextPeriodicWorkPulse(
-                    getApplicationContext(),
-                    SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
-            );
+            Context appCtx = getApplicationContext();
+            if (SyncWorker.hasLoggedInUser(appCtx)) {
+                SyncWorker.scheduleNextPeriodicWorkPulse(
+                        appCtx,
+                        SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
+                );
+                SyncWorker.scheduleNextBackgroundAlarm(appCtx, 60L);
+            }
         } catch (Exception ignored) {}
         super.onDestroy();
     }
@@ -373,16 +392,16 @@ public class MainActivity extends BridgeActivity {
                     editor.putString("user_role", cleanRole);
                     editor.putString("_cap_user_role", cleanRole);
                 }
-                if (serverUrl != null && !serverUrl.trim().isEmpty()) {
-                    String cleanUrl = serverUrl.trim();
-                    editor.putString("server_url", cleanUrl);
-                    editor.putString("_cap_server_url", cleanUrl);
-                }
+                String safeUrl = SyncWorker.sanitizeServerUrl(serverUrl);
+                editor.putString("server_url", safeUrl);
+                editor.putString("_cap_server_url", safeUrl);
                 editor.apply();
+                Context appCtx = context.getApplicationContext();
                 SyncWorker.scheduleNextPeriodicWorkPulse(
-                        context.getApplicationContext(),
+                        appCtx,
                         SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
                 );
+                SyncWorker.scheduleNextBackgroundAlarm(appCtx, 60L);
                 return true;
             } catch (Exception e) {
                 Log.e(TAG, "syncSessionCredentialsNative error", e);
@@ -404,6 +423,11 @@ public class MainActivity extends BridgeActivity {
                         .remove("app_current_user_data")
                         .remove("_cap_app_current_user_data")
                         .apply();
+                Context appCtx = context.getApplicationContext();
+                SyncWorker.cancelBackgroundAlarm(appCtx);
+                try {
+                    WorkManager.getInstance(appCtx).cancelUniqueWork(SyncWorker.PERIODIC_PULSE_WORK_NAME);
+                } catch (Exception ignored) {}
                 return true;
             } catch (Exception e) {
                 Log.e(TAG, "clearSessionCredentialsNative error", e);
@@ -633,10 +657,14 @@ public class MainActivity extends BridgeActivity {
     private void saveWebServerUrlToSharedPreferences() {
         try {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String existingUrl = prefs.getString("server_url", "");
-            if (existingUrl == null || existingUrl.isEmpty()) {
-                prefs.edit().putString("server_url", "https://dlkam.ir").apply();
-                Log.d(TAG, "Stored fallback server URL (https://dlkam.ir) in Capacitor SharedPreferences.");
+            String existingUrl = prefs.getString("_cap_server_url", prefs.getString("server_url", ""));
+            String safeUrl = SyncWorker.sanitizeServerUrl(existingUrl);
+            if (!safeUrl.equals(existingUrl)) {
+                prefs.edit()
+                        .putString("server_url", safeUrl)
+                        .putString("_cap_server_url", safeUrl)
+                        .apply();
+                Log.d(TAG, "Stored sanitized server URL (" + safeUrl + ") in Capacitor SharedPreferences.");
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to store server URL in SharedPreferences", e);
@@ -691,6 +719,7 @@ public class MainActivity extends BridgeActivity {
                     getApplicationContext(),
                     SyncWorker.PERIODIC_PULSE_INTERVAL_SECONDS
             );
+            SyncWorker.scheduleNextBackgroundAlarm(getApplicationContext(), 60L);
             
             Log.i(TAG, "WorkManager Background Sync Task successfully registered.");
         } catch (Exception e) {

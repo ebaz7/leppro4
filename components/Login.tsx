@@ -5,6 +5,7 @@ import {
   saveAccountOnLogin,
   removeSavedAccount,
   decodeSavedPassword,
+  consumeLogoutReason,
   SavedAccountEntry
 } from '../services/authService';
 import { getServerHost, setServerHost, apiCall } from '../services/apiService';
@@ -155,6 +156,11 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       // If native and no host, force config screen
       if (native && !host) {
         setShowServerConfig(true);
+      }
+
+      const reason = consumeLogoutReason();
+      if (reason) {
+        setError(reason);
       }
     } catch(e) {
       console.error("Login Init Error", e);

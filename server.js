@@ -7769,7 +7769,15 @@ app.post('/api/notifications/ack', (req, res) => {
 app.get('/api/notifications/queue-pending', (req, res) => {
     const username = req.query.username;
     if (!username) return res.json([]);
-    const pending = notificationQueue.getPendingNotificationsForUser(username);
+    const db = getDb();
+    const lowerU = String(username).toLowerCase().trim();
+    const dbUser = (db.users || []).find(u => u && u.username && String(u.username).toLowerCase().trim() === lowerU);
+    const userRoles = Array.from(new Set([
+        dbUser?.role,
+        ...(Array.isArray(dbUser?.roles) ? dbUser.roles : []),
+        req.query.role
+    ].filter(Boolean)));
+    const pending = notificationQueue.getPendingNotificationsForUser(username, userRoles);
     res.json(pending);
 });
 
@@ -7789,11 +7797,21 @@ app.get('/api/notifications', (req, res) => {
             return res.json(list.slice(-100));
         }
 
+        const lowerU = username ? String(username).toLowerCase().trim() : '';
+        const dbUser = lowerU
+            ? (db.users || []).find(u => u && u.username && String(u.username).toLowerCase().trim() === lowerU)
+            : null;
+        const userRoles = new Set(
+            [role, dbUser?.role, ...(Array.isArray(dbUser?.roles) ? dbUser.roles : [])]
+                .filter(Boolean)
+                .map(r => String(r).toLowerCase().trim())
+        );
+
         const filtered = list.filter(n => {
-            if (n.deletedForUsernames && Array.isArray(n.deletedForUsernames) && n.deletedForUsernames.includes(username)) {
+            if (lowerU && n.deletedForUsernames && Array.isArray(n.deletedForUsernames) && n.deletedForUsernames.some(u => String(u).toLowerCase().trim() === lowerU)) {
                 return false;
             }
-            if (n.excludeUsernames && Array.isArray(n.excludeUsernames) && n.excludeUsernames.includes(username)) {
+            if (lowerU && n.excludeUsernames && Array.isArray(n.excludeUsernames) && n.excludeUsernames.some(u => String(u).toLowerCase().trim() === lowerU)) {
                 return false;
             }
             const hasRoleTargets = Boolean(n.targetRoles && Array.isArray(n.targetRoles) && n.targetRoles.length > 0);
@@ -7803,11 +7821,11 @@ app.get('/api/notifications', (req, res) => {
                 return true;
             }
 
-            const matchRole = hasRoleTargets && role
-                ? n.targetRoles.some(r => String(r).toLowerCase() === String(role).toLowerCase())
+            const matchRole = hasRoleTargets && userRoles.size > 0
+                ? n.targetRoles.some(r => userRoles.has(String(r).toLowerCase().trim()))
                 : false;
-            const matchUser = hasUserTargets && username
-                ? n.targetUsernames.some(u => String(u).toLowerCase() === String(username).toLowerCase())
+            const matchUser = hasUserTargets && lowerU
+                ? n.targetUsernames.some(u => String(u).toLowerCase().trim() === lowerU)
                 : false;
 
             return matchRole || matchUser;
@@ -7815,7 +7833,7 @@ app.get('/api/notifications', (req, res) => {
 
         const result = filtered.slice(-100).map(n => ({
             ...n,
-            read: Array.isArray(n.readBy) ? n.readBy.includes(username) : false
+            read: Array.isArray(n.readBy) && lowerU ? n.readBy.some(u => String(u).toLowerCase().trim() === lowerU) : false
         }));
 
         res.json(result);
@@ -8787,6 +8805,45 @@ const getDefaultIndustrialErpState = (companyName = 'شرکت تولیدی', isP
         defaultPaymentBankAccountCode: '110101',
         defaultReceivableAccountCode: '110201',
         defaultPayableAccountCode: '210101'
+    },
+    labelTemplateConfig: {
+        barcodeType: 'LINEAR_1D',
+        barcodeValueSource: 'referenceCode',
+        showBarcodeHumanText: true,
+        linearBarcodeHeightPx: 44,
+        labelWidthMm: 100,
+        labelHeightMm: 70,
+        fontSizeScale: 'MEDIUM',
+        borderStyle: 'SOLID',
+        headerTitle: '',
+        headerSubtitle: 'لیبل شناسنامه کارتن نخ صنعتی',
+        footerNote: '',
+        fields: {
+            showCompanyName: true,
+            showHeaderSubtitle: true,
+            showProductName: true,
+            showProductCode: true,
+            showYarnCount: true,
+            showColorName: true,
+            showMachineLine: true,
+            showShift: true,
+            showLotNumber: true,
+            showConesCount: true,
+            showGrade: true,
+            showGrossWeight: true,
+            showTareWeight: true,
+            showNetWeight: true,
+            showReferenceCode: true,
+            showSerialNumber: false,
+            showDate: true,
+            showTime: true,
+            showOperator: false,
+            showFooterNote: false
+        }
+    },
+    scaleConfig: {
+        lockTareWeightsGlobally: false,
+        lockConesCountGlobally: false
     }
 });
 

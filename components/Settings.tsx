@@ -110,7 +110,7 @@ import {
 } from "../services/notificationService";
 import { isTauriDesktop, getDesktopRuntime } from "../utils/platformDetection";
 import { safeLocalStorage } from "../utils/safeStorage";
-import { getUsers } from "../services/authService";
+import { getUsers, getCurrentUser } from "../services/authService";
 import { generateUUID } from "../constants";
 import PrintTemplateDesigner from "./PrintTemplateDesigner";
 import { FiscalYearManager } from "./FiscalModule";
@@ -1208,9 +1208,9 @@ const Settings: React.FC<SettingsProps> = ({
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   useEffect(() => {
-    const userStr = localStorage.getItem("app_current_user");
-    if (userStr) {
-      setCurrentUser(JSON.parse(userStr));
+    const user = getCurrentUser();
+    if (user) {
+      setCurrentUser(user);
     }
   }, []);
 
@@ -2310,8 +2310,8 @@ const Settings: React.FC<SettingsProps> = ({
         { id: `test_${Date.now()}` }
       );
 
-      const userStr = localStorage.getItem("app_current_user");
-      const username = userStr ? JSON.parse(userStr).username : "test";
+      const activeUser = getCurrentUser();
+      const username = activeUser?.username || "test";
       await apiCall("/send-test-push", "POST", { username });
       alert("پیام تست با موفقیت ارسال شد و اتصال سرور تایید گردید ✅");
     } catch (e: any) {

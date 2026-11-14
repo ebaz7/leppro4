@@ -44,7 +44,7 @@ import { PublicBioPage } from './components/PublicBioPage';
 import { PublicCustomerSurveyPage } from './components/PublicCustomerSurveyPage';
 import { AppNavItem, getAppNavItems, getSidebarLabel } from './utils/navigationItems';
 import { getOrders, getSettings, getMessages, saveSettings, getSystemAnnouncements, getGroups, getTaskGroups, getTasks, getBioLinkConfig } from './services/storageService'; 
-import { getCurrentUser, getUsers, getRolePermissions, logout as authLogout } from './services/authService';
+import { getCurrentUser, getUsers, getRolePermissions, logout as authLogout, setLogoutReason, touchWebActivity, WEB_LAST_ACTIVITY_KEY, WEB_IDLE_LIMIT_MS } from './services/authService';
 import { logoutGoogleWorkspace } from './services/googleWorkspaceService';
 import { PaymentOrder, User, OrderStatus, UserRole, AppNotification, SystemSettings, PaymentMethod, ChatMessage, SystemAnnouncement, ChatGroup, TaskGroup, GroupTask, BioLinkConfig } from './types';
 import { Loader2, Bell, X, MessageSquare, AlertTriangle, FileWarning, CreditCard, BellRing, Columns, Maximize2, Minimize2, ArrowRightLeft, Minus, ExternalLink, Calculator, Monitor } from 'lucide-react';
@@ -1064,6 +1064,9 @@ function App() {
         syncServiceWorkerAuth(user).catch(console.error);
       } else {
         syncServiceWorkerAuth(null).catch(console.error);
+        if (isWebApp()) {
+          unsubscribeFromPushNotifications(null, localStorage.getItem('push_endpoint')).catch(() => {});
+        }
       }
       syncNativeShownNotifications().catch(console.error);
       syncServiceWorkerShownNotifications().catch(console.error);
@@ -1077,7 +1080,11 @@ function App() {
     };
     const handleOpenNotes = () => setActiveTab('notes');
     const handleDesktopAutoLogout = () => {
+        const active = getCurrentUser();
+        const endpoint = localStorage.getItem('push_endpoint');
+        disconnectSSENotificationClient();
         authLogout();
+        unsubscribeFromPushNotifications(active, endpoint).catch(() => {});
         setCurrentUser(null);
     };
     window.addEventListener('CHANGE_TAB' as any, handleTabChange);
@@ -1170,29 +1177,66 @@ function App() {
   }, [settings]);
 
   // Inactivity timeout:
-  // Strictly applies ONLY to standard Web browsers (URL in browser).
+  // Strictly applies ONLY to standard Web browsers (URL in browser / Web PWA).
   // Native Android and Windows Desktop apps MUST NEVER have an idle timeout or auto-logout;
-  // they remain permanently authenticated until the user explicitly clicks logout,
-  // allowing background push notifications and SSE to operate continuously without interruption.
+  // they remain permanently authenticated until logout (or close on Windows),
+  // allowing background notifications and SSE to operate continuously.
   useEffect(() => {
     const enforceIdle = shouldEnforceIdleTimeout();
     if (currentUser && enforceIdle) {
         let lastReset = 0;
+        let hasExpired = false;
+
+        const expireWebSession = () => {
+            if (hasExpired) return;
+            hasExpired = true;
+            setLogoutReason('به دلیل عدم فعالیت به مدت ۱ ساعت در مرورگر وب، از سیستم خارج شدید.');
+            handleLogout();
+        };
+
+        const checkElapsedExpiry = (): boolean => {
+            try {
+                const rawLast = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(WEB_LAST_ACTIVITY_KEY) : null;
+                const lastTs = rawLast ? Number(rawLast) : 0;
+                if (lastTs > 0 && Date.now() - lastTs >= WEB_IDLE_LIMIT_MS) {
+                    expireWebSession();
+                    return true;
+                }
+            } catch {}
+            return false;
+        };
+
         const resetIdleTimer = () => {
+            if (checkElapsedExpiry()) return;
             const now = Date.now();
             if (now - lastReset < 5000) return;
             lastReset = now;
+            touchWebActivity();
             if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-            idleTimeoutRef.current = setTimeout(() => {
-                handleLogout();
-                alert("به دلیل عدم فعالیت به مدت ۱ ساعت در مرورگر وب، از سیستم خارج شدید.");
-            }, IDLE_LIMIT);
+            idleTimeoutRef.current = setTimeout(expireWebSession, IDLE_LIMIT);
         };
+
+        const onVisibilityOrFocus = () => {
+            if (typeof document === 'undefined' || !document.hidden) {
+                checkElapsedExpiry();
+            }
+        };
+
         const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
         events.forEach(event => window.addEventListener(event, resetIdleTimer, { passive: true }));
+        window.addEventListener('focus', onVisibilityOrFocus);
+        document.addEventListener('visibilitychange', onVisibilityOrFocus);
+
+        const watchdogId = setInterval(() => {
+            checkElapsedExpiry();
+        }, 15000);
+
         resetIdleTimer();
         return () => {
             events.forEach(event => window.removeEventListener(event, resetIdleTimer));
+            window.removeEventListener('focus', onVisibilityOrFocus);
+            document.removeEventListener('visibilitychange', onVisibilityOrFocus);
+            clearInterval(watchdogId);
             if (idleTimeoutRef.current) {
                 clearTimeout(idleTimeoutRef.current);
                 idleTimeoutRef.current = null;
@@ -1794,7 +1838,15 @@ function App() {
 
   useEffect(() => {
     const syncSettings = async () => {
-      const host = getServerHost() || 'https://dlkam.ir';
+      const rawHost = getServerHost() || 'https://dlkam.ir';
+      const lowerHost = rawHost.toLowerCase();
+      const host =
+        !rawHost ||
+        lowerHost.includes('://localhost') ||
+        lowerHost.includes('://127.0.0.1') ||
+        lowerHost.startsWith('capacitor://')
+          ? 'https://dlkam.ir'
+          : rawHost;
       try {
         const win = window as any;
         if (win.DlkamAndroid) {

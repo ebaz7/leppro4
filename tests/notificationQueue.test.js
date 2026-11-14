@@ -69,3 +69,42 @@ test('Notification Queue: initialization and enqueuing with priority', async () 
     const stats = getQueueDiagnostics();
     assert.ok(stats.totalQueued >= 1);
 });
+
+test('Notification Queue: role-targeted notifications are delivered to matching users via getPendingNotificationsForUser', async () => {
+    const mockDb = {
+        notificationQueue: [],
+        subscriptions: [],
+        users: [
+            { username: 'ceo_user', role: 'CEO', roles: ['CEO'] },
+            { username: 'warehouse_user', role: 'WAREHOUSE_KEEPER', roles: ['USER', 'WAREHOUSE_KEEPER'] }
+        ]
+    };
+    const mockDbManager = {
+        getDb: () => mockDb,
+        saveDb: (d) => { Object.assign(mockDb, d); }
+    };
+
+    initNotificationQueue(mockDbManager);
+
+    const roleNotif = await enqueueNotification({
+        id: 'test_role_201',
+        type: 'order_approval',
+        title: 'دستور پرداخت جدید',
+        body: 'نیاز به تایید مدیرعامل',
+        url: '/manage',
+        targetRoles: ['ceo'],
+        excludeUsernames: ['requester'],
+        priority: 2
+    });
+    assert.ok(roleNotif);
+
+    const ceoPending = getPendingNotificationsForUser('ceo_user', ['CEO']);
+    assert.equal(ceoPending.length, 1);
+    assert.equal(ceoPending[0].id, 'test_role_201');
+
+    const warehousePending = getPendingNotificationsForUser('warehouse_user', ['USER', 'WAREHOUSE_KEEPER']);
+    assert.equal(warehousePending.length, 0);
+
+    acknowledgeNotification('test_role_201', 'ceo_user');
+    assert.equal(getPendingNotificationsForUser('ceo_user', ['CEO']).length, 0);
+});
