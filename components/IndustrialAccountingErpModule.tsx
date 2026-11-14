@@ -362,7 +362,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
   };
 
-  const handleDownloadBackup = async (format: 'json' | 'zip' | 'gz' = 'zip', specificFileName?: string) => {
+  const handleDownloadBackup = async (format: 'json' | 'zip' | 'gz' | 'sql' = 'zip', specificFileName?: string) => {
     if (!selectedCompany) return;
     setBackupModalStatus({ type: 'info', text: 'در حال آماده‌سازی و دریافت فایل پشتیبان از سرور مرکزی...' });
     try {
@@ -395,9 +395,10 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       }
 
       const ext = format === 'gz' ? 'json.gz' : format;
+      const prefix = format === 'sql' ? 'ERP_Postgres' : 'ERP_Backup';
       const downloadFileName =
         specificFileName ||
-        `ERP_Backup_${selectedCompany.id}_${new Date().toISOString().slice(0, 10)}.${ext}`;
+        `${prefix}_${selectedCompany.id}_${new Date().toISOString().slice(0, 10)}.${ext}`;
 
       const savedOk = await saveBlobAndOpenFile(blob, downloadFileName);
       if (!savedOk) {
@@ -1963,15 +1964,23 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                   className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
                 >
                   <FileArchive size={15} className="text-indigo-600 dark:text-indigo-400" />
-                  <span>دانلود بکاپ فشرده (ZIP)</span>
+                  <span>دانلود بکاپ فشرده (ZIP شامل SQL + JSON)</span>
+                </button>
+
+                <button
+                  onClick={() => handleDownloadBackup('sql')}
+                  className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                >
+                  <Download size={15} className="text-blue-600 dark:text-blue-400" />
+                  <span>دانلود اسکریپت PostgreSQL (.SQL)</span>
                 </button>
 
                 <button
                   onClick={() => handleDownloadBackup('json')}
-                  className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                  className="sm:col-span-2 min-h-[40px] px-4 py-2 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
                 >
                   <Download size={15} className="text-emerald-600 dark:text-emerald-400" />
-                  <span>دانلود مستقیم فایل (JSON)</span>
+                  <span>دانلود مستقیم فایل پرتابل (JSON)</span>
                 </button>
               </div>
 
@@ -1984,7 +1993,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                       <span>بازیابی از فایل بکاپ اختصاصی شرکت</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      فرمت‌های مجاز: <span className="font-mono">.zip</span>، <span className="font-mono">.json.gz</span> یا <span className="font-mono">.json</span> (پیش از بازیابی، بکاپ ایمنی خودکار گرفته می‌شود)
+                      فرمت‌های مجاز: <span className="font-mono">.zip</span>، <span className="font-mono">.sql</span>، <span className="font-mono">.json.gz</span> یا <span className="font-mono">.json</span> (پیش از بازیابی، بکاپ ایمنی خودکار گرفته می‌شود)
                     </p>
                   </div>
                   <label className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0">
@@ -1992,7 +2001,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                     <span>انتخاب فایل بکاپ</span>
                     <input
                       type="file"
-                      accept=".json,.gz,.zip,application/json,application/zip,application/gzip"
+                      accept=".sql,.json,.gz,.zip,application/sql,application/json,application/zip,application/gzip"
                       onChange={handleUploadBackupFileSelect}
                       className="hidden"
                     />

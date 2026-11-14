@@ -9661,7 +9661,7 @@ app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
             console.warn('[Backup-to-Bot] Snapshot disk warning (continuing bot send):', snapErr?.message);
         }
 
-        const caption = `📁 نسخه پشتیبان اختصاصی و مجزای شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 تعداد کارتن: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBuf.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
+        const caption = `📁 نسخه پشتیبان اختصاصی و مجزای شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n🗄️ محتوا: اسکریپت دیتابیس PostgreSQL (.sql) + اسنپ‌شات (.json)\n📦 تعداد کارتن: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBuf.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
         const botResult = await dispatchSpecificBufferToBots(
             zipBuf.buffer,
             zipBuf.filename,
@@ -9679,7 +9679,7 @@ app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
         }
         res.json({
             success: true,
-            message: `بکاپ اختصاصی شرکت «${comp.name}» با موفقیت تهیه و به‌صورت کاملاً مجزا به بات ارسال گردید (${[botResult.baleSent ? 'بله ✅' : '', botResult.tgSent ? 'تلگرام ✅' : ''].filter(Boolean).join(' و ')}).`,
+            message: `بکاپ اختصاصی شرکت «${comp.name}» (شامل فایل .sql دیتابیس PostgreSQL و اسنپ‌شات .json) با موفقیت تهیه و به بات ارسال گردید (${[botResult.baleSent ? 'بله ✅' : '', botResult.tgSent ? 'تلگرام ✅' : ''].filter(Boolean).join(' و ')}).`,
             filename: zipBuf.filename,
             snapshotFileName: snapFileName,
             botResult
@@ -9689,7 +9689,7 @@ app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
     }
 });
 
-// Download isolated per-company backup (.json, .zip, or .gz)
+// Download isolated per-company backup (.sql, .json, .zip, or .gz)
 app.get('/api/industrial-erp/download-backup', async (req, res) => {
     try {
         const db = getDb();
@@ -9727,6 +9727,16 @@ app.get('/api/industrial-erp/download-backup', async (req, res) => {
             state,
             erpPg.isPostgresConfigured() ? 'postgresql' : 'json'
         );
+
+        if (format === 'sql') {
+            const sqlText = erpBackupMgr.generateCompanyPostgresSqlDump(envelope);
+            const sqlBuf = Buffer.from(sqlText, 'utf8');
+            const filename = `ERP_Postgres_${safeComp}_${ts}.sql`;
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.setHeader('Content-Type', 'application/sql; charset=utf-8');
+            res.setHeader('Content-Length', String(sqlBuf.length));
+            return res.send(sqlBuf);
+        }
 
         if (format === 'gz') {
             const gzBuf = zlib.gzipSync(Buffer.from(JSON.stringify(envelope), 'utf8'), { level: 9 });

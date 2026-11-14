@@ -4,8 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
+import AdmZip from 'adm-zip';
 import { mergeConcurrentErpStates } from '../backend/erp-pg-repository.js';
 import {
+  generateCompanyPostgresSqlDump,
   createIsolatedCompanySnapshot,
   listIsolatedCompanySnapshots,
   createIsolatedCompanyBackupZip,
@@ -144,7 +146,7 @@ test('Per-company backups are strictly isolated on disk, compressed, and dedupli
     assert.ok(listA[0].fileName.includes('comp_lian'));
     assert.ok(listB[0].fileName.includes('comp_pars'));
 
-    // Create ZIP for Company A and verify it never contains Company B data
+    // Create ZIP for Company A and verify it contains BOTH .sql (PostgreSQL dump) and .json (Snapshot) and never contains Company B data
     const zipA = await createIsolatedCompanyBackupZip({
       backupsRootDir: rootDir,
       companyId: 'comp_lian',
@@ -152,6 +154,24 @@ test('Per-company backups are strictly isolated on disk, compressed, and dedupli
       state: stateA,
     });
     const zipBytes = fs.readFileSync(zipA.filePath);
+    const admZip = new AdmZip(zipBytes);
+    const entryNames = admZip.getEntries().map((e) => e.entryName);
+    assert.ok(entryNames.some((n) => n.endsWith('.sql') && n.startsWith('ERP_Postgres_comp_lian_')), 'ZIP must include PostgreSQL .sql dump file');
+    assert.ok(entryNames.some((n) => n.endsWith('.json') && n.startsWith('ERP_Snapshot_comp_lian_')), 'ZIP must include JSON snapshot file');
+
+    const sqlEntry = admZip.getEntries().find((e) => e.entryName.endsWith('.sql'));
+    const sqlText = sqlEntry.getData().toString('utf8');
+    assert.ok(sqlText.includes('BEGIN;'), 'SQL dump must start transaction');
+    assert.ok(sqlText.includes('INSERT INTO erp_companies'), 'SQL dump must insert into erp_companies');
+    assert.ok(sqlText.includes('INSERT INTO erp_carton_labels'), 'SQL dump must insert into erp_carton_labels');
+    assert.ok(sqlText.includes('COMMIT;'), 'SQL dump must commit transaction');
+    assert.ok(!sqlText.includes('comp_pars'), 'SQL dump must never leak another company');
+
+    // Verify restoring directly from the .sql file works and validates SHA-256 checksum
+    const parsedFromSql = parseAndValidateCompanyBackupPayload(Buffer.from(sqlText, 'utf8'));
+    assert.equal(parsedFromSql.sourceCompanyId, 'comp_lian');
+    assert.equal(parsedFromSql.state.items[0].id, 'comp_lian_item_1');
+
     const parsedZip = parseAndValidateCompanyBackupPayload(zipBytes);
     assert.equal(parsedZip.sourceCompanyId, 'comp_lian');
     assert.equal(parsedZip.state.items[0].id, 'comp_lian_item_1');
