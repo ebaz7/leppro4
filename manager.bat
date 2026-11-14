@@ -52,16 +52,20 @@ echo 6. Setup / Check Local PostgreSQL (Same Install Drive, Offline)
 echo 7. Free Up Windows C:\ Drive Space (Safe Cleanup + Redirect Caches)
 echo 8. Exit
 echo ========================================================
-set /p choice="Select an option (1-8): "
+set "choice="
+set /p "choice=Select an option (1-8): "
+if not defined choice goto MENU
+set "choice=!choice: =!"
+set "choice=!choice:"=!"
 
-if "%choice%"=="1" goto INSTALL
-if "%choice%"=="2" goto UPDATE
-if "%choice%"=="3" goto UNINSTALL
-if "%choice%"=="4" goto LOGS
-if "%choice%"=="5" goto ONLYOFFICE
-if "%choice%"=="6" goto POSTGRES
-if "%choice%"=="7" goto CLEAN_C
-if "%choice%"=="8" goto EOF
+if "!choice!"=="1" goto INSTALL
+if "!choice!"=="2" goto UPDATE
+if "!choice!"=="3" goto UNINSTALL
+if "!choice!"=="4" goto LOGS
+if "!choice!"=="5" goto ONLYOFFICE
+if "!choice!"=="6" goto POSTGRES
+if "!choice!"=="7" goto CLEAN_C
+if "!choice!"=="8" goto :eof
 
 goto MENU
 
@@ -167,8 +171,8 @@ if not exist .env (
 
 echo.
 echo [3/8] Installing Node.js dependencies (Offline-compatible)...
-set PUPPETEER_CACHE_DIR=%cd%\.puppeteer
-set PUPPETEER_SKIP_DOWNLOAD=true
+set "PUPPETEER_CACHE_DIR=%cd%\.puppeteer"
+set "PUPPETEER_SKIP_DOWNLOAD=true"
 call npm install --prefer-offline --no-audit --no-fund
 if errorlevel 1 (
     if exist node_modules (
@@ -257,9 +261,11 @@ echo ========================================================
 call :BACKUP update
 
 echo.
-set /p repo="Enter Git repository URL (or press ENTER for offline/local update): "
-set /p branch="Enter branch name (default: main): "
-if "!branch!"=="" set branch=main
+set "repo="
+set /p "repo=Enter Git repository URL (or press ENTER for offline/local update): "
+set "branch="
+set /p "branch=Enter branch name (default: main): "
+if "!branch!"=="" set "branch=main"
 
 echo.
 echo Stopping Windows Service and releasing file locks...
@@ -276,7 +282,7 @@ if exist wauth (
 )
 
 echo.
-echo [1/7] Checking Git updates (Offline-safe; existing DB & PGDATA never overwritten)...
+echo [1/7] Checking Git updates (Offline-safe; existing DB ^& PGDATA never overwritten)...
 if exist .git (
     if not "!repo!"=="" (
         git remote remove origin 2>nul
@@ -336,8 +342,8 @@ if "!WAUTH_BACKED_UP!"=="1" (
 
 echo.
 echo [2/7] Installing/Updating dependencies (Offline-compatible)...
-set PUPPETEER_CACHE_DIR=%cd%\.puppeteer
-set PUPPETEER_SKIP_DOWNLOAD=true
+set "PUPPETEER_CACHE_DIR=%cd%\.puppeteer"
+set "PUPPETEER_SKIP_DOWNLOAD=true"
 call npm install --prefer-offline --no-audit --no-fund
 if errorlevel 1 (
     if exist node_modules (
@@ -364,7 +370,7 @@ echo [4/7] Setting up / Verifying Local PostgreSQL inside Install Drive (Never t
 if exist "%cd%\scripts\setup-local-postgres.ps1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\setup-local-postgres.ps1" -InstallDir "%cd%" -Mode update -OfflineOnly
     if !errorlevel! equ 2 (
-        echo [NOTE] Local PostgreSQL offline archive not present yet; existing system & database.json remain active and safe.
+        echo [NOTE] Local PostgreSQL offline archive not present yet; existing system ^& database.json remain active and safe.
     ) else if errorlevel 1 (
         echo [WARNING] Local PostgreSQL check reported a warning. Your existing organizational database.json remains untouched.
     )
@@ -380,7 +386,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [6/7] Updating & Restarting Windows Service...
+echo [6/7] Updating ^& Restarting Windows Service...
 if exist install-service.js (
     node install-service.js >nul 2>&1
     timeout /t 3 /nobreak >nul 2>&1
@@ -486,22 +492,33 @@ goto MENU
 
 :BACKUP
 echo.
-echo Creating backup of critical files (database.json, .env, local SQL)...
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
-set timestamp=!datetime:~0,4!!datetime:~4,2!!datetime:~6,2!_!datetime:~8,2!!datetime:~10,2!!datetime:~12,2!
-set backup_dir=backup_!timestamp!
-mkdir "!backup_dir!"
-if exist database.json copy database.json "!backup_dir!\" >nul
-if exist .env copy .env "!backup_dir!\" >nul
+echo Creating backup of critical files ^(database.json, .env, local SQL^)...
+set "timestamp="
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "Get-Date -Format 'yyyyMMdd_HHmmss'" 2^>nul`) do set "timestamp=%%I"
+if "!timestamp!"=="" (
+    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do (
+        set "datetime=%%I"
+        set "timestamp=!datetime:~0,4!!datetime:~4,2!!datetime:~6,2!_!datetime:~8,2!!datetime:~10,2!!datetime:~12,2!"
+    )
+)
+if "!timestamp!"=="" set "timestamp=manual_%RANDOM%"
+set "backup_dir=backup_!timestamp!"
+if not exist "!backup_dir!" mkdir "!backup_dir!" >nul 2>&1
+if exist database.json copy /y database.json "!backup_dir!\" >nul 2>&1
+if exist .env copy /y .env "!backup_dir!\" >nul 2>&1
 
 if exist "%cd%\pgsql\bin\pg_dump.exe" if exist "%cd%\pgdata\PG_VERSION" (
-    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_PORT=" .env 2^>nul') do set _BK_PORT=%%B
-    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_DB_NAME=" .env 2^>nul') do set _BK_DB=%%B
-    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_ADMIN_USER=" .env 2^>nul') do set _BK_USER=%%B
-    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_ADMIN_PASSWORD=" .env 2^>nul') do set _BK_PASS=%%B
-    if "!_BK_PORT!"=="" set _BK_PORT=5439
-    if "!_BK_DB!"=="" set _BK_DB=delkam_erp
-    if "!_BK_USER!"=="" set _BK_USER=postgres
+    set "_BK_PORT="
+    set "_BK_DB="
+    set "_BK_USER="
+    set "_BK_PASS="
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_PORT=" .env 2^>nul') do set "_BK_PORT=%%B"
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_DB_NAME=" .env 2^>nul') do set "_BK_DB=%%B"
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_ADMIN_USER=" .env 2^>nul') do set "_BK_USER=%%B"
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_ADMIN_PASSWORD=" .env 2^>nul') do set "_BK_PASS=%%B"
+    if "!_BK_PORT!"=="" set "_BK_PORT=5439"
+    if "!_BK_DB!"=="" set "_BK_DB=delkam_erp"
+    if "!_BK_USER!"=="" set "_BK_USER=postgres"
     set "PGPASSWORD=!_BK_PASS!"
     "%cd%\pgsql\bin\pg_dump.exe" -h 127.0.0.1 -p !_BK_PORT! -U !_BK_USER! -d !_BK_DB! -Fc -Z 9 -f "!backup_dir!\!_BK_DB!_!timestamp!.dump" >nul 2>&1
     set "PGPASSWORD="
@@ -509,8 +526,13 @@ if exist "%cd%\pgsql\bin\pg_dump.exe" if exist "%cd%\pgdata\PG_VERSION" (
 
 echo Backup saved in !backup_dir! folder.
 
-if not "%1"=="" (
-    echo Sending local/Bale/Telegram backup safely...
-    node send-pre-action-backup.js "%1"
+if not "%~1"=="" (
+    if exist "%cd%\send-pre-action-backup.js" (
+        where node >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo Sending local/Bale/Telegram backup safely...
+            node send-pre-action-backup.js "%~1"
+        )
+    )
 )
-exit /b
+exit /b 0

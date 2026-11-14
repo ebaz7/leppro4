@@ -1,6 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto eol=lf
 
+# Windows batch scripts require CRLF for cmd.exe goto/call label seeking
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Explicit binary files to prevent Git CRLF corruption on Windows
 *.png binary
 *.jpg binary

@@ -55,6 +55,19 @@ test('manager.bat, build-android.js, setup-desktop-icons.cjs, and electron-build
   assert.ok(managerBat.includes('set "ELECTRON_BUILDER_CACHE=%cd%\\.electron_builder_cache"'), 'manager.bat redirects ELECTRON_BUILDER_CACHE');
   assert.ok(managerBat.includes('git rm -r --cached .gradle_home'), 'manager.bat keeps .gradle_home out of git resets');
   assert.ok(managerBat.includes(':CLEAN_C'), 'manager.bat exposes Option 7 for C:\\ cleanup');
+  assert.ok(managerBat.includes('Get-Date -Format'), 'manager.bat uses PowerShell Get-Date with wmic fallback for backup timestamps');
+
+  // Verify Windows CRLF line endings and no unescaped & in echo lines
+  for (const batName of ['manager.bat', 'free-c-drive.bat', 'install_onlyoffice.bat']) {
+    const rawBat = fs.readFileSync(path.join(ROOT, batName), 'utf8');
+    const lfOnly = (rawBat.match(/(?<!\r)\n/g) || []).length;
+    assert.equal(lfOnly, 0, `${batName} must use CRLF line endings for reliable Windows cmd.exe goto/call execution`);
+    const badEchoAmp = rawBat.split(/\r\n/).filter((line) => /^\s*echo\b/i.test(line) && /(?<!\^)&/.test(line));
+    assert.deepEqual(badEchoAmp, [], `${batName} must not have unescaped & inside echo commands`);
+  }
+
+  const gitattributes = fs.readFileSync(path.join(ROOT, '.gitattributes'), 'utf8');
+  assert.ok(gitattributes.includes('*.bat text eol=crlf'), '.gitattributes enforces CRLF for *.bat');
 
   const buildAndroid = fs.readFileSync(path.join(ROOT, 'build-android.js'), 'utf8');
   assert.ok(buildAndroid.includes("path.join(__dirname, '.gradle_home')"), 'build-android.js redirects GRADLE_USER_HOME');
