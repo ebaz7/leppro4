@@ -315,12 +315,15 @@ test('Windows install-drive PostgreSQL script protects C: drive, existing .env/p
   const ps1 = fs.readFileSync(path.join(process.cwd(), 'scripts', 'setup-local-postgres.ps1'), 'utf8');
   const bat = fs.readFileSync(path.join(process.cwd(), 'manager.bat'), 'utf8');
 
+  assert.ok(!/[^\x00-\x7F]/.test(ps1), 'setup-local-postgres.ps1 must stay strictly 7-bit ASCII for Windows PowerShell 5.1 localization safety');
+  assert.ok(ps1.includes('Invoke-PsqlStdin'), 'Uses stdin pipe for psql commands to avoid PS 5.1 quote mangling');
   assert.ok(ps1.includes('$env:TEMP = $PgTempDir'), 'Temp directory redirected to install drive');
   assert.ok(ps1.includes('PG_VERSION'), 'Checks PG_VERSION before initdb so existing pgdata is never overwritten');
   assert.ok(ps1.includes('5439'), 'Uses dedicated isolated port 5439 to avoid colliding with organizational SQL');
   assert.ok(!ps1.includes('taskkill') && !ps1.toLowerCase().includes('stop-process -name postgres'), 'Never kills global postgres processes');
 
   assert.ok(bat.includes('set "TEMP=%cd%\\pgtemp"'), 'manager.bat redirects TEMP to install drive');
+  assert.ok(bat.includes('npm_config_logs_dir'), 'manager.bat redirects npm logs off C:');
   assert.ok(bat.includes('--prefer-offline'), 'manager.bat uses offline-safe npm install');
   assert.ok(bat.includes('if not exist .env'), 'manager.bat preserves existing .env on install');
   assert.ok(bat.includes('git rm -r --cached pgdata'), 'manager.bat protects pgdata from git reset');

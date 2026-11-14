@@ -123,6 +123,11 @@ function Find-OfflinePgZip {
     return $null
 }
 
+function Invoke-PsqlStdin($psqlPath, $pgPort, $pgUser, $pgDb, $sqlText) {
+    $sqlText | & $psqlPath -h 127.0.0.1 -p $pgPort -U $pgUser -d $pgDb -v ON_ERROR_STOP=1 -qAt
+    return $LASTEXITCODE
+}
+
 $PostgresExe = Join-Path $PgBinRoot "bin\postgres.exe"
 $PgCtlExe    = Join-Path $PgBinRoot "bin\pg_ctl.exe"
 $InitDbExe   = Join-Path $PgBinRoot "bin\initdb.exe"
@@ -209,13 +214,13 @@ if (-not (Test-Path $PostgresExe)) {
         Write-Host "  To activate multi-user PostgreSQL completely offline:" -ForegroundColor White
         Write-Host "  1) Place 'postgresql-16.x-windows-x64-binaries.zip' into:" -ForegroundColor White
         Write-Host "     $PgOfflineDir" -ForegroundColor Cyan
-        Write-Host "  2) Re-run Update (Option 2) or Option 7 in manager.bat." -ForegroundColor White
+        Write-Host "  2) Re-run Update (Option 2) or Option 6 in manager.bat." -ForegroundColor White
         Write-Host "  Meanwhile, your existing system & database.json continue working." -ForegroundColor Green
         Write-Host "==================================================================" -ForegroundColor Yellow
         exit 2
     }
 
-    Write-Info "Extracting offline PostgreSQL archive strictly on ${InstallDrive}..."
+    Write-Info "Extracting offline PostgreSQL archive strictly on $InstallDrive..."
     $extractStage = Join-Path $PgTempDir "pg_extract_stage"
     if (Test-Path $extractStage) { Remove-Item -Recurse -Force $extractStage }
     New-Item -ItemType Directory -Force -Path $extractStage | Out-Null
@@ -290,9 +295,9 @@ logging_collector = off
         "SQL_ADMIN_PASSWORD" = $sqlAdminPass
         "PGDATA"             = $PgDataDir
     }
-    Write-Ok "Initialized PostgreSQL cluster safely on ${InstallDrive} and updated .env without touching existing keys."
+    Write-Ok "Initialized PostgreSQL cluster safely on $InstallDrive and updated .env without touching existing keys."
 } else {
-    Write-Ok "Existing PGDATA detected at $PgDataDir — preserving 100% of existing database files."
+    Write-Ok "Existing PGDATA detected at $PgDataDir - preserving 100% of existing database files."
     # Ensure SQL_* keys exist in .env without overwriting existing values
     $toEnsure = @{}
     if (-not $envMap["SQL_HOST"])           { $toEnsure["SQL_HOST"] = "127.0.0.1" }
@@ -356,27 +361,34 @@ if (-not $ready) {
 }
 Write-Ok "Local PostgreSQL is active on 127.0.0.1:$sqlPort."
 
-# STEP 5: Ensure role & database exist non-destructively
+# STEP 5: Ensure role & database exist non-destructively via stdin (immune to PS 5.1 quote mangling)
 $env:PGPASSWORD = $sqlAdminPass
 try {
-    $escapedUser = $sqlAppUser.Replace("'", "''")
-    $escapedPass = $sqlAppPass.Replace("'", "''")
-    $escapedDb   = $sqlDbName.Replace('"', '""')
+    $escapedUserLit = $sqlAppUser.Replace("'", "''")
+    $escapedUserId  = $sqlAppUser.Replace('"', '""')
+    $escapedPassLit = $sqlAppPass.Replace("'", "''")
+    $escapedDbLit   = $sqlDbName.Replace("'", "''")
+    $escapedDbId    = $sqlDbName.Replace('"', '""')
 
-    $roleExists = & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$escapedUser';"
-    if ($roleExists.Trim() -ne "1") {
+    $roleExists = ("SELECT 1 FROM pg_roles WHERE rolname='$escapedUserLit';" | & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -tA)
+    if (($roleExists | Out-String).Trim() -ne "1") {
         Write-Info "Creating ERP database role '$sqlAppUser'..."
-        & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -c "CREATE USER `"$sqlAppUser`" WITH PASSWORD '$escapedPass';" | Out-Null
+        $rc = Invoke-PsqlStdin $PsqlExe $sqlPort $sqlAdminUser "postgres" "CREATE USER `"$escapedUserId`" WITH PASSWORD '$escapedPassLit';"
+        if ($rc -ne 0) { throw "Failed creating role $sqlAppUser" }
     }
 
-    $dbExists = & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$($sqlDbName.Replace("'", "''"))';"
-    if ($dbExists.Trim() -ne "1") {
+    $dbExists = ("SELECT 1 FROM pg_database WHERE datname='$escapedDbLit';" | & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -tA)
+    if (($dbExists | Out-String).Trim() -ne "1") {
         Write-Info "Creating ERP database '$sqlDbName'..."
-        & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -c "CREATE DATABASE `"$escapedDb`" OWNER `"$sqlAppUser`" ENCODING 'UTF8';" | Out-Null
+        $rc = Invoke-PsqlStdin $PsqlExe $sqlPort $sqlAdminUser "postgres" "CREATE DATABASE `"$escapedDbId`" OWNER `"$escapedUserId`" ENCODING 'UTF8';"
+        if ($rc -ne 0) { throw "Failed creating database $sqlDbName" }
     } else {
-        & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE `"$escapedDb`" TO `"$sqlAppUser`";" | Out-Null
+        $rc = Invoke-PsqlStdin $PsqlExe $sqlPort $sqlAdminUser "postgres" "GRANT ALL PRIVILEGES ON DATABASE `"$escapedDbId`" TO `"$escapedUserId`";"
+        if ($rc -ne 0) { throw "Failed granting privileges on $sqlDbName" }
     }
-    & $PsqlExe -h 127.0.0.1 -p $sqlPort -U $sqlAdminUser -d $sqlDbName -c "GRANT ALL ON SCHEMA public TO `"$sqlAppUser`";" | Out-Null
+
+    $rcSchema = Invoke-PsqlStdin $PsqlExe $sqlPort $sqlAdminUser $sqlDbName "GRANT ALL ON SCHEMA public TO `"$escapedUserId`";"
+    if ($rcSchema -ne 0) { throw "Failed granting public schema privileges on $sqlDbName" }
 } finally {
     $env:PGPASSWORD = ""
 }
@@ -412,5 +424,5 @@ try {
     Pop-Location
 }
 
-Write-Ok "Local PostgreSQL ready on ${InstallDrive} ($PgDataDir) without touching $WinDrive or other databases!"
+Write-Ok "Local PostgreSQL ready on $InstallDrive ($PgDataDir) without touching $WinDrive or other databases!"
 exit 0

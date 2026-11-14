@@ -6,12 +6,13 @@ title Payment System Deployment Manager
 :: Change to the directory of this script to avoid running in System32 when launched as Admin
 cd /d "%~dp0"
 
-:: Redirect temp and npm cache to the installation drive so C:\ is NEVER filled
+:: Redirect temp and npm cache/logs to the installation drive so C:\ is NEVER filled
 if not exist "%cd%\pgtemp" mkdir "%cd%\pgtemp" >nul 2>&1
-if not exist "%cd%\.npm_cache" mkdir "%cd%\.npm_cache" >nul 2>&1
+if not exist "%cd%\.npm_cache\_logs" mkdir "%cd%\.npm_cache\_logs" >nul 2>&1
 set "TEMP=%cd%\pgtemp"
 set "TMP=%cd%\pgtemp"
 set "npm_config_cache=%cd%\.npm_cache"
+set "npm_config_logs_dir=%cd%\.npm_cache\_logs"
 
 :: Check for Administrator privileges
 net session >nul 2>&1
@@ -135,7 +136,13 @@ set PUPPETEER_SKIP_DOWNLOAD=true
 call npm install --prefer-offline --no-audit --no-fund
 if errorlevel 1 (
     if exist node_modules (
-        echo [WARNING] npm install returned an error ^(likely offline^). Using existing node_modules safely.
+        echo [WARNING] npm install returned an error ^(likely offline^). Checking core SQL drivers...
+        if not exist "node_modules\pg" (
+            call npm install pg drizzle-orm --no-save --prefer-offline --no-audit --no-fund >nul 2>&1
+        ) else if not exist "node_modules\drizzle-orm" (
+            call npm install pg drizzle-orm --no-save --prefer-offline --no-audit --no-fund >nul 2>&1
+        )
+        echo [WARNING] Continuing safely with existing node_modules.
     ) else (
         echo [ERROR] node_modules missing and npm install failed offline.
         pause
@@ -292,7 +299,13 @@ set PUPPETEER_SKIP_DOWNLOAD=true
 call npm install --prefer-offline --no-audit --no-fund
 if errorlevel 1 (
     if exist node_modules (
-        echo [NOTE] Offline environment detected - continuing safely with existing node_modules.
+        echo [NOTE] Offline/partial npm install warning - checking core SQL drivers...
+        if not exist "node_modules\pg" (
+            call npm install pg drizzle-orm --no-save --prefer-offline --no-audit --no-fund >nul 2>&1
+        ) else if not exist "node_modules\drizzle-orm" (
+            call npm install pg drizzle-orm --no-save --prefer-offline --no-audit --no-fund >nul 2>&1
+        )
+        echo [NOTE] Continuing safely with existing node_modules.
     ) else (
         echo [ERROR] Dependency installation failed and node_modules folder does not exist.
         pause

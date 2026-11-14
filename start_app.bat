@@ -22,12 +22,13 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Redirect temp and npm cache to install drive (never fill C:\ drive)
+:: Redirect temp and npm cache/logs to install drive (never fill C:\ drive)
 if not exist "%~dp0pgtemp" mkdir "%~dp0pgtemp" >nul 2>&1
-if not exist "%~dp0.npm_cache" mkdir "%~dp0.npm_cache" >nul 2>&1
+if not exist "%~dp0.npm_cache\_logs" mkdir "%~dp0.npm_cache\_logs" >nul 2>&1
 set "TEMP=%~dp0pgtemp"
 set "TMP=%~dp0pgtemp"
 set "npm_config_cache=%~dp0.npm_cache"
+set "npm_config_logs_dir=%~dp0.npm_cache\_logs"
 
 :: 2. Check and install dependencies if missing
 if not exist node_modules (
