@@ -42,6 +42,11 @@ import {
   getTodayJalali,
   getExactTimeNow
 } from './types';
+import {
+  getNextPlainSequentialNumber,
+  matchesSearchQuery,
+  normalizeFaSearch
+} from './erpCodeUtils';
 import { User } from '../../types';
 
 interface WarehouseModuleViewProps {
@@ -134,10 +139,8 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
     const selWh = warehouses.find(w => w.id === targetWhForReceipt);
     const dateToday = getTodayJalali();
     const exactTime = getExactTimeNow();
-    const cleanDate = dateToday.replace(/\//g, '');
-    const docSeq = (warehouseDocs.length + 1);
-    const docNo = `REC-PRD-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
-    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const docNo = getNextPlainSequentialNumber(warehouseDocs.map(d => d.docNo), 1);
+    const archiveCode = getNextPlainSequentialNumber(warehouseDocs.map(d => d.archiveCode), 1001);
 
     // Update cartons warehouseId & add history event
     const updatedCartons = allCartons.map(c => {
@@ -232,11 +235,11 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
 
   const handleScanCartonInput = (code: string) => {
     if (!code.trim()) return;
-    const clean = code.trim().toLowerCase();
+    const clean = normalizeFaSearch(code);
     const found = availableCartonsInWh.find(c =>
-      c.referenceCode.toLowerCase() === clean ||
-      c.serialNumber.toLowerCase() === clean ||
-      c.qrPayload.toLowerCase().includes(clean)
+      normalizeFaSearch(c.referenceCode) === clean ||
+      normalizeFaSearch(c.serialNumber) === clean ||
+      normalizeFaSearch(c.qrPayload).includes(clean)
     );
     if (found) {
       handleAddCartonToRemittance(found);
@@ -266,10 +269,8 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
     const selWh = warehouses.find(w => w.id === sourceWhForRemittance);
     const dateToday = getTodayJalali();
     const exactTime = getExactTimeNow();
-    const cleanDate = dateToday.replace(/\//g, '');
-    const docSeq = (warehouseDocs.length + 1);
-    const docNo = `REM-SAL-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
-    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const docNo = getNextPlainSequentialNumber(warehouseDocs.map(d => d.docNo), 1);
+    const archiveCode = getNextPlainSequentialNumber(warehouseDocs.map(d => d.archiveCode), 1001);
 
     const remCartonIds = selectedCartonsForSales.map(c => c.id);
 
@@ -356,10 +357,8 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
     const tgtWh = warehouses.find(w => w.id === transferTargetWh);
     const dateToday = getTodayJalali();
     const exactTime = getExactTimeNow();
-    const cleanDate = dateToday.replace(/\//g, '');
-    const docSeq = (warehouseDocs.length + 1);
-    const docNo = `TRF-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
-    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const docNo = getNextPlainSequentialNumber(warehouseDocs.map(d => d.docNo), 1);
+    const archiveCode = getNextPlainSequentialNumber(warehouseDocs.map(d => d.archiveCode), 1001);
 
     const trfCartonIds = selectedCartonsForTransfer.map(c => c.id);
     const totNet = Number(selectedCartonsForTransfer.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
@@ -437,10 +436,8 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
     const tgtWh = warehouses.find(w => w.id === transferDoc.targetWarehouseId);
     const dateToday = getTodayJalali();
     const exactTime = getExactTimeNow();
-    const cleanDate = dateToday.replace(/\//g, '');
-    const docSeq = (warehouseDocs.length + 1);
-    const docNo = `REC-TRF-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
-    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const docNo = getNextPlainSequentialNumber(warehouseDocs.map(d => d.docNo), 1);
+    const archiveCode = getNextPlainSequentialNumber(warehouseDocs.map(d => d.archiveCode), 1001);
 
     // Move cartons to target warehouse & stamp receipt history
     const updatedCartons = allCartons.map(c => {
@@ -515,10 +512,11 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
 
   const handleAddCartonToReturn = () => {
     if (!returnCartonCode.trim()) return;
-    const clean = returnCartonCode.trim().toLowerCase();
+    const clean = normalizeFaSearch(returnCartonCode);
     const found = allCartons.find(c =>
-      c.referenceCode.toLowerCase() === clean ||
-      c.serialNumber.toLowerCase() === clean
+      normalizeFaSearch(c.referenceCode) === clean ||
+      normalizeFaSearch(c.serialNumber) === clean ||
+      normalizeFaSearch(c.qrPayload).includes(clean)
     );
     if (found) {
       if (selectedCartonsForReturn.some(c => c.id === found.id)) {
@@ -541,10 +539,8 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
     const tgtWh = warehouses.find(w => w.id === returnTargetWh);
     const dateToday = getTodayJalali();
     const exactTime = getExactTimeNow();
-    const cleanDate = dateToday.replace(/\//g, '');
-    const docSeq = (warehouseDocs.length + 1);
-    const docNo = `RET-SAL-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
-    const archiveCode = `WH-ARC-${cleanDate}-${String(docSeq).padStart(4, '0')}`;
+    const docNo = getNextPlainSequentialNumber(warehouseDocs.map(d => d.docNo), 1);
+    const archiveCode = getNextPlainSequentialNumber(warehouseDocs.map(d => d.archiveCode), 1001);
 
     const retCartonIds = selectedCartonsForReturn.map(c => c.id);
     const totNet = Number(selectedCartonsForReturn.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
@@ -609,23 +605,75 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
   const [archiveSearchTerm, setArchiveSearchTerm] = useState<string>('');
   const [selectedDocForModal, setSelectedDocForModal] = useState<ErpWarehouseDocument | null>(null);
 
+  const getDocCartons = (doc: ErpWarehouseDocument): ErpCartonLabel[] => {
+    const idSet = new Set(doc.cartonIds || []);
+    return allCartons.filter(c => idSet.has(c.id));
+  };
+
+  const getDocTypePersianLabel = (type: ErpWarehouseDocType): string => {
+    switch (type) {
+      case 'RECEIPT_PRODUCTION':
+        return 'رسید تحویل از تولید';
+      case 'SALES_REMITTANCE':
+        return 'حواله فروش کارخانه';
+      case 'INTER_WH_TRANSFER':
+        return 'حواله بین انبار انتقال';
+      case 'INTER_WH_RECEIPT':
+        return 'رسید حواله بین انبار ورود';
+      case 'SALES_RETURN':
+        return 'رسید مرجوعی از فروش';
+    }
+  };
+
   const filteredWarehouseDocs = useMemo(() => {
     return warehouseDocs.filter(d => {
       if (archiveFilterType !== 'ALL' && d.docType !== archiveFilterType) return false;
       if (archiveSearchTerm.trim()) {
-        const q = archiveSearchTerm.toLowerCase();
-        return (
-          d.docNo.toLowerCase().includes(q) ||
-          d.archiveCode.toLowerCase().includes(q) ||
-          (d.partyName && d.partyName.toLowerCase().includes(q)) ||
-          (d.sourceWarehouseName && d.sourceWarehouseName.toLowerCase().includes(q)) ||
-          (d.targetWarehouseName && d.targetWarehouseName.toLowerCase().includes(q)) ||
-          d.dateJalali.includes(q)
-        );
+        const linkedCartons = getDocCartons(d);
+        const statusText = d.status === 'COMPLETED' ? 'نهایی شده' : 'در انتظار تایید مقصد';
+        const cartonFields: unknown[] = [];
+        for (const c of linkedCartons) {
+          cartonFields.push(
+            c.referenceCode,
+            c.serialNumber,
+            c.productName,
+            c.productCode,
+            c.lotNumber,
+            c.machineCode,
+            c.grade,
+            c.netWeightKg,
+            c.grossWeightKg,
+            c.productionVoucherNo,
+            c.productionArchiveCode,
+            c.qrPayload
+          );
+        }
+        return matchesSearchQuery(archiveSearchTerm, [
+          d.docNo,
+          d.archiveCode,
+          d.docType,
+          getDocTypePersianLabel(d.docType),
+          d.sourceWarehouseName,
+          d.targetWarehouseName,
+          d.partyName,
+          d.partyCode,
+          d.driverName,
+          d.plateNumber,
+          d.createdBy,
+          d.receiverUserName,
+          d.dateJalali,
+          d.timeExact,
+          d.notes,
+          d.cartonsCount,
+          d.totalNetWeightKg,
+          d.totalGrossWeightKg,
+          statusText,
+          ...cartonFields
+        ]);
       }
       return true;
     });
-  }, [warehouseDocs, archiveFilterType, archiveSearchTerm]);
+  }, [warehouseDocs, allCartons, archiveFilterType, archiveSearchTerm]);
 
   const getDocTypeBadge = (type: ErpWarehouseDocType) => {
     switch (type) {
@@ -645,16 +693,16 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
   // -------------------------------------------------------------
   // 8. SUBVIEW: WH_TRACKING (رهگیری جامع کارتن با کد ارجاع / بارکد)
   // -------------------------------------------------------------
-  const [trackingCodeInput, setTrackingCodeInput] = useState<string>('DLK-PL-01-01001');
+  const [trackingCodeInput, setTrackingCodeInput] = useState<string>('');
   const [trackedCarton, setTrackedCarton] = useState<ErpCartonLabel | null>(null);
 
   const handleTrackCarton = (codeToSearch?: string) => {
-    const q = (codeToSearch || trackingCodeInput).trim().toLowerCase();
+    const q = normalizeFaSearch(codeToSearch || trackingCodeInput);
     if (!q) return;
     const found = allCartons.find(c =>
-      c.referenceCode.toLowerCase() === q ||
-      c.serialNumber.toLowerCase() === q ||
-      c.qrPayload.toLowerCase().includes(q)
+      normalizeFaSearch(c.referenceCode) === q ||
+      normalizeFaSearch(c.serialNumber) === q ||
+      normalizeFaSearch(c.qrPayload).includes(q)
     );
     if (found) {
       setTrackedCarton(found);
@@ -674,9 +722,251 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
   }, [activeSubView, allCartons]);
 
   // -------------------------------------------------------------
-  // 9. SUBVIEW: WH_STOCK_REPORT & KARDEX
+  // 9. SUBVIEW: WH_STOCK_REPORT & KARDEX (BY GRADE)
   // -------------------------------------------------------------
   const [stockWhFilter, setStockWhFilter] = useState<string>('ALL');
+  const [stockGradeFilter, setStockGradeFilter] = useState<'ALL' | 'A' | 'B' | 'C'>('ALL');
+  const [kardexItemFilter, setKardexItemFilter] = useState<string>('ALL');
+  const [kardexSearch, setKardexSearch] = useState<string>('');
+
+  const gradeBadge = (g?: string) => {
+    const grade = (g || 'A').toUpperCase();
+    if (grade === 'A') {
+      return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">درجه A (۱)</span>;
+    }
+    if (grade === 'B') {
+      return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">درجه B (۲)</span>;
+    }
+    return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800">درجه C (۳)</span>;
+  };
+
+  const stockAndKardexByItemGrade = useMemo(() => {
+    const gradesList: Array<'A' | 'B' | 'C'> = ['A', 'B', 'C'];
+    const rows: Array<{
+      key: string;
+      item: ErpItem;
+      grade: 'A' | 'B' | 'C';
+      inStockCount: number;
+      inStockNetKg: number;
+      producedCount: number;
+      producedNetKg: number;
+      soldCount: number;
+      soldNetKg: number;
+      returnedCount: number;
+      returnedNetKg: number;
+    }> = [];
+
+    for (const item of erpState.items) {
+      if (kardexItemFilter !== 'ALL' && item.id !== kardexItemFilter) continue;
+      if (kardexSearch.trim() && !matchesSearchQuery(kardexSearch, [item.code, item.name, item.groupName, item.yarnCount])) {
+        // Still allow row if one of its cartons matches search
+        const hasMatchingCarton = allCartons.some(
+          c =>
+            (c.productId === item.id || c.productCode === item.code) &&
+            matchesSearchQuery(kardexSearch, [c.referenceCode, c.serialNumber, c.lotNumber, c.grade])
+        );
+        if (!hasMatchingCarton) continue;
+      }
+
+      const itemCartons = allCartons.filter(c => c.productId === item.id || c.productCode === item.code);
+
+      for (const g of gradesList) {
+        if (stockGradeFilter !== 'ALL' && g !== stockGradeFilter) continue;
+
+        const gradeCartons = itemCartons.filter(c => {
+          const cg = (c.grade || item.grade || 'A').toUpperCase();
+          return cg === g;
+        });
+
+        const scopedForWh = stockWhFilter === 'ALL'
+          ? gradeCartons
+          : gradeCartons.filter(c => c.warehouseId === stockWhFilter);
+
+        const inStockCartons = scopedForWh.filter(c => c.status === 'IN_STOCK' || c.status === 'RETURNED' || !c.status);
+        const soldCartons = scopedForWh.filter(c => c.status === 'SOLD' || c.status === 'REMITTED');
+        const returnedCartons = scopedForWh.filter(c => c.status === 'RETURNED');
+
+        const isDefaultGrade = (item.grade || 'A') === g;
+        // Include row if it has any cartons in this grade, or if it's the item's defined grade and user wants to see all items
+        if (scopedForWh.length > 0 || (isDefaultGrade && stockWhFilter === 'ALL')) {
+          rows.push({
+            key: `${item.id}_${g}`,
+            item,
+            grade: g,
+            inStockCount: inStockCartons.length,
+            inStockNetKg: Number(inStockCartons.reduce((s, c) => s + Number(c.netWeightKg || 0), 0).toFixed(3)),
+            producedCount: scopedForWh.length,
+            producedNetKg: Number(scopedForWh.reduce((s, c) => s + Number(c.netWeightKg || 0), 0).toFixed(3)),
+            soldCount: soldCartons.length,
+            soldNetKg: Number(soldCartons.reduce((s, c) => s + Number(c.netWeightKg || 0), 0).toFixed(3)),
+            returnedCount: returnedCartons.length,
+            returnedNetKg: Number(returnedCartons.reduce((s, c) => s + Number(c.netWeightKg || 0), 0).toFixed(3))
+          });
+        }
+      }
+    }
+
+    return rows;
+  }, [erpState.items, allCartons, stockWhFilter, stockGradeFilter, kardexItemFilter, kardexSearch]);
+
+  const kardexMovements = useMemo(() => {
+    const movements: Array<{
+      id: string;
+      dateJalali: string;
+      timeExact: string;
+      direction: 'IN' | 'OUT';
+      txTitle: string;
+      docNo: string;
+      archiveCode: string;
+      itemId: string;
+      itemCode: string;
+      itemName: string;
+      grade: 'A' | 'B' | 'C';
+      warehouseLabel: string;
+      cartonsCount: number;
+      netWeightKg: number;
+      sampleRefCodes: string[];
+      sortTimestamp: number;
+    }> = [];
+
+    const matchesScopedCarton = (c: ErpCartonLabel, itemFallbackGrade = 'A'): 'A' | 'B' | 'C' => {
+      const g = (c.grade || itemFallbackGrade || 'A').toUpperCase();
+      return g === 'B' ? 'B' : g === 'C' ? 'C' : 'A';
+    };
+
+    // 1. Production Vouchers (ورود از تولید)
+    for (const v of erpState.productionVouchers || []) {
+      const voucherCartons = allCartons.filter(
+        c => v.cartonIds?.includes(c.id) || c.productionVoucherNo === v.voucherNo
+      );
+      const itemObj = erpState.items.find(i => i.id === v.itemId || i.code === v.itemCode);
+      const byGrade: Record<'A' | 'B' | 'C', ErpCartonLabel[]> = { A: [], B: [], C: [] };
+      for (const c of voucherCartons) {
+        byGrade[matchesScopedCarton(c, itemObj?.grade)].push(c);
+      }
+
+      (['A', 'B', 'C'] as const).forEach(g => {
+        const list = byGrade[g];
+        if (list.length === 0) return;
+        if (stockGradeFilter !== 'ALL' && g !== stockGradeFilter) return;
+        if (kardexItemFilter !== 'ALL' && v.itemId !== kardexItemFilter) return;
+        if (stockWhFilter !== 'ALL' && !list.some(c => c.warehouseId === stockWhFilter)) return;
+        const scopedList = stockWhFilter === 'ALL' ? list : list.filter(c => c.warehouseId === stockWhFilter);
+        if (scopedList.length === 0) return;
+
+        const netKg = Number(scopedList.reduce((s, c) => s + Number(c.netWeightKg || 0), 0).toFixed(3));
+        const whName = warehouses.find(w => w.id === scopedList[0].warehouseId)?.name || v.lineName;
+        const mv = {
+          id: `prd_${v.id}_${g}`,
+          dateJalali: v.dateJalali,
+          timeExact: v.timeExact,
+          direction: 'IN' as const,
+          txTitle: `تولید خط (${v.lineName})`,
+          docNo: v.voucherNo,
+          archiveCode: v.archiveCode,
+          itemId: v.itemId,
+          itemCode: v.itemCode,
+          itemName: v.itemName,
+          grade: g,
+          warehouseLabel: whName,
+          cartonsCount: scopedList.length,
+          netWeightKg: netKg,
+          sampleRefCodes: scopedList.map(c => c.referenceCode),
+          sortTimestamp: scopedList[0]?.createdAt || 0
+        };
+        if (
+          !kardexSearch.trim() ||
+          matchesSearchQuery(kardexSearch, [
+            mv.docNo,
+            mv.archiveCode,
+            mv.itemCode,
+            mv.itemName,
+            mv.txTitle,
+            mv.warehouseLabel,
+            mv.grade,
+            ...mv.sampleRefCodes
+          ])
+        ) {
+          movements.push(mv);
+        }
+      });
+    }
+
+    // 2. Warehouse Documents (رسید تولید، حواله فروش، بین‌انبار، مرجوعی)
+    for (const d of warehouseDocs) {
+      if (stockWhFilter !== 'ALL' && d.sourceWarehouseId !== stockWhFilter && d.targetWarehouseId !== stockWhFilter) {
+        continue;
+      }
+      const docCartons = getDocCartons(d);
+      // Group by (productId + grade)
+      const grouped = new Map<string, { itemCode: string; itemName: string; itemId: string; grade: 'A' | 'B' | 'C'; cartons: ErpCartonLabel[] }>();
+      for (const c of docCartons) {
+        const g = matchesScopedCarton(c);
+        if (stockGradeFilter !== 'ALL' && g !== stockGradeFilter) continue;
+        if (kardexItemFilter !== 'ALL' && c.productId !== kardexItemFilter) continue;
+        const k = `${c.productId}_${g}`;
+        const existing = grouped.get(k);
+        if (existing) {
+          existing.cartons.push(c);
+        } else {
+          grouped.set(k, {
+            itemId: c.productId,
+            itemCode: c.productCode,
+            itemName: c.productName,
+            grade: g,
+            cartons: [c]
+          });
+        }
+      }
+
+      grouped.forEach(group => {
+        const isOut = d.docType === 'SALES_REMITTANCE' || d.docType === 'INTER_WH_TRANSFER';
+        const netKg = Number(group.cartons.reduce((s, c) => s + Number(c.netWeightKg || 0), 0).toFixed(3));
+        const whLabel = [
+          d.sourceWarehouseName ? `از ${d.sourceWarehouseName}` : '',
+          d.targetWarehouseName ? `به ${d.targetWarehouseName}` : '',
+          d.partyName ? `(${d.partyName})` : ''
+        ]
+          .filter(Boolean)
+          .join(' ');
+        const mv = {
+          id: `wh_${d.id}_${group.itemId}_${group.grade}`,
+          dateJalali: d.dateJalali,
+          timeExact: d.timeExact,
+          direction: isOut ? ('OUT' as const) : ('IN' as const),
+          txTitle: getDocTypePersianLabel(d.docType),
+          docNo: d.docNo,
+          archiveCode: d.archiveCode,
+          itemId: group.itemId,
+          itemCode: group.itemCode,
+          itemName: group.itemName,
+          grade: group.grade,
+          warehouseLabel: whLabel || 'انبار',
+          cartonsCount: group.cartons.length,
+          netWeightKg: netKg,
+          sampleRefCodes: group.cartons.map(c => c.referenceCode),
+          sortTimestamp: group.cartons[0]?.createdAt ? group.cartons[0].createdAt + 1 : 0
+        };
+        if (
+          !kardexSearch.trim() ||
+          matchesSearchQuery(kardexSearch, [
+            mv.docNo,
+            mv.archiveCode,
+            mv.itemCode,
+            mv.itemName,
+            mv.txTitle,
+            mv.warehouseLabel,
+            mv.grade,
+            ...mv.sampleRefCodes
+          ])
+        ) {
+          movements.push(mv);
+        }
+      });
+    }
+
+    return movements.sort((a, b) => b.sortTimestamp - a.sortTimestamp);
+  }, [erpState.productionVouchers, erpState.items, allCartons, warehouseDocs, warehouses, stockWhFilter, stockGradeFilter, kardexItemFilter, kardexSearch]);
 
   return (
     <div className="h-full flex flex-col min-h-0 bg-transparent overflow-hidden">
@@ -1280,7 +1570,7 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
             <div className="flex items-center gap-2 text-xs">
               <input
                 type="text"
-                placeholder="کد ارجاع کارتن مرجوعی (مثال: DLK-PL-01-01001)..."
+                placeholder="کد ارجاع کارتن مرجوعی (مثال: PO-01001-24.835)..."
                 value={returnCartonCode}
                 onChange={e => setReturnCartonCode(e.target.value)}
                 onKeyDown={e => {
@@ -1351,11 +1641,21 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                 <Search size={14} className="absolute right-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="جستجو در اسناد انبار..."
+                  placeholder="جستجو: کد ارجاع، شماره سند، بایگانی، مشتری، کالا..."
                   value={archiveSearchTerm}
                   onChange={e => setArchiveSearchTerm(e.target.value)}
-                  className="pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                  className="w-full sm:w-80 pr-8 pl-7 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
                 />
+                {archiveSearchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setArchiveSearchTerm('')}
+                    className="absolute left-2 top-2 text-slate-400 hover:text-slate-600"
+                    title="پاک کردن جستجو"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1394,7 +1694,7 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                     <th className="p-3 text-center">نوع سند</th>
                     <th className="p-3">انبار مبدا / مقصد</th>
                     <th className="p-3">طرف حساب / راننده</th>
-                    <th className="p-3 text-center">تعداد کارتن</th>
+                    <th className="p-3 text-center">تعداد کارتن / کد ارجاع</th>
                     <th className="p-3 text-center">وزن خالص (Kg)</th>
                     <th className="p-3 text-center">تاریخ و ساعت دقیق</th>
                     <th className="p-3 text-center">وضعیت</th>
@@ -1402,10 +1702,23 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredWarehouseDocs.map(doc => (
+                  {filteredWarehouseDocs.map(doc => {
+                    const linkedCartons = getDocCartons(doc);
+                    const matchedCartons = archiveSearchTerm.trim()
+                      ? linkedCartons.filter(c =>
+                          matchesSearchQuery(archiveSearchTerm, [
+                            c.referenceCode,
+                            c.serialNumber,
+                            c.lotNumber,
+                            c.netWeightKg,
+                            c.productName
+                          ])
+                        )
+                      : [];
+                    return (
                     <tr key={doc.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                       <td className="p-3 font-mono font-bold text-teal-600">{doc.docNo}</td>
-                      <td className="p-3 font-mono text-slate-500">{doc.archiveCode}</td>
+                      <td className="p-3 font-mono font-bold text-slate-600 dark:text-slate-300">{doc.archiveCode}</td>
                       <td className="p-3 text-center">{getDocTypeBadge(doc.docType)}</td>
                       <td className="p-3 text-slate-700 dark:text-slate-300">
                         {doc.sourceWarehouseName ? <span>از {doc.sourceWarehouseName}</span> : ''}
@@ -1415,7 +1728,26 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                         <strong className="block text-slate-800 dark:text-slate-200">{doc.partyName || '—'}</strong>
                         {doc.driverName && <span className="text-[10px] text-slate-400 font-mono">راننده: {doc.driverName}</span>}
                       </td>
-                      <td className="p-3 text-center font-bold">{doc.cartonsCount}</td>
+                      <td className="p-3 text-center">
+                        <div className="font-bold">{doc.cartonsCount} کارتن</div>
+                        {matchedCartons.length > 0 ? (
+                          <div className="flex flex-wrap justify-center gap-1 mt-1">
+                            {matchedCartons.slice(0, 2).map(mc => (
+                              <span key={mc.id} className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800" dir="ltr">
+                                {mc.referenceCode}
+                              </span>
+                            ))}
+                            {matchedCartons.length > 2 && (
+                              <span className="text-[10px] text-slate-400">+{matchedCartons.length - 2}</span>
+                            )}
+                          </div>
+                        ) : linkedCartons.length > 0 ? (
+                          <div className="font-mono text-[10px] text-slate-400 mt-0.5" dir="ltr">
+                            {linkedCartons[0].referenceCode}
+                            {linkedCartons.length > 1 ? ` (+${linkedCartons.length - 1})` : ''}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">{doc.totalNetWeightKg.toLocaleString()}</td>
                       <td className="p-3 text-center">
                         <div className="font-bold">{doc.dateJalali}</div>
@@ -1436,7 +1768,8 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {filteredWarehouseDocs.length === 0 && (
                     <tr>
                       <td colSpan={10} className="p-8 text-center text-slate-400 font-bold">
@@ -1470,7 +1803,7 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
             <div className="flex flex-col sm:flex-row items-center gap-2">
               <input
                 type="text"
-                placeholder="کد ارجاع، سریال یا بارکد کارتن را وارد نمایید (مثال: DLK-PL-01-01001)..."
+                placeholder="کد ارجاع، سریال یا بارکد کارتن را وارد نمایید (مثال: PO-01001-24.835)..."
                 value={trackingCodeInput}
                 onChange={e => setTrackingCodeInput(e.target.value)}
                 onKeyDown={e => {
@@ -1617,20 +1950,69 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
       )}
 
       {/* --------------------------------------------------------------------------------- */}
-      {/* 9. WH_STOCK_REPORT: INVENTORY REPORT & KARDEX */}
+      {/* --------------------------------------------------------------------------------- */}
+      {/* 9. WH_STOCK_REPORT & KARDEX (BY GRADE A/B/C) */}
       {/* --------------------------------------------------------------------------------- */}
       {(activeSubView === 'wh_stock_report' || activeSubView === 'wh_kardex') && (
         <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+          {/* Header & Multi-Filter Bar */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div>
               <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <BarChart3 className="w-5 h-5 text-teal-600" />
-                {activeSubView === 'wh_kardex' ? 'کاردکس کالا و گردش ریز تراکنش‌های انبار' : 'گزارش موجودی کالاها و کارتن‌های انبار'}
+                {activeSubView === 'wh_kardex'
+                  ? 'کاردکس جامع کالا و گزارش گردش انبار به تفکیک درجه کالا (A / B / C)'
+                  : 'گزارش موجودی کالاها و کارتن‌ها به تفکیک درجه کالا'}
               </h2>
-              <p className="text-xs text-slate-500 mt-1">موجودی لحظه‌ای تفکیک‌شده بر اساس انبار، گروه کالایی، تعداد کارتن و وزن خالص</p>
+              <p className="text-xs text-slate-500 mt-1">
+                تفکیک دقیق موجودی و گردش وارده/صادره بر اساس نوع درجه کیفی کالا (درجه A، B، C)، انبار و کد ارجاع
+              </p>
             </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-bold text-slate-500">فیلتر انبار:</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="relative">
+                <Search size={13} className="absolute right-2.5 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="جستجو کد ارجاع، سند، کالا..."
+                  value={kardexSearch}
+                  onChange={e => setKardexSearch(e.target.value)}
+                  className="w-48 pr-7 pl-6 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+                {kardexSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setKardexSearch('')}
+                    className="absolute left-2 top-2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              <select
+                value={stockGradeFilter}
+                onChange={e => setStockGradeFilter(e.target.value as any)}
+                className="px-3 py-1.5 rounded-xl border border-teal-300 dark:border-teal-700 bg-teal-50/70 dark:bg-teal-950/30 text-teal-800 dark:text-teal-200 font-black"
+              >
+                <option value="ALL">همه درجه‌ها (A / B / C)</option>
+                <option value="A">فقط درجه A (درجه ۱ ممتاز)</option>
+                <option value="B">فقط درجه B (درجه ۲ معمولی)</option>
+                <option value="C">فقط درجه C (درجه ۳ / ضایعاتی)</option>
+              </select>
+
+              <select
+                value={kardexItemFilter}
+                onChange={e => setKardexItemFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold max-w-[200px]"
+              >
+                <option value="ALL">همه کالاها</option>
+                {erpState.items.map(it => (
+                  <option key={it.id} value={it.id}>
+                    {it.code} — {it.name}
+                  </option>
+                ))}
+              </select>
+
               <select
                 value={stockWhFilter}
                 onChange={e => setStockWhFilter(e.target.value)}
@@ -1644,50 +2026,194 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
             </div>
           </div>
 
+          {/* Grade Summary Strip */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            {(['A', 'B', 'C'] as const).map(g => {
+              const subset = stockAndKardexByItemGrade.filter(r => r.grade === g);
+              const count = subset.reduce((s, r) => s + r.inStockCount, 0);
+              const kg = Number(subset.reduce((s, r) => s + r.inStockNetKg, 0).toFixed(3));
+              const activeCls = stockGradeFilter === g ? 'ring-2 ring-teal-500' : '';
+              return (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setStockGradeFilter(prev => (prev === g ? 'ALL' : g))}
+                  className={`text-right bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-3 shadow-sm hover:border-teal-400 transition-all cursor-pointer ${activeCls}`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    {gradeBadge(g)}
+                    <span className="font-bold text-slate-500">{count} کارتن</span>
+                  </div>
+                  <div className="font-mono font-black text-base text-slate-800 dark:text-slate-100" dir="ltr">
+                    {kg.toLocaleString()} Kg
+                  </div>
+                </button>
+              );
+            })}
+            <div className="bg-gradient-to-l from-teal-900 to-slate-900 text-white rounded-2xl p-3 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-bold text-teal-200">مجموع موجودی فیلترشده</span>
+                <span className="font-bold text-teal-100">
+                  {stockAndKardexByItemGrade.reduce((s, r) => s + r.inStockCount, 0)} کارتن
+                </span>
+              </div>
+              <div className="font-mono font-black text-base text-emerald-300" dir="ltr">
+                {Number(stockAndKardexByItemGrade.reduce((s, r) => s + r.inStockNetKg, 0).toFixed(3)).toLocaleString()} Kg
+              </div>
+            </div>
+          </div>
+
+          {/* Summary Table (Stock / Kardex Turnover by Item & Grade) */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/70 dark:bg-slate-800/40">
+              <span className="text-xs font-black text-slate-700 dark:text-slate-200">
+                {activeSubView === 'wh_kardex'
+                  ? 'جدول خلاصه کاردکس به تفکیک کالا و درجه کیفی'
+                  : 'موجودی لحظه‌ای انبار به تفکیک کالا و درجه کیفی'}
+              </span>
+              <span className="text-[11px] text-slate-400 font-bold">{stockAndKardexByItemGrade.length} ردیف</span>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
                 <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
                   <tr>
                     <th className="p-3">کد کالا</th>
                     <th className="p-3">نام کالا</th>
+                    <th className="p-3 text-center">درجه کالا</th>
                     <th className="p-3">گروه کالایی</th>
                     <th className="p-3">انبار</th>
+                    {activeSubView === 'wh_kardex' && (
+                      <>
+                        <th className="p-3 text-center text-blue-600">کل تولید / وارده (Kg)</th>
+                        <th className="p-3 text-center text-rose-600">صادره فروش (Kg)</th>
+                        <th className="p-3 text-center text-amber-600">مرجوعی (Kg)</th>
+                      </>
+                    )}
                     <th className="p-3 text-center">کارتن‌های موجود</th>
-                    <th className="p-3 text-center font-black text-emerald-600">مجموع وزن خالص (Kg)</th>
+                    <th className="p-3 text-center font-black text-emerald-600">موجودی خالص (Kg)</th>
                     <th className="p-3 text-center">میانگین وزن کارتن</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {erpState.items.map(item => {
-                    const matchedCartons = allCartons.filter(c => {
-                      if (c.productId !== item.id && c.productCode !== item.code) return false;
-                      if (stockWhFilter !== 'ALL' && c.warehouseId !== stockWhFilter) return false;
-                      return c.status === 'IN_STOCK' || !c.status;
-                    });
-                    const totalNet = Number(matchedCartons.reduce((sum, c) => sum + c.netWeightKg, 0).toFixed(3));
-                    const count = matchedCartons.length;
-
-                    return (
-                      <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
-                        <td className="p-3 font-mono font-bold text-teal-600">{item.code}</td>
-                        <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{item.name}</td>
-                        <td className="p-3 text-slate-500">{item.groupName || 'نخ‌های DTY'}</td>
-                        <td className="p-3 text-slate-600">
-                          {stockWhFilter === 'ALL' ? 'تمام انبارها' : warehouses.find(w => w.id === stockWhFilter)?.name}
-                        </td>
-                        <td className="p-3 text-center font-bold">{count} کارتن</td>
-                        <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">{totalNet.toLocaleString()} Kg</td>
-                        <td className="p-3 text-center font-mono text-slate-500">
-                          {count > 0 ? (totalNet / count).toFixed(3) : '0.000'} Kg
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {stockAndKardexByItemGrade.map(row => (
+                    <tr
+                      key={row.key}
+                      onClick={() => {
+                        if (activeSubView === 'wh_kardex') {
+                          setKardexItemFilter(row.item.id);
+                          setStockGradeFilter(row.grade);
+                        }
+                      }}
+                      className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/30 ${
+                        activeSubView === 'wh_kardex' ? 'cursor-pointer' : ''
+                      }`}
+                    >
+                      <td className="p-3 font-mono font-bold text-teal-600">{row.item.code}</td>
+                      <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{row.item.name}</td>
+                      <td className="p-3 text-center">{gradeBadge(row.grade)}</td>
+                      <td className="p-3 text-slate-500">{row.item.groupName || 'عمومی'}</td>
+                      <td className="p-3 text-slate-600">
+                        {stockWhFilter === 'ALL' ? 'همه انبارها' : warehouses.find(w => w.id === stockWhFilter)?.name}
+                      </td>
+                      {activeSubView === 'wh_kardex' && (
+                        <>
+                          <td className="p-3 text-center font-mono text-blue-600 font-bold" dir="ltr">
+                            {row.producedNetKg.toLocaleString()} ({row.producedCount})
+                          </td>
+                          <td className="p-3 text-center font-mono text-rose-600 font-bold" dir="ltr">
+                            {row.soldNetKg.toLocaleString()} ({row.soldCount})
+                          </td>
+                          <td className="p-3 text-center font-mono text-amber-600 font-bold" dir="ltr">
+                            {row.returnedNetKg.toLocaleString()} ({row.returnedCount})
+                          </td>
+                        </>
+                      )}
+                      <td className="p-3 text-center font-bold">{row.inStockCount} کارتن</td>
+                      <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">
+                        {row.inStockNetKg.toLocaleString()} Kg
+                      </td>
+                      <td className="p-3 text-center font-mono text-slate-500" dir="ltr">
+                        {row.inStockCount > 0 ? (row.inStockNetKg / row.inStockCount).toFixed(3) : '0.000'} Kg
+                      </td>
+                    </tr>
+                  ))}
+                  {stockAndKardexByItemGrade.length === 0 && (
+                    <tr>
+                      <td colSpan={activeSubView === 'wh_kardex' ? 11 : 8} className="p-8 text-center text-slate-400 font-bold">
+                        موردی با فیلترهای انتخاب‌شده یافت نشد.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
+
+          {/* Detailed Kardex Movement Ledger by Grade */}
+          {activeSubView === 'wh_kardex' && (
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/70 dark:bg-slate-800/40">
+                <span className="text-xs font-black text-slate-700 dark:text-slate-200">
+                  ریز تراکنش‌ها و اسناد کاردکس کالا (بر اساس درجه کیفی انتخاب‌شده)
+                </span>
+                <span className="text-[11px] text-slate-400 font-bold">{kardexMovements.length} تراکنش</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="p-3">تاریخ / ساعت</th>
+                      <th className="p-3">شماره سند</th>
+                      <th className="p-3">کد بایگانی</th>
+                      <th className="p-3">نوع تراکنش</th>
+                      <th className="p-3">کالا</th>
+                      <th className="p-3 text-center">درجه کالا</th>
+                      <th className="p-3">مسیر / انبار</th>
+                      <th className="p-3 text-center text-emerald-600">وارده (Kg / کارتن)</th>
+                      <th className="p-3 text-center text-rose-600">صادره (Kg / کارتن)</th>
+                      <th className="p-3 text-center">کد ارجاع کارتن</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {kardexMovements.map(mv => (
+                      <tr key={mv.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                        <td className="p-3">
+                          <div className="font-bold">{mv.dateJalali}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">{mv.timeExact}</div>
+                        </td>
+                        <td className="p-3 font-mono font-bold text-teal-600">{mv.docNo}</td>
+                        <td className="p-3 font-mono text-slate-500">{mv.archiveCode}</td>
+                        <td className="p-3 font-bold text-slate-700 dark:text-slate-200">{mv.txTitle}</td>
+                        <td className="p-3 font-bold">
+                          <span>{mv.itemName}</span>
+                          <span className="block font-mono text-[10px] text-slate-400">{mv.itemCode}</span>
+                        </td>
+                        <td className="p-3 text-center">{gradeBadge(mv.grade)}</td>
+                        <td className="p-3 text-slate-600 dark:text-slate-300">{mv.warehouseLabel}</td>
+                        <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">
+                          {mv.direction === 'IN' ? `+${mv.netWeightKg.toLocaleString()} (${mv.cartonsCount})` : '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono font-black text-rose-600" dir="ltr">
+                          {mv.direction === 'OUT' ? `-${mv.netWeightKg.toLocaleString()} (${mv.cartonsCount})` : '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono text-[10px] text-slate-500" dir="ltr">
+                          {mv.sampleRefCodes[0] || '—'}
+                          {mv.sampleRefCodes.length > 1 ? ` (+${mv.sampleRefCodes.length - 1})` : ''}
+                        </td>
+                      </tr>
+                    ))}
+                    {kardexMovements.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="p-8 text-center text-slate-400 font-bold">
+                          هیچ گردش کاردکسی برای فیلتر درجه و کالای انتخاب‌شده ثبت نشده است.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

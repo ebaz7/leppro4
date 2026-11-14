@@ -57,6 +57,12 @@ import {
   getExactTimeNow
 } from './types';
 import { CartonLabelCard } from './BarcodeRenderer';
+import {
+  buildCartonReferenceCode,
+  deriveLineReferencePrefix,
+  getNextPlainSequentialNumber,
+  matchesSearchQuery
+} from './erpCodeUtils';
 import { User } from '../../types';
 
 interface ProductionBomModuleViewProps {
@@ -127,6 +133,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const [lineForm, setLineForm] = useState<Partial<ErpProductionLine>>({
     code: '',
     name: '',
+    referencePrefix: '',
     machineType: '',
     supervisorName: currentUser?.fullName || '',
     isActive: true,
@@ -138,10 +145,16 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       showToast?.('error', 'لطفاً کد و عنوان خط تولید را وارد نمایید');
       return;
     }
+    const cleanCustomPrefix = (lineForm.referencePrefix || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 6);
     const newLine: ErpProductionLine = {
       id: lineForm.id || `pl_${Date.now()}`,
       code: lineForm.code,
       name: lineForm.name,
+      ...(cleanCustomPrefix ? { referencePrefix: cleanCustomPrefix } : {}),
       machineType: lineForm.machineType || '',
       supervisorName: lineForm.supervisorName || '',
       isActive: lineForm.isActive !== false,
@@ -153,7 +166,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
 
     await persistErpState({ ...erpState, productionLines: updatedLines }, 'خط تولید با موفقیت ذخیره شد');
     setShowAddLineModal(false);
-    setLineForm({ code: '', name: '', machineType: '', supervisorName: currentUser?.fullName || '', isActive: true, notes: '' });
+    setLineForm({ code: '', name: '', referencePrefix: '', machineType: '', supervisorName: currentUser?.fullName || '', isActive: true, notes: '' });
   };
 
   const handleDeleteLine = async (id: string) => {
@@ -170,7 +183,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
   const [itemSearch, setItemSearch] = useState<string>('');
   const [itemStatusFilter, setItemStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [itemGradeFilter, setItemGradeFilter] = useState<'ALL' | 'A' | 'B' | 'C'>('ALL');
   const [includeChildGroupsItems, setIncludeChildGroupsItems] = useState<boolean>(true);
+  const [showInlineSubgroupBox, setShowInlineSubgroupBox] = useState<boolean>(false);
+  const [inlineSubgroupName, setInlineSubgroupName] = useState<string>('');
+  const [inlineSubgroupCode, setInlineSubgroupCode] = useState<string>('');
 
   const [showAddGroupModal, setShowAddGroupModal] = useState(false);
   const [groupForm, setGroupForm] = useState<Partial<ErpCommodityGroup>>({
@@ -240,6 +257,37 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     return path.map(p => p.name).join(' / ');
   };
 
+  const orderedGroupsWithDepth = useMemo(() => {
+    const result: Array<{ group: ErpCommodityGroup; depth: number }> = [];
+    const visited = new Set<string>();
+    const visit = (parentId: string | null, depth: number) => {
+      const children = groups.filter(g => (g.parentId || null) === parentId);
+      for (const ch of children) {
+        if (visited.has(ch.id)) continue;
+        visited.add(ch.id);
+        result.push({ group: ch, depth });
+        visit(ch.id, depth + 1);
+      }
+    };
+    visit(null, 0);
+    // Include any orphan groups safely
+    for (const g of groups) {
+      if (!visited.has(g.id)) result.push({ group: g, depth: 0 });
+    }
+    return result;
+  }, [groups]);
+
+  const renderGradeBadge = (g?: string) => {
+    const gradeVal = (g || 'A').toUpperCase();
+    if (gradeVal === 'A') {
+      return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">درجه A</span>;
+    }
+    if (gradeVal === 'B') {
+      return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">درجه B</span>;
+    }
+    return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800">درجه C</span>;
+  };
+
   const toggleGroupExpand = (groupId: string) => {
     setExpandedGroupIds(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
@@ -263,18 +311,16 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     } else if (itemStatusFilter === 'INACTIVE') {
       list = list.filter(i => i.isActive === false);
     }
+    if (itemGradeFilter !== 'ALL') {
+      list = list.filter(i => (i.grade || 'A') === itemGradeFilter);
+    }
     if (itemSearch.trim()) {
-      const q = itemSearch.trim().toLowerCase();
       list = list.filter(i =>
-        i.code.toLowerCase().includes(q) ||
-        i.name.toLowerCase().includes(q) ||
-        (i.yarnCount || '').toLowerCase().includes(q) ||
-        (i.colorName || '').toLowerCase().includes(q) ||
-        (i.groupName || '').toLowerCase().includes(q)
+        matchesSearchQuery(itemSearch, [i.code, i.name, i.yarnCount, i.colorName, i.groupName, i.grade])
       );
     }
     return list;
-  }, [erpState.items, selectedGroupId, includeChildGroupsItems, itemStatusFilter, itemSearch, groups]);
+  }, [erpState.items, selectedGroupId, includeChildGroupsItems, itemStatusFilter, itemGradeFilter, itemSearch, groups]);
 
   const openCreateGroupAt = (parentId: string | null) => {
     const parentGroup = parentId ? groups.find(g => g.id === parentId) : null;
@@ -313,6 +359,44 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       isTareLocked: false
     });
     setShowAddItemModal(true);
+    setShowInlineSubgroupBox(false);
+    setInlineSubgroupName('');
+    setInlineSubgroupCode('');
+  };
+
+  const handleQuickCreateSubgroupInItemModal = async () => {
+    const cleanName = inlineSubgroupName.trim();
+    if (!cleanName) {
+      showToast?.('error', 'لطفاً نام زیرگروه را وارد نمایید');
+      return;
+    }
+    const parentId = itemForm.groupId || selectedGroupId || null;
+    const parentGroup = parentId ? groups.find(g => g.id === parentId) : null;
+    const siblingCount = groups.filter(g => (g.parentId || null) === parentId).length + 1;
+    const code =
+      inlineSubgroupCode.trim() ||
+      (parentGroup ? `${parentGroup.code}-${String(siblingCount).padStart(2, '0')}` : `GRP-${String(siblingCount).padStart(2, '0')}`);
+    const newGroup: ErpCommodityGroup = {
+      id: `grp_${Date.now()}`,
+      code,
+      name: cleanName,
+      parentId,
+      isActive: true,
+      description: ''
+    };
+    const updatedGroups = [...groups, newGroup];
+    if (parentId) {
+      setExpandedGroupIds(prev => ({ ...prev, [parentId]: true }));
+    }
+    setSelectedGroupId(newGroup.id);
+    setItemForm(prev => ({ ...prev, groupId: newGroup.id }));
+    setShowInlineSubgroupBox(false);
+    setInlineSubgroupName('');
+    setInlineSubgroupCode('');
+    await persistErpState(
+      { ...erpState, commodityGroups: updatedGroups },
+      `زیرگروه «${cleanName}» ایجاد و انتخاب شد؛ اکنون مشخصات کالا را ثبت کنید`
+    );
   };
 
   const handleSaveGroup = async () => {
@@ -617,7 +701,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const exactTime = getExactTimeNow();
     const cleanDateParts = dateToday.replace(/\//g, '').slice(2); // e.g. 050820
     const serialNumber = `SN-${cleanDateParts}-${String(nextCounter).padStart(5, '0')}`;
-    const referenceCode = `DLK-${currentLine?.code || 'L01'}-${String(nextCounter).padStart(5, '0')}`;
+    const referenceCode = buildCartonReferenceCode(currentLine, nextCounter, effectiveNetKg);
     const qrPayload = `DLKAM-ERP|REF:${referenceCode}|ITEM:${currentItem.code}|LOT:${lotNumber}|NET:${effectiveNetKg}KG|CONES:${effectiveConesCount}|TIME:${exactTime}`;
 
     const newCarton: ErpCartonLabel = {
@@ -695,10 +779,9 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const currentItem = erpState.items.find(i => i.id === selectedItemId);
     const dateToday = getTodayJalali();
     const exactTime = getExactTimeNow();
-    const cleanDate = dateToday.replace(/\//g, '');
-    const voucherSeq = ((erpState.productionVouchers?.length || 0) + 1);
-    const voucherNo = `PRD-${cleanDate}-${String(voucherSeq).padStart(4, '0')}`;
-    const archiveCode = `PRD-ARC-${cleanDate}-${String(voucherSeq).padStart(4, '0')}`;
+    const existingVouchers = erpState.productionVouchers || [];
+    const voucherNo = getNextPlainSequentialNumber(existingVouchers.map(v => v.voucherNo), 1);
+    const archiveCode = getNextPlainSequentialNumber(existingVouchers.map(v => v.archiveCode), 1001);
 
     // Stamp cartons with voucher & archive code
     const finalizedCartons = currentBatchCartons.map(c => ({
@@ -744,22 +827,71 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   // -------------------------------------------------------------
   const [selectedVoucherForView, setSelectedVoucherForView] = useState<ErpProductionVoucher | null>(null);
   const [archiveSearch, setArchiveSearch] = useState<string>('');
+  const [archiveGradeFilter, setArchiveGradeFilter] = useState<'ALL' | 'A' | 'B' | 'C'>('ALL');
 
   const vouchersList = useMemo(() => {
     return erpState.productionVouchers || [];
   }, [erpState.productionVouchers]);
 
-  const filteredVouchers = useMemo(() => {
-    if (!archiveSearch.trim()) return vouchersList;
-    const q = archiveSearch.toLowerCase();
-    return vouchersList.filter(v =>
-      v.voucherNo.toLowerCase().includes(q) ||
-      v.archiveCode.toLowerCase().includes(q) ||
-      v.itemName.toLowerCase().includes(q) ||
-      v.lineName.toLowerCase().includes(q) ||
-      v.dateJalali.includes(q)
+  const getVoucherCartons = (v: ErpProductionVoucher): ErpCartonLabel[] => {
+    const idSet = new Set(v.cartonIds || []);
+    return (erpState.cartonLabels || []).filter(
+      c => idSet.has(c.id) || c.productionVoucherNo === v.voucherNo
     );
-  }, [vouchersList, archiveSearch]);
+  };
+
+  const filteredVouchers = useMemo(() => {
+    return vouchersList.filter(v => {
+      const linkedCartons = getVoucherCartons(v);
+      const itemObj = erpState.items.find(i => i.id === v.itemId || i.code === v.itemCode);
+      if (archiveGradeFilter !== 'ALL') {
+        const hasGrade = linkedCartons.length > 0
+          ? linkedCartons.some(c => (c.grade || itemObj?.grade || 'A') === archiveGradeFilter)
+          : (itemObj?.grade || 'A') === archiveGradeFilter;
+        if (!hasGrade) return false;
+      }
+      if (!archiveSearch.trim()) return true;
+      const statusText = v.status === 'DELIVERED_TO_WAREHOUSE' ? 'تحویل انبار شده' : 'در انتظار تحویل به انبار';
+      const cartonFields: unknown[] = [];
+      for (const c of linkedCartons) {
+        cartonFields.push(
+          c.referenceCode,
+          c.serialNumber,
+          c.lotNumber,
+          c.machineCode,
+          c.productCode,
+          c.productName,
+          c.yarnCount,
+          c.colorName,
+          c.grade,
+          c.shift,
+          c.netWeightKg,
+          c.grossWeightKg,
+          c.qrPayload,
+          c.createdBy,
+          c.productionArchiveCode
+        );
+      }
+      return matchesSearchQuery(archiveSearch, [
+        v.voucherNo,
+        v.archiveCode,
+        v.lineName,
+        v.itemName,
+        v.itemCode,
+        v.operatorName,
+        v.deliveredWarehouseName,
+        v.deliveredDocNo,
+        v.dateJalali,
+        v.timeExact,
+        v.notes,
+        v.cartonsCount,
+        v.totalNetWeightKg,
+        v.totalGrossWeightKg,
+        statusText,
+        ...cartonFields
+      ]);
+    });
+  }, [vouchersList, erpState.cartonLabels, erpState.items, archiveSearch, archiveGradeFilter]);
 
   // -------------------------------------------------------------
   // TAB 5: COMPREHENSIVE BOM MANAGEMENT & COST ENGINE
@@ -1067,9 +1199,17 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 <div key={line.id} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col justify-between">
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800">
-                        {line.code}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800">
+                          {line.code}
+                        </span>
+                        <span
+                          className="font-mono text-[10px] font-black px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 border border-indigo-200 dark:border-indigo-800"
+                          title="پیشوند کد ارجاع کارتن‌های این خط"
+                        >
+                          کد: {deriveLineReferencePrefix(line.name, line.code, line.referencePrefix)}
+                        </span>
+                      </div>
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${line.isActive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
                         {line.isActive ? 'فعال در خط' : 'غیرفعال'}
                       </span>
@@ -1390,6 +1530,22 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                               <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                                 <button
                                   type="button"
+                                  onClick={() => openCreateGroupAt(cg.id)}
+                                  className="px-1.5 py-0.5 rounded bg-orange-50 text-orange-600 hover:bg-orange-100 text-[10px] font-black"
+                                  title="ایجاد زیرگروه داخل این گروه"
+                                >
+                                  + زیرگروه
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openCreateItemAt(cg.id)}
+                                  className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[10px] font-black"
+                                  title="تعریف کالا داخل این گروه"
+                                >
+                                  + کالا
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={() => {
                                     setGroupForm(cg);
                                     setShowAddGroupModal(true);
@@ -1445,6 +1601,17 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         <option value="INACTIVE">فقط کالاهای غیرفعال</option>
                       </select>
 
+                      <select
+                        value={itemGradeFilter}
+                        onChange={e => setItemGradeFilter(e.target.value as any)}
+                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                      >
+                        <option value="ALL">همه درجه‌ها</option>
+                        <option value="A">درجه A</option>
+                        <option value="B">درجه B</option>
+                        <option value="C">درجه C</option>
+                      </select>
+
                       {selectedGroupId && (
                         <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer select-none bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
                           <input
@@ -1470,7 +1637,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                           <th className="p-3">کد کالا</th>
                           <th className="p-3">نام کالا</th>
                           <th className="p-3">مسیر گروه</th>
-                          <th className="p-3 text-center">نمره / گرید</th>
+                          <th className="p-3 text-center">نمره / درجه کالا</th>
                           <th className="p-3 text-center">دوک</th>
                           <th className="p-3 text-center">کارتن / دوک (گرم)</th>
                           <th className="p-3 text-center">قفل وزن</th>
@@ -1500,8 +1667,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                               </td>
                               <td className="p-3 text-[11px] text-slate-500">{groupLabel}</td>
                               <td className="p-3 text-center">
-                                <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono font-bold">{item.yarnCount || '—'}</span>
-                                <span className="mr-1 text-[10px] text-amber-600 font-bold">({item.grade || 'A'})</span>
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono font-bold">{item.yarnCount || '—'}</span>
+                                  {renderGradeBadge(item.grade)}
+                                </div>
                               </td>
                               <td className="p-3 text-center font-bold">{item.defaultConesPerCarton || 6}</td>
                               <td className="p-3 text-center font-mono text-[11px]">
@@ -1739,7 +1908,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       ) : (
                         activeYarnItems.map(item => (
                           <option key={item.id} value={item.id}>
-                            {item.code} — {item.name} ({item.yarnCount} {item.colorName}) {item.isTareLocked ? '🔒' : ''}
+                            {item.code} — {item.name} ({item.yarnCount} {item.colorName}) [درجه {item.grade || 'A'}] {item.isTareLocked ? '🔒' : ''}
                           </option>
                         ))
                       )}
@@ -1849,15 +2018,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     </select>
                   </div>
                   <div>
-                    <label className="font-bold text-slate-600 dark:text-slate-400 block mb-1">گرید کیفی نخ</label>
+                    <label className="font-bold text-slate-600 dark:text-slate-400 block mb-1">درجه کیفی کالا (تولید)</label>
                     <select
                       value={grade}
                       onChange={e => setGrade(e.target.value as any)}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
                     >
-                      <option value="A">درجه A (صادراتی ممتاز)</option>
-                      <option value="B">درجه B (معمولی)</option>
-                      <option value="C">درجه C (ضایعاتی/استوک)</option>
+                      <option value="A">درجه A (درجه ۱ ممتاز)</option>
+                      <option value="B">درجه B (درجه ۲ معمولی)</option>
+                      <option value="C">درجه C (درجه ۳ / ضایعاتی)</option>
                     </select>
                   </div>
                   <div>
@@ -1948,7 +2117,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       grossWeightKg,
                       totalTareKg: calculatedTareKg,
                       netWeightKg: calculatedNetKg,
-                      referenceCode: `DLK-${lines.find(l => l.id === selectedLineId)?.code || 'L01'}-${String((erpState.nextSerialCounter || 1000) + currentBatchCartons.length + 1).padStart(5, '0')}`,
+                      referenceCode: buildCartonReferenceCode(
+                        lines.find(l => l.id === selectedLineId),
+                        (erpState.nextSerialCounter || 1000) + currentBatchCartons.length + 1,
+                        calculatedNetKg
+                      ),
                       serialNumber: `SN-05-${String((erpState.nextSerialCounter || 1000) + currentBatchCartons.length + 1).padStart(5, '0')}`,
                       createdDateJalali: getTodayJalali(),
                       createdTimeExact: getExactTimeNow(),
@@ -2024,6 +2197,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       <th className="p-2.5">ردیف</th>
                       <th className="p-2.5">کد ارجاع (بارکد)</th>
                       <th className="p-2.5">کالای تولیدی</th>
+                      <th className="p-2.5 text-center">درجه کالا</th>
                       <th className="p-2.5 text-center">خط / شیفت</th>
                       <th className="p-2.5 text-center">دوک</th>
                       <th className="p-2.5 text-center">وزن ناخالص</th>
@@ -2039,6 +2213,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         <td className="p-2.5 text-slate-400 font-mono">{idx + 1}</td>
                         <td className="p-2.5 font-mono font-bold text-orange-600">{carton.referenceCode}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-slate-200">{carton.productName}</td>
+                        <td className="p-2.5 text-center">{renderGradeBadge(carton.grade)}</td>
                         <td className="p-2.5 text-center text-slate-500">{carton.machineCode} — {carton.shift}</td>
                         <td className="p-2.5 text-center">{carton.conesCount}</td>
                         <td className="p-2.5 text-center font-mono" dir="ltr">{carton.grossWeightKg.toFixed(2)}</td>
@@ -2088,16 +2263,36 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </h2>
               <p className="text-xs text-slate-500 mt-1">تفکیک شماره سند، کد بایگانی، تاریخ و ساعت دقیق ثبت نوبت و رهگیری کارتن‌ها</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={archiveGradeFilter}
+                onChange={e => setArchiveGradeFilter(e.target.value as any)}
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+              >
+                <option value="ALL">همه درجه‌ها</option>
+                <option value="A">درجه A</option>
+                <option value="B">درجه B</option>
+                <option value="C">درجه C</option>
+              </select>
               <div className="relative">
                 <Search size={14} className="absolute right-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="جستجو در اسناد تولید..."
+                  placeholder="جستجو: کد ارجاع، شماره سند، بایگانی، وزن، کالا، خط..."
                   value={archiveSearch}
                   onChange={e => setArchiveSearch(e.target.value)}
-                  className="pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                  className="w-full sm:w-80 pr-8 pl-7 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
                 />
+                {archiveSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setArchiveSearch('')}
+                    className="absolute left-2 top-2 text-slate-400 hover:text-slate-600"
+                    title="پاک کردن جستجو"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2111,7 +2306,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <th className="p-3">کد بایگانی</th>
                     <th className="p-3">خط تولید</th>
                     <th className="p-3">محصول تولیدی</th>
-                    <th className="p-3 text-center">تعداد کارتن</th>
+                    <th className="p-3 text-center">درجه کالا</th>
+                    <th className="p-3 text-center">تعداد کارتن / کد ارجاع</th>
                     <th className="p-3 text-center">مجموع وزن خالص (Kg)</th>
                     <th className="p-3 text-center">تاریخ و ساعت دقیق</th>
                     <th className="p-3 text-center">ثبت‌کننده</th>
@@ -2120,13 +2316,60 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {filteredVouchers.map(v => (
+                  {filteredVouchers.map(v => {
+                    const linkedCartons = getVoucherCartons(v);
+                    const matchedCartons = archiveSearch.trim()
+                      ? linkedCartons.filter(c =>
+                          matchesSearchQuery(archiveSearch, [
+                            c.referenceCode,
+                            c.serialNumber,
+                            c.lotNumber,
+                            c.netWeightKg,
+                            c.grossWeightKg
+                          ])
+                        )
+                      : [];
+                    const voucherItem = erpState.items.find(i => i.id === v.itemId || i.code === v.itemCode);
+                    const gradesPresent = Array.from(
+                      new Set(
+                        linkedCartons.length > 0
+                          ? linkedCartons.map(c => (c.grade || voucherItem?.grade || 'A').toUpperCase())
+                          : [(voucherItem?.grade || 'A').toUpperCase()]
+                      )
+                    );
+                    return (
                     <tr key={v.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
                       <td className="p-3 font-mono font-bold text-orange-600">{v.voucherNo}</td>
-                      <td className="p-3 font-mono text-slate-500">{v.archiveCode}</td>
+                      <td className="p-3 font-mono font-bold text-slate-600 dark:text-slate-300">{v.archiveCode}</td>
                       <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{v.lineName}</td>
                       <td className="p-3">{v.itemName}</td>
-                      <td className="p-3 text-center font-bold">{v.cartonsCount} کارتن</td>
+                      <td className="p-3 text-center">
+                        <div className="flex flex-wrap justify-center gap-1">
+                          {gradesPresent.map(gr => (
+                            <React.Fragment key={gr}>{renderGradeBadge(gr)}</React.Fragment>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="p-3 text-center">
+                        <div className="font-bold">{v.cartonsCount} کارتن</div>
+                        {matchedCartons.length > 0 ? (
+                          <div className="flex flex-wrap justify-center gap-1 mt-1">
+                            {matchedCartons.slice(0, 2).map(mc => (
+                              <span key={mc.id} className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800" dir="ltr">
+                                {mc.referenceCode}
+                              </span>
+                            ))}
+                            {matchedCartons.length > 2 && (
+                              <span className="text-[10px] text-slate-400">+{matchedCartons.length - 2}</span>
+                            )}
+                          </div>
+                        ) : linkedCartons.length > 0 ? (
+                          <div className="font-mono text-[10px] text-slate-400 mt-0.5" dir="ltr">
+                            {linkedCartons[0].referenceCode}
+                            {linkedCartons.length > 1 ? ` (+${linkedCartons.length - 1})` : ''}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="p-3 text-center font-mono font-black text-emerald-600" dir="ltr">{v.totalNetWeightKg.toLocaleString()}</td>
                       <td className="p-3 text-center">
                         <div className="font-bold">{v.dateJalali}</div>
@@ -2148,10 +2391,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {filteredVouchers.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="p-8 text-center text-slate-400 font-bold">
+                      <td colSpan={11} className="p-8 text-center text-slate-400 font-bold">
                         هیچ سند تولیدی در بایگانی یافت نشد.
                       </td>
                     </tr>
@@ -2386,15 +2630,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </button>
             </div>
             <div className="space-y-3 text-xs">
-              <div>
-                <label className="font-bold block mb-1">کد خط تولید</label>
-                <input
-                  type="text"
-                  value={lineForm.code}
-                  onChange={e => setLineForm({ ...lineForm, code: e.target.value })}
-                  placeholder="مثال: PL-05"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">کد خط تولید</label>
+                  <input
+                    type="text"
+                    value={lineForm.code}
+                    onChange={e => setLineForm({ ...lineForm, code: e.target.value })}
+                    placeholder="مثال: PL-05"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">پیشوند کد ارجاع (اختیاری)</label>
+                  <input
+                    type="text"
+                    value={lineForm.referencePrefix || ''}
+                    onChange={e => setLineForm({ ...lineForm, referencePrefix: e.target.value.toUpperCase() })}
+                    placeholder={`خودکار: ${deriveLineReferencePrefix(lineForm.name, lineForm.code)}`}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold uppercase"
+                    dir="ltr"
+                  />
+                </div>
               </div>
               <div>
                 <label className="font-bold block mb-1">نام خط تولید</label>
@@ -2402,9 +2659,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   type="text"
                   value={lineForm.name}
                   onChange={e => setLineForm({ ...lineForm, name: e.target.value })}
-                  placeholder="مثال: خط تکسچره ۳ (ماشین Rieter)"
+                  placeholder="مثال: خط پی او وای ۱ (POY)"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 />
+                <span className="text-[10px] text-slate-400 block mt-1" dir="ltr">
+                  نمونه کد ارجاع: {buildCartonReferenceCode(lineForm, 1001, 24.835)}
+                </span>
               </div>
               <div>
                 <label className="font-bold block mb-1">نوع ماشین / تکنولوژی</label>
@@ -2477,11 +2737,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 >
                   <option value="">(گروه ریشه - سطح اول)</option>
-                  {groups
-                    .filter(g => g.id !== groupForm.id)
-                    .map(g => (
+                  {orderedGroupsWithDepth
+                    .filter(({ group: g }) => g.id !== groupForm.id)
+                    .map(({ group: g, depth }) => (
                       <option key={g.id} value={g.id}>
-                        {getGroupHierarchyLabel(g)} ({g.code})
+                        {`${'— '.repeat(depth)}${g.name} (${g.code})`}
                       </option>
                     ))}
                 </select>
@@ -2563,19 +2823,78 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   />
                 </div>
                 <div>
-                  <label className="font-bold block mb-1">شاخه / گروه در درخت کالا</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold">شاخه / گروه در درخت کالا</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowInlineSubgroupBox(prev => !prev)}
+                      className="text-[11px] font-black text-orange-600 hover:text-orange-700 dark:text-orange-400 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <FolderPlus size={12} />
+                      <span>{showInlineSubgroupBox ? 'بستن فرم زیرگروه' : '+ زیرگروه جدید'}</span>
+                    </button>
+                  </div>
                   <select
                     value={itemForm.groupId || ''}
                     onChange={e => setItemForm({ ...itemForm, groupId: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                   >
-                    <option value="">انتخاب گروه کالایی...</option>
-                    {groups.map(g => (
-                      <option key={g.id} value={g.id}>{getGroupHierarchyLabel(g)}</option>
+                    <option value="">انتخاب گروه / زیرگروه کالایی...</option>
+                    {orderedGroupsWithDepth.map(({ group: g, depth }) => (
+                      <option key={g.id} value={g.id}>
+                        {`${'↳ '.repeat(depth)}${g.name} (${g.code})`}
+                      </option>
                     ))}
                   </select>
                 </div>
               </div>
+
+              {showInlineSubgroupBox && (
+                <div className="p-3 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                      <FolderPlus size={13} />
+                      ایجاد سریع زیرگروه زیر شاخه فعلی (
+                      {itemForm.groupId
+                        ? groups.find(g => g.id === itemForm.groupId)?.name || 'شاخه انتخاب‌شده'
+                        : 'گروه ریشه'}
+                      )
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={inlineSubgroupCode}
+                      onChange={e => setInlineSubgroupCode(e.target.value)}
+                      placeholder="کد زیرگروه (اختیاری)"
+                      className="px-2.5 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 font-mono font-bold text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={inlineSubgroupName}
+                      onChange={e => setInlineSubgroupName(e.target.value)}
+                      placeholder="نام زیرگروه جدید (مثلاً نخ خام ۱۵۰/۴۸)"
+                      className="sm:col-span-2 px-2.5 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 font-bold text-xs"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowInlineSubgroupBox(false)}
+                      className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-600"
+                    >
+                      انصراف
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleQuickCreateSubgroupInItemModal}
+                      className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black cursor-pointer"
+                    >
+                      ثبت و انتخاب زیرگروه
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="font-bold block mb-1">نام و عنوان کامل کالا</label>
@@ -2610,15 +2929,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   />
                 </div>
                 <div>
-                  <label className="font-bold block mb-1">گرید کیفی</label>
+                  <label className="font-bold block mb-1">درجه کالا (کیفیت پیش‌فرض تولید)</label>
                   <select
                     value={itemForm.grade || 'A'}
                     onChange={e => setItemForm({ ...itemForm, grade: e.target.value as any })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
                   >
-                    <option value="A">درجه A</option>
-                    <option value="B">درجه B</option>
-                    <option value="C">درجه C</option>
+                    <option value="A">درجه A (درجه ۱ ممتاز)</option>
+                    <option value="B">درجه B (درجه ۲ معمولی)</option>
+                    <option value="C">درجه C (درجه ۳ / ضایعاتی)</option>
                   </select>
                 </div>
               </div>
@@ -2743,6 +3062,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <tr>
                     <th className="p-2">ردیف</th>
                     <th className="p-2">کد ارجاع</th>
+                    <th className="p-2 text-center">درجه کالا</th>
                     <th className="p-2 text-center">دوک</th>
                     <th className="p-2 text-center">وزن ناخالص</th>
                     <th className="p-2 text-center">وزن خالص</th>
@@ -2756,6 +3076,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       <tr key={c.id}>
                         <td className="p-2 text-slate-400 font-mono">{i + 1}</td>
                         <td className="p-2 font-mono font-bold text-orange-600">{c.referenceCode}</td>
+                        <td className="p-2 text-center">{renderGradeBadge(c.grade)}</td>
                         <td className="p-2 text-center">{c.conesCount}</td>
                         <td className="p-2 text-center font-mono">{c.grossWeightKg.toFixed(2)}</td>
                         <td className="p-2 text-center font-mono font-black text-emerald-600">{c.netWeightKg.toFixed(3)} Kg</td>
@@ -3000,7 +3321,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         onChange={e => setDesignerDraft({ ...designerDraft, barcodeValueSource: e.target.value as any })}
                         className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                       >
-                        <option value="referenceCode">کد ارجاع (DLK-...)</option>
+                        <option value="referenceCode">کد ارجاع (پیشوند خط + سریال + وزن خالص)</option>
                         <option value="serialNumber">شماره سریال (SN-...)</option>
                         <option value="productCode">کد کالا</option>
                       </select>
@@ -3223,7 +3544,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       grossWeightKg: grossWeightKg || 25.61,
                       totalTareKg: calculatedTareKg || 2.11,
                       netWeightKg: calculatedNetKg || 23.5,
-                      referenceCode: `DLK-${lines.find(l => l.id === selectedLineId)?.code || 'L01'}-01001`,
+                      referenceCode: buildCartonReferenceCode(
+                        lines.find(l => l.id === selectedLineId),
+                        1001,
+                        calculatedNetKg || 23.5
+                      ),
                       serialNumber: 'SN-050820-01001',
                       createdDateJalali: getTodayJalali(),
                       createdTimeExact: getExactTimeNow(),

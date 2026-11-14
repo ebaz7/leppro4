@@ -243,8 +243,8 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     if (!selectedCompany) return;
     setBackingUpToBot(true);
     try {
-      const res = await apiCall<{ success: boolean; message: string; filename?: string; botResult?: any }>(
-        '/api/industrial-erp/backup-to-bot',
+      const res = await apiCall<{ success: boolean; message?: string; error?: string; filename?: string; botResult?: any }>(
+        '/industrial-erp/backup-to-bot',
         'POST',
         { companyId: selectedCompany.id, createdBy: currentUser.fullName }
       );
@@ -252,7 +252,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         showToast('success', res.message || `بکاپ اختصاصی شرکت با موفقیت به بات ارسال گردید (${res.filename || ''})`);
         if (showCompanyBackupModal) loadCompanyBackupsList(selectedCompany.id);
       } else {
-        showToast('error', res?.message || 'خطا در ارسال فایل پشتیبان به بات');
+        showToast('error', res?.message || res?.error || 'خطا در ارسال فایل پشتیبان به بات');
       }
     } catch (err: any) {
       showToast('error', err?.message || 'خطا در برقراری ارتباط با سرور پشتیبان‌گیری');

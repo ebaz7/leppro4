@@ -893,6 +893,8 @@ const sendSpecificFileToBots = async (filePath, filename, captionText, force = f
         } catch (tgErr) {
             errors.push(`تلگرام: ${tgErr.message}`);
         }
+    } else if (!settings.telegramBotToken && !settings.baleBotToken) {
+        errors.push('توکن ربات تلگرام یا بله در تنظیمات وارد نشده است.');
     }
 
     const baleChatId = settings.backupAdminBaleChatId || settings.baleChatId || settings.baleAdminId || settings.baleChannelId || settings.bale_chat_id;
@@ -908,19 +910,26 @@ const sendSpecificFileToBots = async (filePath, filename, captionText, force = f
         }
     }
 
+    if (!tgSent && !baleSent && errors.length === 0) {
+        errors.push('شناسه چت ادمین (بله یا تلگرام) در تنظیمات بکاپ وارد نشده است.');
+    }
+
     return {
         success: tgSent || baleSent,
         tgSent,
         baleSent,
         errors,
+        message: (tgSent || baleSent) ? 'ارسال با موفقیت انجام شد.' : errors.join(' | '),
         filenameSent: filename
     };
 };
 
 // Automated isolated per-company compressed ERP snapshots (.json.gz with SHA-256 deduplication)
+// When data changed and backupBotSendEnabled is active, also sends each company's isolated ZIP separately to Telegram/Bale.
 const performPerCompanyErpAutoBackups = async () => {
     try {
         const db = getDb();
+        const settings = db.settings || {};
         const companies = getErpCompaniesList(db);
         const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
         for (const comp of companies) {
@@ -944,6 +953,28 @@ const performPerCompanyErpAutoBackups = async () => {
                 });
                 if (!snap.skippedUnchanged) {
                     console.log(`✅ [Per-Company ERP AutoBackup] ${comp.name} -> ${snap.fileName} (${(snap.compressedSizeBytes / 1024).toFixed(1)} KB)`);
+                    if (settings.backupBotSendEnabled) {
+                        try {
+                            const zipBackup = await erpBackupMgr.createIsolatedCompanyBackupZip({
+                                backupsRootDir: BACKUPS_DIR,
+                                companyId: comp.id,
+                                companyName: comp.name,
+                                state
+                            });
+                            const caption = `🤖 بکاپ خودکار و مجزای حسابداری شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 کارتن‌ها: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBackup.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
+                            const botRes = await sendSpecificFileToBots(
+                                zipBackup.filePath,
+                                zipBackup.filename,
+                                caption,
+                                false
+                            );
+                            if (botRes?.success) {
+                                console.log(`📤 [Per-Company ERP BotAutoBackup] Sent isolated ZIP for ${comp.name} (${zipBackup.filename})`);
+                            }
+                        } catch (botSendErr) {
+                            console.warn(`⚠️ [Per-Company ERP BotAutoBackup] Safe offline/bot skip for ${comp.name}:`, botSendErr.message);
+                        }
+                    }
                 }
             } catch (compErr) {
                 console.warn(`⚠️ [Per-Company ERP AutoBackup] ${comp.name}:`, compErr.message);
@@ -9401,6 +9432,15 @@ app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
             caption,
             true
         );
+        if (!botResult.success) {
+            return res.status(400).json({
+                success: false,
+                message: botResult.message || 'ارسال به بات ناموفق بود (لطفاً توکن ربات و شناسه چت ادمین را بررسی کنید).',
+                filename: zipBackup.filename,
+                snapshotFileName: snap.fileName,
+                botResult
+            });
+        }
         res.json({
             success: true,
             message: `بکاپ اختصاصی شرکت «${comp.name}» با موفقیت تهیه و به‌صورت کاملاً مجزا به بات ارسال گردید.`,

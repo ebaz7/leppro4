@@ -38,6 +38,7 @@ export interface ErpProductionLine {
   id: string;
   code: string;
   name: string;
+  referencePrefix?: string;
   machineType: string;
   supervisorName: string;
   isActive: boolean;
