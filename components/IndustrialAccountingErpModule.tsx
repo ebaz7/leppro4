@@ -27,9 +27,15 @@ import {
   Layers,
   Download,
   Bot,
-  Trash2
+  Trash2,
+  Archive,
+  Upload,
+  RotateCcw,
+  FileArchive,
+  History,
+  ShieldCheck
 } from 'lucide-react';
-import { apiCall } from '../services/apiService';
+import { apiCall, getEffectiveApiUrl, getAuthToken } from '../services/apiService';
 import { getSettings } from '../services/storageService';
 import { User, UserRole } from '../types';
 import {
@@ -187,6 +193,52 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   const [clearingData, setClearingData] = useState<boolean>(false);
   const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
 
+  // Per-Company Isolated Backup & Restore Manager State
+  interface CompanyBackupSnapshotMeta {
+    id: string;
+    fileName: string;
+    format: 'json' | 'json.gz' | 'zip';
+    backupKind: 'auto' | 'manual' | 'bot' | 'pre_restore' | 'pre_clear';
+    sizeBytes: number;
+    compressedSizeBytes: number;
+    recordCounts?: Record<string, number> | null;
+    checksumSha256?: string | null;
+    createdBy?: string;
+    createdAtMs: number;
+    createdDateJalali?: string;
+  }
+  const [showCompanyBackupModal, setShowCompanyBackupModal] = useState<boolean>(false);
+  const [companyBackupsList, setCompanyBackupsList] = useState<CompanyBackupSnapshotMeta[]>([]);
+  const [loadingCompanyBackups, setLoadingCompanyBackups] = useState<boolean>(false);
+  const [creatingCompanyBackup, setCreatingCompanyBackup] = useState<boolean>(false);
+  const [restoringCompanyBackup, setRestoringCompanyBackup] = useState<boolean>(false);
+  const [confirmRestoreFileName, setConfirmRestoreFileName] = useState<string | null>(null);
+  const [pendingUploadBackup, setPendingUploadBackup] = useState<{ fileName: string; base64: string; allowCrossCompany: boolean } | null>(null);
+
+  const loadCompanyBackupsList = async (compId: string) => {
+    setLoadingCompanyBackups(true);
+    try {
+      const res = await apiCall<{ success: boolean; backups: CompanyBackupSnapshotMeta[] }>(
+        `/industrial-erp/company-backups?companyId=${encodeURIComponent(compId)}`
+      );
+      if (res?.success && Array.isArray(res.backups)) {
+        setCompanyBackupsList(res.backups);
+      }
+    } catch {
+      // Intranet offline fallback
+    } finally {
+      setLoadingCompanyBackups(false);
+    }
+  };
+
+  const openCompanyBackupModal = () => {
+    if (!selectedCompany) return;
+    setConfirmRestoreFileName(null);
+    setPendingUploadBackup(null);
+    setShowCompanyBackupModal(true);
+    loadCompanyBackupsList(selectedCompany.id);
+  };
+
   const handleBackupToBot = async () => {
     if (!selectedCompany) return;
     setBackingUpToBot(true);
@@ -194,10 +246,11 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       const res = await apiCall<{ success: boolean; message: string; filename?: string; botResult?: any }>(
         '/api/industrial-erp/backup-to-bot',
         'POST',
-        { companyId: selectedCompany.id }
+        { companyId: selectedCompany.id, createdBy: currentUser.fullName }
       );
       if (res && res.success) {
-        showToast('success', `بکاپ دیتابیس حسابداری و انبار با موفقیت ایجاد و به بات ارسال گردید (${res.filename || ''})`);
+        showToast('success', res.message || `بکاپ اختصاصی شرکت با موفقیت به بات ارسال گردید (${res.filename || ''})`);
+        if (showCompanyBackupModal) loadCompanyBackupsList(selectedCompany.id);
       } else {
         showToast('error', res?.message || 'خطا در ارسال فایل پشتیبان به بات');
       }
@@ -208,23 +261,131 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
   };
 
-  const handleDownloadBackup = async () => {
+  const handleCreateIsolatedSnapshot = async () => {
+    if (!selectedCompany) return;
+    setCreatingCompanyBackup(true);
+    try {
+      const res = await apiCall<{ success: boolean; message?: string; snapshot?: CompanyBackupSnapshotMeta }>(
+        '/industrial-erp/create-company-backup',
+        'POST',
+        { companyId: selectedCompany.id, createdBy: currentUser.fullName }
+      );
+      if (res?.success) {
+        showToast('success', res.message || 'نسخه پشتیبان فشرده اختصاصی این شرکت ذخیره شد.');
+        await loadCompanyBackupsList(selectedCompany.id);
+      } else {
+        showToast('error', 'خطا در ثبت نسخه پشتیبان شرکت');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'خطا در ایجاد فایل پشتیبان');
+    } finally {
+      setCreatingCompanyBackup(false);
+    }
+  };
+
+  const handleDownloadBackup = async (format: 'json' | 'zip' | 'gz' = 'zip', specificFileName?: string) => {
     if (!selectedCompany) return;
     try {
-      const response = await fetch(`/api/industrial-erp/download-backup?companyId=${encodeURIComponent(selectedCompany.id)}`);
+      const relativeEndpoint = specificFileName
+        ? `/industrial-erp/company-backups/download?companyId=${encodeURIComponent(selectedCompany.id)}&fileName=${encodeURIComponent(specificFileName)}`
+        : `/industrial-erp/download-backup?companyId=${encodeURIComponent(selectedCompany.id)}&format=${format}`;
+      const targetUrl = getEffectiveApiUrl(relativeEndpoint);
+      const token = getAuthToken();
+      const response = await fetch(targetUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       if (!response.ok) throw new Error('دانلود ناموفق بود');
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `ERP_Backup_${selectedCompany.id}_${Date.now()}.json`;
+      const ext = format === 'gz' ? 'json.gz' : format;
+      a.download = specificFileName || `ERP_Backup_${selectedCompany.id}_${Date.now()}.${ext}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      showToast('success', 'فایل JSON پشتیبان اختصاصی شرکت دانلود شد');
+      showToast('success', `فایل پشتیبان اختصاصی شرکت «${selectedCompany.name}» دانلود شد`);
     } catch (err: any) {
       showToast('error', err?.message || 'خطا در دانلود فایل پشتیبان');
+    }
+  };
+
+  const handleRestoreFromSnapshotFile = async (fileName: string) => {
+    if (!selectedCompany) return;
+    setRestoringCompanyBackup(true);
+    try {
+      const res = await apiCall<{ success: boolean; state?: IndustrialErpState; message?: string; error?: string }>(
+        '/industrial-erp/restore-company-backup',
+        'POST',
+        {
+          companyId: selectedCompany.id,
+          fileName,
+          restoredBy: currentUser.fullName
+        }
+      );
+      if (res?.success && res.state) {
+        setErpState(res.state);
+        try {
+          localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(res.state));
+        } catch {}
+        setConfirmRestoreFileName(null);
+        await loadCompanyBackupsList(selectedCompany.id);
+        showToast('success', res.message || `داده‌های شرکت «${selectedCompany.name}» با موفقیت بازیابی شد.`);
+      } else {
+        showToast('error', res?.error || 'خطا در بازیابی بکاپ شرکت');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'خطا در بازیابی نسخه پشتیبان');
+    } finally {
+      setRestoringCompanyBackup(false);
+    }
+  };
+
+  const handleUploadBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      if (base64) {
+        setPendingUploadBackup({ fileName: file.name, base64, allowCrossCompany: false });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleConfirmUploadedBackupRestore = async () => {
+    if (!selectedCompany || !pendingUploadBackup) return;
+    setRestoringCompanyBackup(true);
+    try {
+      const res = await apiCall<{ success: boolean; state?: IndustrialErpState; message?: string; error?: string }>(
+        '/industrial-erp/restore-company-backup',
+        'POST',
+        {
+          companyId: selectedCompany.id,
+          backupContentBase64: pendingUploadBackup.base64,
+          allowCrossCompanyImport: pendingUploadBackup.allowCrossCompany,
+          restoredBy: currentUser.fullName
+        }
+      );
+      if (res?.success && res.state) {
+        setErpState(res.state);
+        try {
+          localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(res.state));
+        } catch {}
+        setPendingUploadBackup(null);
+        await loadCompanyBackupsList(selectedCompany.id);
+        showToast('success', res.message || 'فایل پشتیبان اختصاصی با موفقیت روی همین شرکت بازیابی شد.');
+      } else {
+        showToast('error', res?.error || 'فایل پشتیبان با این شرکت همخوانی ندارد یا معتبر نیست.');
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'خطا در بازیابی فایل انتخاب‌شده');
+    } finally {
+      setRestoringCompanyBackup(false);
     }
   };
 
@@ -476,22 +637,81 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
   }, [selectedCompany?.id]);
 
+  const ERP_TRACKED_COLLECTIONS = [
+    'productionLines',
+    'commodityGroups',
+    'warehouses',
+    'items',
+    'boms',
+    'productionOrders',
+    'cartonLabels',
+    'productionVouchers',
+    'warehouseDocuments',
+    'warehouseDocs',
+    'salesOrders',
+    'remittances',
+    'tradeDocs',
+    'parties',
+    'bankAccounts',
+    'chequeBooks',
+    'treasuryDocs',
+    'employees',
+    'payrollSlips',
+    'fixedAssets',
+    'chartOfAccounts',
+    'vouchers'
+  ] as const;
+
   const persistErpState = async (nextState: IndustrialErpState, successToast?: string) => {
     if (!selectedCompany) return;
+
+    // Diff deleted record IDs compared to previous in-memory state of same company
+    const deletedIds: Record<string, string[]> = {};
+    if (erpState && erpState.companyId === selectedCompany.id) {
+      for (const col of ERP_TRACKED_COLLECTIONS) {
+        const prevArr: any[] = Array.isArray((erpState as any)[col]) ? (erpState as any)[col] : [];
+        const nextArr: any[] = Array.isArray((nextState as any)[col]) ? (nextState as any)[col] : [];
+        if (prevArr.length > 0) {
+          const nextIdSet = new Set(nextArr.map(r => r?.id).filter(Boolean));
+          const removed = prevArr.map(r => r?.id).filter((id): id is string => Boolean(id) && !nextIdSet.has(id));
+          if (removed.length > 0) {
+            deletedIds[col] = removed;
+          }
+        }
+      }
+    }
+
+    const stateToSave: IndustrialErpState = {
+      ...nextState,
+      companyId: selectedCompany.id,
+      _revision: nextState._revision ?? erpState?._revision,
+      ...(Object.keys(deletedIds).length > 0 ? { _deletedIds: deletedIds } : {})
+    };
+
     // 1. Immediate memory update
-    setErpState(nextState);
+    setErpState(stateToSave);
     // 2. Immediate local storage persistence (Never lose data even with no network)
     try {
-      localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(nextState));
+      localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(stateToSave));
     } catch {}
 
-    // 3. Background server save
+    // 3. Background server save with authoritative revision & concurrent merge sync
     try {
       setSaving(true);
-      await apiCall('/industrial-erp/save-state', 'POST', {
-        companyId: selectedCompany.id,
-        state: nextState
-      });
+      const saveRes = await apiCall<{ success: boolean; mergedConcurrently?: boolean; state?: IndustrialErpState }>(
+        '/industrial-erp/save-state',
+        'POST',
+        {
+          companyId: selectedCompany.id,
+          state: stateToSave
+        }
+      );
+      if (saveRes?.state && saveRes.state.companyId === selectedCompany.id) {
+        setErpState(saveRes.state);
+        try {
+          localStorage.setItem(`delcom_erp_state_${selectedCompany.id}`, JSON.stringify(saveRes.state));
+        } catch {}
+      }
       if (successToast) showToast('success', successToast);
       fetchCompaniesList();
     } catch {
@@ -919,20 +1139,20 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             onClick={handleBackupToBot}
             disabled={backingUpToBot}
             className="px-2.5 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
-            title="تهیه و ارسال آنی بکاپ دیتابیس حسابداری و انبار به ربات‌های بله و تلگرام"
+            title="ارسال آنی بکاپ اختصاصی این شرکت به ربات‌های بله و تلگرام"
           >
             <Bot size={13} className={backingUpToBot ? 'animate-spin' : ''} />
             <span className="hidden md:inline">ارسال بکاپ به بات</span>
           </button>
 
-          {/* Download JSON Backup */}
+          {/* Per-Company Isolated Backup & Restore Center */}
           <button
-            onClick={handleDownloadBackup}
+            onClick={openCompanyBackupModal}
             className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-            title="دانلود فایل پشتیبان داده‌های این شرکت"
+            title="مدیریت، دانلود و بازیابی بکاپ اختصاصی این شرکت"
           >
-            <Download size={13} />
-            <span className="hidden md:inline">دانلود بکاپ</span>
+            <Archive size={13} className="text-emerald-400" />
+            <span className="hidden md:inline">بکاپ اختصاصی شرکت</span>
           </button>
 
           {/* Clear / Raw Company Data */}
@@ -1264,6 +1484,252 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                 <Trash2 size={14} className={clearingData ? 'animate-spin' : ''} />
                 <span>{clearingData ? 'در حال پاکسازی...' : 'بله، داده‌های این شرکت خام شود'}</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: PER-COMPANY ISOLATED BACKUP & RESTORE CENTER */}
+      {showCompanyBackupModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0 bg-slate-50 dark:bg-slate-950/60">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                  <Archive size={22} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-black text-sm text-slate-900 dark:text-white truncate">
+                    مرکز بکاپ و بازیابی اختصاصی «{selectedCompany.name}»
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                    بکاپ و بازیابی کاملاً مجزا بدون تداخل با سایر شرکت‌ها
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCompanyBackupModal(false)}
+                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-5 flex-1">
+              {/* Quick Export / Snapshot Actions */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  onClick={handleCreateIsolatedSnapshot}
+                  disabled={creatingCompanyBackup}
+                  className="px-4 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-sm transition-colors"
+                >
+                  <History size={16} className={creatingCompanyBackup ? 'animate-spin' : ''} />
+                  <span>{creatingCompanyBackup ? 'در حال ایجاد نسخه فشرده...' : 'ثبت نسخه بکاپ آنی روی سرور'}</span>
+                </button>
+
+                <button
+                  onClick={handleBackupToBot}
+                  disabled={backingUpToBot}
+                  className="px-4 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-sm transition-colors"
+                >
+                  <Bot size={16} className={backingUpToBot ? 'animate-spin' : ''} />
+                  <span>{backingUpToBot ? 'در حال ارسال...' : 'ارسال بکاپ فشرده این شرکت به بات'}</span>
+                </button>
+
+                <button
+                  onClick={() => handleDownloadBackup('zip')}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileArchive size={15} className="text-indigo-600 dark:text-indigo-400" />
+                  <span>دانلود بکاپ فشرده (ZIP)</span>
+                </button>
+
+                <button
+                  onClick={() => handleDownloadBackup('json')}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                >
+                  <Download size={15} className="text-emerald-600 dark:text-emerald-400" />
+                  <span>دانلود مستقیم فایل (JSON)</span>
+                </button>
+              </div>
+
+              {/* Upload Backup File For This Company Only */}
+              <div className="bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div className="font-black text-xs text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                      <Upload size={14} className="text-indigo-600" />
+                      <span>بازیابی از فایل بکاپ اختصاصی شرکت</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      فرمت‌های مجاز: <span className="font-mono">.zip</span>، <span className="font-mono">.json.gz</span> یا <span className="font-mono">.json</span> (پیش از بازیابی، بکاپ ایمنی خودکار گرفته می‌شود)
+                    </p>
+                  </div>
+                  <label className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0">
+                    <Upload size={14} />
+                    <span>انتخاب فایل بکاپ</span>
+                    <input
+                      type="file"
+                      accept=".json,.gz,.zip,application/json,application/zip,application/gzip"
+                      onChange={handleUploadBackupFileSelect}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                {pendingUploadBackup && (
+                  <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl p-3 space-y-2.5">
+                    <div className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      فایل آماده بازیابی روی شرکت «{selectedCompany.name}»: <span className="font-mono">{pendingUploadBackup.fileName}</span>
+                    </div>
+                    <label className="flex items-center gap-2 text-[11px] text-amber-800 dark:text-amber-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={pendingUploadBackup.allowCrossCompany}
+                        onChange={e =>
+                          setPendingUploadBackup(prev => (prev ? { ...prev, allowCrossCompany: e.target.checked } : null))
+                        }
+                        className="rounded"
+                      />
+                      <span>در صورتی که فایل متعلق به شرکت دیگری است اجازه انتقال به این شرکت داده شود</span>
+                    </label>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => setPendingUploadBackup(null)}
+                        disabled={restoringCompanyBackup}
+                        className="px-3 py-1.5 rounded-lg border border-amber-300 text-xs font-bold text-amber-800 dark:text-amber-200 cursor-pointer"
+                      >
+                        انصراف
+                      </button>
+                      <button
+                        onClick={handleConfirmUploadedBackupRestore}
+                        disabled={restoringCompanyBackup}
+                        className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <RotateCcw size={13} className={restoringCompanyBackup ? 'animate-spin' : ''} />
+                        <span>{restoringCompanyBackup ? 'در حال بازیابی...' : 'تایید و بازیابی فایل'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Saved Per-Company Snapshots Archive */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-black text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <ShieldCheck size={15} className="text-emerald-600" />
+                    <span>آرشیو بکاپ‌های خودکار و دستی این شرکت ({companyBackupsList.length})</span>
+                  </h4>
+                  <button
+                    onClick={() => loadCompanyBackupsList(selectedCompany.id)}
+                    disabled={loadingCompanyBackups}
+                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw size={12} className={loadingCompanyBackups ? 'animate-spin' : ''} />
+                    <span>بروزرسانی لیست</span>
+                  </button>
+                </div>
+
+                {loadingCompanyBackups && companyBackupsList.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-400 font-bold">در حال دریافت آرشیو بکاپ‌های شرکت...</div>
+                ) : companyBackupsList.length === 0 ? (
+                  <div className="text-center py-8 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500 font-bold">
+                    هنوز نسخه پشتیبانی در آرشیو اختصاصی این شرکت ذخیره نشده است. با دکمه بالا می‌توانید اولین بکاپ فشرده را ایجاد کنید.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {companyBackupsList.map(bkp => {
+                      const kindLabel =
+                        bkp.backupKind === 'auto'
+                          ? 'خودکار'
+                          : bkp.backupKind === 'pre_restore'
+                          ? 'ایمنی پیش از بازیابی'
+                          : bkp.backupKind === 'pre_clear'
+                          ? 'ایمنی پیش از خام‌سازی'
+                          : bkp.backupKind === 'bot'
+                          ? 'ارسال به بات'
+                          : 'دستی';
+                      const sizeKb = (bkp.compressedSizeBytes / 1024).toFixed(1);
+                      const isConfirming = confirmRestoreFileName === bkp.fileName;
+
+                      return (
+                        <div
+                          key={bkp.fileName}
+                          className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 flex flex-col gap-2"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-black">
+                                  {kindLabel}
+                                </span>
+                                <span className="font-mono text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate">
+                                  {bkp.fileName}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 flex items-center gap-3 flex-wrap font-mono">
+                                <span>{bkp.createdDateJalali || new Date(bkp.createdAtMs).toLocaleString('fa-IR')}</span>
+                                <span>حجم فشرده: {sizeKb} KB</span>
+                                {bkp.recordCounts && (
+                                  <span>
+                                    کارتن: {bkp.recordCounts.cartonLabels ?? 0} | اسناد: {bkp.recordCounts.vouchers ?? 0} | کالا: {bkp.recordCounts.items ?? 0}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                onClick={() => handleDownloadBackup(bkp.format === 'zip' ? 'zip' : 'gz', bkp.fileName)}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <Download size={13} />
+                                <span>دانلود</span>
+                              </button>
+                              {!bkp.fileName.endsWith('.zip') && (
+                                <button
+                                  onClick={() => setConfirmRestoreFileName(isConfirming ? null : bkp.fileName)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[11px] font-black flex items-center gap-1 cursor-pointer"
+                                >
+                                  <RotateCcw size={13} />
+                                  <span>بازیابی</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {isConfirming && (
+                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-amber-50/70 dark:bg-amber-950/20 p-2.5 rounded-xl">
+                              <span className="text-[11px] font-bold text-amber-900 dark:text-amber-200">
+                                داده‌های فعلی شرکت «{selectedCompany.name}» با این نسخه جایگزین شود؟ (نسخه فعلی پیش از بازیابی ذخیره می‌شود)
+                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                                <button
+                                  onClick={() => setConfirmRestoreFileName(null)}
+                                  disabled={restoringCompanyBackup}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-300 text-[11px] font-bold text-slate-600 cursor-pointer"
+                                >
+                                  لغو
+                                </button>
+                                <button
+                                  onClick={() => handleRestoreFromSnapshotFile(bkp.fileName)}
+                                  disabled={restoringCompanyBackup}
+                                  className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black cursor-pointer disabled:opacity-50"
+                                >
+                                  {restoringCompanyBackup ? 'در حال بازیابی...' : 'تایید نهایی بازیابی'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

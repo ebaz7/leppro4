@@ -599,6 +599,8 @@ export interface IndustrialErpState {
   cutoverConfig?: ErpCutoverConfig;
   labelTemplateConfig?: ErpLabelTemplateConfig;
   scaleConfig?: ErpScaleConfig;
+  _revision?: number;
+  _deletedIds?: Record<string, string[]>;
 }
 
 export type ErpMainCategoryId =

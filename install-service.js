@@ -30,6 +30,11 @@ console.log("---------------------------------------------------------");
 
 const { Service } = await import('node-windows');
 
+const PG_TEMP_DIR = path.join(INSTALL_DIR, 'pgtemp');
+if (!fs.existsSync(PG_TEMP_DIR)) {
+  try { fs.mkdirSync(PG_TEMP_DIR, { recursive: true }); } catch {}
+}
+
 const svc = new Service({
   name: 'PaymentSystem',
   description: 'Payment Order Management System Web Server',
@@ -39,6 +44,8 @@ const svc = new Service({
       { name: "NODE_ENV", value: "production" },
       { name: "PORT", value: port },
       { name: "PUPPETEER_CACHE_DIR", value: path.join(INSTALL_DIR, '.puppeteer') },
+      { name: "TEMP", value: PG_TEMP_DIR },
+      { name: "TMP", value: PG_TEMP_DIR },
       ...(proxy ? [{ name: "PROXY_URL", value: proxy }] : [])
   ]
 });

@@ -69,19 +69,22 @@ async function main() {
         const buffer = fs.readFileSync(filePath);
         const caption = `⚠️ نسخه پشتیبان اضطراری (${reasonLabel})\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 نام فایل: ${filename}`;
 
-        // Send to Telegram
+        // Send to Telegram (short timeout so offline/intranet updates never hang)
         if (tgToken && tgChatId) {
             try {
                 console.log(`Sending to Telegram Admin Chat ID: ${tgChatId}...`);
-                const requestOptions = { agentOptions: { keepAlive: true, family: 4 }, timeout: 30000 };
+                const requestOptions = { agentOptions: { keepAlive: true, family: 4 }, timeout: 8000 };
                 if (process.env.PROXY_URL) requestOptions.proxy = process.env.PROXY_URL;
                 const bot = new TelegramBot(tgToken, { polling: false, request: requestOptions });
                 
                 const contentType = 'application/zip';
-                await bot.sendDocument(tgChatId, buffer, { caption }, { filename, contentType });
+                await Promise.race([
+                    bot.sendDocument(tgChatId, buffer, { caption }, { filename, contentType }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Telegram offline timeout')), 9000))
+                ]);
                 console.log("Backup sent to Telegram successfully ✅");
             } catch (tgErr) {
-                console.error("Failed to send backup to Telegram:", tgErr.message);
+                console.error("Failed to send backup to Telegram (offline/blocked safe skip):", tgErr.message);
             }
         }
 
@@ -100,7 +103,7 @@ async function main() {
                         path: `/bot${baleToken}/sendDocument`,
                         method: 'POST',
                         headers: form.getHeaders(),
-                        timeout: 30000
+                        timeout: 8000
                     };
 
                     const req = https.request(options, (res) => {

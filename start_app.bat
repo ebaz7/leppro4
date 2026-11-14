@@ -22,12 +22,19 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: Redirect temp and npm cache to install drive (never fill C:\ drive)
+if not exist "%~dp0pgtemp" mkdir "%~dp0pgtemp" >nul 2>&1
+if not exist "%~dp0.npm_cache" mkdir "%~dp0.npm_cache" >nul 2>&1
+set "TEMP=%~dp0pgtemp"
+set "TMP=%~dp0pgtemp"
+set "npm_config_cache=%~dp0.npm_cache"
+
 :: 2. Check and install dependencies if missing
 if not exist node_modules (
     echo [1/3] در حال نصب پیش‌نیازهای اولیه برنامه (لطفا شکیبا باشید)...
-    call npm install
+    call npm install --prefer-offline --no-audit --no-fund
     if %errorlevel% neq 0 (
-        echo [خطا] در نصب پکیج‌ها مشکلی پیش آمد. اینترنت خود را بررسی کنید.
+        echo [خطا] در نصب پکیج‌ها مشکلی پیش آمد. فایل node_modules یا کش آفلاین را بررسی کنید.
         echo برای خروج هر کلیدی را فشار دهید...
         pause
         exit /b 1
@@ -44,6 +51,11 @@ if not exist dist (
         pause
         exit /b 1
     )
+)
+
+:: 3.5 Start isolated install-drive PostgreSQL cleanly if initialized here
+if exist "%~dp0pgsql\bin\pg_ctl.exe" if exist "%~dp0pgdata\PG_VERSION" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup-local-postgres.ps1" -InstallDir "%~dp0" -Mode update -OfflineOnly
 )
 
 :: 4. Check if port 3000 is already in use by Windows Service (PaymentSystem) or manager.bat

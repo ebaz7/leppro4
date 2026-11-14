@@ -16,4 +16,13 @@ daemon/
 temp/
 extracted_excel/
 
+# Local Install-Drive PostgreSQL & Offline Caches (Protected from Git Reset/Updates)
+pgsql/
+pgdata/
+pglogs/
+pgtemp/
+pgarchive/
+pgsql_offline/
+.npm_cache/
+
 

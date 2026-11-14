@@ -6,6 +6,13 @@ title Payment System Deployment Manager
 :: Change to the directory of this script to avoid running in System32 when launched as Admin
 cd /d "%~dp0"
 
+:: Redirect temp and npm cache to the installation drive so C:\ is NEVER filled
+if not exist "%cd%\pgtemp" mkdir "%cd%\pgtemp" >nul 2>&1
+if not exist "%cd%\.npm_cache" mkdir "%cd%\.npm_cache" >nul 2>&1
+set "TEMP=%cd%\pgtemp"
+set "TMP=%cd%\pgtemp"
+set "npm_config_cache=%cd%\.npm_cache"
+
 :: Check for Administrator privileges
 net session >nul 2>&1
 if %errorLevel% neq 0 (
@@ -23,28 +30,47 @@ if %errorLevel% neq 0 (
 cls
 echo ========================================================
 echo         Payment System - Deployment Manager
+echo         Install Drive: %cd:~0,3%  (C:\ Protected)
 echo ========================================================
-echo 1. Install (Clone from GitHub, Setup, Install Service)
-echo 2. Update (Backup DB/Env, Pull changes, Restart Service)
-echo 3. Uninstall (Backup DB/Env, Remove Service)
+echo 1. Install (Setup App + Install-Drive PostgreSQL + Service)
+echo 2. Update (Backup DB/Env, Offline-Safe Pull, Sync SQL, Restart)
+echo 3. Uninstall (Backup DB/Env, Stop Services Safely)
 echo 4. View Error Logs (Check why it didn't start)
 echo 5. Install / Start ONLYOFFICE Document Server (Offline Docker)
-echo 6. Exit
+echo 6. Setup / Check Local PostgreSQL (Same Install Drive, Offline)
+echo 7. Exit
 echo ========================================================
-set /p choice="Select an option (1-6): "
+set /p choice="Select an option (1-7): "
 
 if "%choice%"=="1" goto INSTALL
 if "%choice%"=="2" goto UPDATE
 if "%choice%"=="3" goto UNINSTALL
 if "%choice%"=="4" goto LOGS
 if "%choice%"=="5" goto ONLYOFFICE
-if "%choice%"=="6" goto EOF
+if "%choice%"=="6" goto POSTGRES
+if "%choice%"=="7" goto EOF
 
 goto MENU
 
 :ONLYOFFICE
 cls
 call install_onlyoffice.bat
+goto MENU
+
+:POSTGRES
+cls
+echo ========================================================
+echo    LOCAL POSTGRESQL SETUP / CHECK (INSTALL DRIVE ONLY)
+echo ========================================================
+echo Install Directory: %cd%
+echo No files or data will be placed on Windows C:\ drive.
+echo.
+if exist "%cd%\scripts\setup-local-postgres.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\setup-local-postgres.ps1" -InstallDir "%cd%" -Mode update
+) else (
+    echo [ERROR] scripts\setup-local-postgres.ps1 not found.
+)
+pause
 goto MENU
 
 :INSTALL
@@ -80,33 +106,62 @@ git rm -r --cached wauth 2>nul
 git rm -r --cached backups 2>nul
 git rm -r --cached extracted_excel 2>nul
 git rm -r --cached temp 2>nul
+git rm -r --cached pgsql 2>nul
+git rm -r --cached pgdata 2>nul
+git rm -r --cached pglogs 2>nul
+git rm -r --cached pgtemp 2>nul
+git rm -r --cached pgarchive 2>nul
+git rm -r --cached pgsql_offline 2>nul
+git rm -r --cached .npm_cache 2>nul
 
 echo.
-echo [2/7] Configuring Port and Proxy...
+echo [2/8] Configuring Port and Proxy (Preserving existing .env if present)...
 set /p APP_PORT="Enter Port (Default 80): "
 if "!APP_PORT!"=="" set APP_PORT=80
-set /p APP_PROXY="Enter Proxy URL (Optional, e.g. http://127.0.0.1:10809): "
+set /p APP_PROXY="Enter Proxy URL (Optional, leave blank for offline/LAN): "
 
-echo PORT=!APP_PORT! > .env
-if not "!APP_PROXY!"=="" echo PROXY_URL=!APP_PROXY! >> .env
-echo Configuration saved to .env
+if not exist .env (
+    echo PORT=!APP_PORT! > .env
+    if not "!APP_PROXY!"=="" echo PROXY_URL=!APP_PROXY! >> .env
+    echo Configuration saved to .env
+) else (
+    echo Existing .env detected and preserved safely ^(not overwritten^).
+)
 
 echo.
-echo [3/7] Installing Node.js dependencies...
+echo [3/8] Installing Node.js dependencies (Offline-compatible)...
 set PUPPETEER_CACHE_DIR=%cd%\.puppeteer
 set PUPPETEER_SKIP_DOWNLOAD=true
-call npm install
+call npm install --prefer-offline --no-audit --no-fund
+if errorlevel 1 (
+    if exist node_modules (
+        echo [WARNING] npm install returned an error ^(likely offline^). Using existing node_modules safely.
+    ) else (
+        echo [ERROR] node_modules missing and npm install failed offline.
+        pause
+        goto MENU
+    )
+)
 
 echo.
-echo [4/7] Patching dependencies (if required)...
+echo [4/8] Patching dependencies (if required)...
 if exist patch-dependencies.js node patch-dependencies.js
 
 echo.
-echo [5/7] Building Frontend...
+echo [5/8] Setting up Local PostgreSQL inside Install Drive (%cd%\pgdata)...
+if exist "%cd%\scripts\setup-local-postgres.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\setup-local-postgres.ps1" -InstallDir "%cd%" -Mode install -OfflineOnly
+    if !errorlevel! equ 2 (
+        echo [NOTE] Offline PostgreSQL archive not in pgsql_offline\ yet. Continuing safely with database.json.
+    )
+)
+
+echo.
+echo [6/8] Building Frontend...
 call npm run build
 
 echo.
-echo [6/7] Setting up the Windows Service...
+echo [7/8] Setting up the Windows Service...
 if exist install-service.js (
     node install-service.js
 ) else (
@@ -114,7 +169,7 @@ if exist install-service.js (
 )
 
 echo.
-echo [7/7] Configuring Windows Firewall...
+echo [8/8] Configuring Windows Firewall...
 if exist .env (
     for /f "tokens=2 delims==" %%a in ('findstr "^PORT=" .env') do set APP_PORT=%%a
     if not "!APP_PORT!"=="" (
@@ -154,13 +209,12 @@ goto MENU
 :UPDATE
 cls
 echo ========================================================
-echo                        UPDATE
+echo              OFFLINE-SAFE UPDATE (C:\ PROTECTED)
 echo ========================================================
 call :BACKUP update
 
 echo.
-set /p repo="Enter GitHub repository URL (e.g. https://github.com/user/repo.git): "
-if "!repo!"=="" goto MENU
+set /p repo="Enter Git repository URL (or press ENTER for offline/local update): "
 set /p branch="Enter branch name (default: main): "
 if "!branch!"=="" set branch=main
 
@@ -179,25 +233,51 @@ if exist wauth (
 )
 
 echo.
-echo [1/6] Pulling latest changes from GitHub...
-if not exist .git (
-    git init
-)
-git remote remove origin 2>nul
-git remote add origin !repo!
-git fetch origin
-git reset --hard origin/!branch!
-git branch -M !branch!
-git branch --set-upstream-to=origin/!branch! !branch!
-if errorlevel 1 (
-    echo [WARNING] git fetch/reset failed. Check if repository is reachable.
+echo [1/7] Checking Git updates (Offline-safe; existing DB & PGDATA never overwritten)...
+if exist .git (
+    if not "!repo!"=="" (
+        git remote remove origin 2>nul
+        git remote add origin !repo!
+        git fetch origin
+        if !errorlevel! equ 0 (
+            git reset --hard origin/!branch!
+            git branch -M !branch!
+            git branch --set-upstream-to=origin/!branch! !branch!
+        ) else (
+            echo [NOTE] Offline mode or repo unreachable - skipping git reset to protect local files!
+        )
+    ) else (
+        echo [NOTE] No repo URL entered - running local/offline update without remote fetch.
+    )
+) else (
+    if not "!repo!"=="" (
+        git init
+        git remote add origin !repo!
+        git fetch origin
+        if !errorlevel! equ 0 (
+            git reset --hard origin/!branch!
+            git branch -M !branch!
+            git branch --set-upstream-to=origin/!branch! !branch!
+        ) else (
+            echo [NOTE] Offline mode - skipping git reset cleanly.
+        )
+    ) else (
+        echo [NOTE] Running local offline update cleanly.
+    )
 )
 
-REM Untrack volatile folders from git index
+REM Untrack volatile and install-drive database folders from git index
 git rm -r --cached wauth 2>nul
 git rm -r --cached backups 2>nul
 git rm -r --cached extracted_excel 2>nul
 git rm -r --cached temp 2>nul
+git rm -r --cached pgsql 2>nul
+git rm -r --cached pgdata 2>nul
+git rm -r --cached pglogs 2>nul
+git rm -r --cached pgtemp 2>nul
+git rm -r --cached pgarchive 2>nul
+git rm -r --cached pgsql_offline 2>nul
+git rm -r --cached .npm_cache 2>nul
 
 REM Restore wauth session directory
 if "!WAUTH_BACKED_UP!"=="1" (
@@ -206,17 +286,37 @@ if "!WAUTH_BACKED_UP!"=="1" (
 )
 
 echo.
-echo [2/6] Installing/Updating dependencies...
+echo [2/7] Installing/Updating dependencies (Offline-compatible)...
 set PUPPETEER_CACHE_DIR=%cd%\.puppeteer
 set PUPPETEER_SKIP_DOWNLOAD=true
-call npm install
+call npm install --prefer-offline --no-audit --no-fund
+if errorlevel 1 (
+    if exist node_modules (
+        echo [NOTE] Offline environment detected - continuing safely with existing node_modules.
+    ) else (
+        echo [ERROR] Dependency installation failed and node_modules folder does not exist.
+        pause
+        goto MENU
+    )
+)
 
 echo.
-echo [3/6] Patching dependencies (if required)...
+echo [3/7] Patching dependencies (if required)...
 if exist patch-dependencies.js node patch-dependencies.js
 
 echo.
-echo [4/6] Building Frontend...
+echo [4/7] Setting up / Verifying Local PostgreSQL inside Install Drive (Never touches C:\)...
+if exist "%cd%\scripts\setup-local-postgres.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\setup-local-postgres.ps1" -InstallDir "%cd%" -Mode update -OfflineOnly
+    if !errorlevel! equ 2 (
+        echo [NOTE] Local PostgreSQL offline archive not present yet; existing system & database.json remain active and safe.
+    ) else if errorlevel 1 (
+        echo [WARNING] Local PostgreSQL check reported a warning. Your existing organizational database.json remains untouched.
+    )
+)
+
+echo.
+echo [5/7] Building Frontend...
 call npm run build
 if errorlevel 1 (
     echo [ERROR] Frontend build failed!
@@ -225,12 +325,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/6] Restarting Windows Service...
+echo [6/7] Updating & Restarting Windows Service...
+if exist install-service.js (
+    node install-service.js >nul 2>&1
+)
 net stop PaymentSystem >nul 2>&1
 net start PaymentSystem
 
 echo.
-echo [6/6] Configuring Windows Firewall and ONLYOFFICE...
+echo [7/7] Configuring Windows Firewall and ONLYOFFICE...
 if exist .env (
     for /f "tokens=2 delims==" %%a in ('findstr "^PORT=" .env') do set APP_PORT=%%a
     if not "!APP_PORT!"=="" (
@@ -271,6 +374,12 @@ echo ========================================================
 echo                      UNINSTALL
 echo ========================================================
 call :BACKUP uninstall
+
+echo.
+echo Stopping Delkam Local PostgreSQL safely (pgdata kept intact)...
+if exist "%cd%\scripts\setup-local-postgres.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%cd%\scripts\setup-local-postgres.ps1" -InstallDir "%cd%" -Mode stop >nul 2>&1
+)
 
 echo.
 echo Removing Windows Service...
@@ -315,17 +424,31 @@ goto MENU
 
 :BACKUP
 echo.
-echo Creating backup of critical files (database.json, .env)...
+echo Creating backup of critical files (database.json, .env, local SQL)...
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
 set timestamp=!datetime:~0,4!!datetime:~4,2!!datetime:~6,2!_!datetime:~8,2!!datetime:~10,2!!datetime:~12,2!
 set backup_dir=backup_!timestamp!
 mkdir "!backup_dir!"
 if exist database.json copy database.json "!backup_dir!\" >nul
 if exist .env copy .env "!backup_dir!\" >nul
+
+if exist "%cd%\pgsql\bin\pg_dump.exe" if exist "%cd%\pgdata\PG_VERSION" (
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_PORT=" .env 2^>nul') do set _BK_PORT=%%B
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_DB_NAME=" .env 2^>nul') do set _BK_DB=%%B
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_ADMIN_USER=" .env 2^>nul') do set _BK_USER=%%B
+    for /f "tokens=1,* delims==" %%A in ('findstr "^SQL_ADMIN_PASSWORD=" .env 2^>nul') do set _BK_PASS=%%B
+    if "!_BK_PORT!"=="" set _BK_PORT=5439
+    if "!_BK_DB!"=="" set _BK_DB=delkam_erp
+    if "!_BK_USER!"=="" set _BK_USER=postgres
+    set "PGPASSWORD=!_BK_PASS!"
+    "%cd%\pgsql\bin\pg_dump.exe" -h 127.0.0.1 -p !_BK_PORT! -U !_BK_USER! -d !_BK_DB! -Fc -Z 9 -f "!backup_dir!\!_BK_DB!_!timestamp!.dump" >nul 2>&1
+    set "PGPASSWORD="
+)
+
 echo Backup saved in !backup_dir! folder.
 
 if not "%1"=="" (
-    echo Sending backup to Telegram and Bale bots...
+    echo Sending local/Bale/Telegram backup safely...
     node send-pre-action-backup.js "%1"
 )
 exit /b

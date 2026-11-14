@@ -126,6 +126,12 @@
     "levelCode": "11"
   },
   {
+    "personCode": "2189",
+    "tafsiliCode": "112189",
+    "fullName": "MADADI",
+    "levelCode": "11"
+  },
+  {
     "personCode": "2783",
     "tafsiliCode": "112783",
     "fullName": "mahaseni",
@@ -2310,16 +2316,16 @@
     "levelCode": "11"
   },
   {
-    "personCode": "3034",
-    "tafsiliCode": "113034",
-    "fullName": "بانک رفاه",
-    "levelCode": "11"
-  },
-  {
     "personCode": "1005",
     "tafsiliCode": "1311005",
     "fullName": "بانک رفاه",
     "levelCode": "131"
+  },
+  {
+    "personCode": "3034",
+    "tafsiliCode": "113034",
+    "fullName": "بانک رفاه",
+    "levelCode": "11"
   },
   {
     "personCode": "1011",
@@ -10956,14 +10962,14 @@
     "levelCode": "11"
   },
   {
-    "personCode": "2937",
-    "tafsiliCode": "112937",
+    "personCode": "2941",
+    "tafsiliCode": "112941",
     "fullName": "علی مرادخانی",
     "levelCode": "11"
   },
   {
-    "personCode": "2941",
-    "tafsiliCode": "112941",
+    "personCode": "2937",
+    "tafsiliCode": "112937",
     "fullName": "علی مرادخانی",
     "levelCode": "11"
   },
@@ -13821,12 +13827,6 @@
     "personCode": "2188",
     "tafsiliCode": "112188",
     "fullName": "مخير (کارگزار تندگويان)",
-    "levelCode": "11"
-  },
-  {
-    "personCode": "2189",
-    "tafsiliCode": "112189",
-    "fullName": "مددي",
     "levelCode": "11"
   },
   {
@@ -17037,6 +17037,12 @@
     "personCode": "1024",
     "tafsiliCode": "11024",
     "fullName": "علیرضا صادقی",
+    "levelCode": "11"
+  },
+  {
+    "personCode": "2189",
+    "tafsiliCode": "112189",
+    "fullName": "مددي",
     "levelCode": "11"
   },
   {

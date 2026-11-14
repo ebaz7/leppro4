@@ -58,6 +58,9 @@ import * as sayanRemittanceService from './backend/sayan-remittance-service.js';
 import { mergeFilesToPdf, enhanceDocumentImage } from './backend/pdf-merger.js';
 import { generateBenchmarkData } from './backend/sayanBenchmarkData.js';
 import * as notificationQueue from './backend/notification-queue.js';
+import zlib from 'zlib';
+import * as erpPg from './backend/erp-pg-repository.js';
+import * as erpBackupMgr from './backend/erp-backup-manager.js';
 
 const getDb = dbManager.getDb;
 const saveDb = dbManager.saveDb;
@@ -862,6 +865,95 @@ const sendBackupToBots = async (filePath, filename, reason = "بکاپ خودک�
     }
 };
 
+// Dispatch a specific isolated file (such as an isolated per-company ERP backup ZIP) to Telegram/Bale bots
+const sendSpecificFileToBots = async (filePath, filename, captionText, force = false) => {
+    const db = getDb();
+    const settings = db.settings || {};
+
+    if (!force && !settings.backupBotSendEnabled) {
+        return { success: false, message: "ارسال بکاپ به بات در تنظیمات غیرفعال است." };
+    }
+    if (!fs.existsSync(filePath)) {
+        return { success: false, message: "فایل پشتیبان یافت نشد." };
+    }
+
+    let tgSent = false;
+    let baleSent = false;
+    const errors = [];
+    const buffer = fs.readFileSync(filePath);
+
+    const tgChatId = settings.backupAdminTelegramChatId || settings.telegramChatId || settings.telegramAdminId || settings.telegramChannelId || settings.telegram_chat_id;
+    if (settings.telegramBotToken && tgChatId) {
+        try {
+            const tg = await safeImport('./backend/telegram.js');
+            if (tg && tg.sendBotDocument) {
+                await tg.sendBotDocument(tgChatId, buffer, filename, captionText);
+                tgSent = true;
+            }
+        } catch (tgErr) {
+            errors.push(`تلگرام: ${tgErr.message}`);
+        }
+    }
+
+    const baleChatId = settings.backupAdminBaleChatId || settings.baleChatId || settings.baleAdminId || settings.baleChannelId || settings.bale_chat_id;
+    if (settings.baleBotToken && baleChatId) {
+        try {
+            const bale = await safeImport('./backend/bale.js');
+            if (bale && bale.sendBotDocument) {
+                await bale.sendBotDocument(baleChatId, buffer, filename, captionText);
+                baleSent = true;
+            }
+        } catch (baleErr) {
+            errors.push(`بله: ${baleErr.message}`);
+        }
+    }
+
+    return {
+        success: tgSent || baleSent,
+        tgSent,
+        baleSent,
+        errors,
+        filenameSent: filename
+    };
+};
+
+// Automated isolated per-company compressed ERP snapshots (.json.gz with SHA-256 deduplication)
+const performPerCompanyErpAutoBackups = async () => {
+    try {
+        const db = getDb();
+        const companies = getErpCompaniesList(db);
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
+        for (const comp of companies) {
+            try {
+                const legacySt = ensureIndustrialErpStructure(db, comp.id);
+                const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+                    companyId: comp.id,
+                    companyName: comp.name,
+                    settingsCompany: comp,
+                    legacyState: legacySt
+                });
+                const snap = await erpBackupMgr.createIsolatedCompanySnapshot({
+                    backupsRootDir: BACKUPS_DIR,
+                    companyId: comp.id,
+                    companyName: comp.name,
+                    state,
+                    backupKind: 'auto',
+                    createdBy: 'auto-scheduler',
+                    createdDateJalali: todayJalali,
+                    maxRetainedPerCompany: 15
+                });
+                if (!snap.skippedUnchanged) {
+                    console.log(`✅ [Per-Company ERP AutoBackup] ${comp.name} -> ${snap.fileName} (${(snap.compressedSizeBytes / 1024).toFixed(1)} KB)`);
+                }
+            } catch (compErr) {
+                console.warn(`⚠️ [Per-Company ERP AutoBackup] ${comp.name}:`, compErr.message);
+            }
+        }
+    } catch (err) {
+        console.warn('[Per-Company ERP AutoBackup] Scheduler warning:', err.message);
+    }
+};
+
 const performAutoBackup = () => {
     const db = getDb();
     const settings = db.settings || {};
@@ -879,6 +971,7 @@ const performAutoBackup = () => {
         output.on('close', () => {
             console.log(`✅ Auto Backup Created: ${filename} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`);
             sendBackupToBots(filePath, filename, "بکاپ خودکار دوره‌ای");
+            performPerCompanyErpAutoBackups().catch(() => {});
         });
 
         archive.on('error', (err) => { throw err; });
@@ -9069,8 +9162,8 @@ function ensureIndustrialErpStructure(db, requestedCompanyId = null) {
     return companyState;
 }
 
-// Get list of all ERP Companies (directly synced from Settings) with isolated database KPIs
-app.get('/api/industrial-erp/companies', (req, res) => {
+// Get list of all ERP Companies (directly synced from Settings) with isolated PostgreSQL/DB KPIs
+app.get('/api/industrial-erp/companies', async (req, res) => {
     try {
         const db = getDb();
         const companies = getErpCompaniesList(db);
@@ -9083,9 +9176,36 @@ app.get('/api/industrial-erp/companies', (req, res) => {
         const filteredCompanies = companies.filter(comp => comp.isAccountingEnabled !== false);
         const targetList = filteredCompanies.length > 0 ? filteredCompanies : companies.slice(0, 1);
 
-        const result = targetList.map((comp, idx) => {
+        let pgStatsMap = null;
+        if (erpPg.isPostgresConfigured()) {
+            pgStatsMap = await erpPg.getAllCompanyStatsFromPg().catch(() => null);
+        }
+
+        const result = [];
+        for (let idx = 0; idx < targetList.length; idx++) {
+            const comp = targetList[idx];
             const st = ensureIndustrialErpStructure(db, comp.id);
-            return {
+            let pgEntry = pgStatsMap ? pgStatsMap.get(comp.id) : null;
+
+            if (erpPg.isPostgresConfigured() && !pgEntry) {
+                const hydrated = await erpPg.getCompanyErpStateFromPg(comp.id, comp.name, comp, st).catch(() => null);
+                if (hydrated) {
+                    pgEntry = {
+                        activeFiscalYear: hydrated.activeFiscalYear,
+                        fiscalYears: hydrated.fiscalYears,
+                        stats: {
+                            vouchersCount: (hydrated.vouchers || []).length,
+                            inStockCartonsCount: (hydrated.cartonLabels || []).filter(c => c.status === 'IN_STOCK').length,
+                            itemsCount: (hydrated.items || []).length,
+                            pendingRemittancesCount: (hydrated.remittances || []).filter(r => r.status === 'PENDING_TEHRAN_PRICING').length,
+                            invoicesCount: (hydrated.tradeDocs || []).length,
+                            warehousesCount: (hydrated.warehouses || []).length
+                        }
+                    };
+                }
+            }
+
+            result.push({
                 id: comp.id,
                 name: comp.name,
                 nationalId: comp.nationalId || '-',
@@ -9096,11 +9216,11 @@ app.get('/api/industrial-erp/companies', (req, res) => {
                 logo: comp.logo || null,
                 isAccountingEnabled: comp.isAccountingEnabled !== false,
                 banks: Array.isArray(comp.banks) ? comp.banks : [],
-                activeFiscalYear: st.activeFiscalYear || defaultFyLabel,
-                fiscalYears: st.fiscalYears || ['1405', '1404'],
+                activeFiscalYear: pgEntry?.activeFiscalYear || st.activeFiscalYear || defaultFyLabel,
+                fiscalYears: pgEntry?.fiscalYears || st.fiscalYears || ['1405', '1404'],
                 allowedUserIds: comp.erpAllowedUserIds || [],
                 isPrimary: idx === 0,
-                stats: {
+                stats: pgEntry?.stats || {
                     vouchersCount: (st.vouchers || []).length,
                     inStockCartonsCount: (st.cartonLabels || []).filter(c => c.status === 'IN_STOCK').length,
                     itemsCount: (st.items || []).length,
@@ -9108,8 +9228,8 @@ app.get('/api/industrial-erp/companies', (req, res) => {
                     invoicesCount: (st.tradeDocs || []).length,
                     warehousesCount: (st.warehouses || []).length
                 }
-            };
-        });
+            });
+        }
         saveDb(db);
         res.json(result);
     } catch (e) {
@@ -9118,7 +9238,7 @@ app.get('/api/industrial-erp/companies', (req, res) => {
 });
 
 // Create or Update an ERP Company & Fiscal Years
-app.post('/api/industrial-erp/companies', (req, res) => {
+app.post('/api/industrial-erp/companies', async (req, res) => {
     try {
         const db = getDb();
         const companies = getErpCompaniesList(db);
@@ -9176,6 +9296,14 @@ app.post('/api/industrial-erp/companies', (req, res) => {
             st.fiscalYears = Array.from(new Set(fiscalYears.map(String)));
         }
 
+        if (erpPg.isPostgresConfigured()) {
+            const compObj = companies.find(c => c.id === compId) || null;
+            await erpPg.saveCompanyErpStateToPg(compId, st, st.companyName, {
+                settingsCompany: compObj,
+                legacyFallbackState: st
+            });
+        }
+
         saveDb(db);
         res.json({ success: true, companyId: compId, message: `اطلاعات شرکت «${name}» و دوره مالی مستقل آن ذخیره شد.` });
     } catch (e) {
@@ -9183,89 +9311,389 @@ app.post('/api/industrial-erp/companies', (req, res) => {
     }
 });
 
-// Clean / Raw reset of ERP company data without touching main DB
-app.post('/api/industrial-erp/clear-company-data', (req, res) => {
+// Clean / Raw reset of ERP company data without touching main DB or other companies
+app.post('/api/industrial-erp/clear-company-data', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body && req.body.companyId;
         if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است' });
         const compList = getErpCompaniesList(db);
         const comp = compList.find(c => c.id === companyId) || { name: 'شرکت انتخابی' };
+
+        // Auto safety backup strictly for this company before clearing
+        const legacyCurrent = ensureIndustrialErpStructure(db, companyId);
+        const currentAuthoritative = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId,
+            companyName: comp.name,
+            settingsCompany: comp,
+            legacyState: legacyCurrent
+        });
+        await erpBackupMgr.createIsolatedCompanySnapshot({
+            backupsRootDir: BACKUPS_DIR,
+            companyId,
+            companyName: comp.name,
+            state: currentAuthoritative,
+            backupKind: 'pre_restore',
+            createdBy: 'clear-guard',
+            createdDateJalali: utils.toShamsiFull(new Date()).split(' ')[0] || ''
+        }).catch(() => {});
+
         const freshState = getDefaultIndustrialErpState(comp.name, false);
         freshState.companyId = companyId;
+        freshState.employees = [];
+
+        let finalState = freshState;
+        if (erpPg.isPostgresConfigured()) {
+            const pgFresh = await erpPg.resetCompanyErpStateInPg(companyId, comp.name, freshState);
+            if (pgFresh) finalState = pgFresh;
+        }
+
         if (!db.industrialErp) db.industrialErp = {};
         if (!db.industrialErp.companiesData) db.industrialErp.companiesData = {};
-        db.industrialErp.companiesData[companyId] = freshState;
+        db.industrialErp.companiesData[companyId] = finalState;
         saveDb(db);
-        res.json({ success: true, message: 'داده‌های حسابداری و انبار شرکت با موفقیت خام و صفر گردید. دیتابیس اصلی نرم‌افزار کاملاً دست‌نخورده باقی ماند.', state: freshState });
+        res.json({ success: true, message: 'داده‌های حسابداری و انبار شرکت با موفقیت خام و صفر گردید. دیتابیس اصلی نرم‌افزار کاملاً دست‌نخورده باقی ماند.', state: finalState });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// Send Backup to Bale & Telegram bots
+// Send ISOLATED per-company backup ZIP to Bale & Telegram bots (never leaks other companies!)
 app.post('/api/industrial-erp/backup-to-bot', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body && req.body.companyId;
+        if (!companyId) {
+            return res.status(400).json({ success: false, error: 'شناسه شرکت برای بکاپ‌گیری اختصاصی الزامی است.' });
+        }
         const compList = getErpCompaniesList(db);
-        const comp = compList.find(c => c.id === companyId) || { name: 'سیستم جامع ERP' };
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-        const dbBackup = await createDbOnlyBackupZip(timestamp);
-        const reasonText = 'پشتیبان‌گیری دستی حسابداری و انبار شرکت ' + comp.name;
-        const botResult = await sendBackupToBots(
-            dbBackup.filePath,
-            dbBackup.filename,
-            reasonText,
+        const comp = compList.find(c => c.id === companyId) || { id: companyId, name: 'شرکت انتخابی' };
+        const legacySt = ensureIndustrialErpStructure(db, comp.id);
+        const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: comp.id,
+            companyName: comp.name,
+            settingsCompany: comp,
+            legacyState: legacySt
+        });
+
+        const zipBackup = await erpBackupMgr.createIsolatedCompanyBackupZip({
+            backupsRootDir: BACKUPS_DIR,
+            companyId: comp.id,
+            companyName: comp.name,
+            state
+        });
+
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
+        const snap = await erpBackupMgr.createIsolatedCompanySnapshot({
+            backupsRootDir: BACKUPS_DIR,
+            companyId: comp.id,
+            companyName: comp.name,
+            state,
+            backupKind: 'bot',
+            createdBy: req.body?.createdBy || 'bot-export',
+            createdDateJalali: todayJalali
+        });
+
+        const caption = `📁 نسخه پشتیبان اختصاصی و مجزای شرکت «${comp.name}»\n🆔 شناسه: ${comp.id}\n📦 تعداد کارتن: ${(state.cartonLabels || []).length} | اسناد مالی: ${(state.vouchers || []).length}\n🔐 SHA-256: ${zipBackup.envelope.checksumSha256.slice(0, 16)}...\n⏰ ${new Date().toLocaleString('fa-IR')}`;
+        const botResult = await sendSpecificFileToBots(
+            zipBackup.filePath,
+            zipBackup.filename,
+            caption,
             true
         );
         res.json({
             success: true,
-            message: 'نسخه پشتیبان دیتابیس تهیه شد و با موفقیت به بات ارسال گردید.',
-            filename: dbBackup.filename,
-            botResult: botResult
+            message: `بکاپ اختصاصی شرکت «${comp.name}» با موفقیت تهیه و به‌صورت کاملاً مجزا به بات ارسال گردید.`,
+            filename: zipBackup.filename,
+            snapshotFileName: snap.fileName,
+            botResult
         });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// Download JSON backup of ERP company state
-app.get('/api/industrial-erp/download-backup', (req, res) => {
+// Download isolated per-company backup (.json, .zip, or .gz)
+app.get('/api/industrial-erp/download-backup', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.query.companyId;
-        const erp = ensureIndustrialErpStructure(db, companyId);
-        const compName = (erp.companyName || 'ERP').replace(/[^a-zA-Z0-9_-]/g, '_');
-        const filename = 'ERP_Backup_' + compName + '_' + Date.now() + '.json';
-        res.setHeader('Content-Disposition', 'attachment; filename=' + filename);
+        const format = String(req.query.format || 'json').toLowerCase();
+        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const targetId = legacySt.companyId;
+        const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
+        const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: targetId,
+            companyName: comp?.name || legacySt.companyName,
+            settingsCompany: comp,
+            legacyState: legacySt
+        });
+
+        const safeComp = erpBackupMgr.sanitizeCompanyFolderName(targetId);
+        const ts = Date.now();
+
+        if (format === 'zip') {
+            const zipRes = await erpBackupMgr.createIsolatedCompanyBackupZip({
+                backupsRootDir: BACKUPS_DIR,
+                companyId: targetId,
+                companyName: state.companyName,
+                state
+            });
+            res.setHeader('Content-Disposition', `attachment; filename="${zipRes.filename}"`);
+            res.setHeader('Content-Type', 'application/zip');
+            return res.sendFile(zipRes.filePath);
+        }
+
+        const envelope = erpBackupMgr.buildIsolatedCompanyBackupEnvelope(
+            targetId,
+            state.companyName,
+            state,
+            erpPg.isPostgresConfigured() ? 'postgresql' : 'json'
+        );
+
+        if (format === 'gz') {
+            const gzBuf = zlib.gzipSync(Buffer.from(JSON.stringify(envelope), 'utf8'), { level: 9 });
+            const filename = `ERP_Backup_${safeComp}_${ts}.json.gz`;
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.setHeader('Content-Type', 'application/gzip');
+            return res.send(gzBuf);
+        }
+
+        const filename = `ERP_Backup_${safeComp}_${ts}.json`;
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.send(JSON.stringify(erp, null, 2));
+        res.send(JSON.stringify(envelope, null, 2));
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-app.get('/api/industrial-erp/state', (req, res) => {
-    const db = getDb();
-    const companyId = req.query.companyId || null;
-    const erp = ensureIndustrialErpStructure(db, companyId);
-    saveDb(db);
-    res.json(erp);
+// List isolated backups strictly belonging to this company
+app.get('/api/industrial-erp/company-backups', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.query.companyId;
+        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
+        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const list = await erpBackupMgr.listIsolatedCompanySnapshots(BACKUPS_DIR, legacySt.companyId);
+        res.json({ success: true, companyId: legacySt.companyId, backups: list });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
-app.post('/api/industrial-erp/save-state', (req, res) => {
+// Download a specific isolated snapshot file for this company (path traversal protected)
+app.get('/api/industrial-erp/company-backups/download', (req, res) => {
+    try {
+        const companyId = req.query.companyId;
+        const fileName = path.basename(String(req.query.fileName || ''));
+        if (!companyId || !fileName) return res.status(400).json({ error: 'پارامترهای شرکت و فایل الزامی است.' });
+        const companyDir = erpBackupMgr.getCompanyBackupDir(BACKUPS_DIR, companyId);
+        const fullPath = path.resolve(companyDir, fileName);
+        if (!fullPath.startsWith(path.resolve(companyDir)) || !fs.existsSync(fullPath)) {
+            return res.status(404).json({ error: 'فایل پشتیبان در بایگانی اختصاصی این شرکت یافت نشد.' });
+        }
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.sendFile(fullPath);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Create an immediate compact compressed snapshot strictly for this company
+app.post('/api/industrial-erp/create-company-backup', async (req, res) => {
+    try {
+        const db = getDb();
+        const { companyId, createdBy = 'کاربر سیستم' } = req.body || {};
+        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
+        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const targetId = legacySt.companyId;
+        const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
+        const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: targetId,
+            companyName: comp?.name || legacySt.companyName,
+            settingsCompany: comp,
+            legacyState: legacySt
+        });
+
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
+        const snapshot = await erpBackupMgr.createIsolatedCompanySnapshot({
+            backupsRootDir: BACKUPS_DIR,
+            companyId: targetId,
+            companyName: state.companyName,
+            state,
+            backupKind: 'manual',
+            createdBy,
+            createdDateJalali: todayJalali
+        });
+
+        res.json({
+            success: true,
+            snapshot,
+            message: `بکاپ اختصاصی شرکت «${state.companyName}» (${snapshot.fileName}) با فشرده‌سازی ذخیره شد.`
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Restore strictly a single company's ERP database from a saved snapshot or uploaded file
+app.post('/api/industrial-erp/restore-company-backup', async (req, res) => {
+    try {
+        const db = getDb();
+        const {
+            companyId,
+            fileName,
+            backupContentBase64,
+            backupData,
+            allowCrossCompanyImport = false,
+            restoredBy = 'کاربر سیستم'
+        } = req.body || {};
+        if (!companyId) return res.status(400).json({ error: 'شناسه شرکت الزامی است.' });
+
+        const legacySt = ensureIndustrialErpStructure(db, companyId);
+        const targetId = legacySt.companyId;
+        const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
+        const targetName = comp?.name || legacySt.companyName;
+
+        let backupInput = null;
+        if (fileName) {
+            const safeName = path.basename(String(fileName));
+            const companyDir = erpBackupMgr.getCompanyBackupDir(BACKUPS_DIR, targetId);
+            const fullPath = path.resolve(companyDir, safeName);
+            if (!fullPath.startsWith(path.resolve(companyDir)) || !fs.existsSync(fullPath)) {
+                return res.status(404).json({ error: 'فایل بکاپ انتخاب‌شده در پوشه این شرکت یافت نشد.' });
+            }
+            backupInput = fs.readFileSync(fullPath);
+        } else if (backupContentBase64) {
+            backupInput = Buffer.from(String(backupContentBase64), 'base64');
+        } else if (backupData) {
+            backupInput = backupData;
+        } else {
+            return res.status(400).json({ error: 'فایل یا داده پشتیبان برای بازیابی ارسال نشده است.' });
+        }
+
+        const currentAuthoritative = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: targetId,
+            companyName: targetName,
+            settingsCompany: comp,
+            legacyState: legacySt
+        });
+
+        const restored = await erpBackupMgr.restoreIsolatedCompanyBackup({
+            backupsRootDir: BACKUPS_DIR,
+            targetCompanyId: targetId,
+            targetCompanyName: targetName,
+            settingsCompany: comp,
+            currentStateForSafetySnapshot: currentAuthoritative,
+            backupInput,
+            allowCrossCompanyImport: Boolean(allowCrossCompanyImport),
+            restoredBy,
+            createdDateJalali: utils.toShamsiFull(new Date()).split(' ')[0] || '',
+            legacyJsonSyncFn: (finalState) => {
+                db.industrialErp.companiesData[targetId] = finalState;
+                saveDb(db);
+            }
+        });
+
+        res.json({
+            success: true,
+            state: restored.state,
+            recordCounts: restored.recordCounts,
+            message: `بکاپ اختصاصی شرکت «${targetName}» با موفقیت بازیابی گردید (سایر شرکت‌ها و دیتابیس اصلی کاملاً دست‌نخورده ماندند).`
+        });
+    } catch (e) {
+        res.status(400).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/industrial-erp/state', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.query.companyId || null;
+        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const comp = getErpCompaniesList(db).find(c => c.id === legacyErp.companyId) || null;
+        const state = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: legacyErp.companyId,
+            companyName: comp?.name || legacyErp.companyName,
+            settingsCompany: comp,
+            legacyState: legacyErp
+        });
+        saveDb(db);
+        res.json(state);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/industrial-erp/save-state', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body?.companyId || req.query?.companyId || null;
-        const current = ensureIndustrialErpStructure(db, companyId);
-        const targetId = current.companyId;
+        const currentLegacy = ensureIndustrialErpStructure(db, companyId);
+        const targetId = currentLegacy.companyId;
+        const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
         const payload = req.body?.state ? req.body.state : req.body;
-        const updated = { ...current, ...payload, companyId: targetId };
-        delete updated.companiesData;
-        db.industrialErp.companiesData[targetId] = updated;
+
+        let finalState;
+        let mergedConcurrently = false;
+        if (erpPg.isPostgresConfigured()) {
+            const pgResult = await erpPg.saveCompanyErpStateToPg(
+                targetId,
+                payload,
+                comp?.name || currentLegacy.companyName,
+                {
+                    settingsCompany: comp,
+                    legacyFallbackState: currentLegacy
+                }
+            );
+            finalState = pgResult.state;
+            mergedConcurrently = pgResult.mergedConcurrently;
+        } else {
+            finalState = { ...currentLegacy, ...payload, companyId: targetId };
+            delete finalState.companiesData;
+        }
+
+        db.industrialErp.companiesData[targetId] = finalState;
         saveDb(db);
-        res.json({ success: true, state: db.industrialErp.companiesData[targetId] });
+        res.json({ success: true, mergedConcurrently, state: finalState });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/industrial-erp/update-cutover-config', async (req, res) => {
+    try {
+        const db = getDb();
+        const companyId = req.body?.companyId || null;
+        const cutoverConfig = req.body?.cutoverConfig || {};
+        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const targetId = legacyErp.companyId;
+        const comp = getErpCompaniesList(db).find(c => c.id === targetId) || null;
+
+        let updatedState;
+        if (erpPg.isPostgresConfigured()) {
+            const txRes = await erpPg.mutateCompanyErpTransactionally(
+                targetId,
+                comp?.name || legacyErp.companyName,
+                comp,
+                legacyErp,
+                async (curr) => ({
+                    state: {
+                        ...curr,
+                        cutoverConfig: { ...(curr.cutoverConfig || {}), ...cutoverConfig }
+                    }
+                })
+            );
+            updatedState = txRes.state;
+        } else {
+            legacyErp.cutoverConfig = { ...(legacyErp.cutoverConfig || {}), ...cutoverConfig };
+            updatedState = legacyErp;
+        }
+
+        db.industrialErp.companiesData[targetId] = updatedState;
+        saveDb(db);
+        res.json({ success: true, state: updatedState });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -9474,6 +9902,16 @@ app.post('/api/industrial-erp/sync-sayan-inventory-barcodes', async (req, res) =
         }
 
         erp.cutoverConfig.lastSayanBarcodeSyncAt = new Date().toISOString();
+        let finalErp = erp;
+        if (erpPg.isPostgresConfigured()) {
+            const comp = getErpCompaniesList(db).find(c => c.id === erp.companyId) || null;
+            const pgRes = await erpPg.saveCompanyErpStateToPg(erp.companyId, erp, erp.companyName, {
+                settingsCompany: comp,
+                legacyFallbackState: erp
+            });
+            if (pgRes?.state) finalErp = pgRes.state;
+        }
+        db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
 
         res.json({
@@ -9481,8 +9919,8 @@ app.post('/api/industrial-erp/sync-sayan-inventory-barcodes', async (req, res) =
             usedLiveSql,
             importedItemsCount,
             importedCartonsCount,
-            state: erp,
-            message: `${importedCartonsCount} بارکد کارتن موجود در انبار سایان و ${importedItemsCount} ردیف کالای جدید با موفقیت به انبار شرکت «${erp.companyName}» منتقل شد.`
+            state: finalErp,
+            message: `${importedCartonsCount} بارکد کارتن موجود در انبار سایان و ${importedItemsCount} ردیف کالای جدید با موفقیت به انبار شرکت «${finalErp.companyName}» منتقل شد.`
         });
     } catch (e) {
         console.error('Sync Sayan Inventory & Barcodes Error:', e);
@@ -9495,7 +9933,14 @@ app.post('/api/industrial-erp/lookup-any-barcode', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body?.companyId || null;
-        const erp = ensureIndustrialErpStructure(db, companyId);
+        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const comp = getErpCompaniesList(db).find(c => c.id === legacyErp.companyId) || null;
+        const erp = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: legacyErp.companyId,
+            companyName: comp?.name || legacyErp.companyName,
+            settingsCompany: comp,
+            legacyState: legacyErp
+        });
         const raw = String(req.body?.barcode || '').trim();
         if (!raw) return res.status(400).json({ success: false, message: 'بارکد یا سریال وارد نشده است.' });
 
@@ -9507,6 +9952,7 @@ app.post('/api/industrial-erp/lookup-any-barcode', async (req, res) => {
 
         let found = erp.cartonLabels.find(c =>
             c.serialNumber.toLowerCase() === serial.toLowerCase() ||
+            (c.referenceCode && c.referenceCode.toLowerCase() === serial.toLowerCase()) ||
             c.qrPayload.toLowerCase() === raw.toLowerCase()
         );
 
@@ -9555,8 +10001,17 @@ app.post('/api/industrial-erp/lookup-any-barcode', async (req, res) => {
                     createdDateJalali: utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20'
                 };
                 erp.cartonLabels.unshift(importedCarton);
+                let finalErp = erp;
+                if (erpPg.isPostgresConfigured()) {
+                    const pgRes = await erpPg.saveCompanyErpStateToPg(erp.companyId, erp, erp.companyName, {
+                        settingsCompany: comp,
+                        legacyFallbackState: erp
+                    });
+                    if (pgRes?.state) finalErp = pgRes.state;
+                }
+                db.industrialErp.companiesData[erp.companyId] = finalErp;
                 saveDb(db);
-                return res.json({ success: true, carton: importedCarton, source: 'SAYAN_LIVE', state: erp });
+                return res.json({ success: true, carton: importedCarton, source: 'SAYAN_LIVE', state: finalErp });
             }
         } catch (sayanErr) {
             console.warn('[Industrial ERP] Sayan live barcode lookup fallback warning:', sayanErr.message);
@@ -9576,7 +10031,14 @@ app.post('/api/industrial-erp/factory-exit-remittance', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body?.companyId || null;
-        const erp = ensureIndustrialErpStructure(db, companyId);
+        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const comp = getErpCompaniesList(db).find(c => c.id === legacyErp.companyId) || null;
+        const erp = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: legacyErp.companyId,
+            companyName: comp?.name || legacyErp.companyName,
+            settingsCompany: comp,
+            legacyState: legacyErp
+        });
         if (!db.exitPermits) db.exitPermits = [];
 
         const {
@@ -9710,14 +10172,23 @@ app.post('/api/industrial-erp/factory-exit-remittance', async (req, res) => {
             return item;
         });
 
+        let finalErp = erp;
+        if (erpPg.isPostgresConfigured()) {
+            const pgRes = await erpPg.saveCompanyErpStateToPg(erp.companyId, erp, erp.companyName, {
+                settingsCompany: comp,
+                legacyFallbackState: erp
+            });
+            if (pgRes?.state) finalErp = pgRes.state;
+        }
+        db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
 
         res.json({
             success: true,
             remittance: newRemittance,
             exitPermit: newExitPermit,
-            state: erp,
-            message: `حواله خروج کارخانه ${remittanceNo} و مجوز خروج شماره #${nextPermitNumber} (بدون فی) برای «${erp.companyName}» صادر شد و به کارتابل دفتر تهران ارسال گردید.`
+            state: finalErp,
+            message: `حواله خروج کارخانه ${remittanceNo} و مجوز خروج شماره #${nextPermitNumber} (بدون فی) برای «${finalErp.companyName}» صادر شد و به کارتابل دفتر تهران ارسال گردید.`
         });
     } catch (e) {
         console.error('Factory Exit Remittance Error:', e);
@@ -9730,7 +10201,14 @@ app.post('/api/industrial-erp/tehran-price-and-invoice', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body?.companyId || null;
-        const erp = ensureIndustrialErpStructure(db, companyId);
+        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const comp = getErpCompaniesList(db).find(c => c.id === legacyErp.companyId) || null;
+        const erp = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: legacyErp.companyId,
+            companyName: comp?.name || legacyErp.companyName,
+            settingsCompany: comp,
+            legacyState: legacyErp
+        });
         const { remittanceId, itemPrices = {}, issuedBy = 'دفتر مرکزی تهران' } = req.body || {};
 
         const remIdx = erp.remittances.findIndex(r => r.id === remittanceId);
@@ -9863,14 +10341,23 @@ app.post('/api/industrial-erp/tehran-price-and-invoice', async (req, res) => {
             }
         }
 
+        let finalErp = erp;
+        if (erpPg.isPostgresConfigured()) {
+            const pgRes = await erpPg.saveCompanyErpStateToPg(erp.companyId, erp, erp.companyName, {
+                settingsCompany: comp,
+                legacyFallbackState: erp
+            });
+            if (pgRes?.state) finalErp = pgRes.state;
+        }
+        db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
 
         res.json({
             success: true,
             invoice: newInvoice,
             voucher: salesVoucher,
-            state: erp,
-            message: `فی فروش دفتر تهران ثبت شد و فاکتور نهایی ${docNo} به همراه سند حسابداری شماره #${voucherNo} در شرکت «${erp.companyName}» صادر گردید.`
+            state: finalErp,
+            message: `فی فروش دفتر تهران ثبت شد و فاکتور نهایی ${docNo} به همراه سند حسابداری شماره #${voucherNo} در شرکت «${finalErp.companyName}» صادر گردید.`
         });
     } catch (e) {
         console.error('Tehran Price and Invoice Error:', e);
@@ -9883,7 +10370,14 @@ app.post('/api/industrial-erp/import-sayan-trial-balance', async (req, res) => {
     try {
         const db = getDb();
         const companyId = req.body?.companyId || null;
-        const erp = ensureIndustrialErpStructure(db, companyId);
+        const legacyErp = ensureIndustrialErpStructure(db, companyId);
+        const comp = getErpCompaniesList(db).find(c => c.id === legacyErp.companyId) || null;
+        const erp = await erpBackupMgr.loadAuthoritativeCompanyErpState({
+            companyId: legacyErp.companyId,
+            companyName: comp?.name || legacyErp.companyName,
+            settingsCompany: comp,
+            legacyState: legacyErp
+        });
         const cutoffDateJalali = String(req.body?.cutoffDateJalali || '1405/08/20').trim();
         const fiscalYear = String(req.body?.fiscalYear || db.settings?.sayanActivePeriodCode || '4').trim();
         const importedBy = String(req.body?.importedBy || 'مدیر مالی').trim();
@@ -10008,14 +10502,25 @@ app.post('/api/industrial-erp/import-sayan-trial-balance', async (req, res) => {
         erp.vouchers.unshift(openingVoucher);
         erp.nextVoucherNo = voucherNo + 1;
         erp.cutoverConfig.lastSayanTrialBalanceCutoff = cutoffDateJalali;
+
+        let finalErp = erp;
+        if (erpPg.isPostgresConfigured()) {
+            const comp = getErpCompaniesList(db).find(c => c.id === erp.companyId) || null;
+            const pgRes = await erpPg.saveCompanyErpStateToPg(erp.companyId, erp, erp.companyName, {
+                settingsCompany: comp,
+                legacyFallbackState: erp
+            });
+            if (pgRes?.state) finalErp = pgRes.state;
+        }
+        db.industrialErp.companiesData[erp.companyId] = finalErp;
         saveDb(db);
 
         res.json({
             success: true,
             usedLiveSql,
             voucher: openingVoucher,
-            state: erp,
-            message: `تراز مانده حساب‌ها تا تاریخ ${cutoffDateJalali} با موفقیت در قالب سند افتتاحیه شماره #${voucherNo} (${voucherLines.length} آرتیکل تراز) به حسابداری شرکت «${erp.companyName}» منتقل شد.`
+            state: finalErp,
+            message: `تراز مانده حساب‌ها تا تاریخ ${cutoffDateJalali} با موفقیت در قالب سند افتتاحیه شماره #${voucherNo} (${voucherLines.length} آرتیکل تراز) به حسابداری شرکت «${finalErp.companyName}» منتقل شد.`
         });
     } catch (e) {
         console.error('Import Sayan Trial Balance Error:', e);
