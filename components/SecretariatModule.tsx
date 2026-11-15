@@ -192,6 +192,7 @@ if (typeof window !== "undefined" && ReactQuill) {
 
 import { motion, AnimatePresence } from "motion/react";
 import { executeCrossPlatformPrint } from "../utils/mobilePrintService";
+import { FileViewerModal } from "./FileViewerModal";
 import {
   Building,
   Building2,
@@ -642,33 +643,66 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   const [printPreviewFullscreen, setPrintPreviewFullscreen] = useState(false);
   const [isSharingLetter, setIsSharingLetter] = useState(false);
 
+  const secretariatDeepLinkFetchRef = React.useRef<string | null>(null);
   useEffect(() => {
-    const openLetterByDetail = (detail: any): boolean => {
-      if (!detail || !Array.isArray(letters) || letters.length === 0) return false;
-      const targetId = String(detail.letterId || detail.id || "").trim();
-      const targetNum = String(detail.letterNumber || "").trim();
-      if (!targetId && !targetNum) return false;
-
-      const found = letters.find((l) => {
-        if (targetId && String(l.id).trim() === targetId) return true;
-        if (targetNum && String(l.letterNumber || "").trim() === targetNum) return true;
-        if (targetId && String(l.letterNumber || "").trim() === targetId) return true;
+    const norm = (v: any) => String(v ?? "").replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776)).replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632)).trim();
+    const matchLetterInList = (list: SecretariatLetter[], detail: any): SecretariatLetter | undefined => {
+      const targetId = norm(detail?.letterId || detail?.id);
+      const targetNum = norm(detail?.letterNumber);
+      if (!targetId && !targetNum) return undefined;
+      return list.find((l) => {
+        const lId = norm(l.id);
+        const lNum = norm(l.letterNumber);
+        if (targetId && lId === targetId) return true;
+        if (targetNum && lNum === targetNum) return true;
+        if (targetId && lNum === targetId) return true;
         return false;
       });
+    };
 
+    const openFoundLetter = (found: SecretariatLetter) => {
+      if (found.companyId && systemSettings?.companies) {
+        const comp = systemSettings.companies.find((c) => c.id === found.companyId || c.name === (found as any).companyName);
+        if (comp) setSelectedCompany(comp);
+      }
+      if ((found as any).section) {
+        setActiveSection((found as any).section);
+      } else if (!activeSection) {
+        setActiveSection("headquarters");
+      }
+      setSelectedLetterForView(found);
+      try { sessionStorage.removeItem("pending_secretariat_deep_link"); } catch {}
+    };
+
+    const openLetterByDetail = (detail: any): boolean => {
+      if (!detail) return false;
+      const targetId = norm(detail.letterId || detail.id);
+      const targetNum = norm(detail.letterNumber);
+      if (!targetId && !targetNum) return false;
+
+      const currentList = Array.isArray(letters) ? letters : [];
+      const found = matchLetterInList(currentList, detail);
       if (found) {
-        if (found.companyId && systemSettings?.companies) {
-          const comp = systemSettings.companies.find((c) => c.id === found.companyId || c.name === (found as any).companyName);
-          if (comp) setSelectedCompany(comp);
-        }
-        if ((found as any).section) {
-          setActiveSection((found as any).section);
-        } else if (!activeSection) {
-          setActiveSection("headquarters");
-        }
-        setSelectedLetterForView(found);
-        try { sessionStorage.removeItem("pending_secretariat_deep_link"); } catch {}
+        openFoundLetter(found);
         return true;
+      }
+
+      const fetchKey = `${targetId}|${targetNum}`;
+      if (secretariatDeepLinkFetchRef.current !== fetchKey) {
+        secretariatDeepLinkFetchRef.current = fetchKey;
+        getSecretariatLetters()
+          .then((fresh) => {
+            const arr = Array.isArray(fresh) ? fresh : [];
+            if (arr.length > 0) setLetters(arr);
+            const match = matchLetterInList(arr, detail);
+            if (match) openFoundLetter(match);
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (secretariatDeepLinkFetchRef.current === fetchKey) {
+              secretariatDeepLinkFetchRef.current = null;
+            }
+          });
       }
       return false;
     };
@@ -788,6 +822,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
     setEditingLetterId(null);
   };
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [previewLetterAttachment, setPreviewLetterAttachment] = useState<{ url: string; fileName: string } | null>(null);
 
   // Auto-fit zoom for mobile web, Android & small screens
   // Auto-fit zoom for mobile web, Android & small screens (Safe standalone function)
@@ -8930,19 +8965,18 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {selectedLetterForView.attachments.map((file, i) => (
                             <div key={i} className="flex items-center gap-1.5">
-                              <a
-                                href={file.url}
-                                target="_blank"
-                                rel="referrer"
-                                className="flex-1 flex items-center justify-between bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-purple-700 dark:text-purple-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all font-bold truncate"
+                              <button
+                                type="button"
+                                onClick={() => setPreviewLetterAttachment({ url: file.url, fileName: file.fileName })}
+                                className="flex-1 flex items-center justify-between bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-[11px] text-purple-700 dark:text-purple-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all font-bold truncate cursor-pointer"
                               >
                                 <span className="flex items-center gap-1 truncate">
                                   <FileText size={13} className="shrink-0" /> <span className="truncate">{file.fileName}</span>
                                 </span>
-                                <span className="text-[9px] text-slate-400 shrink-0 ml-1">
-                                  دانلود
+                                <span className="text-[9px] text-purple-600 dark:text-purple-400 shrink-0 ml-1 flex items-center gap-0.5">
+                                  <Eye size={11} /> مشاهده
                                 </span>
-                              </a>
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => openSendToChat({
@@ -9563,6 +9597,15 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           );
         })()}
       </AnimatePresence>
+
+      {previewLetterAttachment && (
+        <FileViewerModal
+          isOpen={!!previewLetterAttachment}
+          onClose={() => setPreviewLetterAttachment(null)}
+          fileUrl={previewLetterAttachment.url}
+          fileName={previewLetterAttachment.fileName}
+        />
+      )}
     </div>
   );
 };

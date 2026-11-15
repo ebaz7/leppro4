@@ -7484,9 +7484,9 @@ export const notifySecretariatLetter = async (letter, db) => {
             if (!db.notifications) db.notifications = [];
             db.notifications.push({
                 id: utils.generateUUID(),
-                title: "نامه اداری جدید",
+                title: `نامه اداری جدید #${letter.letterNumber || ''}`,
                 body: `نامه با موضوع "${letter.subject}" منتظر بررسی یا امضای شماست.`,
-                url: "/secretariat",
+                url: `/secretariat?letterId=${encodeURIComponent(letter.id || '')}&letterNumber=${encodeURIComponent(letter.letterNumber || '')}`,
                 targetRoles: null,
                 targetUsernames: targetUsernames,
                 excludeUsernames: null,

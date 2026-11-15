@@ -582,10 +582,9 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
 
     // Listen for custom navigation / open events from Global Search or cross-module links
     useEffect(() => {
-        const handleOpenTradeRecord = (e: any) => {
-            const detail = e.detail;
-            if (!detail) return;
-            const targetId = detail.recordId || detail.id;
+        const openTradeByDetail = (detail: any): boolean => {
+            if (!detail || records.length === 0) return false;
+            const targetId = String(detail.recordId || detail.id || '').trim();
             const targetTab = detail.tab || 'timeline';
             const targetSearch = detail.searchTerm;
             if (targetSearch) {
@@ -605,8 +604,27 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                     setSelectedRecord(found);
                     setViewMode('details');
                     setActiveTab(targetTab);
+                    try { sessionStorage.removeItem('pending_trade_deep_link'); } catch {}
+                    return true;
                 }
             }
+            return false;
+        };
+
+        try {
+            const rawPending = sessionStorage.getItem('pending_trade_deep_link');
+            if (rawPending) {
+                const parsed = JSON.parse(rawPending);
+                if (!parsed?.at || Date.now() - Number(parsed.at) < 120000) {
+                    openTradeByDetail(parsed);
+                } else {
+                    sessionStorage.removeItem('pending_trade_deep_link');
+                }
+            }
+        } catch {}
+
+        const handleOpenTradeRecord = (e: any) => {
+            openTradeByDetail(e.detail);
         };
         window.addEventListener('OPEN_TRADE_RECORD' as any, handleOpenTradeRecord);
         window.addEventListener('NAVIGATE_TRADE_RECORD' as any, handleOpenTradeRecord);

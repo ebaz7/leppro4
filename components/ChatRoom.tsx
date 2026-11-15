@@ -515,7 +515,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
             if (resolvedType === 'group' && (hasTask || taskGroups.some(tg => tg.id === resolvedId))) {
                 resolvedType = 'task_group';
             } else if (resolvedType === 'private' && users.length > 0) {
-                const matchedUser = users.find(u => u.username?.toLowerCase() === resolvedId.toLowerCase());
+                const lowerTarget = resolvedId.trim().toLowerCase();
+                const matchedUser =
+                    users.find(u => u.username?.trim().toLowerCase() === lowerTarget) ||
+                    users.find(u => u.fullName?.trim().toLowerCase() === lowerTarget) ||
+                    users.find(u => u.fullName?.trim().toLowerCase().includes(lowerTarget));
                 if (matchedUser?.username) {
                     resolvedId = matchedUser.username;
                 }
@@ -1306,10 +1310,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                 
                 const targetUrl = lastNewMsg.groupId 
                     ? `/chat?group=${lastNewMsg.groupId}` 
-                    : `/chat?pv=${lastNewMsg.senderUsername}`;
+                    : lastNewMsg.recipient
+                        ? `/chat?pv=${lastNewMsg.senderUsername}`
+                        : '/chat';
                 
                 // Pass precise unique message ID to allow reliable deduplication on client and native platforms
-                sendNotification(title, bodyText, { id: lastNewMsg.id, url: targetUrl, tab: 'chat' });
+                sendNotification(title, bodyText, { id: lastNewMsg.id, url: targetUrl, tab: 'chat', type: lastNewMsg.recipient ? 'chat_pv' : 'chat_group' });
             }
         }
     }, [messages, mutedChannels, groups, currentUser]);

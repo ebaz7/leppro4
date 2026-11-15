@@ -241,8 +241,11 @@ self.addEventListener('push', (event) => {
           icon: '/lepan-logo.png',
           badge: '/lepan-logo.png',
           data: {
+            ...data,
             url: data.url || '/#chat',
-            id: data.id
+            id: data.id,
+            title: data.title || 'سامانه مالی',
+            body: data.body || 'اعلان جدید'
           },
           vibrate: [200, 100, 200],
           dir: 'rtl',
@@ -264,24 +267,44 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  
-  let targetUrl = event.notification.data ? event.notification.data.url : '/#chat';
-  if (!targetUrl || targetUrl === '/' || targetUrl === '/chat') {
+
+  const notifData = event.notification.data || {};
+  const notifTitle = event.notification.title || notifData.title || '';
+  const notifBody = event.notification.body || notifData.body || '';
+  const rawUrl = notifData.url || notifData.targetUrl || '';
+
+  let targetUrl = rawUrl || '/#chat';
+  if (targetUrl === '/' || targetUrl === '/chat') {
     targetUrl = '/#chat';
   } else if (targetUrl.startsWith('/chat?')) {
     targetUrl = '/?' + targetUrl.substring(6) + '#chat';
+  } else if (targetUrl.startsWith('/') && !targetUrl.startsWith('/?')) {
+    const cleanPath = targetUrl.replace(/^\/+/, '');
+    const [pathOnly, queryPart] = cleanPath.split('?');
+    if (queryPart) {
+      targetUrl = `/?tab=${encodeURIComponent(pathOnly)}&${queryPart}#${pathOnly}`;
+    } else if (pathOnly) {
+      targetUrl = `/#${pathOnly}`;
+    }
   }
-  
+
   if (!targetUrl.startsWith('http')) {
     targetUrl = new URL(targetUrl, self.location.origin).href;
   }
-  
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
         if (client.url.startsWith(self.location.origin) && 'focus' in client) {
           client.focus();
-          client.postMessage({ type: 'NAVIGATE', url: targetUrl });
+          client.postMessage({
+            type: 'NAVIGATE',
+            url: rawUrl || targetUrl,
+            targetHref: targetUrl,
+            title: notifTitle,
+            body: notifBody,
+            data: notifData
+          });
           return;
         }
       }

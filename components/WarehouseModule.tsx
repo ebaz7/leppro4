@@ -417,23 +417,68 @@ const WarehouseModule: React.FC<Props> = ({ currentUser, settings, initialTab = 
         return () => { window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION')); };
     }, [viewBijak, editingBijak, editingReceipt, activeTab]);
 
+    const warehouseDeepLinkFetchRef = React.useRef<string | null>(null);
     useEffect(() => {
+        const norm = (v: any) => String(v ?? '').replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 1776)).replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 1632)).trim();
+        const matchTxInList = (list: WarehouseTransaction[], detail: any): WarehouseTransaction | undefined => {
+            const targetId = norm(detail?.txId || detail?.id);
+            const targetNum = norm(detail?.txNumber || detail?.number);
+            if (!targetId && !targetNum) return undefined;
+            return list.find(tx => {
+                const tId = norm(tx.id);
+                const tNum = norm(tx.number);
+                const tProf = norm(tx.proformaNumber);
+                return (
+                    (targetId && tId === targetId) ||
+                    (targetNum && tNum === targetNum) ||
+                    (targetId && tNum === targetId) ||
+                    (targetNum && tProf === targetNum)
+                );
+            });
+        };
+
+        const openFoundTx = (found: WarehouseTransaction) => {
+            if (found.type === 'IN') {
+                setActiveTab('entry_archive');
+                setEditingReceipt(found);
+            } else {
+                setActiveTab('archive');
+                setViewBijak(found);
+            }
+            try { sessionStorage.removeItem('pending_warehouse_deep_link'); } catch {}
+        };
+
         const openTxByDetail = (detail: any): boolean => {
-            if (!detail || !Array.isArray(allTransactions) || allTransactions.length === 0) return false;
-            const targetId = String(detail.txId || detail.id || '').trim();
-            const targetNum = String(detail.txNumber || detail.number || '').trim();
+            if (!detail) return false;
+            const targetId = norm(detail.txId || detail.id);
+            const targetNum = norm(detail.txNumber || detail.number);
             if (!targetId && !targetNum) return false;
 
-            const found = allTransactions.find(tx =>
-                (targetId && String(tx.id) === targetId) ||
-                (targetNum && String(tx.number) === targetNum) ||
-                (targetId && String(tx.number) === targetId) ||
-                (targetNum && String(tx.proformaNumber || '') === targetNum)
-            );
+            const currentList = Array.isArray(allTransactions) ? allTransactions : [];
+            const found = matchTxInList(currentList, detail);
             if (found) {
-                setViewBijak(found);
-                try { sessionStorage.removeItem('pending_warehouse_deep_link'); } catch {}
+                openFoundTx(found);
                 return true;
+            }
+
+            const fetchKey = `${targetId}|${targetNum}`;
+            if (warehouseDeepLinkFetchRef.current !== fetchKey) {
+                warehouseDeepLinkFetchRef.current = fetchKey;
+                getWarehouseTransactions()
+                    .then((fresh) => {
+                        const arr = Array.isArray(fresh) ? fresh : [];
+                        const match = matchTxInList(arr, detail);
+                        if (match) {
+                            setAllTransactions(prev => prev.some(x => x.id === match.id) ? prev : [match, ...prev]);
+                            openFoundTx(match);
+                        }
+                    })
+                    .catch(() => {})
+                    .finally(() => {
+                        if (warehouseDeepLinkFetchRef.current === fetchKey) {
+                            warehouseDeepLinkFetchRef.current = null;
+                        }
+                    });
             }
             return false;
         };
@@ -903,35 +948,11 @@ const WarehouseModule: React.FC<Props> = ({ currentUser, settings, initialTab = 
             }
         };
 
-        const handleOpenWarehouseTx = (e: any) => {
-            const detail = e.detail;
-            if (!detail) return;
-            const targetId = detail.txId || detail.id || detail.number;
-            const targetType = detail.type; // 'IN' or 'OUT'
-            if (targetType === 'IN') {
-                setActiveTab('entry_archive');
-            } else {
-                setActiveTab('archive');
-            }
-            if (targetId && allTransactions.length > 0) {
-                const found = allTransactions.find(t => t.id === targetId || t.number === targetId || String(t.number) === String(targetId));
-                if (found) {
-                    if (found.type === 'OUT') {
-                        setViewBijak(found);
-                    } else {
-                        setEditingReceipt(found);
-                    }
-                }
-            }
-        };
-
         window.addEventListener('OPEN_WAREHOUSE_ITEM' as any, handleOpenWarehouseItem);
-        window.addEventListener('OPEN_WAREHOUSE_TX' as any, handleOpenWarehouseTx);
         return () => {
             window.removeEventListener('OPEN_WAREHOUSE_ITEM' as any, handleOpenWarehouseItem);
-            window.removeEventListener('OPEN_WAREHOUSE_TX' as any, handleOpenWarehouseTx);
         };
-    }, [items, allTransactions]);
+    }, [items]);
     
     // Trigger update on company change
     useEffect(() => { 

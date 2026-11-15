@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mapNotificationUrlToTab, parseNotificationDeepLink } from '../utils/notificationDeepLink.ts';
+import { mapNotificationUrlToTab, parseNotificationDeepLink, normalizeDigitsToEnglish } from '../utils/notificationDeepLink.ts';
+import { getAppNavItems } from '../utils/navigationItems.ts';
+import { UserRole } from '../types.ts';
 import {
     clampZoom,
     getTouchDistance,
@@ -17,6 +19,7 @@ test('mapNotificationUrlToTab routes manage-exit and manage-invoices before mana
     assert.equal(mapNotificationUrlToTab('/production-meetings'), 'meetings');
     assert.equal(mapNotificationUrlToTab('meetings'), 'meetings');
     assert.equal(mapNotificationUrlToTab('/secretariat?letterId=l1'), 'secretariat');
+    assert.equal(mapNotificationUrlToTab('/trade?tradeId=tr-12'), 'trade');
 });
 
 test('parseNotificationDeepLink extracts exact meetingId and meetingNumber from URL or Persian title/body', () => {
@@ -45,22 +48,54 @@ test('parseNotificationDeepLink extracts exact meetingId and meetingNumber from 
     assert.equal(fromNativeIntent.meetingNumber, 'M-1037');
 });
 
-test('parseNotificationDeepLink extracts payment order, exit permit, purchase request, secretariat letter, and warehouse bijak', () => {
+test('parseNotificationDeepLink extracts payment order, exit permit (including Persian digits), chat sender, purchase request, secretariat letter, trade, and warehouse bijak', () => {
+    assert.equal(normalizeDigitsToEnglish('۱۰۸۸'), '1088');
+
     const orderLink = parseNotificationDeepLink(
         '/manage',
-        '💸 دستور پرداخت جدید #1088',
+        '💸 دستور پرداخت جدید #۱۰۸۸',
         'شرکت: لیان بافت | مبلغ: 50,000,000 ریال'
     );
     assert.equal(orderLink.tab, 'manage');
     assert.equal(orderLink.trackingNumber, '1088');
 
+    const orderByQuery = parseNotificationDeepLink('/manage?orderId=ord-77&trackingNumber=۱۰۹۰');
+    assert.equal(orderByQuery.tab, 'manage');
+    assert.equal(orderByQuery.orderId, 'ord-77');
+    assert.equal(orderByQuery.trackingNumber, '1090');
+
     const permitLink = parseNotificationDeepLink(
         '/manage-exit',
-        '🚛 برگه خروج کالا از کارخانه #412',
+        '🚛 برگه خروج کالا از کارخانه #۱۰',
         'گیرنده: مشتری تهران'
     );
     assert.equal(permitLink.tab, 'manage-exit');
-    assert.equal(permitLink.permitNumber, '412');
+    assert.equal(permitLink.permitNumber, '10');
+
+    const permitTitleOnly = parseNotificationDeepLink(
+        '',
+        'برگه خروج شماره ۱۰ ثبت شد',
+        'تایید مدیر کارخانه'
+    );
+    assert.equal(permitTitleOnly.tab, 'manage-exit');
+    assert.equal(permitTitleOnly.permitNumber, '10');
+
+    const permitQuery = parseNotificationDeepLink('/manage-exit?permitId=perm-10&permitNumber=10');
+    assert.equal(permitQuery.tab, 'manage-exit');
+    assert.equal(permitQuery.permitId, 'perm-10');
+    assert.equal(permitQuery.permitNumber, '10');
+
+    const chatByUrl = parseNotificationDeepLink('/chat?pv=ahmadi', 'پیام جدید از احمدی', 'سلام');
+    assert.equal(chatByUrl.tab, 'chat');
+    assert.equal(chatByUrl.pv, 'ahmadi');
+
+    const chatByTitleOnly = parseNotificationDeepLink('/chat', '💬 پیام جدید از احمدی', 'لطفا فاکتور را بررسی کنید');
+    assert.equal(chatByTitleOnly.tab, 'chat');
+    assert.equal(chatByTitleOnly.pv, 'احمدی');
+
+    const chatMention = parseNotificationDeepLink('/chat', '🔔 منشن جدید: احمدی در گفتگو', 'سلام');
+    assert.equal(chatMention.tab, 'chat');
+    assert.equal(chatMention.pv, 'احمدی');
 
     const purchaseLink = parseNotificationDeepLink(
         '/purchase?requestId=req-99&subTab=comments',
@@ -87,11 +122,39 @@ test('parseNotificationDeepLink extracts payment order, exit permit, purchase re
     );
     assert.equal(warehouseLink.tab, 'warehouse');
     assert.equal(warehouseLink.txNumber, '709');
+
+    const tradeLink = parseNotificationDeepLink('/trade?tradeId=tr-555', 'بروزرسانی پرونده بازرگانی');
+    assert.equal(tradeLink.tab, 'trade');
+    assert.equal(tradeLink.tradeId, 'tr-555');
+});
+
+test('getAppNavItems allows manage-exit and authorized modules even when settings is null (cold start)', () => {
+    const rolesWithExitAccess = [
+        UserRole.ADMIN,
+        UserRole.CEO,
+        UserRole.FACTORY_MANAGER,
+        UserRole.WAREHOUSE_KEEPER,
+        UserRole.SECURITY_HEAD,
+        UserRole.SECURITY_GUARD,
+        UserRole.SALES_MANAGER
+    ];
+
+    for (const role of rolesWithExitAccess) {
+        const items = getAppNavItems({
+            id: `u-${role}`,
+            username: `user_${role}`,
+            fullName: `Test ${role}`,
+            role
+        }, null);
+        const ids = items.map(i => i.id);
+        assert.ok(ids.includes('manage-exit'), `Expected role ${role} to include manage-exit when settings is null`);
+        assert.ok(ids.includes('chat'), `Expected role ${role} to include chat when settings is null`);
+    }
 });
 
 test('touchZoomPan computes 2-finger pinch zoom and 4-directional pan accurately', () => {
     assert.equal(clampZoom(0.1), 0.5);
-    assert.equal(clampZoom(10), 6);
+    assert.equal(clampZoom(10), 8);
     assert.equal(clampZoom(2.25), 2.25);
 
     const p1 = { x: 100, y: 100 };
@@ -122,11 +185,22 @@ test('touchZoomPan computes 2-finger pinch zoom and 4-directional pan accurately
     assert.equal(pinchResult.panY, -15);
 
     // 4-directional pan clamping allows left, right, up, and down movement when zoomed in
-    const panRightDown = clampPanOffsets(180, 220, 2.5, { viewportWidth: 400, viewportHeight: 600 });
+    // even when the image is narrower than the viewport
+    const panRightDown = clampPanOffsets(180, 220, 2.5, {
+        viewportWidth: 400,
+        viewportHeight: 700,
+        contentWidth: 280,
+        contentHeight: 500
+    });
     assert.equal(panRightDown.panX, 180);
     assert.equal(panRightDown.panY, 220);
 
-    const panLeftUp = clampPanOffsets(-180, -220, 2.5, { viewportWidth: 400, viewportHeight: 600 });
+    const panLeftUp = clampPanOffsets(-180, -220, 2.5, {
+        viewportWidth: 400,
+        viewportHeight: 700,
+        contentWidth: 280,
+        contentHeight: 500
+    });
     assert.equal(panLeftUp.panX, -180);
     assert.equal(panLeftUp.panY, -220);
 });

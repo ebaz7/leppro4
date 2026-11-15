@@ -67,8 +67,10 @@ export function mapNotificationUrlToTab(rawUrl?: string | null, fallbackText?: s
       if (params.get('orderId') || params.get('trackingNumber')) return 'manage';
       if (params.get('requestId') || params.get('requestNumber')) return 'purchase';
       if (params.get('letterId') || params.get('letterNumber')) return 'secretariat';
-      if (params.get('txId') || params.get('bijakNumber')) return 'warehouse';
-      if (params.get('pv') || params.get('group') || params.get('task')) return 'chat';
+      if (params.get('txId') || params.get('txNumber') || params.get('bijakNumber')) return 'warehouse';
+      if (params.get('tradeId') || params.get('dossierId')) return 'trade';
+      if (params.get('chequeId') || params.get('receiptId')) return 'cheque-receipts';
+      if (params.get('pv') || params.get('group') || params.get('groupId') || params.get('task') || params.get('taskId')) return 'chat';
     } catch {}
   }
 
@@ -169,7 +171,13 @@ export function mapNotificationUrlToTab(rawUrl?: string | null, fallbackText?: s
   if (text.includes('بیجک') || text.includes('حواله ورود انبار') || text.includes('حواله خروج انبار')) {
     return 'warehouse';
   }
-  if (text.includes('تسک') || text.includes('پیام از') || text.includes('منشن جدید')) {
+  if (text.includes('رسید چک') || text.includes('دریافت چک')) {
+    return 'cheque-receipts';
+  }
+  if (text.includes('بازرگانی') || text.includes('پرونده واردات') || text.includes('پرفرما')) {
+    return 'trade';
+  }
+  if (text.includes('تسک') || text.includes('پیام از') || text.includes('پیام جدید از') || text.includes('منشن جدید')) {
     return 'chat';
   }
 
@@ -204,6 +212,7 @@ export function parseNotificationDeepLink(
   const combinedText = normalizeDigitsToEnglish(
     `${title || ''} ${body || ''} ${queryTitle} ${queryBody}`
   ).trim();
+  const normalizedTitle = normalizeDigitsToEnglish(`${title || ''} ${queryTitle}`).trim();
   const tab = mapNotificationUrlToTab(effectiveUrl, combinedText);
 
   const result: ParsedNotificationDeepLink = {
@@ -218,7 +227,7 @@ export function parseNotificationDeepLink(
       const getParam = (...keys: string[]) => {
         for (const k of keys) {
           const val = params.get(k);
-          if (val && val.trim()) return val.trim();
+          if (val && val.trim()) return normalizeDigitsToEnglish(val.trim());
         }
         return undefined;
       };
@@ -237,9 +246,9 @@ export function parseNotificationDeepLink(
       result.txNumber = getParam('txNumber', 'bijakNumber');
       result.tradeId = getParam('tradeId', 'dossierId');
       result.chequeId = getParam('chequeId', 'receiptId');
-      result.pv = getParam('pv');
-      result.group = getParam('group', 'groupId');
-      result.task = getParam('task', 'taskId');
+      result.pv = params.get('pv')?.trim() || undefined;
+      result.group = params.get('group')?.trim() || params.get('groupId')?.trim() || undefined;
+      result.task = params.get('task')?.trim() || params.get('taskId')?.trim() || undefined;
       result.subTab = getParam('subTab');
       result.filterStatus = getParam('filterStatus');
       result.exitStatus = getParam('exitStatus');
@@ -264,14 +273,19 @@ export function parseNotificationDeepLink(
   // 2. Merge explicit fields from extraData (e.g. FCM data payload or notification metadata)
   if (extraData && typeof extraData === 'object') {
     if (extraData.meetingId && !result.meetingId) result.meetingId = String(extraData.meetingId);
-    if (extraData.meetingNumber && !result.meetingNumber) result.meetingNumber = String(extraData.meetingNumber);
+    if (extraData.meetingNumber && !result.meetingNumber) result.meetingNumber = normalizeDigitsToEnglish(String(extraData.meetingNumber));
     if (extraData.orderId && !result.orderId) result.orderId = String(extraData.orderId);
-    if (extraData.trackingNumber && !result.trackingNumber) result.trackingNumber = String(extraData.trackingNumber);
+    if (extraData.trackingNumber && !result.trackingNumber) result.trackingNumber = normalizeDigitsToEnglish(String(extraData.trackingNumber));
     if (extraData.permitId && !result.permitId) result.permitId = String(extraData.permitId);
-    if (extraData.permitNumber && !result.permitNumber) result.permitNumber = String(extraData.permitNumber);
+    if (extraData.permitNumber && !result.permitNumber) result.permitNumber = normalizeDigitsToEnglish(String(extraData.permitNumber));
     if (extraData.requestId && !result.requestId) result.requestId = String(extraData.requestId);
+    if (extraData.requestNumber && !result.requestNumber) result.requestNumber = normalizeDigitsToEnglish(String(extraData.requestNumber));
     if (extraData.letterId && !result.letterId) result.letterId = String(extraData.letterId);
+    if (extraData.letterNumber && !result.letterNumber) result.letterNumber = normalizeDigitsToEnglish(String(extraData.letterNumber));
     if (extraData.txId && !result.txId) result.txId = String(extraData.txId);
+    if (extraData.txNumber && !result.txNumber) result.txNumber = normalizeDigitsToEnglish(String(extraData.txNumber));
+    if (extraData.tradeId && !result.tradeId) result.tradeId = String(extraData.tradeId);
+    if (extraData.chequeId && !result.chequeId) result.chequeId = String(extraData.chequeId);
     if (extraData.pv && !result.pv) result.pv = String(extraData.pv);
     if (extraData.group && !result.group) result.group = String(extraData.group);
     if (extraData.task && !result.task) result.task = String(extraData.task);
@@ -280,13 +294,17 @@ export function parseNotificationDeepLink(
   // 3. Smart fallback extraction from notification Title / Body when URL lacks IDs
   if (combinedText) {
     if (tab === 'meetings' && !result.meetingId && !result.meetingNumber) {
-      const mMatch = combinedText.match(/\b(M-\d+)\b/i) || combinedText.match(/#([A-Za-z0-9\-_\/]+)/);
+      const mMatch =
+        combinedText.match(/\b(M-\d+)\b/i) ||
+        combinedText.match(/#([A-Za-z0-9\-_\/]+)/) ||
+        combinedText.match(/شماره\s*([A-Za-z0-9\-_\/]+)/);
       if (mMatch && mMatch[1]) {
         result.meetingNumber = mMatch[1];
       }
     } else if (tab === 'manage' && !result.orderId && !result.trackingNumber) {
       const oMatch =
         combinedText.match(/#(\d+)/) ||
+        combinedText.match(/دستور پرداخت\s*(?:شماره\s*)?#?(\d+)/) ||
         combinedText.match(/شماره\s*(\d+)/) ||
         combinedText.match(/سند\s*#?(\d+)/);
       if (oMatch && oMatch[1]) {
@@ -295,8 +313,9 @@ export function parseNotificationDeepLink(
     } else if (tab === 'manage-exit' && !result.permitId && !result.permitNumber) {
       const pMatch =
         combinedText.match(/#(\d+)/) ||
+        combinedText.match(/(?:برگه خروج|مجوز خروج|حواله خروج کالا|حواله)\s*(?:شماره\s*)?#?(\d+)/) ||
         combinedText.match(/شماره\s*(\d+)/) ||
-        combinedText.match(/حواله\s*#?(\d+)/);
+        combinedText.match(/کد\s*#?(\d+)/);
       if (pMatch && pMatch[1]) {
         result.permitNumber = pMatch[1];
       }
@@ -311,9 +330,20 @@ export function parseNotificationDeepLink(
         result.letterNumber = lMatch[1];
       }
     } else if (tab === 'warehouse' && !result.txId && !result.txNumber) {
-      const wMatch = combinedText.match(/#(\d+)/) || combinedText.match(/شماره\s*(\d+)/);
+      const wMatch =
+        combinedText.match(/#(\d+)/) ||
+        combinedText.match(/(?:بیجک|حواله)\s*(?:شماره\s*)?#?(\d+)/) ||
+        combinedText.match(/شماره\s*(\d+)/);
       if (wMatch && wMatch[1]) {
         result.txNumber = wMatch[1];
+      }
+    } else if (tab === 'chat' && !result.pv && !result.group && !result.task) {
+      const senderMatch =
+        normalizedTitle.match(/پیام\s+(?:جدید\s+)?از\s+([^\n|@]+)/) ||
+        normalizedTitle.match(/منشن\s+جدید:\s*([^\n|]+?)\s+در\s+گفتگو/) ||
+        combinedText.match(/پیام\s+(?:جدید\s+)?از\s+([^\n:|@]+)/);
+      if (senderMatch && senderMatch[1]) {
+        result.pv = senderMatch[1].trim();
       }
     }
   }

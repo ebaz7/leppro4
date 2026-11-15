@@ -485,6 +485,7 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
             break;
             
         case UserRole.SECURITY_GUARD:
+            perms.canViewExitPermits = true;
             perms.canViewSecurity = true;
             perms.canCreateSecurityLog = true;
             break;

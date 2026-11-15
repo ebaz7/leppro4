@@ -7,6 +7,7 @@ import {
   Loader2, CheckCircle2, AlertTriangle, FileType, Image as ImageIcon,
   Sparkles, Wand2
 } from 'lucide-react';
+import { FileViewerModal } from './FileViewerModal';
 
 interface Props {
   order: PaymentOrder;
@@ -29,6 +30,7 @@ export const OrderArchiveModal: React.FC<Props> = ({
   const [attachmentTitle, setAttachmentTitle] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [previewFile, setPreviewFile] = useState<{ url: string; fileName: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -395,15 +397,14 @@ export const OrderArchiveModal: React.FC<Props> = ({
                       </div>
 
                       <div className="flex items-center gap-1 shrink-0">
-                        <a
-                          href={rawUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg font-bold flex items-center gap-1"
-                          title="مشاهده"
+                        <button
+                          type="button"
+                          onClick={() => setPreviewFile({ url: rawUrl, fileName })}
+                          className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg font-bold flex items-center gap-1 cursor-pointer"
+                          title="مشاهده با قابلیت زوم لمسی"
                         >
                           <Eye size={14} />
-                        </a>
+                        </button>
 
                         <button
                           type="button"
@@ -432,6 +433,15 @@ export const OrderArchiveModal: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {previewFile && (
+        <FileViewerModal
+          isOpen={!!previewFile}
+          onClose={() => setPreviewFile(null)}
+          fileUrl={previewFile.url}
+          fileName={previewFile.fileName}
+        />
+      )}
     </div>
   );
 };

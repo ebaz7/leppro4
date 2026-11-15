@@ -610,8 +610,9 @@ ipcMain.handle('open-local-file-dir', async (event, fileName) => {
 });
 
 // 6. Show Native Windows Toast Notification (Action Center)
-ipcMain.handle('show-native-notification', (event, { title, body, silent, url, id, tab, type }) => {
+ipcMain.handle('show-native-notification', (event, payload = {}) => {
   try {
+    const { title, body, silent, url, id, tab, type, ...rest } = payload || {};
     if (Notification.isSupported()) {
       const iconPath = path.join(__dirname, '../app-icon.png');
       const isUrgentChat = type === 'chat_pv' || (url && url.includes('pv='));
@@ -628,9 +629,15 @@ ipcMain.handle('show-native-notification', (event, { title, body, silent, url, i
           if (!mainWindow.isVisible()) mainWindow.show();
           if (mainWindow.isMinimized()) mainWindow.restore();
           mainWindow.focus();
-          if (url || tab) {
-            mainWindow.webContents.send('navigate-to-url', { url, tab: tab || (isUrgentChat ? 'chat' : null), id });
-          }
+          mainWindow.webContents.send('navigate-to-url', {
+            ...rest,
+            url: url || '',
+            tab: tab || (isUrgentChat ? 'chat' : null),
+            id,
+            title: title || '',
+            body: body || '',
+            type
+          });
         }
       });
       notif.show();

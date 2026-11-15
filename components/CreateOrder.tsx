@@ -8,6 +8,7 @@ import { jalaliToGregorian, getCurrentShamsiDate, formatCurrency, generateUUID, 
 import { Wand2, Save, Loader2, Plus, Trash2, Paperclip, X, Hash, UploadCloud, Building2, BrainCircuit, AlertTriangle, Calendar, Landmark, CreditCard, Edit, ArrowRightLeft, MapPin, RefreshCcw, Sparkles } from 'lucide-react';
 import { getDisplayFileName } from '../utils/fileNameUtils';
 import { getUsers } from '../services/authService';
+import { FileViewerModal } from './FileViewerModal';
 
 interface CreateOrderProps {
   onSuccess: () => void;
@@ -29,6 +30,7 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onSuccess, currentUser }) => 
   const [paymentLines, setPaymentLines] = useState<PaymentDetail[]>([]);
   
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<{ url: string; fileName: string } | null>(null);
 
   const [newLine, setNewLine] = useState<{ 
       method: PaymentMethod; 
@@ -608,17 +610,16 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onSuccess, currentUser }) => 
                       const displayFileName = getDisplayFileName(file.fileName, file.data);
                       return (
                         <div key={idx} className="flex items-center justify-between glass-panel p-3 rounded-xl border border-gray-200 text-sm shadow-xs group bg-white gap-2">
-                          <a 
-                            href={file.data} 
-                            target="_blank" 
-                            rel="noreferrer"
-                            className="text-blue-600 hover:text-blue-800 break-words line-clamp-2 hover:underline flex items-center gap-2 font-medium min-w-0 flex-1"
+                          <button
+                            type="button"
+                            onClick={() => setPreviewFile({ url: file.data, fileName: displayFileName })}
+                            className="text-blue-600 hover:text-blue-800 break-words line-clamp-2 hover:underline flex items-center gap-2 font-medium min-w-0 flex-1 text-right cursor-pointer"
                             dir="auto"
                             title={displayFileName}
                           >
                             <Paperclip size={16} className="shrink-0 text-blue-500" />
                             <span className="truncate">{displayFileName}</span>
-                          </a>
+                          </button>
                           <button 
                             type="button" 
                             onClick={() => removeAttachment(idx)} 
@@ -636,6 +637,15 @@ const CreateOrder: React.FC<CreateOrderProps> = ({ onSuccess, currentUser }) => 
             
             <div className="pt-4"><button type="submit" disabled={isSubmitting || uploading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 transition-all transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-70 disabled:hover:scale-100">{isSubmitting ? <Loader2 size={24} className="animate-spin" /> : <Save size={24} />}ثبت نهایی دستور پرداخت</button></div>
         </form>
+
+        {previewFile && (
+          <FileViewerModal
+            isOpen={!!previewFile}
+            onClose={() => setPreviewFile(null)}
+            fileUrl={previewFile.url}
+            fileName={previewFile.fileName}
+          />
+        )}
     </div>
   );
 };

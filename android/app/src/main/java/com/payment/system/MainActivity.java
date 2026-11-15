@@ -167,16 +167,29 @@ public class MainActivity extends BridgeActivity {
                 String group = intent.getStringExtra("group");
                 String task = intent.getStringExtra("task");
 
+                String txId = intent.getStringExtra("txId");
+                String permitNumber = intent.getStringExtra("permitNumber");
+                String orderNumber = intent.getStringExtra("trackingNumber");
+                String meetingNumber = intent.getStringExtra("meetingNumber");
+
                 if (meetingId != null && !meetingId.isEmpty()) {
                     rawTarget = "/meetings?meetingId=" + Uri.encode(meetingId);
+                } else if (meetingNumber != null && !meetingNumber.isEmpty()) {
+                    rawTarget = "/meetings?meetingNumber=" + Uri.encode(meetingNumber);
                 } else if (orderId != null && !orderId.isEmpty()) {
                     rawTarget = "/manage?orderId=" + Uri.encode(orderId);
+                } else if (orderNumber != null && !orderNumber.isEmpty()) {
+                    rawTarget = "/manage?trackingNumber=" + Uri.encode(orderNumber);
                 } else if (permitId != null && !permitId.isEmpty()) {
                     rawTarget = "/manage-exit?permitId=" + Uri.encode(permitId);
+                } else if (permitNumber != null && !permitNumber.isEmpty()) {
+                    rawTarget = "/manage-exit?permitNumber=" + Uri.encode(permitNumber);
                 } else if (requestId != null && !requestId.isEmpty()) {
                     rawTarget = "/purchase?requestId=" + Uri.encode(requestId);
                 } else if (letterId != null && !letterId.isEmpty()) {
                     rawTarget = "/secretariat?letterId=" + Uri.encode(letterId);
+                } else if (txId != null && !txId.isEmpty()) {
+                    rawTarget = "/warehouse?txId=" + Uri.encode(txId);
                 } else if (pv != null && !pv.isEmpty()) {
                     rawTarget = "/chat?pv=" + Uri.encode(pv);
                 } else if (group != null && !group.isEmpty()) {
@@ -186,19 +199,21 @@ public class MainActivity extends BridgeActivity {
                 }
             }
 
-            if ((rawTarget == null || rawTarget.trim().isEmpty()) && (title == null || title.trim().isEmpty())) {
+            if ((rawTarget == null || rawTarget.trim().isEmpty()) && (title == null || title.trim().isEmpty()) && (body == null || body.trim().isEmpty())) {
                 return;
             }
 
             String cleanTarget = rawTarget != null ? rawTarget.trim() : "";
-            if (!cleanTarget.contains("?") && ((title != null && !title.isEmpty()) || (body != null && !body.isEmpty()))) {
+            if (!cleanTarget.contains("_nt=") && ((title != null && !title.isEmpty()) || (body != null && !body.isEmpty()))) {
                 StringBuilder sb = new StringBuilder(cleanTarget.isEmpty() ? "/dashboard" : cleanTarget);
-                sb.append("?");
+                sb.append(cleanTarget.contains("?") ? "&" : "?");
+                boolean addedAny = false;
                 if (title != null && !title.isEmpty()) {
                     sb.append("_nt=").append(Uri.encode(title));
+                    addedAny = true;
                 }
                 if (body != null && !body.isEmpty()) {
-                    if (sb.charAt(sb.length() - 1) != '?') sb.append("&");
+                    if (addedAny) sb.append("&");
                     sb.append("_nb=").append(Uri.encode(body));
                 }
                 cleanTarget = sb.toString();
@@ -457,6 +472,11 @@ public class MainActivity extends BridgeActivity {
 
         public DlkamAndroidBridge(Context context) {
             this.context = context;
+        }
+
+        @JavascriptInterface
+        public boolean showNativeNotification(String title, String body, String notifId, String channelId) {
+            return showNativeNotification(title, body, notifId, channelId, "");
         }
 
         @JavascriptInterface

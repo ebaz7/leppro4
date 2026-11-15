@@ -126,25 +126,56 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
         };
     }, []);
 
+    const meetingDeepLinkFetchRef = React.useRef<string | null>(null);
     useEffect(() => {
-        const openMeetingByPayload = (payload: any): boolean => {
-            if (!payload || !Array.isArray(meetings) || meetings.length === 0) return false;
-            const targetId = String(payload.meetingId || payload.id || '').trim();
-            const targetNum = String(payload.meetingNumber || '').trim().toUpperCase();
-            if (!targetId && !targetNum) return false;
-
-            const found = meetings.find(m => {
-                if (targetId && String(m.id).trim() === targetId) return true;
-                const mNum = String(m.meetingNumber || '').trim().toUpperCase();
+        const norm = (v: any) => String(v ?? '').replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 1776)).replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 1632)).trim();
+        const matchMeetingInList = (list: MeetingMinutes[], payload: any): MeetingMinutes | undefined => {
+            const targetId = norm(payload?.meetingId || payload?.id);
+            const targetNum = norm(payload?.meetingNumber).toUpperCase();
+            if (!targetId && !targetNum) return undefined;
+            return list.find(m => {
+                const mId = norm(m.id);
+                const mNum = norm(m.meetingNumber).toUpperCase();
+                if (targetId && mId === targetId) return true;
                 if (targetNum && mNum === targetNum) return true;
                 if (targetId && mNum === targetId.toUpperCase()) return true;
                 return false;
             });
+        };
 
+        const openMeetingByPayload = (payload: any): boolean => {
+            if (!payload) return false;
+            const targetId = norm(payload.meetingId || payload.id);
+            const targetNum = norm(payload.meetingNumber).toUpperCase();
+            if (!targetId && !targetNum) return false;
+
+            const currentList = Array.isArray(meetings) ? meetings : [];
+            const found = matchMeetingInList(currentList, payload);
             if (found) {
                 setViewMeeting(found);
                 try { sessionStorage.removeItem('pending_meeting_deep_link'); } catch {}
                 return true;
+            }
+
+            const fetchKey = `${targetId}|${targetNum}`;
+            if (meetingDeepLinkFetchRef.current !== fetchKey) {
+                meetingDeepLinkFetchRef.current = fetchKey;
+                getMeetings()
+                    .then((fresh) => {
+                        const arr = Array.isArray(fresh) ? fresh : [];
+                        if (arr.length > 0) setMeetings(arr);
+                        const match = matchMeetingInList(arr, payload);
+                        if (match) {
+                            setViewMeeting(match);
+                            try { sessionStorage.removeItem('pending_meeting_deep_link'); } catch {}
+                        }
+                    })
+                    .catch(() => {})
+                    .finally(() => {
+                        if (meetingDeepLinkFetchRef.current === fetchKey) {
+                            meetingDeepLinkFetchRef.current = null;
+                        }
+                    });
             }
             return false;
         };

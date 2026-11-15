@@ -53,15 +53,13 @@ export const ALL_NAVIGATION_ITEMS: Record<string, AppNavItem> = {
 export const getAppNavItems = (currentUser: User | null, settings: SystemSettings | null): AppNavItem[] => {
   if (!currentUser) return [];
 
-  const perms = settings 
-    ? getRolePermissions(currentUser.role, settings, currentUser) 
-    : { canCreatePaymentOrder: false, canViewPaymentOrders: false };
+  const perms = getRolePermissions(currentUser.role, settings || null, currentUser);
 
-  const canCreatePayment = perms.canCreatePaymentOrder === true;
+  const canCreatePayment = currentUser.role === UserRole.ADMIN || perms.canCreatePaymentOrder === true;
   const canViewPayment = currentUser.role === UserRole.ADMIN || perms.canViewPaymentOrders === true || perms.canManageArchiveAttachments === true || currentUser.canManageArchiveAttachments === true || perms.canCreatePaymentOrder === true;
-  const canCreateExit = perms.canCreateExitPermit === true;
-  const canViewInvoices = perms.canViewInvoices === true;
-  const canViewExit = perms.canViewExitPermits === true;
+  const canCreateExit = currentUser.role === UserRole.ADMIN || perms.canCreateExitPermit === true;
+  const canViewInvoices = currentUser.role === UserRole.ADMIN || perms.canViewInvoices === true;
+  const canViewExit = currentUser.role === UserRole.ADMIN || perms.canViewExitPermits === true;
   const canManageWarehouse = currentUser.role === UserRole.ADMIN || perms.canManageWarehouse === true || currentUser.role === UserRole.WAREHOUSE_KEEPER || currentUser.role === 'warehouse_keeper';
   const canSeeTrade = currentUser.role === UserRole.ADMIN || perms.canManageTrade === true;
   const canSeeBalances = currentUser.role === UserRole.ADMIN || (perms as any).canViewCustomerBalances === true;

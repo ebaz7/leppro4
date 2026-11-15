@@ -376,6 +376,39 @@ export const setupNativePushNotifications = async (username: string, role: strin
             }
         });
 
+        // 4. Listen for push & local notification tap actions (so removeAllListeners never drops click deep-linking)
+        await PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+            const data = action.notification?.data || {};
+            const title = action.notification?.title || data.title || '';
+            const body = action.notification?.body || data.body || '';
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('dlkam-notification-tap', {
+                    detail: {
+                        ...data,
+                        url: data.url || data.targetUrl || data.link || data.tab || '',
+                        title,
+                        body
+                    }
+                }));
+            }
+        });
+
+        await LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
+            const extra = action.notification?.extra || {};
+            const title = action.notification?.title || extra.title || '';
+            const body = action.notification?.body || extra.body || '';
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('dlkam-notification-tap', {
+                    detail: {
+                        ...extra,
+                        url: extra.url || extra.targetUrl || extra.link || extra.tab || '',
+                        title,
+                        body
+                    }
+                }));
+            }
+        });
+
         // Create high priority Android notification channels for instant status-bar banners
         if (Capacitor.getPlatform() === 'android') {
             try {
@@ -662,8 +695,8 @@ export const sendNotification = async (title: string, body: string, data?: any) 
           const channelId = isChatPV ? 'chat_pv_channel' : 'fcm_default_channel';
           const dlkamBridge = (window as any).DlkamAndroid;
 
-          // 1. Primary path: Direct Native Android NotificationManager (0ms latency, guaranteed Delkam icon)
-          if (dlkamBridge && typeof dlkamBridge.showNativeNotification === 'function') {
+          // 1. Primary path: Direct Native Android NotificationManager (only when APK also supports consumePendingNotificationUrl deep-linking)
+          if (dlkamBridge && typeof dlkamBridge.showNativeNotification === 'function' && typeof dlkamBridge.consumePendingNotificationUrl === 'function') {
               const shown = dlkamBridge.showNativeNotification(
                   title,
                   body,
@@ -674,14 +707,20 @@ export const sendNotification = async (title: string, body: string, data?: any) 
               if (shown) return;
           }
 
-          // 2. Fallback path: Capacitor LocalNotifications with drawable/ic_stat_dlkam and drawable/ic_launcher
+          // 2. Fallback / Capacitor LocalNotifications path with full deep-link payload in `extra`
           await LocalNotifications.schedule({
               notifications: [
                   {
                       title: title,
                       body: body,
                       id: Math.floor(Math.random() * 2147483647),
-                      extra: data || null,
+                      extra: {
+                          ...(data || {}),
+                          id: idValue || undefined,
+                          url: data?.url || data?.targetUrl || '',
+                          title,
+                          body
+                      },
                       channelId,
                       smallIcon: 'ic_stat_dlkam',
                       largeIcon: 'ic_launcher',
@@ -700,10 +739,13 @@ export const sendNotification = async (title: string, body: string, data?: any) 
           const electronAPI = (window as any).electronAPI;
           if (electronAPI && typeof electronAPI.showNativeNotification === 'function') {
               electronAPI.showNativeNotification(title, body, {
+                  ...(data || {}),
                   id: idValue,
-                  url: data?.url,
+                  url: data?.url || '',
                   tab: data?.tab,
-                  type: data?.type
+                  type: data?.type,
+                  title,
+                  body
               });
               return;
           }
@@ -711,6 +753,23 @@ export const sendNotification = async (title: string, body: string, data?: any) 
           console.warn('Electron native notification dispatch error:', e);
       }
   }
+
+  const dispatchWebNotificationTap = () => {
+      try {
+          if (typeof window !== 'undefined') {
+              window.focus();
+              window.dispatchEvent(new CustomEvent('dlkam-notification-tap', {
+                  detail: {
+                      ...(data || {}),
+                      id: idValue || undefined,
+                      url: data?.url || data?.targetUrl || '',
+                      title,
+                      body
+                  }
+              }));
+          }
+      } catch (_) {}
+  };
 
   if (isTauriDesktop()) {
       try {
@@ -744,7 +803,11 @@ export const sendNotification = async (title: string, body: string, data?: any) 
           try {
               if (Notification.permission === 'granted') {
                   const iconUrl = getPwaIconUrl();
-                  new Notification(title, { body, icon: iconUrl, dir: 'rtl', lang: 'fa' });
+                  const notif = new Notification(title, { body, icon: iconUrl, dir: 'rtl', lang: 'fa', data: { ...(data || {}), title, body } });
+                  notif.onclick = () => {
+                      dispatchWebNotificationTap();
+                      try { notif.close(); } catch (_) {}
+                  };
                   return;
               }
           } catch (e) {}
@@ -755,6 +818,13 @@ export const sendNotification = async (title: string, body: string, data?: any) 
   if (typeof window !== 'undefined' && 'Notification' in window && typeof Notification !== 'undefined' && Notification.permission === "granted") {
       try {
           const iconUrl = getPwaIconUrl();
+          const swPayload = {
+              ...(data || {}),
+              id: idValue || undefined,
+              url: data?.url || data?.targetUrl || '',
+              title,
+              body
+          };
           // Check if SW is active to show via SW (more reliable)
           if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
               try {
@@ -768,7 +838,7 @@ export const sendNotification = async (title: string, body: string, data?: any) 
                           vibrate: [200, 100, 200],
                           tag: idValue || 'general',
                           renotify: true,
-                          data: data
+                          data: swPayload
                       } as any);
                       return;
                   }
@@ -776,7 +846,11 @@ export const sendNotification = async (title: string, body: string, data?: any) 
           }
           
           if (typeof Notification === 'function') {
-              new Notification(title, { body, icon: iconUrl, dir: 'rtl', lang: 'fa' });
+              const notif = new Notification(title, { body, icon: iconUrl, dir: 'rtl', lang: 'fa', data: swPayload });
+              notif.onclick = () => {
+                  dispatchWebNotificationTap();
+                  try { notif.close(); } catch (_) {}
+              };
           }
       } catch (e) {
           console.error("Web Notification Error:", e);

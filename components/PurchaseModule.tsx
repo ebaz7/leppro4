@@ -520,16 +520,16 @@ const PurchaseModule: React.FC<{ currentUser: User, settings?: SystemSettings, i
     }, []);
 
     // Listen for notification deep-links to open a specific PurchaseRequest and its COMMENTS tab
+    const purchaseDeepLinkFetchRef = React.useRef<string | null>(null);
     useEffect(() => {
         const checkPendingDeepLink = () => {
             try {
                 const raw = sessionStorage.getItem('pending_purchase_deep_link');
                 if (raw) {
-                    sessionStorage.removeItem('pending_purchase_deep_link');
                     const parsed = JSON.parse(raw);
-                    if (parsed && parsed.requestId) {
+                    if (parsed && (parsed.requestId || parsed.requestNumber)) {
                         setPendingDeepLink({
-                            requestId: String(parsed.requestId),
+                            requestId: String(parsed.requestId || parsed.requestNumber),
                             subTab: parsed.subTab === 'comments' || parsed.subTab === 'COMMENTS' ? 'COMMENTS' : 'DETAILS'
                         });
                     }
@@ -538,7 +538,7 @@ const PurchaseModule: React.FC<{ currentUser: User, settings?: SystemSettings, i
 
             try {
                 const params = new URLSearchParams(window.location.search);
-                const reqId = params.get('requestId');
+                const reqId = params.get('requestId') || params.get('requestNumber');
                 const subTab = params.get('subTab');
                 if (reqId) {
                     setPendingDeepLink({
@@ -553,9 +553,10 @@ const PurchaseModule: React.FC<{ currentUser: User, settings?: SystemSettings, i
 
         const handleOpenPurchaseDetails = (e: any) => {
             const detail = e?.detail;
-            if (detail && detail.requestId) {
+            const reqKey = detail?.requestId || detail?.requestNumber || detail?.id;
+            if (reqKey) {
                 setPendingDeepLink({
-                    requestId: String(detail.requestId),
+                    requestId: String(reqKey),
                     subTab: detail.subTab === 'comments' || detail.subTab === 'COMMENTS' ? 'COMMENTS' : 'DETAILS'
                 });
             }
@@ -566,9 +567,11 @@ const PurchaseModule: React.FC<{ currentUser: User, settings?: SystemSettings, i
     }, []);
 
     useEffect(() => {
-        if (!pendingDeepLink || requests.length === 0) return;
+        if (!pendingDeepLink) return;
+        const norm = (v: any) => String(v ?? '').replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 1776)).replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 1632)).trim();
+        const target = norm(pendingDeepLink.requestId);
         const found = requests.find(
-            r => String(r.id) === String(pendingDeepLink.requestId) || String(r.requestNumber) === String(pendingDeepLink.requestId)
+            r => norm(r.id) === target || norm(r.requestNumber) === target
         );
         if (found) {
             if (found.status === PurchaseRequestStatus.COMPLETED || found.status === PurchaseRequestStatus.REJECTED) {
@@ -576,9 +579,19 @@ const PurchaseModule: React.FC<{ currentUser: User, settings?: SystemSettings, i
             } else {
                 setActiveTab('REQUESTS');
             }
-            setInitialModalTab(pendingDeepLink.subTab || 'COMMENTS');
+            setInitialModalTab(pendingDeepLink.subTab || 'DETAILS');
             setViewRequest(found);
             setPendingDeepLink(null);
+            try { sessionStorage.removeItem('pending_purchase_deep_link'); } catch {}
+        } else if (purchaseDeepLinkFetchRef.current !== target) {
+            purchaseDeepLinkFetchRef.current = target;
+            loadRequests().finally(() => {
+                setTimeout(() => {
+                    if (purchaseDeepLinkFetchRef.current === target) {
+                        purchaseDeepLinkFetchRef.current = null;
+                    }
+                }, 1000);
+            });
         }
     }, [pendingDeepLink, requests]);
 

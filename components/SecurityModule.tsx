@@ -20,6 +20,7 @@ import { getRolePermissions } from '../services/authService';
 import { generatePdf } from '../utils/pdfGenerator';
 import { isInFinancialYear } from '../utils/dateUtils';
 import { shareElementToChat } from '../services/chatShareService';
+import { FileViewerModal } from './FileViewerModal';
 
 interface Props {
     currentUser: User;
@@ -2102,42 +2103,14 @@ const SecurityModule: React.FC<Props> = ({ currentUser, financialYear }) => {
                 document.body
             )}
 
-            {/* View Image Attachment Lightbox Modal */}
-            {viewAttachmentUrl && typeof document !== 'undefined' && createPortal(
-                <div className="fixed inset-0 bg-black/80 z-[99999] flex items-center justify-center p-4 transition-all touch-manipulation" onClick={() => setViewAttachmentUrl(null)}>
-                    <div className="bg-white rounded-xl shadow-2xl p-4 max-w-2xl w-full relative" onClick={e => e.stopPropagation()}>
-                        <button 
-                            onClick={() => setViewAttachmentUrl(null)}
-                            className="absolute -top-3 -left-3 bg-red-600 hover:bg-red-700 text-white rounded-full p-1.5 shadow-lg transition-all"
-                        >
-                            <X size={18} />
-                        </button>
-                        <h4 className="font-bold text-sm text-gray-800 mb-3 text-right">تصویر ثبت شده خودرو در گیت ورودی</h4>
-                        <img 
-                            src={viewAttachmentUrl} 
-                            alt="License Plate Snapshot" 
-                            className="w-full h-auto max-h-[70vh] object-contain rounded-lg border shadow-inner"
-                        />
-                        <div className="mt-4 flex justify-center gap-2">
-                            <a 
-                                href={viewAttachmentUrl} 
-                                download="car_plate.jpg" 
-                                target="_blank"
-                                rel="noreferrer"
-                                className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-all"
-                            >
-                                دریافت تصویر اصلی
-                            </a>
-                            <button 
-                                onClick={() => setViewAttachmentUrl(null)}
-                                className="bg-gray-200 hover:bg-gray-300 text-gray-800 text-xs font-bold px-4 py-2 rounded-lg transition-all"
-                            >
-                                بستن پنجره
-                            </button>
-                        </div>
-                    </div>
-                </div>,
-                document.body
+            {/* Touch-Zoomable Image & PDF Attachment Viewer Modal */}
+            {viewAttachmentUrl && (
+                <FileViewerModal
+                    isOpen={!!viewAttachmentUrl}
+                    onClose={() => setViewAttachmentUrl(null)}
+                    fileUrl={viewAttachmentUrl}
+                    fileName={viewAttachmentUrl.toLowerCase().endsWith('.pdf') ? 'سند پیوست انتظامات.pdf' : 'تصویر ثبت شده انتظامات.jpg'}
+                />
             )}
 
             {/* Driver Payment Form Modal */}

@@ -26,6 +26,7 @@ import { A5ChequeReceiptPrintModal } from './sayan-cheques/A5ChequeReceiptPrintM
 import { MobileAttachmentUploader, ReceiptAttachment } from './sayan-cheques/MobileAttachmentUploader';
 import { ChequeWorkflowSettingsModal, ChequeWorkflowConfig } from './ChequeWorkflowSettingsModal';
 import { getEffectiveApiUrl, getAuthToken, resolveImageUrl } from '../services/apiService';
+import { FileViewerModal } from './FileViewerModal';
 
 interface SayanPerson {
     personCode: string;
@@ -2681,77 +2682,14 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 />
             )}
 
-            {/* Local Attachment Preview Modal */}
-            {previewFile && typeof document !== 'undefined' && createPortal(
-                <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 z-[99999] overflow-y-auto">
-                    <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-3xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[85vh] my-auto animate-scale-in">
-                        {/* Header */}
-                        <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800">
-                            <h3 className="text-sm font-black text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                                <FileText className="w-4 h-4 text-indigo-500" />
-                                <span>پیش‌نمایش فایل: {previewFile.fileName}</span>
-                            </h3>
-                            <button
-                                type="button"
-                                onClick={() => setPreviewFile(null)}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        
-                        {/* Content */}
-                        <div className="p-6 flex-1 overflow-y-auto flex items-center justify-center bg-slate-50 dark:bg-slate-950/40">
-                            {previewFile.fileType.startsWith('image/') ? (
-                                <img
-                                    src={resolveImageUrl(previewFile.url || previewFile.fileData || '')}
-                                    alt={previewFile.fileName}
-                                    className="max-w-full max-h-[55vh] object-contain rounded-xl shadow-md border border-slate-200 dark:border-slate-800"
-                                />
-                            ) : previewFile.fileType === 'application/pdf' ? (
-                                <iframe
-                                    src={resolveImageUrl(previewFile.url || previewFile.fileData || '')}
-                                    title={previewFile.fileName}
-                                    className="w-full h-[55vh] rounded-xl border border-slate-200 dark:border-slate-800 bg-white"
-                                />
-                            ) : (
-                                <div className="text-center py-12 space-y-4">
-                                    <FileText className="w-16 h-16 text-indigo-400 mx-auto animate-pulse" />
-                                    <p className="text-slate-600 dark:text-slate-400 text-xs">
-                                        امکان پیش‌نمایش مستقیم این نوع فایل وجود ندارد. لطفاً آن را دانلود کنید.
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Footer */}
-                        <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2 bg-slate-50 dark:bg-slate-900/60 rounded-b-3xl">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const link = document.createElement('a');
-                                    link.href = resolveImageUrl(previewFile.url || previewFile.fileData || '');
-                                    link.download = previewFile.fileName;
-                                    document.body.appendChild(link);
-                                    link.click();
-                                    document.body.removeChild(link);
-                                }}
-                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
-                            >
-                                <Download className="w-4 h-4" />
-                                <span>دانلود این فایل</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setPreviewFile(null)}
-                                className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                            >
-                                بستن
-                            </button>
-                        </div>
-                    </div>
-                </div>,
-                document.body
+            {/* Standard Touch-Zoomable File Viewer Modal */}
+            {previewFile && (
+                <FileViewerModal
+                    isOpen={!!previewFile}
+                    onClose={() => setPreviewFile(null)}
+                    fileUrl={resolveImageUrl(previewFile.url || previewFile.fileData || '')}
+                    fileName={previewFile.fileName || 'پیش‌نمایش فایل پیوست'}
+                />
             )}
             {/* Cheque Workflow & Permissions Settings Modal */}
             <ChequeWorkflowSettingsModal

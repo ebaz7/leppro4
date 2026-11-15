@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { PaymentOrder, OrderStatus, User, UserRole, SystemSettings, PaymentMethod } from '../types';
-import { updateOrderStatus, deleteOrder } from '../services/storageService';
+import { updateOrderStatus, deleteOrder, getOrders } from '../services/storageService';
 import { getRolePermissions } from '../services/authService';
 import { formatCurrency, formatDate, getStatusLabel, jalaliToGregorian, formatNumberString, deformatNumberString, parseSafeDate } from '../constants';
 import { Eye, Trash2, Search, Filter, FileSpreadsheet, Paperclip, ListChecks, Archive, X, Building2, Calculator, AlertTriangle, RefreshCcw, Loader2, ShieldAlert, XCircle, Sparkles, Scan, CreditCard } from 'lucide-react';
@@ -11,8 +11,10 @@ import EditOrderModal from './EditOrderModal';
 import { AiDocumentScannerModal } from './AiDocumentScannerModal';
 import { apiCall } from '../services/apiService';
 import MobileOrderCard from './mobile/MobileOrderCard';
+import { FileViewerModal } from './FileViewerModal';
 
 import { isInFinancialYear } from '../utils/dateUtils';
+import { normalizeDigitsToEnglish } from '../utils/notificationDeepLink';
 
 interface ManageOrdersProps {
   orders: PaymentOrder[];
@@ -38,6 +40,7 @@ const ManageOrders: React.FC<ManageOrdersProps> = ({ orders, refreshData, curren
   const [activeTab, setActiveTab] = useState<'current' | 'archive'>(initialTab);
   const [viewOrder, setViewOrder] = useState<PaymentOrder | null>(null); 
   const [editingOrder, setEditingOrder] = useState<PaymentOrder | null>(null);
+  const [previewOrderAttachment, setPreviewOrderAttachment] = useState<{ url: string; fileName: string } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   
   const [showFilters, setShowFilters] = useState(false);
@@ -90,33 +93,67 @@ const ManageOrders: React.FC<ManageOrdersProps> = ({ orders, refreshData, curren
   }, [statusFilter]);
 
   // Listen for custom navigation / open events from Global Search, Notifications, or cross-module links
+  const orderDeepLinkFetchRef = React.useRef<string | null>(null);
   useEffect(() => {
+      const matchOrderInList = (list: PaymentOrder[], detail: any): PaymentOrder | undefined => {
+          const targetId = normalizeDigitsToEnglish(String(detail?.orderId ?? detail?.id ?? '')).trim();
+          const targetTracking = normalizeDigitsToEnglish(String(detail?.trackingNumber ?? '')).trim();
+          if (!targetId && !targetTracking) return undefined;
+          return list.find(o => {
+              const oId = normalizeDigitsToEnglish(String(o.id || '')).trim();
+              const oTrack = normalizeDigitsToEnglish(String(o.trackingNumber ?? '')).trim();
+              return (
+                  (targetId && oId === targetId) ||
+                  (targetTracking && oTrack === targetTracking) ||
+                  (targetId && oTrack === targetId)
+              );
+          });
+      };
+
+      const openFoundOrder = (found: PaymentOrder) => {
+          setCurrentStatusFilter(null);
+          if (found.status === OrderStatus.APPROVED_CEO || found.status === OrderStatus.REVOKED) {
+              setActiveTab('archive');
+          } else {
+              setActiveTab('current');
+          }
+          setViewOrder(found);
+          try { sessionStorage.removeItem('pending_payment_order_deep_link'); } catch {}
+      };
+
       const openOrderByDetail = (detail: any): boolean => {
           if (!detail) return false;
-          const targetId = detail.orderId || detail.id;
-          const targetTracking = detail.trackingNumber;
+          const targetId = detail.orderId || detail.id || '';
+          const targetTracking = detail.trackingNumber || '';
           const targetSearch = detail.searchTerm;
           if (targetSearch) {
               setSearchTerm(targetSearch);
           }
-          if (targetId || targetTracking) {
-              const allList = Array.isArray(localOrders) ? localOrders : [];
-              const found = allList.find(o =>
-                  (targetId && String(o.id) === String(targetId)) ||
-                  (targetTracking && String(o.trackingNumber) === String(targetTracking)) ||
-                  (targetId && String(o.trackingNumber) === String(targetId))
-              );
-              if (found) {
-                  setCurrentStatusFilter(null);
-                  if (found.status === OrderStatus.APPROVED_CEO || found.status === OrderStatus.REVOKED) {
-                      setActiveTab('archive');
-                  } else {
-                      setActiveTab('current');
-                  }
-                  setViewOrder(found);
-                  try { sessionStorage.removeItem('pending_payment_order_deep_link'); } catch {}
-                  return true;
-              }
+          if (!targetId && !targetTracking) return false;
+
+          const allList = Array.isArray(localOrders) ? localOrders : [];
+          const found = matchOrderInList(allList, detail);
+          if (found) {
+              openFoundOrder(found);
+              return true;
+          }
+
+          const fetchKey = `${targetId}|${targetTracking}`;
+          if (orderDeepLinkFetchRef.current !== fetchKey) {
+              orderDeepLinkFetchRef.current = fetchKey;
+              getOrders()
+                  .then((freshOrders) => {
+                      const arr = Array.isArray(freshOrders) ? freshOrders : [];
+                      if (arr.length > 0) setLocalOrders(arr);
+                      const match = matchOrderInList(arr, detail);
+                      if (match) openFoundOrder(match);
+                  })
+                  .catch(() => {})
+                  .finally(() => {
+                      if (orderDeepLinkFetchRef.current === fetchKey) {
+                          orderDeepLinkFetchRef.current = null;
+                      }
+                  });
           }
           return false;
       };
@@ -709,7 +746,7 @@ const ManageOrders: React.FC<ManageOrdersProps> = ({ orders, refreshData, curren
                           <tr key={order.id} className={rowClass}>
                             <td className="px-6 py-4 font-mono text-gray-500">#{order.trackingNumber}</td>
                             <td className="px-6 py-4 text-gray-700">{formatDate(order.date)}</td>
-                            <td className="px-6 py-4 font-medium text-gray-900 max-w-[200px]"><div className="truncate font-bold">{order.payee}</div><div className="text-xs text-gray-500 truncate mt-1">{order.description}</div><div className="flex gap-1 mt-1">{order.attachments?.map((a,i) => <a key={i} href={a.data} target="_blank" className="text-blue-500 text-[10px] bg-blue-50 px-1 rounded flex items-center"><Paperclip size={10}/></a>)}</div></td>
+                            <td className="px-6 py-4 font-medium text-gray-900 max-w-[200px]"><div className="truncate font-bold">{order.payee}</div><div className="text-xs text-gray-500 truncate mt-1">{order.description}</div><div className="flex gap-1 mt-1">{order.attachments?.map((a,i) => <button key={i} type="button" onClick={(e) => { e.stopPropagation(); setPreviewOrderAttachment({ url: a.data, fileName: a.fileName || `پیوست ${i + 1}` }); }} className="text-blue-500 text-[10px] bg-blue-50 px-1 rounded flex items-center cursor-pointer" title={a.fileName || 'مشاهده پیوست'}><Paperclip size={10}/></button>)}</div></td>
                             <td className="px-6 py-4 text-xs font-bold text-gray-700">{order.payingCompany || '-'}</td>
                             <td className="px-6 py-4 text-xs text-gray-600">
                                 {paymentDetails.map((d, i) => (
@@ -820,6 +857,15 @@ const ManageOrders: React.FC<ManageOrdersProps> = ({ orders, refreshData, curren
         <AiDocumentScannerModal
           isOpen={showAiScanner}
           onClose={() => setShowAiScanner(false)}
+        />
+      )}
+
+      {previewOrderAttachment && (
+        <FileViewerModal
+          isOpen={!!previewOrderAttachment}
+          onClose={() => setPreviewOrderAttachment(null)}
+          fileUrl={previewOrderAttachment.url}
+          fileName={previewOrderAttachment.fileName}
         />
       )}
     </div>

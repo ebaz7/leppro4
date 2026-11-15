@@ -10,6 +10,7 @@ import PrintVoucher from './PrintVoucher';
 import { getUsers } from '../services/authService';
 import { apiCall } from '../services/apiService';
 import html2canvas from 'html2canvas';
+import { FileViewerModal } from './FileViewerModal';
 
 interface EditOrderModalProps {
   order: PaymentOrder;
@@ -41,6 +42,7 @@ const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, onClose, onSave 
   
   // NEW: Editing state for lines
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<{ url: string; fileName: string } | null>(null);
 
   const [newLine, setNewLine] = useState<{ 
       method: PaymentMethod; 
@@ -570,17 +572,16 @@ const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, onClose, onSave 
                           const displayFileName = getDisplayFileName(file.fileName, file.data);
                           return (
                             <div key={idx} className="flex items-center justify-between glass-panel p-3 rounded-xl border border-gray-200 text-sm shadow-xs group bg-white gap-2">
-                              <a 
-                                href={file.data} 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="text-blue-600 hover:text-blue-800 break-words line-clamp-2 hover:underline flex items-center gap-2 font-medium min-w-0 flex-1"
+                              <button
+                                type="button"
+                                onClick={() => setPreviewFile({ url: file.data, fileName: displayFileName })}
+                                className="text-blue-600 hover:text-blue-800 break-words line-clamp-2 hover:underline flex items-center gap-2 font-medium min-w-0 flex-1 text-right cursor-pointer"
                                 dir="auto"
                                 title={displayFileName}
                               >
                                 <Paperclip size={16} className="shrink-0 text-blue-500" />
                                 <span className="truncate">{displayFileName}</span>
-                              </a>
+                              </button>
                               <button 
                                 type="button" 
                                 onClick={() => removeAttachment(idx)} 
@@ -604,6 +605,15 @@ const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, onClose, onSave 
                 </div>
             </form>
         </div>
+
+        {previewFile && (
+          <FileViewerModal
+            isOpen={!!previewFile}
+            onClose={() => setPreviewFile(null)}
+            fileUrl={previewFile.url}
+            fileName={previewFile.fileName}
+          />
+        )}
     </div>
   );
 };

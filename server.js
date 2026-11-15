@@ -8104,8 +8104,9 @@ app.post('/api/notifications/delete', (req, res) => {
 
 app.post('/api/notifications/add', async (req, res) => {
     try {
-        const { title, body, url, targetRoles, targetUsernames, excludeUsernames } = req.body;
-        const notif = await broadcastNotification(title, body, url, targetRoles, targetUsernames, excludeUsernames);
+        const { title, body, url, targetRoles, targetUsernames, excludeUsernames, username } = req.body;
+        const resolvedTargets = targetUsernames || (username ? [username] : null);
+        const notif = await broadcastNotification(title, body, url, targetRoles, resolvedTargets, excludeUsernames);
         res.json({ success: true, notification: notif });
     } catch (e) {
         console.error("POST /api/notifications/add error:", e);

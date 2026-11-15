@@ -315,18 +315,22 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.dispatchEvent(new CustomEvent('REGISTER_BACK_ACTION', { detail: onClose }));
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.dispatchEvent(new CustomEvent('REGISTER_BACK_ACTION', { detail: null }));
+    };
   }, [isOpen, onClose]);
 
-  // Native non-passive touch listeners for silky-smooth 2-finger pinch-to-zoom & 4-way touch pan
+  // Native non-passive touch listeners for silky-smooth 2-finger pinch-to-zoom, tap-zoom & 4-way touch pan
   useEffect(() => {
     const el = viewportRef.current;
     if (!el || !isOpen) return;
 
     const handleTouchStart = (e: TouchEvent) => {
+      e.stopPropagation();
       if (e.touches.length === 2) {
         e.preventDefault();
-        e.stopPropagation();
         const p1 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         const p2 = { x: e.touches[1].clientX, y: e.touches[1].clientY };
         gestureRef.current.mode = 'pinch';
@@ -345,16 +349,17 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           touch.clientY - gestureRef.current.lastTapY
         );
 
-        // Double-tap to toggle zoom (1x <-> 2.4x centered on tap point)
-        if (dt > 40 && dt < 320 && dist < 36) {
+        // Double-tap (Tap-to-Zoom) cycles 1x -> 2.5x -> 4x -> 1x centered on tap point
+        if (dt > 30 && dt < 400 && dist < 48) {
           e.preventDefault();
-          e.stopPropagation();
           gestureRef.current.lastTapTime = 0;
-          if (zoomRef.current > 1.15) {
+          if (zoomRef.current < 1.8) {
+            applyZoomLevel(2.5, { x: touch.clientX, y: touch.clientY });
+          } else if (zoomRef.current < 3.4) {
+            applyZoomLevel(4, { x: touch.clientX, y: touch.clientY });
+          } else {
             setZoom(1);
             setPan({ x: 0, y: 0 });
-          } else {
-            applyZoomLevel(2.4, { x: touch.clientX, y: touch.clientY });
           }
           return;
         }
@@ -363,22 +368,20 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         gestureRef.current.lastTapX = touch.clientX;
         gestureRef.current.lastTapY = touch.clientY;
 
-        // Enable 1-finger 4-direction touch panning whenever zoomed in (or for images at any zoom)
-        if (zoomRef.current > 1.01 || detectedType === 'image' || pdfPageImages.length > 0) {
-          gestureRef.current.mode = 'pan';
-          gestureRef.current.startX = touch.clientX;
-          gestureRef.current.startY = touch.clientY;
-          gestureRef.current.initialPanX = panRef.current.x;
-          gestureRef.current.initialPanY = panRef.current.y;
-          setIsTouchingGesture(true);
-        }
+        // Enable 1-finger 4-direction touch panning for images and PDF pages
+        gestureRef.current.mode = 'pan';
+        gestureRef.current.startX = touch.clientX;
+        gestureRef.current.startY = touch.clientY;
+        gestureRef.current.initialPanX = panRef.current.x;
+        gestureRef.current.initialPanY = panRef.current.y;
+        setIsTouchingGesture(true);
       }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
+      e.stopPropagation();
       if (e.touches.length === 2) {
         e.preventDefault();
-        e.stopPropagation();
         const p1 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         const p2 = { x: e.touches[1].clientX, y: e.touches[1].clientY };
 
@@ -419,7 +422,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         if (zoomRef.current > 1.01) {
           // Full 4-directional touch panning (left, right, up, down) when zoomed
           e.preventDefault();
-          e.stopPropagation();
           const rawPanX = gestureRef.current.initialPanX + dx;
           const rawPanY = gestureRef.current.initialPanY + dy;
           const clamped = clampPanOffsets(rawPanX, rawPanY, zoomRef.current, getBounds());
@@ -427,16 +429,29 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         } else if (pdfPageImages.length > 1) {
           // At 1x zoom on multi-page PDF, allow vertical scrolling through pages via panY
           e.preventDefault();
-          e.stopPropagation();
           const bounds = getBounds();
           const maxVerticalScroll = Math.max(0, (bounds.contentHeight - bounds.viewportHeight) / 2 + 120);
           const nextY = Math.min(maxVerticalScroll, Math.max(-maxVerticalScroll, gestureRef.current.initialPanY + dy));
           setPan({ x: 0, y: nextY });
+        } else {
+          // At 1x zoom on image or single page, allow 4-way pan if content overflows viewport
+          const bounds = getBounds();
+          const clamped = clampPanOffsets(
+            gestureRef.current.initialPanX + dx,
+            gestureRef.current.initialPanY + dy,
+            zoomRef.current,
+            bounds
+          );
+          if (clamped.panX !== 0 || clamped.panY !== 0) {
+            e.preventDefault();
+            setPan({ x: clamped.panX, y: clamped.panY });
+          }
         }
       }
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
+      e.stopPropagation();
       if (e.touches.length === 0) {
         gestureRef.current.mode = 'none';
         setIsTouchingGesture(false);
@@ -458,7 +473,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey || zoomRef.current > 1.01) {
         e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.2 : -0.2;
+        const delta = e.deltaY < 0 ? 0.25 : -0.25;
         applyZoomLevel(zoomRef.current + delta, { x: e.clientX, y: e.clientY });
       }
     };
@@ -787,17 +802,55 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {/* Floating Reset & Touch Hint Pill when zoomed */}
-        {zoom > 1.05 && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-slate-900/90 text-white px-3.5 py-1.5 rounded-full border border-white/15 shadow-xl text-xs font-bold">
-            <Move size={14} className="text-blue-400" />
-            <span>حرکت در ۴ جهت فعال است ({Math.round(zoom * 100)}%)</span>
-            <button
-              onClick={resetViewTransform}
-              className="mr-1 px-2 py-0.5 bg-blue-600 hover:bg-blue-500 rounded-full text-[10px]"
-            >
-              بازنشانی
-            </button>
+        {/* Floating Touch Zoom & 4-Way Pan Control Bar for Android & Web */}
+        {isCanvasViewActive && !isLoadingPreview && !isRenderingPdfPages && !loadError && (
+          <div
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-full border border-white/15 shadow-2xl text-xs font-bold whitespace-nowrap"
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
+            <Move size={14} className={zoom > 1.05 ? 'text-emerald-400' : 'text-blue-400'} />
+            <span className="text-[11px] text-gray-200 hidden sm:inline">
+              {zoom > 1.05 ? 'حرکت در ۴ جهت فعال' : 'زوم با دو انگشت یا دو ضربه (Tap)'}
+            </span>
+            <div className="flex items-center gap-1 mr-1">
+              <button
+                type="button"
+                onClick={resetViewTransform}
+                className={`px-2 py-0.5 rounded-full text-[11px] font-mono transition ${
+                  zoom <= 1.05 ? 'bg-blue-600 text-white' : 'bg-white/10 hover:bg-white/20 text-gray-200'
+                }`}
+              >
+                1x
+              </button>
+              <button
+                type="button"
+                onClick={() => applyZoomLevel(2)}
+                className={`px-2 py-0.5 rounded-full text-[11px] font-mono transition ${
+                  zoom > 1.5 && zoom < 2.8 ? 'bg-blue-600 text-white' : 'bg-white/10 hover:bg-white/20 text-gray-200'
+                }`}
+              >
+                2x
+              </button>
+              <button
+                type="button"
+                onClick={() => applyZoomLevel(3.5)}
+                className={`px-2 py-0.5 rounded-full text-[11px] font-mono transition ${
+                  zoom >= 2.8 ? 'bg-blue-600 text-white' : 'bg-white/10 hover:bg-white/20 text-gray-200'
+                }`}
+              >
+                3.5x
+              </button>
+              {zoom > 1.05 && (
+                <button
+                  type="button"
+                  onClick={resetViewTransform}
+                  className="px-2 py-0.5 bg-rose-600/80 hover:bg-rose-600 text-white rounded-full text-[10px]"
+                >
+                  مرکز ({Math.round(zoom * 100)}%)
+                </button>
+              )}
+            </div>
           </div>
         )}
 

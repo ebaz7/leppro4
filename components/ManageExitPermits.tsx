@@ -19,6 +19,7 @@ import useIsMobile from '../hooks/useIsMobile';
 import { isInFinancialYear } from '../utils/dateUtils';
 import { syncDriversFromRecords } from '../services/driverMemoryService';
 import { backgroundAutoDetectAndAttachRemittance } from '../services/sayanExitService';
+import { normalizeDigitsToEnglish } from '../utils/notificationDeepLink';
 
 const ManageExitPermits: React.FC<{ currentUser: User, settings?: SystemSettings, statusFilter?: any, financialYear?: string, mode?: 'INVOICE' | 'EXIT' }> = ({ currentUser, settings, statusFilter, financialYear, mode = 'EXIT' }) => {
     const isMobile = useIsMobile();
@@ -122,28 +123,77 @@ const ManageExitPermits: React.FC<{ currentUser: User, settings?: SystemSettings
     }, [statusFilter]);
 
     // Listen for custom navigation / open events from Global Search, Notifications, or cross-module links
+    const deepLinkFetchInFlightRef = React.useRef<string | null>(null);
     useEffect(() => {
+        const matchPermitInList = (list: ExitPermit[], detail: any): ExitPermit | undefined => {
+            const rawId = detail?.permitId ?? detail?.id ?? '';
+            const rawNum = detail?.permitNumber ?? '';
+            const targetId = normalizeDigitsToEnglish(String(rawId)).trim();
+            const targetNum = normalizeDigitsToEnglish(String(rawNum)).trim();
+            if (!targetId && !targetNum) return undefined;
+            return list.find(p => {
+                const pId = normalizeDigitsToEnglish(String(p.id || '')).trim();
+                const pNum = normalizeDigitsToEnglish(String(p.permitNumber ?? '')).trim();
+                const pRem = normalizeDigitsToEnglish(String(p.sayanRemittanceNumber || '')).trim();
+                const pArch = normalizeDigitsToEnglish(String(p.sayanArchiveCode || '')).trim();
+                return (
+                    (targetId && pId === targetId) ||
+                    (targetNum && pNum === targetNum) ||
+                    (targetId && pNum === targetId) ||
+                    (targetId && pRem === targetId) ||
+                    (targetId && pArch === targetId)
+                );
+            });
+        };
+
+        const openFoundPermit = (found: ExitPermit) => {
+            if (found.status === ExitPermitStatus.EXITED || found.status === ExitPermitStatus.REJECTED) {
+                setActiveTab('EXIT_ARCHIVE');
+            } else {
+                setActiveTab('CARTABLE');
+            }
+            setViewPermit(found);
+            try { sessionStorage.removeItem('pending_exit_permit_deep_link'); } catch {}
+        };
+
         const openPermitByDetail = (detail: any): boolean => {
             if (!detail) return false;
-            const targetId = detail.permitId || detail.id;
-            const targetNum = detail.permitNumber;
+            const targetId = detail.permitId || detail.id || '';
+            const targetNum = detail.permitNumber || '';
             const targetSearch = detail.searchTerm;
             if (targetSearch) {
                 setSearchTerm(targetSearch);
             }
-            if (targetId || targetNum) {
-                const found = permits.find(p =>
-                    (targetId && String(p.id) === String(targetId)) ||
-                    (targetNum && String(p.permitNumber) === String(targetNum)) ||
-                    (targetId && String(p.permitNumber) === String(targetId)) ||
-                    (targetId && p.sayanRemittanceNumber === targetId) ||
-                    (targetId && p.sayanArchiveCode === targetId)
-                );
-                if (found) {
-                    setViewPermit(found);
-                    try { sessionStorage.removeItem('pending_exit_permit_deep_link'); } catch {}
-                    return true;
-                }
+            if (!targetId && !targetNum) return false;
+
+            const found = matchPermitInList(permits, detail);
+            if (found) {
+                openFoundPermit(found);
+                return true;
+            }
+
+            // If not found in currently loaded state (e.g. newly created or filtered by fiscal year), fetch fresh from server immediately
+            const fetchKey = `${targetId}|${targetNum}`;
+            if (deepLinkFetchInFlightRef.current !== fetchKey) {
+                deepLinkFetchInFlightRef.current = fetchKey;
+                getExitPermits()
+                    .then((freshData) => {
+                        const rawList = Array.isArray(freshData) ? freshData : [];
+                        const match = matchPermitInList(rawList, detail);
+                        if (match) {
+                            setPermits(prev => {
+                                const merged = prev.some(x => x.id === match.id) ? prev : [match, ...prev];
+                                return merged.sort((a, b) => ((b.createdAt || 0) - (a.createdAt || 0)) || ((b.permitNumber || 0) - (a.permitNumber || 0)));
+                            });
+                            openFoundPermit(match);
+                        }
+                    })
+                    .catch(() => {})
+                    .finally(() => {
+                        if (deepLinkFetchInFlightRef.current === fetchKey) {
+                            deepLinkFetchInFlightRef.current = null;
+                        }
+                    });
             }
             return false;
         };

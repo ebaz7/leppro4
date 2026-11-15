@@ -23,7 +23,7 @@ export interface ViewportBounds {
 }
 
 export const MIN_TOUCH_ZOOM = 0.5;
-export const MAX_TOUCH_ZOOM = 6;
+export const MAX_TOUCH_ZOOM = 8;
 
 export function clampZoom(scale: number, min = MIN_TOUCH_ZOOM, max = MAX_TOUCH_ZOOM): number {
   if (!Number.isFinite(scale)) return 1;
@@ -44,8 +44,9 @@ export function getTouchMidpoint(p1: Point2D, p2: Point2D): Point2D {
 }
 
 /**
- * Clamps 4-way pan offsets (panX, panY) so the zoomed content can be panned
+ * Clamps 4-way pan offsets (panX, panY) so the content can be panned
  * freely in all 4 directions (left, right, up, down) without flying completely off-screen.
+ * Also supports panning tall/wide content at 1x scale if content exceeds viewport.
  */
 export function clampPanOffsets(
   panX: number,
@@ -56,10 +57,6 @@ export function clampPanOffsets(
   if (!Number.isFinite(panX)) panX = 0;
   if (!Number.isFinite(panY)) panY = 0;
 
-  if (scale <= 1.01) {
-    return { panX: 0, panY: 0 };
-  }
-
   const vw = bounds?.viewportWidth && bounds.viewportWidth > 0 ? bounds.viewportWidth : 800;
   const vh = bounds?.viewportHeight && bounds.viewportHeight > 0 ? bounds.viewportHeight : 800;
   const cw = bounds?.contentWidth && bounds.contentWidth > 0 ? bounds.contentWidth : vw;
@@ -68,9 +65,28 @@ export function clampPanOffsets(
   const scaledWidth = cw * scale;
   const scaledHeight = ch * scale;
 
-  // Allow panning across the full scaled dimensions plus a comfortable margin in all 4 directions
-  const maxPanX = Math.max((scaledWidth - vw) / 2 + vw * 0.35, ( vw * (scale - 1) ) / 2 + 80);
-  const maxPanY = Math.max((scaledHeight - vh) / 2 + vh * 0.35, ( vh * (scale - 1) ) / 2 + 120);
+  if (scale <= 1.01) {
+    // At 1x scale, allow vertical/horizontal panning if the rendered content is larger than the viewport
+    const overflowX = Math.max(0, (scaledWidth - vw) / 2);
+    const overflowY = Math.max(0, (scaledHeight - vh) / 2);
+    return {
+      panX: overflowX > 0 ? Math.min(overflowX, Math.max(-overflowX, panX)) : 0,
+      panY: overflowY > 0 ? Math.min(overflowY, Math.max(-overflowY, panY)) : 0,
+    };
+  }
+
+  // When zoomed in (scale > 1.01), guarantee generous 4-way pan freedom in all 4 directions
+  // even when the base image is smaller than the viewport on one axis.
+  const maxPanX = Math.max(
+    (scaledWidth - vw) / 2 + vw * 0.45,
+    (vw * scale - vw) / 2 + vw * 0.35,
+    vw * 0.5
+  );
+  const maxPanY = Math.max(
+    (scaledHeight - vh) / 2 + vh * 0.45,
+    (vh * scale - vh) / 2 + vh * 0.35,
+    vh * 0.5
+  );
 
   return {
     panX: Math.min(maxPanX, Math.max(-maxPanX, panX)),

@@ -77,7 +77,14 @@ const FALLBACK_BIO_CONFIG: BioLinkConfig = {
 
 function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [settings, setSettings] = useState<SystemSettings | undefined>(undefined);
+  const [settings, setSettings] = useState<SystemSettings | undefined>(() => {
+    try {
+      const cached = getLocalData<SystemSettings | undefined>(LS_KEYS.SETTINGS, undefined);
+      return cached && typeof cached === 'object' ? cached : undefined;
+    } catch {
+      return undefined;
+    }
+  });
 
   // Memoized user navigation items strictly derived from user role permissions
   const allowedNavItems = useMemo(() => {
@@ -255,10 +262,13 @@ function App() {
       } catch (_) {}
       setTimeout(() => {
           try { window.dispatchEvent(new CustomEvent(eventName, { detail })); } catch (_) {}
-      }, 140);
+      }, 150);
       setTimeout(() => {
           try { window.dispatchEvent(new CustomEvent(eventName, { detail })); } catch (_) {}
-      }, 420);
+      }, 450);
+      setTimeout(() => {
+          try { window.dispatchEvent(new CustomEvent(eventName, { detail })); } catch (_) {}
+      }, 950);
   };
 
   const navigateFromNotificationUrl = (
@@ -290,6 +300,9 @@ function App() {
       }
 
       const parsed = parseNotificationDeepLink(cleanRawUrl, notifTitle, notifBody, extraData);
+
+      // Ensure mobile split view switches to primary pane where notification targets open
+      setMobileActiveSplitPane('primary');
 
       if (parsed.pv) {
           setDirectChatTarget({ type: 'private', id: parsed.pv });
@@ -392,6 +405,20 @@ function App() {
           try { sessionStorage.setItem('pending_warehouse_deep_link', JSON.stringify(payload)); } catch {}
           dispatchTimedDeepLinkEvent('OPEN_WAREHOUSE_TX', payload);
       }
+
+      // 7. Trade Dossier (بازرگانی) item deep-link
+      if (parsed.tradeId) {
+          const payload = {
+              recordId: parsed.tradeId,
+              id: parsed.tradeId,
+              at: now
+          };
+          try { sessionStorage.setItem('pending_trade_deep_link', JSON.stringify(payload)); } catch {}
+          dispatchTimedDeepLinkEvent('OPEN_TRADE_RECORD', payload);
+      }
+
+      // Trigger background refresh so newly created server records are immediately available
+      try { loadData(true); } catch (_) {}
   };
 
   useEffect(() => {
@@ -804,6 +831,27 @@ function App() {
   const isNative = Capacitor.isNativePlatform();
 
   useEffect(() => {
+    // Listen for direct notification taps across ALL platforms (Android MainActivity, Capacitor Push/Local, Web Notification onclick)
+    const handleGlobalNotificationTap = (e: any) => {
+        try {
+            const dlkamBridge = (window as any).DlkamAndroid;
+            const bridgeUrl = isNative && dlkamBridge && typeof dlkamBridge.consumePendingNotificationUrl === 'function'
+                ? dlkamBridge.consumePendingNotificationUrl()
+                : '';
+            const detail = e?.detail || {};
+            const targetUrl = detail.url || detail.targetUrl || detail.link || detail.tab || bridgeUrl || '';
+            const title = detail.title || '';
+            const body = detail.body || '';
+            if (targetUrl || title || body) {
+                navigateFromNotificationUrl(targetUrl, title, body, e?.detail || null);
+            }
+        } catch (_) {}
+    };
+    window.addEventListener('dlkam-notification-tap' as any, handleGlobalNotificationTap);
+    if (isNative) {
+        handleGlobalNotificationTap(null);
+    }
+
     if (isNative) {
         let backListener: any;
         try {
@@ -820,7 +868,6 @@ function App() {
                 const data = notification.notification?.data || {};
                 const title = notification.notification?.title || data.title || '';
                 const body = notification.notification?.body || data.body || '';
-                console.log("Push Action Data:", data);
                 navigateFromNotificationUrl(data.url || data.targetUrl || data.link || data.tab || '', title, body, data);
             });
 
@@ -828,28 +875,9 @@ function App() {
                 const data = action.notification?.extra || {};
                 const title = action.notification?.title || data.title || '';
                 const body = action.notification?.body || data.body || '';
-                console.log("Local action data:", data);
                 navigateFromNotificationUrl(data.url || data.targetUrl || data.link || data.tab || '', title, body, data);
             });
         } catch(e) { console.error("Notification Listener Error", e); }
-
-        // Listen for direct Android MainActivity intent taps (warm start & cold start fallback)
-        const handleNativeNotificationTap = (e: any) => {
-            try {
-                const dlkamBridge = (window as any).DlkamAndroid;
-                const bridgeUrl = dlkamBridge && typeof dlkamBridge.consumePendingNotificationUrl === 'function'
-                    ? dlkamBridge.consumePendingNotificationUrl()
-                    : '';
-                const targetUrl = e?.detail?.url || bridgeUrl;
-                const title = e?.detail?.title || '';
-                const body = e?.detail?.body || '';
-                if (targetUrl || title || body) {
-                    navigateFromNotificationUrl(targetUrl, title, body, e?.detail || null);
-                }
-            } catch (_) {}
-        };
-        window.addEventListener('dlkam-notification-tap' as any, handleNativeNotificationTap);
-        handleNativeNotificationTap(null);
 
         // --- ANDROID INTENT SUPPORT (Simplified) & SHARE TARGET plugin ---
         try {
@@ -866,7 +894,6 @@ function App() {
             // Also try to catch it in appUrlOpen
             CapacitorApp.addListener('appUrlOpen', (data: any) => {
                 if (data.url && (data.url.includes('sharedFileUrl') || data.url.includes('sharedText'))) {
-                    // This case is already handled by the other useEffect but let's be sure
                     setTimeout(() => setActiveTab('chat'), 500);
                 }
             });
@@ -897,9 +924,13 @@ function App() {
 
         return () => {
             if (backListener) backListener.remove();
-            window.removeEventListener('dlkam-notification-tap' as any, handleNativeNotificationTap);
+            window.removeEventListener('dlkam-notification-tap' as any, handleGlobalNotificationTap);
         };
     }
+
+    return () => {
+        window.removeEventListener('dlkam-notification-tap' as any, handleGlobalNotificationTap);
+    };
   }, []);
 
   useEffect(() => {
@@ -1051,7 +1082,7 @@ function App() {
     }
 
     const defaultTab = (window.location.hash || '').replace(/^#\/?/, '') || 'dashboard';
-    const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'security', 'purchase', 'balances', 'ccti', 'sayan', 'cheque-receipts', 'digital-card'];
+    const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'industrial-erp', 'security', 'meetings', 'secretariat', 'purchase', 'balances', 'knowledge', 'notes', 'ccti', 'sayan', 'sayan-operations', 'cheque-receipts', 'digital-card', 'products', 'sales', 'tickets'];
 
     if (validTabs.includes(defaultTab)) {
         setActiveTabState(defaultTab); 
@@ -1108,30 +1139,14 @@ function App() {
     const handleServiceWorkerMessage = (event: MessageEvent) => {
         if (event.data && event.data.type === 'NAVIGATE') {
             try {
-                const url = new URL(event.data.url);
-                let path = url.pathname.replace(/^\/+/, '');
-                if (!path) path = url.hash.replace(/^#\/?/, '');
-                
-                // Extract search params
-                const params = new URLSearchParams(url.search);
-                const pv = params.get('pv');
-                const group = params.get('group');
-                
-                if (pv || group) {
-                    setDirectChatTarget({
-                        type: pv ? 'private' : 'group',
-                        id: pv || group || ''
-                    });
-                }
-
-                const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'security', 'purchase', 'balances', 'meetings', 'knowledge', 'ccti', 'sayan', 'cheque-receipts'];
-                if (validTabs.includes(path) || path === '') {
-                    const targetTab = path || 'dashboard';
-                    setActiveTab(targetTab);
-                    try {
-                        window.history.replaceState({ tab: targetTab }, '', `/#${targetTab}`);
-                    } catch (e) {}
-                }
+                const payloadData = event.data.data || event.data || {};
+                const rawMsgUrl = event.data.url || event.data.targetHref || payloadData.url || '';
+                navigateFromNotificationUrl(
+                    rawMsgUrl,
+                    event.data.title || payloadData.title,
+                    event.data.body || payloadData.body,
+                    payloadData
+                );
             } catch(e) {}
         }
     };
@@ -1145,40 +1160,24 @@ function App() {
     const sharedText = params.get('sharedText');
     const sharedTitle = params.get('sharedTitle');
     
-    const pv = params.get('pv');
-    const group = params.get('group');
-
-    if (pv || group) {
-        setDirectChatTarget({
-            type: pv ? 'private' : 'group',
-            id: pv || group || ''
-        });
-        setActiveTab('chat');
-        try {
-            const urlWithoutParams = window.location.protocol + "//" + window.location.host + "/#chat";
-            window.history.replaceState({ path: urlWithoutParams, tab: 'chat' }, '', urlWithoutParams);
-        } catch (e) {}
-    } else if (sharedFileUrl || sharedText || sharedTitle) {
+    if (sharedFileUrl || sharedText || sharedTitle) {
       setSharedData({
         fileUrl: sharedFileUrl || undefined,
         text: sharedText || undefined,
         title: sharedTitle || undefined,
       });
-      // Switch to the chat tab
       setActiveTab('chat');
-      
-      // Clean up URL query parameters so refresh doesn't trigger again
       try {
         const urlWithoutParams = window.location.protocol + "//" + window.location.host + "/#chat";
         window.history.replaceState({ path: urlWithoutParams, tab: 'chat' }, '', urlWithoutParams);
-      } catch (e) {
-        console.error("Failed to clean query parameters", e);
-      }
-    } else if (window.location.pathname === '/chat') {
-      setActiveTab('chat');
-      try {
-        window.history.replaceState({ tab: 'chat' }, '', '/#chat');
       } catch (e) {}
+    } else {
+      const hasDeepLinkParam = ['pv', 'group', 'task', 'tab', 'permitId', 'permitNumber', 'orderId', 'trackingNumber', 'meetingId', 'meetingNumber', 'requestId', 'requestNumber', 'letterId', 'letterNumber', 'txId', 'txNumber', 'tradeId', 'chequeId'].some(k => params.has(k));
+      const cleanPath = window.location.pathname.replace(/^\/+/, '');
+      if (hasDeepLinkParam || (cleanPath && cleanPath !== 'index.html')) {
+        const fullUrl = window.location.pathname + window.location.search + window.location.hash;
+        navigateFromNotificationUrl(fullUrl, params.get('_nt') || undefined, params.get('_nb') || undefined);
+      }
     }
   }, []);
 
@@ -1788,13 +1787,17 @@ function App() {
                     markNotificationAsShown(`chat_pv_${latestChat.id}`);
                     const title = latestChat.sender ? `پیام از ${latestChat.sender}` : 'پیام جدید در گفتگو';
                     const body = latestChat.message || (latestChat.audioUrl ? '🎤 پیام صوتی' : '📎 فایل ضمیمه');
-                    const targetUrl = latestChat.groupId ? `/chat?group=${latestChat.groupId}` : `/chat?pv=${latestChat.senderUsername}`;
+                    const targetUrl = latestChat.groupId
+                        ? `/chat?group=${latestChat.groupId}`
+                        : latestChat.recipient
+                            ? `/chat?pv=${latestChat.senderUsername}`
+                            : '/chat';
                     
                     playNotificationSound();
                     setToast({ show: true, title, message: body, url: targetUrl });
                     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
                     toastTimeoutRef.current = setTimeout(() => setToast(null), 4000);
-                    sendNotification(title, body, { id: `chat_pv_${latestChat.id}`, url: targetUrl, tab: 'chat', type: 'chat_pv' });
+                    sendNotification(title, body, { id: `chat_pv_${latestChat.id}`, url: targetUrl, tab: 'chat', type: latestChat.recipient ? 'chat_pv' : 'chat_group' });
                 }
             }
 

@@ -18,8 +18,9 @@ import {
 import { apiCall } from '../services/apiService';
 import { PersianHandwritingPad } from './PersianHandwritingPad';
 import { ChequeCalendarView } from './ChequeCalendarView';
-import { PenTool } from 'lucide-react';
+import { PenTool, Eye } from 'lucide-react';
 import { shareElementToChat, openSendToChat } from '../services/chatShareService';
+import { FileViewerModal } from './FileViewerModal';
 
 // Lazy loader for pdfjs-dist to ensure zero startup impact and 100% compatibility with older iOS WebKit
 let cachedPdfLib: any = null;
@@ -393,6 +394,7 @@ export const ChequeReceiptModule: React.FC<ChequeReceiptModuleProps> = ({ curren
   // Detail & Print states
   const [selectedReceipt, setSelectedReceipt] = useState<ChequeReceipt | null>(null);
   const [isSharingReceipt, setIsSharingReceipt] = useState(false);
+  const [previewChequeFile, setPreviewChequeFile] = useState<{ url: string; fileName: string } | null>(null);
 
   // Automatically scroll to the top of the main container when a receipt is opened for viewing
   useEffect(() => {
@@ -1862,19 +1864,33 @@ export const ChequeReceiptModule: React.FC<ChequeReceiptModuleProps> = ({ curren
                     </button>
 
                     {selectedReceipt.attachedFile?.url && (
-                      <button 
-                        onClick={() => openSendToChat({
-                          fileUrl: selectedReceipt.attachedFile!.url,
-                          fileName: selectedReceipt.attachedFile!.name || 'Cheque_Attachment.jpg',
-                          title: 'ارسال تصویر/فایل چک به گفتگو',
-                          defaultMessage: `📎 فایل ضمیمه چک رسید شماره ${selectedReceipt.serialNumber || '-'}`
-                        })}
-                        className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer"
-                        title="ارسال فایل پیوست این چک به گفتگوی سازمانی"
-                      >
-                        <MessageSquare size={14} />
-                        ارسال تصویر چک به گفتگو
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewChequeFile({
+                            url: selectedReceipt.attachedFile!.url,
+                            fileName: selectedReceipt.attachedFile!.name || 'Cheque_Attachment.jpg'
+                          })}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer"
+                          title="مشاهده تصویر/فایل چک با زوم لمسی"
+                        >
+                          <Eye size={14} />
+                          مشاهده فایل چک
+                        </button>
+                        <button 
+                          onClick={() => openSendToChat({
+                            fileUrl: selectedReceipt.attachedFile!.url,
+                            fileName: selectedReceipt.attachedFile!.name || 'Cheque_Attachment.jpg',
+                            title: 'ارسال تصویر/فایل چک به گفتگو',
+                            defaultMessage: `📎 فایل ضمیمه چک رسید شماره ${selectedReceipt.serialNumber || '-'}`
+                          })}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer"
+                          title="ارسال فایل پیوست این چک به گفتگوی سازمانی"
+                        >
+                          <MessageSquare size={14} />
+                          ارسال تصویر چک به گفتگو
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -2062,14 +2078,13 @@ export const ChequeReceiptModule: React.FC<ChequeReceiptModuleProps> = ({ curren
                           <td className="p-3 text-center">{getStatusBadge(r.status || 'pending_sales')}</td>
                           <td className="p-3 text-center">
                             {r.attachedFile ? (
-                              <a 
-                                href={r.attachedFile.url} 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1.5 px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:text-blue-500 rounded-lg text-[10px] font-bold"
+                              <button
+                                type="button"
+                                onClick={() => setPreviewChequeFile({ url: r.attachedFile!.url, fileName: r.attachedFile!.name || 'فایل پیوست چک' })}
+                                className="inline-flex items-center gap-1.5 px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 hover:bg-blue-100 rounded-lg text-[10px] font-bold cursor-pointer"
                               >
-                                <Download size={12} /> دانلود
-                              </a>
+                                <Eye size={12} /> مشاهده
+                              </button>
                             ) : (
                               <span className="text-gray-400">-</span>
                             )}
@@ -2295,14 +2310,14 @@ export const ChequeReceiptModule: React.FC<ChequeReceiptModuleProps> = ({ curren
                         </td>
                         <td className="p-3 text-center">
                           {item.receipt.attachedFile ? (
-                            <a 
-                              href={item.receipt.attachedFile.url}
-                              target="_blank" 
-                              rel="noreferrer"
-                              className="p-1 text-gray-400 hover:text-blue-500 inline-block"
+                            <button
+                              type="button"
+                              onClick={() => setPreviewChequeFile({ url: item.receipt.attachedFile!.url, fileName: item.receipt.attachedFile!.name || 'فایل پیوست چک' })}
+                              className="p-1 text-blue-500 hover:text-blue-700 inline-block cursor-pointer"
+                              title="مشاهده ضمیمه چک"
                             >
-                              <Download size={14} />
-                            </a>
+                              <Eye size={14} />
+                            </button>
                           ) : '-'}
                         </td>
                         <td className="p-3 text-center">
@@ -2957,6 +2972,15 @@ export const ChequeReceiptModule: React.FC<ChequeReceiptModuleProps> = ({ curren
         onSelectText={handleHandwritingSelectText}
         initialTargetField={handwritingTargetField}
       />
+
+      {previewChequeFile && (
+        <FileViewerModal
+          isOpen={!!previewChequeFile}
+          onClose={() => setPreviewChequeFile(null)}
+          fileUrl={previewChequeFile.url}
+          fileName={previewChequeFile.fileName}
+        />
+      )}
     </div>
   );
 };
