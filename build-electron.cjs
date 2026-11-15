@@ -94,8 +94,20 @@ async function buildAndPublishElectron() {
   console.log('\n🔨 مرحله ۲: کامپایل و ساخت فایل نصبی ویندوز (Electron NSIS)...');
   runCommand('npx electron-builder --win --x64');
 
-  // 7. Guarantee copy into downloads/ & public/downloads/ even if hook was bypassed
-  copyElectronInstallersToDownloads();
+  // 7. Guarantee copy into downloads/ & public/downloads/ only if afterAllArtifactBuild hook was bypassed
+  const expectedPrimaryExe = path.join(ROOT_DIR, 'downloads', `dlkam-electron-setup-v${verInfo.version}.exe`);
+  const alreadyCopiedByHook = (() => {
+    try {
+      if (!fs.existsSync(expectedPrimaryExe)) return false;
+      const st = fs.statSync(expectedPrimaryExe);
+      return st.isFile() && st.size > 102400;
+    } catch (_) {
+      return false;
+    }
+  })();
+  if (!alreadyCopiedByHook) {
+    copyElectronInstallersToDownloads();
+  }
   refreshWindowsIconCache();
 
   console.log('\n====================================================================');

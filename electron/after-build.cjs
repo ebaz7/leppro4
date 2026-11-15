@@ -73,19 +73,21 @@ function copyElectronInstallersToDownloads(artifactPaths = []) {
   });
 
   const versionedFileName = `dlkam-electron-setup-v${pkgVersion}.exe`;
+  const primaryTarget = path.join(DOWNLOADS_DIR, versionedFileName);
   const targets = [
-    path.join(DOWNLOADS_DIR, versionedFileName),
-    path.join(DOWNLOADS_DIR, 'dlkam-electron-setup.exe'),
-    path.join(PUBLIC_DOWNLOADS_DIR, 'dlkam-electron-setup.exe')
+    { path: primaryTarget, required: true },
+    { path: path.join(DOWNLOADS_DIR, 'dlkam-electron-setup.exe'), required: false },
+    { path: path.join(PUBLIC_DOWNLOADS_DIR, 'dlkam-electron-setup.exe'), required: false }
   ];
 
-  // Clean older versioned Electron setup files from downloads/ so disk doesn't fill up with old builds
+  // Clean older versioned Electron setup files & stale .tmp files from downloads/
   try {
     for (const existing of fs.readdirSync(DOWNLOADS_DIR)) {
       const lower = existing.toLowerCase();
       if (
-        /^dlkam-electron-setup-v[\d.]+\.exe$/i.test(lower) &&
-        lower !== versionedFileName.toLowerCase()
+        (lower.includes('.tmp-') && lower.includes('dlkam-electron-setup')) ||
+        (/^dlkam-electron-setup-v[\d.]+\.exe$/i.test(lower) &&
+        lower !== versionedFileName.toLowerCase())
       ) {
         try {
           fs.unlinkSync(path.join(DOWNLOADS_DIR, existing));
@@ -94,8 +96,78 @@ function copyElectronInstallersToDownloads(artifactPaths = []) {
     }
   } catch (_) {}
 
+  const sleepSync = (ms) => {
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    } catch (_) {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {}
+    }
+  };
+
+  const isTargetAlreadySynced = (targetPath) => {
+    try {
+      if (!fs.existsSync(targetPath)) return false;
+      const tStat = fs.statSync(targetPath);
+      if (!tStat.isFile() || tStat.size !== stat.size) return false;
+      // Verify PE/MZ header so partial/corrupt files are never treated as synced
+      const fd = fs.openSync(targetPath, 'r');
+      const hdr = Buffer.alloc(2);
+      const bytesRead = fs.readSync(fd, hdr, 0, 2, 0);
+      fs.closeSync(fd);
+      if (bytesRead < 2 || hdr[0] !== 0x4D || hdr[1] !== 0x5A) return false;
+      return tStat.mtimeMs >= stat.mtimeMs - 5000;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const copyWithRetry = (src, dest) => {
+    if (isTargetAlreadySynced(dest)) {
+      return 'already-synced';
+    }
+    const maxAttempts = 8;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const tmpDest = `${dest}.tmp-${process.pid}-${attempt}`;
+      try {
+        fs.copyFileSync(src, tmpDest);
+        try {
+          if (fs.existsSync(dest)) {
+            fs.unlinkSync(dest);
+          }
+        } catch (_) {}
+        try {
+          fs.renameSync(tmpDest, dest);
+        } catch (renameErr) {
+          // If target is locked during rename, try direct overwrite fallback on later retries
+          try { if (fs.existsSync(tmpDest)) fs.unlinkSync(tmpDest); } catch (_) {}
+          fs.copyFileSync(src, dest);
+        }
+        return 'copied';
+      } catch (err) {
+        lastErr = err;
+        try { if (fs.existsSync(tmpDest)) fs.unlinkSync(tmpDest); } catch (_) {}
+        const code = err && err.code;
+        if ((code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') && attempt < maxAttempts) {
+          sleepSync(400 * attempt);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr;
+  };
+
   for (const target of targets) {
-    fs.copyFileSync(newestExe, target);
+    try {
+      copyWithRetry(newestExe, target.path);
+    } catch (copyErr) {
+      if (target.required) {
+        throw copyErr;
+      }
+      console.warn(`⚠️ [Electron AfterBuild] فایل کمکی ${path.basename(target.path)} موقتاً قفل بود و رد شد (${copyErr.code || copyErr.message})`);
+    }
   }
 
   // Update release-version.json metadata so server reads exact latest Electron installer info immediately
@@ -115,7 +187,7 @@ function copyElectronInstallersToDownloads(artifactPaths = []) {
     fs.writeFileSync(RELEASE_JSON_PATH, JSON.stringify(updatedRel, null, 2) + '\n', 'utf8');
   } catch (_) {}
 
-  console.log(`✅ [Electron AfterBuild] فایل نصبی الکترون (${(stat.size / (1024 * 1024)).toFixed(1)} MB) در پوشه downloads کپی شد:`);
+  console.log(`✅ [Electron AfterBuild] فایل نصبی الکترون (${(stat.size / (1024 * 1024)).toFixed(1)} MB) در پوشه downloads آماده است:`);
   console.log(`   - downloads/${versionedFileName}`);
   console.log(`   - downloads/dlkam-electron-setup.exe`);
   console.log(`   - public/downloads/dlkam-electron-setup.exe`);

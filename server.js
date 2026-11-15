@@ -248,8 +248,21 @@ app.use('/api', (req, res, next) => {
     next();
 });
 
-// Maximum compression for speed
-app.use(compression({ level: 5 })); 
+// Maximum compression for speed (explicitly exclude binary installer downloads to prevent Content-Length / streaming corruption)
+app.use(compression({
+    level: 5,
+    filter: (req, res) => {
+        const reqPath = String(req.path || '').toLowerCase();
+        if (
+            reqPath.startsWith('/api/downloads') ||
+            reqPath.startsWith('/downloads') ||
+            /\.(exe|msi|apk|zip|gz)$/i.test(reqPath)
+        ) {
+            return false;
+        }
+        return compression.filter(req, res);
+    }
+})); 
 // INCREASED LIMIT TO 1GB TO SUPPORT FULL SYSTEM RESTORE (Files + DB)
 app.use(express.json({ limit: '1024mb' })); 
 app.use(express.urlencoded({ limit: '1024mb', extended: true }));
@@ -408,17 +421,17 @@ function findNewestInstallerFile(platformType, preferredExt = null, runtime = nu
         ]
         : (isElectronReq
             ? [
-                path.join(ROOT_DIR, 'release-electron'),
                 DOWNLOADS_DIR,
                 PUBLIC_DOWNLOADS_DIR,
+                path.join(ROOT_DIR, 'release-electron'),
                 ROOT_DIR
             ]
             : (isTauriReq
                 ? [
-                    path.join(ROOT_DIR, 'src-tauri', 'target', 'release', 'bundle', 'nsis'),
-                    path.join(ROOT_DIR, 'src-tauri', 'target', 'release', 'bundle', 'msi'),
                     DOWNLOADS_DIR,
                     PUBLIC_DOWNLOADS_DIR,
+                    path.join(ROOT_DIR, 'src-tauri', 'target', 'release', 'bundle', 'nsis'),
+                    path.join(ROOT_DIR, 'src-tauri', 'target', 'release', 'bundle', 'msi'),
                     ROOT_DIR
                 ]
                 : [
@@ -444,6 +457,9 @@ function findNewestInstallerFile(platformType, preferredExt = null, runtime = nu
             const entries = fs.readdirSync(dir);
             for (const f of entries) {
                 const lower = f.toLowerCase();
+                if (lower.includes('.tmp') || lower.endsWith('.part') || lower.includes('__uninstaller') || lower.includes('uninstaller') || lower.endsWith('.blockmap')) {
+                    continue;
+                }
                 if (isAndroid) {
                     if (!lower.endsWith('.apk')) continue;
                 } else {
@@ -468,6 +484,22 @@ function findNewestInstallerFile(platformType, preferredExt = null, runtime = nu
 
                 const stat = fs.statSync(fullPath);
                 if (!stat.isFile() || stat.size < 102400) continue; // Ignore tiny/corrupt files < 100KB
+
+                // Verify file is readable and starts with valid PE/MZ header for .exe installers
+                try {
+                    const fd = fs.openSync(fullPath, 'r');
+                    if (lower.endsWith('.exe')) {
+                        const hdr = Buffer.alloc(2);
+                        const readBytes = fs.readSync(fd, hdr, 0, 2, 0);
+                        fs.closeSync(fd);
+                        if (readBytes < 2 || hdr[0] !== 0x4D || hdr[1] !== 0x5A) continue;
+                    } else {
+                        fs.closeSync(fd);
+                    }
+                } catch (_) {
+                    continue; // Skip files currently exclusively locked during build
+                }
+
                 const ext = lower.endsWith('.apk') ? 'apk' : (lower.endsWith('.exe') ? 'exe' : 'msi');
                 candidates.push({
                     filePath: fullPath,
@@ -540,16 +572,28 @@ function findNewestInstallerFile(platformType, preferredExt = null, runtime = nu
 function sendAndroidInstallerResponse(req, res) {
     const bestApk = findNewestInstallerFile('android');
     if (bestApk && fs.existsSync(bestApk.filePath)) {
+        try { req.setTimeout(0); } catch (_) {}
+        try { res.setTimeout(0); } catch (_) {}
         const dlName = bestApk.version ? `dlkam-android-v${bestApk.version}.apk` : 'dlkam-android-latest.apk';
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
+        res.setHeader('X-Accel-Buffering', 'no');
         res.setHeader('Content-Type', 'application/vnd.android.package-archive');
         res.setHeader('Content-Disposition', `attachment; filename="${dlName}"`);
-        if (bestApk.size) {
-            res.setHeader('Content-Length', String(bestApk.size));
-        }
-        return res.sendFile(bestApk.filePath);
+        return res.sendFile(bestApk.filePath, {
+            dotfiles: 'allow',
+            acceptRanges: true,
+            cacheControl: false,
+            etag: false,
+            lastModified: false
+        }, (err) => {
+            if (err && !res.headersSent) {
+                res.removeHeader('Content-Length');
+                res.removeHeader('Content-Disposition');
+                res.status(err.statusCode || 500).json({ error: 'خطا در ارسال فایل نصبی اندروید' });
+            }
+        });
     }
     return res.status(404).json({ error: 'فایل نصبی اندروید (APK) در پوشه downloads سرور یافت نشد.' });
 }
@@ -568,6 +612,8 @@ function sendDesktopInstallerResponse(req, res) {
     const preferredExt = (reqExt === 'msi') ? 'msi' : 'exe';
     const bestDesktop = findNewestInstallerFile('desktop', preferredExt, runtime);
     if (bestDesktop && fs.existsSync(bestDesktop.filePath)) {
+        try { req.setTimeout(0); } catch (_) {}
+        try { res.setTimeout(0); } catch (_) {}
         const isExe = bestDesktop.fileName.toLowerCase().endsWith('.exe');
         const ext = isExe ? 'exe' : 'msi';
         const dlName = bestDesktop.fileName || (bestDesktop.version ? `dlkam-desktop-v${bestDesktop.version}.${ext}` : `dlkam-desktop-setup.${ext}`);
@@ -575,12 +621,25 @@ function sendDesktopInstallerResponse(req, res) {
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
-        res.setHeader('Content-Type', isExe ? 'application/x-msdownload' : 'application/x-msi');
-        res.setHeader('Content-Disposition', `attachment; filename="${asciiDlName}"; filename*=UTF-8''${encodeURIComponent(dlName)}`);
-        if (bestDesktop.size) {
-            res.setHeader('Content-Length', String(bestDesktop.size));
-        }
-        return res.sendFile(bestDesktop.filePath);
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.setHeader('Content-Type', isExe ? 'application/octet-stream' : 'application/x-msi');
+        const contentDisp = asciiDlName === dlName
+            ? `attachment; filename="${asciiDlName}"`
+            : `attachment; filename="${asciiDlName}"; filename*=UTF-8''${encodeURIComponent(dlName)}`;
+        res.setHeader('Content-Disposition', contentDisp);
+        return res.sendFile(bestDesktop.filePath, {
+            dotfiles: 'allow',
+            acceptRanges: true,
+            cacheControl: false,
+            etag: false,
+            lastModified: false
+        }, (err) => {
+            if (err && !res.headersSent) {
+                res.removeHeader('Content-Length');
+                res.removeHeader('Content-Disposition');
+                res.status(err.statusCode || 500).json({ error: 'خطا در ارسال فایل نصبی ویندوز' });
+            }
+        });
     }
     return res.status(404).json({ error: 'فایل نصبی ویندوز در پوشه downloads سرور یافت نشد.' });
 }
@@ -17881,6 +17940,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
         sayanOrderAuto.initAutomationCron();
     }, 1000);
 });
+
+// Prevent Node 18+/20+ default 300s requestTimeout from cutting off large 185MB+ installer downloads or backups
+try {
+    server.requestTimeout = 0;
+} catch (_) {}
 
 // WebSocket proxy support for ONLYOFFICE coauthoring and docservice
 server.on('upgrade', (req, socket, head) => {
