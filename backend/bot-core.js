@@ -2713,7 +2713,7 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                     await m.broadcastNotification(
                         `📎 پیوست جدید دستور پرداخت #${targetOrder.trackingNumber}`,
                         `پیوست جدید توسط ${user ? user.fullName : (platform === 'bale' ? 'کاربر بله' : 'کاربر ربات')} به سند #${targetOrder.trackingNumber} متصل شد.`,
-                        '/manage',
+                        `/manage?orderId=${encodeURIComponent(targetOrder.id || '')}&trackingNumber=${encodeURIComponent(targetOrder.trackingNumber || '')}`,
                         ['admin', 'financial', 'manager', 'ceo']
                     );
                 }
@@ -6357,7 +6357,7 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
                 await m.broadcastNotification(
                     `📎 پیوست جدید دستور پرداخت #${order.trackingNumber}`,
                     `${count} فایل جدید به دستور پرداخت #${order.trackingNumber} ضمیمه شد.`,
-                    '/manage',
+                    `/manage?orderId=${encodeURIComponent(order.id || '')}&trackingNumber=${encodeURIComponent(order.trackingNumber || '')}`,
                     ['admin', 'financial', 'manager', 'ceo']
                 );
             }

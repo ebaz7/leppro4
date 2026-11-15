@@ -11262,7 +11262,7 @@ app.post('/api/meetings/:id/announce', async (req, res) => {
             broadcastNotification(
                 `✨ اعلان برگزاری جلسه تولید #${meeting.meetingNumber || ''}`,
                 `جلسه تولید شماره ${meeting.meetingNumber || ''} روز ${meeting.date || ''} ساعت ${meeting.time || '۱۲:۰۰'} برگزار می‌شود.`,
-                '/production-meetings',
+                `/meetings?meetingId=${encodeURIComponent(meeting.id || '')}&meetingNumber=${encodeURIComponent(meeting.meetingNumber || '')}`,
                 null,
                 null
             );
@@ -11291,7 +11291,7 @@ app.post('/api/meetings/:id/send-minutes', async (req, res) => {
             broadcastNotification(
                 `📝 ارسال صورتجلسه تولید #${meeting.meetingNumber || ''}`,
                 `صورتجلسه شماره ${meeting.meetingNumber || ''} ثبت و ابلاغ گردید.`,
-                '/production-meetings',
+                `/meetings?meetingId=${encodeURIComponent(meeting.id || '')}&meetingNumber=${encodeURIComponent(meeting.meetingNumber || '')}`,
                 null,
                 null
             );
@@ -11984,7 +11984,7 @@ app.post('/api/orders', async (req, res) => {
                 await broadcastNotification(
                     isEdit ? `✏️ ویرایش دستور پرداخت #${order.trackingNumber || order.id}` : `💸 دستور پرداخت جدید #${order.trackingNumber || order.id}`,
                     `شرکت: ${order.payingCompany || '-'} | درخواست‌کننده: ${order.requester || '-'} | مبلغ: ${totalFormatted} ریال | ذینفع: ${order.payee || '-'}`,
-                    '/manage',
+                    `/manage?orderId=${encodeURIComponent(order.id || '')}&trackingNumber=${encodeURIComponent(order.trackingNumber || '')}`,
                     ['admin', 'financial', 'manager', 'ceo'],
                     null,
                     order.requester ? [order.requester] : null
@@ -12082,7 +12082,7 @@ app.put('/api/orders/:id', async (req, res) => {
                 await broadcastNotification(
                     `🔄 بروزرسانی دستور پرداخت #${order.trackingNumber || order.id}`,
                     `مرحله: ${stepName} | شرکت: ${order.payingCompany || '-'} | مبلغ: ${totalFormatted} ریال | ذینفع: ${order.payee || '-'}`,
-                    '/manage',
+                    `/manage?orderId=${encodeURIComponent(order.id || '')}&trackingNumber=${encodeURIComponent(order.trackingNumber || '')}`,
                     ['admin', 'financial', 'manager', 'ceo'],
                     null,
                     null
@@ -12214,7 +12214,7 @@ app.delete('/api/orders/:id/archive-attachments/:attachmentId', async (req, res)
             await broadcastNotification(
                 `🗑️ حذف پیوست دستور پرداخت #${order.trackingNumber}`,
                 `یکی از پیوست‌های سند #${order.trackingNumber} حذف شد.`,
-                '/manage',
+                `/manage?orderId=${encodeURIComponent(order.id || '')}&trackingNumber=${encodeURIComponent(order.trackingNumber || '')}`,
                 ['admin', 'financial', 'manager', 'ceo']
             );
         } catch (_) {}
@@ -12263,7 +12263,7 @@ app.delete('/api/orders/:id/attachments/:attachmentId', async (req, res) => {
             await broadcastNotification(
                 `🗑️ حذف پیوست دستور پرداخت #${order.trackingNumber}`,
                 `یکی از پیوست‌های سند #${order.trackingNumber} حذف شد.`,
-                '/manage',
+                `/manage?orderId=${encodeURIComponent(order.id || '')}&trackingNumber=${encodeURIComponent(order.trackingNumber || '')}`,
                 ['admin', 'financial', 'manager', 'ceo']
             );
         } catch (_) {}
@@ -12332,7 +12332,7 @@ app.post('/api/warehouse/transactions', async (req, res) => {
                 await broadcastNotification(
                     title,
                     `شرکت: ${tx.company || '-'} | تحویل‌گیرنده/دهنده: ${tx.delivererOrReceiver || '-'} | وضعیت: ${tx.status || 'در انتظار'}`,
-                    '/warehouse',
+                    `/warehouse?txId=${encodeURIComponent(tx.id || '')}&txNumber=${encodeURIComponent(tx.number || '')}`,
                     ['admin', 'warehouse', 'factory_manager', 'ceo', 'manager'],
                     null,
                     tx.createdBy ? [tx.createdBy] : null
@@ -12398,7 +12398,7 @@ app.put('/api/warehouse/transactions/:id', async (req, res) => {
                 await broadcastNotification(
                     title,
                     `مرحله: ${stepName} | شرکت: ${tx.company || '-'} | تحویل‌گیرنده/دهنده: ${tx.delivererOrReceiver || '-'}`,
-                    '/warehouse',
+                    `/warehouse?txId=${encodeURIComponent(tx.id || '')}&txNumber=${encodeURIComponent(tx.number || '')}`,
                     ['admin', 'warehouse', 'factory_manager', 'ceo', 'manager'],
                     null,
                     null
@@ -12605,7 +12605,7 @@ app.post('/api/purchase-requests', async (req, res) => {
                 await broadcastNotification(
                     isEdit ? `✏️ ویرایش درخواست خرید #${reqItem.requestNumber || reqItem.id}` : `🛒 درخواست خرید جدید #${reqItem.requestNumber || reqItem.id}`,
                     `عنوان: ${reqItem.title || reqItem.itemName || '-'} | درخواست‌کننده: ${reqItem.requester || '-'} | شرکت: ${reqItem.company || '-'}${reqItem.sayanStockSummary ? ` | ${reqItem.sayanStockSummary}` : ''}`,
-                    '/purchase',
+                    `/purchase?requestId=${encodeURIComponent(reqItem.id || '')}`,
                     ['admin', 'ceo', 'manager', 'commercial', 'financial'],
                     null,
                     reqItem.requester ? [reqItem.requester] : null
@@ -12976,7 +12976,7 @@ app.post('/api/secretariat-letters', async (req, res) => {
                 await broadcastNotification(
                     `✉️ نامه اداری جدید #${letter.letterNumber}`,
                     `موضوع: ${letter.subject || '-'} | فرستنده: ${letter.sender || '-'} | گیرنده: ${letter.receiver || '-'}`,
-                    '/secretariat',
+                    `/secretariat?letterId=${encodeURIComponent(letter.id || '')}&letterNumber=${encodeURIComponent(letter.letterNumber || '')}`,
                     ['admin', 'ceo', 'manager', 'office'],
                     targets.length > 0 ? targets : null
                 );
@@ -13016,7 +13016,7 @@ app.put('/api/secretariat-letters/:id', async (req, res) => {
                 await broadcastNotification(
                     `🔄 بروزرسانی نامه اداری #${letter.letterNumber}`,
                     `موضوع: ${letter.subject || '-'} | وضعیت/تاییدها بروزرسانی شد.`,
-                    '/secretariat',
+                    `/secretariat?letterId=${encodeURIComponent(letter.id || '')}&letterNumber=${encodeURIComponent(letter.letterNumber || '')}`,
                     ['admin', 'ceo', 'manager', 'office'],
                     targets.length > 0 ? targets : null
                 );
@@ -13835,7 +13835,7 @@ app.post('/api/exit-permits', async (req, res) => {
                 await broadcastNotification(
                     isEdit ? `✏️ ویرایش برگه خروج کالا #${permit.permitNumber}` : `🚛 برگه خروج کالا از کارخانه #${permit.permitNumber}`,
                     `شرکت: ${permit.company || '-'} | گیرنده: ${permit.recipientName || '-'} | راننده: ${permit.driverName || '-'} (پلاک: ${permit.plateNumber || '-'})`,
-                    '/manage-exit',
+                    `/manage-exit?permitId=${encodeURIComponent(permit.id || '')}&permitNumber=${encodeURIComponent(permit.permitNumber || '')}`,
                     ['admin', 'ceo', 'manager', 'factory_manager', 'warehouse', 'security', 'sales_manager'],
                     targets.length > 0 ? targets : null
                 );
@@ -13918,7 +13918,7 @@ app.put('/api/exit-permits/:id', async (req, res) => {
                 await broadcastNotification(
                     `🔄 بروزرسانی برگه خروج کالا #${permit.permitNumber}`,
                     `مرحله: ${stepName} | وضعیت: ${permit.status || '-'} | گیرنده: ${permit.recipientName || '-'}`,
-                    '/manage-exit',
+                    `/manage-exit?permitId=${encodeURIComponent(permit.id || '')}&permitNumber=${encodeURIComponent(permit.permitNumber || '')}`,
                     ['admin', 'ceo', 'manager', 'factory_manager', 'warehouse', 'security', 'sales_manager'],
                     targets.length > 0 ? targets : null
                 );
@@ -13997,7 +13997,7 @@ app.post('/api/exit-permits/:id/notify-customer', async (req, res) => {
             broadcastNotification(
                 `⚠️ عدم ثبت شماره مشتری (حواله #${permit.permitNumber})`,
                 `برای خریدار «${result.missingPhoneBuyers.join('، ')}» شماره‌ای ثبت نشده است و پیام خروج بار ارسال نشد.`,
-                '/manage-exit',
+                `/manage-exit?permitId=${encodeURIComponent(permit.id || '')}&permitNumber=${encodeURIComponent(permit.permitNumber || '')}`,
                 ['admin', 'ceo', 'sales_manager']
             ).catch(() => {});
         }

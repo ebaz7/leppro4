@@ -416,6 +416,48 @@ const WarehouseModule: React.FC<Props> = ({ currentUser, settings, initialTab = 
         }
         return () => { window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION')); };
     }, [viewBijak, editingBijak, editingReceipt, activeTab]);
+
+    useEffect(() => {
+        const openTxByDetail = (detail: any): boolean => {
+            if (!detail || !Array.isArray(allTransactions) || allTransactions.length === 0) return false;
+            const targetId = String(detail.txId || detail.id || '').trim();
+            const targetNum = String(detail.txNumber || detail.number || '').trim();
+            if (!targetId && !targetNum) return false;
+
+            const found = allTransactions.find(tx =>
+                (targetId && String(tx.id) === targetId) ||
+                (targetNum && String(tx.number) === targetNum) ||
+                (targetId && String(tx.number) === targetId) ||
+                (targetNum && String(tx.proformaNumber || '') === targetNum)
+            );
+            if (found) {
+                setViewBijak(found);
+                try { sessionStorage.removeItem('pending_warehouse_deep_link'); } catch {}
+                return true;
+            }
+            return false;
+        };
+
+        try {
+            const rawPending = sessionStorage.getItem('pending_warehouse_deep_link');
+            if (rawPending) {
+                const parsed = JSON.parse(rawPending);
+                if (!parsed?.at || Date.now() - Number(parsed.at) < 120000) {
+                    openTxByDetail(parsed);
+                } else {
+                    sessionStorage.removeItem('pending_warehouse_deep_link');
+                }
+            }
+        } catch {}
+
+        const handleOpenWarehouseTx = (e: any) => {
+            if (e?.detail) openTxByDetail(e.detail);
+        };
+        window.addEventListener('OPEN_WAREHOUSE_TX' as any, handleOpenWarehouseTx);
+        return () => {
+            window.removeEventListener('OPEN_WAREHOUSE_TX' as any, handleOpenWarehouseTx);
+        };
+    }, [allTransactions]);
     
     // Reports State
     const [archiveFilterCompany, setArchiveFilterCompany] = useState('');

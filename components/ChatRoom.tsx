@@ -1221,6 +1221,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     }, [activeChannel]);
 
     useEffect(() => {
+        const isChatRouteActive = typeof window !== 'undefined' && (
+            window.location.hash.toLowerCase().includes('chat') ||
+            window.location.pathname.toLowerCase().includes('chat')
+        );
+        if (!isChatRouteActive) {
+            return;
+        }
         if (activeChannel) {
             const handleBack = () => {
                  setActiveChannel(null);
@@ -1230,7 +1237,9 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
             window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION'));
         }
         return () => {
-            window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION'));
+            if (isChatRouteActive) {
+                window.dispatchEvent(new CustomEvent('UNREGISTER_BACK_ACTION'));
+            }
         };
     }, [activeChannel]);
 
@@ -4042,21 +4051,15 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                 );
             })()}
 
-            {/* 2. Image Viewer */}
+            {/* 2. Image Viewer with Pinch-to-Zoom & 4-Way Touch Pan */}
             {showImageViewer && (
-                <div className="fixed inset-0 bg-black/90 z-[200] flex items-start pt-16 md:pt-24 pb-32 overflow-y-auto overflow-x-hidden justify-center animate-fade-in" onClick={() => setShowImageViewer(null)}>
-                    <img src={showImageViewer} className="max-w-[90%] max-h-[90%] rounded shadow-2xl" onClick={e => e.stopPropagation()}/>
-                    <div className="absolute top-4 right-4 flex gap-3 z-50">
-                        <button onClick={(e) => { 
-                            e.stopPropagation(); 
-                            saveImageToGallery(showImageViewer, 'image_' + Date.now() + '.jpg'); 
-                        }} className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 shadow-lg cursor-pointer">
-                            <DownloadCloud size={16} />
-                            <span>ذخیره در گالری</span>
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); setShowImageViewer(null); }} className="p-2 bg-white/20 rounded-xl hover:bg-white/40 text-white cursor-pointer"><X/></button>
-                    </div>
-                </div>
+                <FileViewerModal
+                    isOpen={Boolean(showImageViewer)}
+                    onClose={() => setShowImageViewer(null)}
+                    fileUrl={showImageViewer}
+                    fileName={'تصویر گفتگو'}
+                    fileType="image"
+                />
             )}
 
             {/* PDF & File Viewer Modal */}

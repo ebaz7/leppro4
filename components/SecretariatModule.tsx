@@ -642,6 +642,61 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   const [printPreviewFullscreen, setPrintPreviewFullscreen] = useState(false);
   const [isSharingLetter, setIsSharingLetter] = useState(false);
 
+  useEffect(() => {
+    const openLetterByDetail = (detail: any): boolean => {
+      if (!detail || !Array.isArray(letters) || letters.length === 0) return false;
+      const targetId = String(detail.letterId || detail.id || "").trim();
+      const targetNum = String(detail.letterNumber || "").trim();
+      if (!targetId && !targetNum) return false;
+
+      const found = letters.find((l) => {
+        if (targetId && String(l.id).trim() === targetId) return true;
+        if (targetNum && String(l.letterNumber || "").trim() === targetNum) return true;
+        if (targetId && String(l.letterNumber || "").trim() === targetId) return true;
+        return false;
+      });
+
+      if (found) {
+        if (found.companyId && systemSettings?.companies) {
+          const comp = systemSettings.companies.find((c) => c.id === found.companyId || c.name === (found as any).companyName);
+          if (comp) setSelectedCompany(comp);
+        }
+        if ((found as any).section) {
+          setActiveSection((found as any).section);
+        } else if (!activeSection) {
+          setActiveSection("headquarters");
+        }
+        setSelectedLetterForView(found);
+        try { sessionStorage.removeItem("pending_secretariat_deep_link"); } catch {}
+        return true;
+      }
+      return false;
+    };
+
+    try {
+      const rawPending = sessionStorage.getItem("pending_secretariat_deep_link");
+      if (rawPending) {
+        const parsed = JSON.parse(rawPending);
+        if (!parsed?.at || Date.now() - Number(parsed.at) < 120000) {
+          openLetterByDetail(parsed);
+        } else {
+          sessionStorage.removeItem("pending_secretariat_deep_link");
+        }
+      }
+    } catch {}
+
+    const handleOpenSecretariatLetter = (e: any) => {
+      if (e?.detail) {
+        openLetterByDetail(e.detail);
+      }
+    };
+
+    window.addEventListener("OPEN_SECRETARIAT_LETTER" as any, handleOpenSecretariatLetter);
+    return () => {
+      window.removeEventListener("OPEN_SECRETARIAT_LETTER" as any, handleOpenSecretariatLetter);
+    };
+  }, [letters, systemSettings]);
+
   const handleShareSecretariatLetterToChat = async (targetLetter?: SecretariatLetter | null) => {
     const letterToShare = targetLetter || isPrintMode || selectedLetterForView;
     if (!letterToShare) return;

@@ -126,6 +126,55 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
         };
     }, []);
 
+    useEffect(() => {
+        const openMeetingByPayload = (payload: any): boolean => {
+            if (!payload || !Array.isArray(meetings) || meetings.length === 0) return false;
+            const targetId = String(payload.meetingId || payload.id || '').trim();
+            const targetNum = String(payload.meetingNumber || '').trim().toUpperCase();
+            if (!targetId && !targetNum) return false;
+
+            const found = meetings.find(m => {
+                if (targetId && String(m.id).trim() === targetId) return true;
+                const mNum = String(m.meetingNumber || '').trim().toUpperCase();
+                if (targetNum && mNum === targetNum) return true;
+                if (targetId && mNum === targetId.toUpperCase()) return true;
+                return false;
+            });
+
+            if (found) {
+                setViewMeeting(found);
+                try { sessionStorage.removeItem('pending_meeting_deep_link'); } catch {}
+                return true;
+            }
+            return false;
+        };
+
+        try {
+            const rawPending = sessionStorage.getItem('pending_meeting_deep_link');
+            if (rawPending) {
+                const parsed = JSON.parse(rawPending);
+                if (!parsed?.at || Date.now() - Number(parsed.at) < 120000) {
+                    openMeetingByPayload(parsed);
+                } else {
+                    sessionStorage.removeItem('pending_meeting_deep_link');
+                }
+            }
+        } catch {}
+
+        const handleOpenMeetingEvent = (e: any) => {
+            if (e?.detail) {
+                openMeetingByPayload(e.detail);
+            }
+        };
+
+        window.addEventListener('OPEN_MEETING_RECORD' as any, handleOpenMeetingEvent);
+        window.addEventListener('NAVIGATE_MEETING_RECORD' as any, handleOpenMeetingEvent);
+        return () => {
+            window.removeEventListener('OPEN_MEETING_RECORD' as any, handleOpenMeetingEvent);
+            window.removeEventListener('NAVIGATE_MEETING_RECORD' as any, handleOpenMeetingEvent);
+        };
+    }, [meetings]);
+
     const handleRefreshNumber = async () => {
         setIsRefreshingNumber(true);
         try {
@@ -416,7 +465,7 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
                         username: attendee.username,
                         title: `تایید نهایی صورتجلسه ${updated.meetingNumber}`,
                         body: `مدیرعامل صورتجلسه شماره ${updated.meetingNumber} را تایید نهایی و بایگانی کرد.`,
-                        url: 'meetings'
+                        url: `/meetings?meetingId=${encodeURIComponent(updated.id)}&meetingNumber=${encodeURIComponent(updated.meetingNumber || '')}`
                     }).catch(() => {})
                 )
             ]).catch(err => console.warn('Background notifications notice:', err));
@@ -500,7 +549,7 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
                     username: username,
                     title: `📌 ارجاع مصوبه در صورتجلسه ${m.meetingNumber}`,
                     body: `مصوباتی در صورتجلسه شماره ${m.meetingNumber} به شما ارجاع گردید:\n${mentionText}`,
-                    url: 'meetings'
+                    url: `/meetings?meetingId=${encodeURIComponent(m.id)}&meetingNumber=${encodeURIComponent(m.meetingNumber || '')}`
                 });
             } catch (e) { console.error("PV notification failed", e); }
         }
@@ -542,7 +591,7 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
                         username: ceo.username,
                         title: `درخواست بایگانی صورتجلسه ${updated.meetingNumber}`,
                         body: `صورتجلسه شماره ${updated.meetingNumber} توسط مدیر کارخانه تایید شد. این صورتجلسه هم‌اکنون منتظر تایید نهایی و بایگانی توسط شماست.`,
-                        url: 'meetings'
+                        url: `/meetings?meetingId=${encodeURIComponent(updated.id)}&meetingNumber=${encodeURIComponent(updated.meetingNumber || '')}`
                     }).catch(() => {})
                 ),
                 ...ceoUsers.map(ceo =>
@@ -1682,7 +1731,7 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
                                                                                     username: ceo.username,
                                                                                     title: `درخواست تایید نهایی صورتجلسه ${updated.meetingNumber}`,
                                                                                     body: `تمامی اعضا صورتجلسه شماره ${updated.meetingNumber} را امضاء کرده‌اند. این صورتجلسه هم‌اکنون منتظر تایید نهایی و بایگانی توسط شماست.`,
-                                                                                    url: 'meetings'
+                                                                                    url: `/meetings?meetingId=${encodeURIComponent(updated.id)}&meetingNumber=${encodeURIComponent(updated.meetingNumber || '')}`
                                                                                 });
                                                                             } catch (err) {
                                                                                 console.warn('Failed to add CEO notification', err);
@@ -1728,7 +1777,7 @@ const MeetingModule: React.FC<Props> = ({ currentUser, initialYear }) => {
                                                                                     username: ceo.username,
                                                                                     title: `درخواست تایید نهایی صورتجلسه ${updated.meetingNumber}`,
                                                                                     body: `تمامی اعضا صورتجلسه شماره ${updated.meetingNumber} را امضاء کرده‌اند. این صورتجلسه هم‌اکنون منتظر تایید نهایی و بایگانی توسط شماست.`,
-                                                                                    url: 'meetings'
+                                                                                    url: `/meetings?meetingId=${encodeURIComponent(updated.id)}&meetingNumber=${encodeURIComponent(updated.meetingNumber || '')}`
                                                                                 });
                                                                             } catch (err) {
                                                                                 console.warn('Failed to add CEO notification', err);

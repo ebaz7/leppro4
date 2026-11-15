@@ -18,6 +18,11 @@ interface Props {
 
 const NotificationController: React.FC<Props> = ({ currentUser, onNotificationClick }) => {
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
+  const onNotificationClickRef = React.useRef(onNotificationClick);
+
+  useEffect(() => {
+    onNotificationClickRef.current = onNotificationClick;
+  }, [onNotificationClick]);
 
   // Helper to convert Key
   function urlBase64ToUint8Array(base64String: string) {
@@ -234,22 +239,30 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
             try {
                 const channelId = (notification.data?.type === 'chat_pv' || notification.data?.tab === 'chat') ? 'chat_pv_channel' : 'fcm_default_channel';
                 const dlkamBridge = (window as any).DlkamAndroid;
+                const titleText = notification.title || (notification.data && notification.data.title) || 'اعلان جدید';
+                const bodyText = notification.body || (notification.data && notification.data.body) || '';
+                const rawUrl = notification.data?.url || notification.data?.targetUrl || notification.data?.link || '';
                 if (dlkamBridge && typeof dlkamBridge.showNativeNotification === 'function') {
                     dlkamBridge.showNativeNotification(
-                        notification.title || 'اعلان جدید',
-                        notification.body || (notification.data && notification.data.body) || '',
+                        titleText,
+                        bodyText,
                         notifId || `push_${now}`,
                         channelId,
-                        notification.data?.url || ''
+                        rawUrl
                     );
                 } else {
                     await LocalNotifications.schedule({
                         notifications: [
                             {
-                                title: notification.title || 'اعلان جدید',
-                                body: notification.body || (notification.data && notification.data.body) || '',
+                                title: titleText,
+                                body: bodyText,
                                 id: Math.floor(Math.random() * 2147483647),
-                                extra: notification.data || null,
+                                extra: {
+                                    ...(notification.data || {}),
+                                    title: titleText,
+                                    body: bodyText,
+                                    url: rawUrl
+                                },
                                 channelId,
                                 smallIcon: 'ic_stat_dlkam',
                                 largeIcon: 'ic_launcher',
@@ -266,24 +279,34 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
 
         PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
             console.log('Push action performed: ', action);
-            const notifId = action.notification.data?.id;
+            const data = action.notification?.data || {};
+            const notifId = data?.id;
             if (notifId) {
                 markNotificationAsShown(notifId);
             }
-            if (onNotificationClick && action.notification.data) {
-                onNotificationClick(action.notification.data);
+            if (onNotificationClickRef.current) {
+                onNotificationClickRef.current({
+                    ...data,
+                    title: action.notification?.title || data?.title || '',
+                    body: action.notification?.body || data?.body || ''
+                });
             }
         });
 
         // Add LocalNotification listener as well for foreground tapped notifications
         LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
             console.log('Local action performed: ', action);
-            const notifId = action.notification.extra?.id;
+            const extra = action.notification?.extra || {};
+            const notifId = extra?.id;
             if (notifId) {
                 markNotificationAsShown(notifId);
             }
-            if (onNotificationClick && action.notification.extra) {
-                onNotificationClick(action.notification.extra);
+            if (onNotificationClickRef.current) {
+                onNotificationClickRef.current({
+                    ...extra,
+                    title: action.notification?.title || extra?.title || '',
+                    body: action.notification?.body || extra?.body || ''
+                });
             }
         });
     }

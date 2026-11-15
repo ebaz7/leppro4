@@ -129,29 +129,101 @@ public class MainActivity extends BridgeActivity {
     private void extractNotificationTargetUrl(Intent intent) {
         if (intent == null) return;
         try {
+            android.os.Bundle extras = intent.getExtras();
+            if (extras == null) return;
+
             String rawTarget = intent.getStringExtra("targetUrl");
             if (rawTarget == null || rawTarget.trim().isEmpty()) {
                 rawTarget = intent.getStringExtra("url");
             }
             if (rawTarget == null || rawTarget.trim().isEmpty()) {
+                rawTarget = intent.getStringExtra("link");
+            }
+
+            String title = intent.getStringExtra("notifTitle");
+            if (title == null || title.trim().isEmpty()) {
+                title = intent.getStringExtra("title");
+                if (title == null || title.trim().isEmpty()) {
+                    title = intent.getStringExtra("gcm.notification.title");
+                }
+            }
+            String body = intent.getStringExtra("notifBody");
+            if (body == null || body.trim().isEmpty()) {
+                body = intent.getStringExtra("body");
+                if (body == null || body.trim().isEmpty()) {
+                    body = intent.getStringExtra("gcm.notification.body");
+                }
+            }
+
+            // Synthesize targetUrl from FCM data keys if url was not explicitly provided
+            if (rawTarget == null || rawTarget.trim().isEmpty()) {
+                String tab = intent.getStringExtra("tab");
+                String meetingId = intent.getStringExtra("meetingId");
+                String orderId = intent.getStringExtra("orderId");
+                String permitId = intent.getStringExtra("permitId");
+                String requestId = intent.getStringExtra("requestId");
+                String letterId = intent.getStringExtra("letterId");
+                String pv = intent.getStringExtra("pv");
+                String group = intent.getStringExtra("group");
+                String task = intent.getStringExtra("task");
+
+                if (meetingId != null && !meetingId.isEmpty()) {
+                    rawTarget = "/meetings?meetingId=" + Uri.encode(meetingId);
+                } else if (orderId != null && !orderId.isEmpty()) {
+                    rawTarget = "/manage?orderId=" + Uri.encode(orderId);
+                } else if (permitId != null && !permitId.isEmpty()) {
+                    rawTarget = "/manage-exit?permitId=" + Uri.encode(permitId);
+                } else if (requestId != null && !requestId.isEmpty()) {
+                    rawTarget = "/purchase?requestId=" + Uri.encode(requestId);
+                } else if (letterId != null && !letterId.isEmpty()) {
+                    rawTarget = "/secretariat?letterId=" + Uri.encode(letterId);
+                } else if (pv != null && !pv.isEmpty()) {
+                    rawTarget = "/chat?pv=" + Uri.encode(pv);
+                } else if (group != null && !group.isEmpty()) {
+                    rawTarget = "/chat?group=" + Uri.encode(group) + (task != null && !task.isEmpty() ? "&task=" + Uri.encode(task) : "");
+                } else if (tab != null && !tab.isEmpty()) {
+                    rawTarget = "/" + tab.replaceFirst("^/+", "");
+                }
+            }
+
+            if ((rawTarget == null || rawTarget.trim().isEmpty()) && (title == null || title.trim().isEmpty())) {
                 return;
             }
-            final String cleanTarget = rawTarget.trim();
-            pendingNotificationTargetUrl = cleanTarget;
+
+            String cleanTarget = rawTarget != null ? rawTarget.trim() : "";
+            if (!cleanTarget.contains("?") && ((title != null && !title.isEmpty()) || (body != null && !body.isEmpty()))) {
+                StringBuilder sb = new StringBuilder(cleanTarget.isEmpty() ? "/dashboard" : cleanTarget);
+                sb.append("?");
+                if (title != null && !title.isEmpty()) {
+                    sb.append("_nt=").append(Uri.encode(title));
+                }
+                if (body != null && !body.isEmpty()) {
+                    if (sb.charAt(sb.length() - 1) != '?') sb.append("&");
+                    sb.append("_nb=").append(Uri.encode(body));
+                }
+                cleanTarget = sb.toString();
+            }
+
+            final String finalTarget = cleanTarget;
+            pendingNotificationTargetUrl = finalTarget;
             intent.removeExtra("targetUrl");
             intent.removeExtra("url");
+            intent.removeExtra("notifTitle");
+            intent.removeExtra("notifBody");
 
             if (this.getBridge() != null && this.getBridge().getWebView() != null) {
                 final WebView webView = this.getBridge().getWebView();
-                final String quotedUrl = org.json.JSONObject.quote(cleanTarget);
-                webView.post(() -> {
+                final String quotedUrl = org.json.JSONObject.quote(finalTarget);
+                final String quotedTitle = org.json.JSONObject.quote(title != null ? title : "");
+                final String quotedBody = org.json.JSONObject.quote(body != null ? body : "");
+                webView.postDelayed(() -> {
                     try {
                         webView.evaluateJavascript(
-                            "window.dispatchEvent(new CustomEvent('dlkam-notification-tap', { detail: { url: " + quotedUrl + " } }));",
+                            "window.dispatchEvent(new CustomEvent('dlkam-notification-tap', { detail: { url: " + quotedUrl + ", title: " + quotedTitle + ", body: " + quotedBody + " } }));",
                             null
                         );
                     } catch (Exception ignored) {}
-                });
+                }, 180);
             }
         } catch (Exception e) {
             Log.w(TAG, "extractNotificationTargetUrl error", e);
@@ -298,6 +370,13 @@ public class MainActivity extends BridgeActivity {
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             if (targetUrl != null && !targetUrl.isEmpty()) {
                 intent.putExtra("targetUrl", targetUrl);
+                intent.putExtra("url", targetUrl);
+            }
+            if (title != null && !title.isEmpty()) {
+                intent.putExtra("notifTitle", title);
+            }
+            if (body != null && !body.isEmpty()) {
+                intent.putExtra("notifBody", body);
             }
             intent.putExtra("notificationId", safeId);
 

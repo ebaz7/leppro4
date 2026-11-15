@@ -392,16 +392,28 @@ const Layout: React.FC<LayoutProps> = ({
   useEffect(() => {
     let timeoutId: any = null;
     const checkModal = () => {
-      // Check for any active modal/dialog backdrops without layout thrashing
+      // Check for any active fullscreen modal/dialog backdrops without false positives
       const modals = document.querySelectorAll('.fixed.inset-0:not(.pointer-events-none), [role="dialog"], .modal-active');
       let visible = false;
       for (let i = 0; i < modals.length; i++) {
         const el = modals[i] as HTMLElement;
-        if (!el.classList.contains('bottom-nav-bar') && !el.classList.contains('bg-blobs')) {
-          if (!el.classList.contains('hidden') && el.style.display !== 'none' && (el.offsetWidth > 0 || el.offsetHeight > 0)) {
-            visible = true;
-            break;
-          }
+        if (
+          el.classList.contains('bottom-nav-bar') ||
+          el.classList.contains('bg-blobs') ||
+          el.classList.contains('hidden') ||
+          el.closest('.hidden')
+        ) {
+          continue;
+        }
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) {
+          continue;
+        }
+        const rect = el.getBoundingClientRect();
+        // Only treat as a blocking modal if it is visibly rendered and occupies substantial screen area
+        if (rect.width > 120 && rect.height > 120) {
+          visible = true;
+          break;
         }
       }
       setIsModalOpen(visible);
@@ -410,11 +422,11 @@ const Layout: React.FC<LayoutProps> = ({
     checkModal();
     const debouncedCheck = () => {
       if (timeoutId) clearTimeout(timeoutId);
-      timeoutId = setTimeout(checkModal, 250);
+      timeoutId = setTimeout(checkModal, 180);
     };
 
     const observer = new MutationObserver(debouncedCheck);
-    observer.observe(document.body, { childList: true, subtree: false });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
     
     const handleRegister = () => setHasBackAction(true);
     const handleUnregister = () => setHasBackAction(false);
@@ -428,6 +440,14 @@ const Layout: React.FC<LayoutProps> = ({
       window.removeEventListener('UNREGISTER_BACK_ACTION', handleUnregister);
     };
   }, []);
+
+  // Reset stale back-action state and re-verify modals whenever the active tab changes
+  useEffect(() => {
+    if (activeTab === 'dashboard') {
+      setHasBackAction(false);
+    }
+    setIsModalOpen(false);
+  }, [activeTab]);
 
   // Local Profile Form State
   const [profileForm, setProfileForm] = useState<{
@@ -819,7 +839,7 @@ const Layout: React.FC<LayoutProps> = ({
     };
   }, [navItems, currentUser.mobileNavOrder, settings?.mobileNavOrder]);
 
-  const isBottomBarVisible = !showMobileMenu && !isModalOpen && !hasBackAction && activeTab !== 'chat';
+  const isBottomBarVisible = !showMobileMenu && !isModalOpen && (activeTab === 'dashboard' || !hasBackAction) && activeTab !== 'chat';
 
   const getItemCategory = (id: string): 'finance' | 'warehouse' | 'sales' | 'admin' => {
     if (['create', 'manage', 'ccti', 'cheque-receipts', 'balances'].includes(id)) return 'finance';
@@ -1949,13 +1969,14 @@ const Layout: React.FC<LayoutProps> = ({
       </AnimatePresence>
 
       {/* Mobile Bottom Navigation - Always accessible across main modules for 1-tap switching */}
-      {isBottomBarVisible && (
+      {isBottomBarVisible && typeof document !== 'undefined' && createPortal(
         <div 
-          className={`md:hidden fixed z-[90] bottom-2.5 left-3 right-3 ${
+          style={{ transform: 'translate3d(0, 0, 0)', WebkitTransform: 'translate3d(0, 0, 0)' }}
+          className={`md:hidden fixed z-[95] bottom-2.5 left-3 right-3 ${
             isNativeAndroid || lowSpecMode
               ? 'bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 shadow-lg'
-              : 'bg-white/90 dark:bg-zinc-900/90 border border-zinc-200/70 dark:border-zinc-800/70 backdrop-blur-lg shadow-[0_10px_30px_rgba(0,0,0,0.12)]'
-          } pb-1.5 pt-1.5 rounded-2xl flex justify-around items-center px-1.5 bottom-nav-bar`}
+              : 'bg-white/95 dark:bg-zinc-900/95 border border-zinc-200/70 dark:border-zinc-800/70 backdrop-blur-lg shadow-[0_10px_30px_rgba(0,0,0,0.14)]'
+          } pb-1.5 pt-1.5 rounded-2xl flex justify-around items-center px-1.5 bottom-nav-bar pointer-events-auto`}
         >
             {bottomVisibleItems.map((item) => {
                 const Icon = item.icon;
@@ -1997,7 +2018,8 @@ const Layout: React.FC<LayoutProps> = ({
                 </div>
                 <span className={`text-[10px] font-bold tracking-tight ${menuItems.some(m => m.id === activeTab) ? 'text-blue-600 dark:text-blue-400' : 'text-zinc-500 dark:text-zinc-400'}`}>همه منوها</span>
             </button>
-        </div>
+        </div>,
+        document.body
       )}
 
       <main className={`flex flex-1 flex-col overflow-hidden relative min-w-0 min-h-0 w-full max-w-full m-0 ${

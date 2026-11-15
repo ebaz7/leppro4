@@ -89,28 +89,52 @@ const ManageOrders: React.FC<ManageOrdersProps> = ({ orders, refreshData, curren
       }
   }, [statusFilter]);
 
-  // Listen for custom navigation / open events from Global Search or cross-module links
+  // Listen for custom navigation / open events from Global Search, Notifications, or cross-module links
   useEffect(() => {
-      const handleOpenPaymentOrder = (e: any) => {
-          const detail = e.detail;
-          if (!detail) return;
-          const targetId = detail.orderId || detail.id || detail.trackingNumber;
+      const openOrderByDetail = (detail: any): boolean => {
+          if (!detail) return false;
+          const targetId = detail.orderId || detail.id;
+          const targetTracking = detail.trackingNumber;
           const targetSearch = detail.searchTerm;
           if (targetSearch) {
               setSearchTerm(targetSearch);
           }
-          if (targetId) {
+          if (targetId || targetTracking) {
               const allList = Array.isArray(localOrders) ? localOrders : [];
-              const found = allList.find(o => o.id === targetId || o.trackingNumber === targetId || String(o.trackingNumber) === String(targetId));
+              const found = allList.find(o =>
+                  (targetId && String(o.id) === String(targetId)) ||
+                  (targetTracking && String(o.trackingNumber) === String(targetTracking)) ||
+                  (targetId && String(o.trackingNumber) === String(targetId))
+              );
               if (found) {
+                  setCurrentStatusFilter(null);
                   if (found.status === OrderStatus.APPROVED_CEO || found.status === OrderStatus.REVOKED) {
                       setActiveTab('archive');
                   } else {
                       setActiveTab('current');
                   }
                   setViewOrder(found);
+                  try { sessionStorage.removeItem('pending_payment_order_deep_link'); } catch {}
+                  return true;
               }
           }
+          return false;
+      };
+
+      try {
+          const rawPending = sessionStorage.getItem('pending_payment_order_deep_link');
+          if (rawPending) {
+              const parsed = JSON.parse(rawPending);
+              if (!parsed?.at || Date.now() - Number(parsed.at) < 120000) {
+                  openOrderByDetail(parsed);
+              } else {
+                  sessionStorage.removeItem('pending_payment_order_deep_link');
+              }
+          }
+      } catch {}
+
+      const handleOpenPaymentOrder = (e: any) => {
+          openOrderByDetail(e.detail);
       };
       window.addEventListener('OPEN_PAYMENT_ORDER' as any, handleOpenPaymentOrder);
       window.addEventListener('NAVIGATE_PAYMENT_ORDER' as any, handleOpenPaymentOrder);
