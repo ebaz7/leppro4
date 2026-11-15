@@ -1,5 +1,6 @@
 import { getEffectiveApiUrl, getAuthToken } from './apiService';
 import { isTauriDesktop, isMobileApp, isWebApp, isElectronDesktop, isTauriDesktopOnly, getDesktopRuntime } from '../utils/platformDetection';
+import { appendOrReplaceQueryParam } from '../utils/urlUtils';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
 import toast from 'react-hot-toast';
@@ -358,7 +359,7 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
         ? (rawUrl.startsWith('http') ? rawUrl : getEffectiveApiUrl(rawUrl))
         : defaultDesktopUrl;
       if (resolvedUrl && !/[?&]runtime=/i.test(resolvedUrl)) {
-        resolvedUrl += (resolvedUrl.includes('?') ? '&' : '?') + `runtime=${encodeURIComponent(runtime)}`;
+        resolvedUrl = appendOrReplaceQueryParam(resolvedUrl, 'runtime', runtime);
       }
       data.downloadUrl = resolvedUrl;
 
@@ -533,7 +534,7 @@ export async function openDirectUpdateLink(rawUrl: string): Promise<void> {
   if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
     fullUrl = getEffectiveApiUrl(fullUrl);
   }
-  const cacheBustedUrl = fullUrl.includes('?') ? `${fullUrl}&t=${Date.now()}` : `${fullUrl}?t=${Date.now()}`;
+  const cacheBustedUrl = appendOrReplaceQueryParam(fullUrl, 't', String(Date.now()));
 
   if (isAndroid) {
     try {
@@ -616,7 +617,7 @@ export async function applyApplicationUpdate(
     if (!rawApk.startsWith('http://') && !rawApk.startsWith('https://')) {
       rawApk = getEffectiveApiUrl(rawApk);
     }
-    const apkUrl = rawApk.includes('?') ? `${rawApk}&t=${Date.now()}` : `${rawApk}?t=${Date.now()}`;
+    const apkUrl = appendOrReplaceQueryParam(rawApk, 't', String(Date.now()));
     const APK_MIME = 'application/vnd.android.package-archive';
 
     try {
@@ -702,9 +703,9 @@ export async function applyApplicationUpdate(
       rawDesktop = getEffectiveApiUrl(rawDesktop);
     }
     if (!/[?&]runtime=/i.test(rawDesktop)) {
-      rawDesktop += (rawDesktop.includes('?') ? '&' : '?') + `runtime=${encodeURIComponent(runtime)}`;
+      rawDesktop = appendOrReplaceQueryParam(rawDesktop, 'runtime', runtime);
     }
-    const downloadUrl = rawDesktop.includes('?') ? `${rawDesktop}&t=${Date.now()}` : `${rawDesktop}?t=${Date.now()}`;
+    const downloadUrl = appendOrReplaceQueryParam(rawDesktop, 't', String(Date.now()));
 
     const electronBridge = win.electronAPI || win.electron;
 

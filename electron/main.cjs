@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, Tray, Menu, Notification, nativeImage, powerSaveBlocker, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, Notification, nativeImage, powerSaveBlocker, session, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -19,6 +19,70 @@ try {
     app.setAppUserModelId('com.delkam.erp');
   }
 } catch (_) {}
+
+// Single-Instance Lock:
+// Prevents spawning a 2nd Electron process when the app is minimized to tray and reopened from Desktop/Start Menu.
+// Without this lock, Chromium LevelDB LOCK causes the 2nd instance to open with an empty localStorage (losing saved users/login).
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+  process.exit(0);
+}
+
+app.on('second-instance', () => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) mainWindow.show();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    } else if (app.isReady()) {
+      createWindow();
+    }
+  } catch (_) {}
+});
+
+function getPersistentKVPath() {
+  return path.join(app.getPath('userData'), 'dlkam-persistent-kv.json');
+}
+
+function readPersistentKV() {
+  try {
+    const filePath = getPersistentKVPath();
+    if (!fs.existsSync(filePath)) return {};
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw || !raw.trim()) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (err) {
+    console.warn('[Electron] readPersistentKV warning:', err?.message || err);
+    return {};
+  }
+}
+
+function writePersistentKV(data) {
+  try {
+    const filePath = getPersistentKVPath();
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const tmpPath = `${filePath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(data || {}, null, 2), 'utf8');
+    fs.renameSync(tmpPath, filePath);
+    return true;
+  } catch (err) {
+    console.warn('[Electron] writePersistentKV warning:', err?.message || err);
+    return false;
+  }
+}
+
+function flushElectronSessionStorage() {
+  try {
+    if (session && session.defaultSession && typeof session.defaultSession.flushStorageData === 'function') {
+      session.defaultSession.flushStorageData();
+    }
+  } catch (_) {}
+}
 
 function createTray() {
   if (tray) return;
@@ -155,7 +219,34 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // Security & Background Persistence: Closing the window automatically logs out to the Login screen
+  // Native Persian Context Menu for Copy / Cut / Paste / Select All across all views & modals
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    try {
+      const template = [];
+      const hasSelection = Boolean(params.selectionText && params.selectionText.trim().length > 0);
+      if (params.isEditable) {
+        template.push(
+          { label: 'برش (Cut)', role: 'cut', enabled: params.editFlags.canCut },
+          { label: 'کپی (Copy)', role: 'copy', enabled: params.editFlags.canCopy || hasSelection },
+          { label: 'جایگذاری (Paste)', role: 'paste', enabled: params.editFlags.canPaste },
+          { type: 'separator' },
+          { label: 'انتخاب همه (Select All)', role: 'selectAll', enabled: params.editFlags.canSelectAll }
+        );
+      } else {
+        if (hasSelection) {
+          template.push({ label: 'کپی (Copy)', role: 'copy' });
+        }
+        template.push({ label: 'انتخاب همه (Select All)', role: 'selectAll' });
+      }
+      if (template.length > 0) {
+        const ctxMenu = Menu.buildFromTemplate(template);
+        ctxMenu.popup({ window: mainWindow });
+      }
+    } catch (_) {}
+  });
+
+  // Security & Background Persistence: Closing the window automatically logs out active session to the Login screen
+  // while preserving saved accounts & server settings in localStorage + native persistent KV store.
   mainWindow.on('close', (event) => {
     try {
       if (mainWindow && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
@@ -166,11 +257,16 @@ function createWindow() {
         ).catch(() => {});
       }
     } catch (_) {}
+    flushElectronSessionStorage();
     if (!isQuitting) {
       event.preventDefault();
       mainWindow.hide();
       return false;
     }
+  });
+
+  mainWindow.on('hide', () => {
+    flushElectronSessionStorage();
   });
 
   if (app.isPackaged) {
@@ -299,7 +395,7 @@ function streamDownloadToFile({ url, destPath, authToken, expectedSize = 0, onPr
     const isHttps = parsedUrl.protocol === 'https:';
     const client = isHttps ? https : http;
     const headers = {
-      'User-Agent': `DelkamDesktop-Electron/${app.getVersion() || '1.0.29'}`,
+      'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 DelkamDesktop-Electron/${app.getVersion() || '1.0.29'}`,
       'X-Client-Runtime': 'electron',
       'Accept': '*/*',
       'Cache-Control': 'no-cache'
@@ -670,6 +766,59 @@ ipcMain.handle('request-native-permissions', () => {
   }
 });
 
+// 9. Native Persistent Key-Value Store (survives LevelDB locks, upgrades, and abrupt exits)
+ipcMain.on('get-persistent-kv-sync', (event) => {
+  event.returnValue = readPersistentKV();
+});
+
+ipcMain.handle('get-persistent-kv', () => {
+  return readPersistentKV();
+});
+
+ipcMain.handle('set-persistent-kv', (_event, { key, value }) => {
+  if (!key || typeof key !== 'string') return false;
+  const current = readPersistentKV();
+  if (value === null || value === undefined) {
+    delete current[key];
+  } else {
+    current[key] = String(value);
+  }
+  return writePersistentKV(current);
+});
+
+ipcMain.handle('set-persistent-kv-bulk', (_event, entries) => {
+  if (!entries || typeof entries !== 'object') return false;
+  const current = readPersistentKV();
+  for (const [k, v] of Object.entries(entries)) {
+    if (!k) continue;
+    if (v === null || v === undefined) {
+      delete current[k];
+    } else {
+      current[k] = String(v);
+    }
+  }
+  return writePersistentKV(current);
+});
+
+ipcMain.handle('remove-persistent-kv', (_event, key) => {
+  if (!key || typeof key !== 'string') return false;
+  const current = readPersistentKV();
+  if (Object.prototype.hasOwnProperty.call(current, key)) {
+    delete current[key];
+    return writePersistentKV(current);
+  }
+  return true;
+});
+
+ipcMain.handle('copy-text', (_event, text) => {
+  try {
+    clipboard.writeText(String(text ?? ''));
+    return true;
+  } catch (_) {
+    return false;
+  }
+});
+
 app.whenReady().then(() => {
   try {
     if (session && session.defaultSession) {
@@ -736,6 +885,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  flushElectronSessionStorage();
 });
 
 app.on('window-all-closed', () => {

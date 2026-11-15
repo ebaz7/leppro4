@@ -556,18 +556,27 @@ function sendAndroidInstallerResponse(req, res) {
 
 function sendDesktopInstallerResponse(req, res) {
     const reqExt = String(req.query?.ext || req.query?.format || '').toLowerCase();
-    const runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || '').toLowerCase();
+    const pathHint = String(req.params?.fileName || req.path || '').toLowerCase();
+    let runtime = String(req.query?.runtime || req.headers['x-client-runtime'] || '').toLowerCase();
+    if (!runtime) {
+        if (pathHint.includes('electron')) {
+            runtime = 'electron';
+        } else if (pathHint.includes('dlkam-desktop-') || pathHint.includes('sayan-desktop-') || pathHint.endsWith('.msi')) {
+            runtime = 'tauri';
+        }
+    }
     const preferredExt = (reqExt === 'msi') ? 'msi' : 'exe';
     const bestDesktop = findNewestInstallerFile('desktop', preferredExt, runtime);
     if (bestDesktop && fs.existsSync(bestDesktop.filePath)) {
         const isExe = bestDesktop.fileName.toLowerCase().endsWith('.exe');
         const ext = isExe ? 'exe' : 'msi';
         const dlName = bestDesktop.fileName || (bestDesktop.version ? `dlkam-desktop-v${bestDesktop.version}.${ext}` : `dlkam-desktop-setup.${ext}`);
+        const asciiDlName = dlName.replace(/"/g, '').replace(/[^\x20-\x7E]/g, '_');
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
         res.setHeader('Content-Type', isExe ? 'application/x-msdownload' : 'application/x-msi');
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(dlName)}"; filename*=UTF-8''${encodeURIComponent(dlName)}`);
+        res.setHeader('Content-Disposition', `attachment; filename="${asciiDlName}"; filename*=UTF-8''${encodeURIComponent(dlName)}`);
         if (bestDesktop.size) {
             res.setHeader('Content-Length', String(bestDesktop.size));
         }
@@ -593,6 +602,8 @@ app.get(androidDownloadRoutes, sendAndroidInstallerResponse);
 
 // --- DYNAMIC DESKTOP INSTALLER (.exe / .msi) DOWNLOAD PROVIDER (Registered BEFORE static middleware, zero cache) ---
 const desktopDownloadRoutes = [
+    '/downloads/dlkam-electron-setup.exe',
+    '/downloads/delkam-electron-setup.exe',
     '/downloads/dlkam-desktop-setup.msi',
     '/downloads/dlkam-desktop-setup.exe',
     '/downloads/delkam-desktop-setup.msi',
@@ -606,6 +617,8 @@ const desktopDownloadRoutes = [
     '/downloads/latest-desktop',
     '/api/downloads/desktop',
     '/api/downloads/latest-desktop',
+    '/api/downloads/dlkam-electron-setup.exe',
+    '/api/downloads/delkam-electron-setup.exe',
     '/api/downloads/dlkam-desktop-setup.msi',
     '/api/downloads/dlkam-desktop-setup.exe',
     '/api/downloads/delkam-desktop-setup.msi',
@@ -10993,11 +11006,13 @@ app.get('/api/desktop/updater.json', (req, res) => {
     const pubDate = settings.systemUpdatePublishedAt ? new Date(Number(settings.systemUpdatePublishedAt)).toISOString() : new Date().toISOString();
 
     const runtimeParam = `&runtime=${runtime}`;
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim() || 'https';
+    const hostHeader = req.get('host');
     const downloadUrl = hasDesktop
-        ? `${req.protocol}://${req.get('host')}/api/downloads/latest-desktop?v=${encodeURIComponent(desktopVersion)}&ext=${desktopExt}${runtimeParam}`
+        ? `${proto}://${hostHeader}/api/downloads/latest-desktop?v=${encodeURIComponent(desktopVersion)}&ext=${desktopExt}${runtimeParam}`
         : '';
     const androidDownloadUrl = hasAndroid
-        ? `${req.protocol}://${req.get('host')}/api/downloads/latest-android?v=${encodeURIComponent(androidVersion)}`
+        ? `${proto}://${hostHeader}/api/downloads/latest-android?v=${encodeURIComponent(androidVersion)}`
         : '';
 
     // Standard Auto-Updater manifest

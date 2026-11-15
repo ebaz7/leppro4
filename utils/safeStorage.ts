@@ -7,6 +7,29 @@
 // In-memory fallback map for values that exceed quota or if storage is blocked
 const memoryStore = new Map<string, string>();
 
+const PERSISTENT_NATIVE_KEYS = new Set([
+  'dlkam_saved_accounts_v2',
+  'dlkam_saved_credentials',
+  'saved_username',
+  'app_server_host',
+  'sayan_remote_server_url',
+  'sayan_active_api_url'
+]);
+
+const mirrorKeyToElectron = (key: string, value: string | null): void => {
+  if (!PERSISTENT_NATIVE_KEYS.has(key)) return;
+  try {
+    if (typeof window === 'undefined') return;
+    const api = (window as any).electronAPI;
+    if (!api) return;
+    if (value === null) {
+      api.removePersistentKV?.(key)?.catch?.(() => {});
+    } else {
+      api.syncPersistentKV?.(key, value)?.catch?.(() => {});
+    }
+  } catch {}
+};
+
 // List of volatile/non-essential cache keys that can be safely evicted when quota is exceeded
 const VOLATILE_CACHE_KEYS = [
   'app_data_balances_statements',
@@ -114,6 +137,7 @@ export const safeLocalStorage = {
   setItem: (key: string, value: string): void => {
     // Keep in-memory store in sync
     memoryStore.set(key, String(value));
+    mirrorKeyToElectron(key, String(value));
 
     if (typeof window === 'undefined' || !window.localStorage) return;
 
@@ -139,6 +163,7 @@ export const safeLocalStorage = {
 
   removeItem: (key: string): void => {
     memoryStore.delete(key);
+    mirrorKeyToElectron(key, null);
     if (typeof window === 'undefined' || !window.localStorage) return;
     try {
       window.localStorage.removeItem(key);
@@ -169,6 +194,7 @@ export const installSafeStorageGlobalPolyfill = (): void => {
 
     window.localStorage.setItem = function (key: string, value: string): void {
       memoryStore.set(key, String(value));
+      mirrorKeyToElectron(key, String(value));
       try {
         originalSetItem(key, String(value));
       } catch (err: any) {
@@ -200,6 +226,7 @@ export const installSafeStorageGlobalPolyfill = (): void => {
 
     window.localStorage.removeItem = function (key: string): void {
       memoryStore.delete(key);
+      mirrorKeyToElectron(key, null);
       try {
         originalRemoveItem(key);
       } catch {}

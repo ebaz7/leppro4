@@ -165,6 +165,39 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     } catch(e) {
       console.error("Login Init Error", e);
     }
+
+    const syncSavedAccountsFromDisk = async () => {
+      try {
+        let latest = getSavedAccounts();
+        if (latest.length === 0) {
+          const api = (window as any).electronAPI;
+          if (api && typeof api.getPersistentKV === 'function') {
+            const disk = await api.getPersistentKV();
+            if (disk && typeof disk.dlkam_saved_accounts_v2 === 'string' && disk.dlkam_saved_accounts_v2 !== '[]') {
+              localStorage.setItem('dlkam_saved_accounts_v2', disk.dlkam_saved_accounts_v2);
+              if (typeof disk.dlkam_saved_credentials === 'string') {
+                localStorage.setItem('dlkam_saved_credentials', disk.dlkam_saved_credentials);
+              }
+              if (typeof disk.saved_username === 'string') {
+                localStorage.setItem('saved_username', disk.saved_username);
+              }
+              latest = getSavedAccounts();
+            }
+          }
+        }
+        if (latest.length > 0) {
+          setSavedAccounts(latest);
+        }
+      } catch {}
+    };
+
+    syncSavedAccountsFromDisk();
+    window.addEventListener('desktop-auto-logout', syncSavedAccountsFromDisk);
+    window.addEventListener('focus', syncSavedAccountsFromDisk);
+    return () => {
+      window.removeEventListener('desktop-auto-logout', syncSavedAccountsFromDisk);
+      window.removeEventListener('focus', syncSavedAccountsFromDisk);
+    };
   }, []);
 
   useEffect(() => {

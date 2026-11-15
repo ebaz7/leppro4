@@ -185,6 +185,12 @@ export const resolveImageUrl = (url: string | null | undefined): string => {
 export const setServerHost = (url: string) => {
     const cleanUrl = url.trim().replace(/\/$/, '');
     localStorage.setItem('app_server_host', cleanUrl);
+    try {
+        const api = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+        if (api && typeof api.syncPersistentKV === 'function') {
+            api.syncPersistentKV('app_server_host', cleanUrl).catch?.(() => {});
+        }
+    } catch {}
 };
 
 let isFetchInterceptorInstalled = false;

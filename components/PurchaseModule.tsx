@@ -22,8 +22,10 @@ import {
     GitFork, Clock, CornerUpLeft, UserCheck, FileCode, AlertTriangle, Check, ExternalLink, Paperclip, Wrench,
     FileSpreadsheet, Container, ArrowDownCircle, ArrowUpCircle, MessageSquare, Sparkles, Bot, ChevronUp, ChevronDown,
     Crown, Briefcase, ShoppingBag, Lock, ShieldAlert, RotateCcw, RefreshCw, Users, CheckSquare, Sliders,
-    ChevronRight, ChevronLeft, Download
+    ChevronRight, ChevronLeft, Download, Copy
 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { copyTextToClipboard } from '../utils/clipboard';
 import { shareElementToChat, openSendToChat } from '../services/chatShareService';
 import { formatDate, formatCurrency, generateUUID, getCurrentShamsiDate } from '../constants';
 import useIsMobile from '../hooks/useIsMobile';
@@ -2636,12 +2638,13 @@ const PurchasingAgentModal = ({ onClose, onConfirm }: { onClose: () => void, onC
     );
 };
 
-const DataSheetModal = ({ part, onClose }: { part: PartMasterData, onClose: () => void }) => {
+const DataSheetModal = ({ part, extraSpecifications, onClose }: { part: PartMasterData, extraSpecifications?: string, onClose: () => void }) => {
     const [isSharing, setIsSharing] = useState(false);
     const [previewFile, setPreviewFile] = useState<{ url: string; fileName: string } | null>(null);
     const [activeImgIdx, setActiveImgIdx] = useState(0);
     const [activePdfIdx, setActivePdfIdx] = useState(0);
     const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+    const [copiedAllSpecs, setCopiedAllSpecs] = useState(false);
 
     const allImages = React.useMemo(() => {
         const list = Array.isArray(part.images) && part.images.length > 0
@@ -2698,6 +2701,29 @@ const DataSheetModal = ({ part, onClose }: { part: PartMasterData, onClose: () =
             alert('خطا در آماده‌سازی سند جهت ارسال به گفتگو');
         } finally {
             setIsSharing(false);
+        }
+    };
+
+    const handleCopyAllPartSpecs = async () => {
+        const lines = [
+            `نام کالا: ${part.name || '-'}`,
+            `کد سیستمی: ${part.id || '-'}`,
+            `نوع / دسته‌بندی: ${part.type || '-'} / ${part.category || '-'}`
+        ];
+        if (part.subCategory) lines.push(`زیرگروه: ${part.subCategory}`);
+        if (part.machineName) lines.push(`نام دستگاه: ${part.machineName}`);
+        if (part.dimensions) lines.push(`مشخصات فنی / ابعادی: ${part.dimensions}`);
+        if (extraSpecifications && extraSpecifications.trim() && extraSpecifications.trim() !== (part.dimensions || '').trim()) {
+            lines.push(`مشخصات فنی درخواست: ${extraSpecifications.trim()}`);
+        }
+        lines.push(`واحد اندازه‌گیری: ${part.unit || '-'}`);
+        const ok = await copyTextToClipboard(lines.join('\n'));
+        if (ok) {
+            setCopiedAllSpecs(true);
+            toast.success('مشخصات کامل کالا کپی شد ✓');
+            setTimeout(() => setCopiedAllSpecs(false), 2000);
+        } else {
+            toast.error('امکان کپی خودکار فراهم نشد — می‌توانید متن داخل شناسنامه را انتخاب و کپی کنید.');
         }
     };
 
@@ -2818,11 +2844,12 @@ const DataSheetModal = ({ part, onClose }: { part: PartMasterData, onClose: () =
                     </div>
                 )}
                 
-                <div className="flex-1 overflow-y-auto bg-gray-50 p-2 sm:p-4 md:p-8">
+                <div className="flex-1 overflow-y-auto bg-gray-50 p-2 sm:p-4 md:p-8 select-text">
                     <PinchZoomContainer contentWidth={760} autoFitMobile={true} showToolbar={true}>
-                        <div id="datasheet-print-area" className="bg-white p-4 md:p-12 shadow-sm rounded-2xl mx-auto max-w-3xl border border-gray-200 printable-datasheet">
+                        <div id="datasheet-print-area" className="bg-white p-4 md:p-12 shadow-sm rounded-2xl mx-auto max-w-3xl border border-gray-200 printable-datasheet select-text">
                              <PrintPartDataSheet
                                  part={part}
+                                 extraSpecifications={extraSpecifications}
                                  activeImageIndex={safeImgIdx}
                                  onSelectImageIndex={setActiveImgIdx}
                              />
@@ -2832,6 +2859,15 @@ const DataSheetModal = ({ part, onClose }: { part: PartMasterData, onClose: () =
 
                 <div className="p-4 sm:p-6 border-t flex flex-wrap justify-end gap-2.5 sm:gap-3 bg-white shrink-0">
                     <button onClick={onClose} className="px-5 py-2.5 sm:px-6 sm:py-3 border-2 border-gray-200 rounded-2xl font-bold text-gray-500 text-xs sm:text-sm cursor-pointer">بستن</button>
+                    <button
+                        type="button"
+                        onClick={handleCopyAllPartSpecs}
+                        className="px-4 py-2.5 sm:px-5 sm:py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-2xl font-black flex items-center gap-2 transition-colors cursor-pointer text-xs sm:text-sm"
+                        title="کپی متن کامل مشخصات کالا"
+                    >
+                        {copiedAllSpecs ? <Check size={17} className="text-emerald-600" /> : <Copy size={17} className="text-indigo-600" />}
+                        <span>{copiedAllSpecs ? 'کپی شد ✓' : 'کپی مشخصات کالا'}</span>
+                    </button>
                     <button 
                         onClick={handleSendToChat} 
                         disabled={isSharing}
@@ -3280,7 +3316,21 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
     const [printingProforma, setPrintingProforma] = useState<PurchaseProforma | null>(null);
     const [printType, setPrintType] = useState<'REQUEST' | 'PROFORMA' | 'RECEIPT' | 'BARCODE'>('REQUEST');
     const [definingItem, setDefiningItem] = useState<any>(null);
-    const [viewingPartDataSheet, setViewingPartDataSheet] = useState<PartMasterData | null>(null);
+    const [viewingPartDataSheet, setViewingPartDataSheet] = useState<{ part: PartMasterData; extraSpecifications?: string } | null>(null);
+    const [copiedSpecKey, setCopiedSpecKey] = useState<string | null>(null);
+
+    const handleCopySpecText = async (key: string, text: string, label = 'متن مشخصات') => {
+        const clean = (text || '').trim();
+        if (!clean || clean === '---') return;
+        const ok = await copyTextToClipboard(clean);
+        if (ok) {
+            setCopiedSpecKey(key);
+            toast.success(`${label} کپی شد ✓`);
+            setTimeout(() => setCopiedSpecKey(prev => (prev === key ? null : prev)), 1800);
+        } else {
+            toast.error('امکان کپی خودکار فراهم نشد — متن را با موس انتخاب کرده و کپی کنید.');
+        }
+    };
     const [viewingProformaDetails, setViewingProformaDetails] = useState<PurchaseProforma | null>(null);
     const [previewFile, setPreviewFile] = useState<{ url: string; fileName: string } | null>(null);
     const [isPrintDropdownOpen, setIsPrintDropdownOpen] = useState(false);
@@ -3809,19 +3859,30 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
                                                             </div>
                                                         )}
 
-                                                        {it.specifications && (
-                                                            <div className="text-[11px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/60 p-2 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
-                                                                <span className="font-bold text-gray-400 text-[10px] block mb-0.5">مشخصات فنی / ابعاد:</span>
-                                                                <p className="leading-relaxed">{it.specifications}</p>
+                                                         {it.specifications && (
+                                                            <div className="text-[11px] text-gray-600 dark:text-gray-400 bg-white/70 dark:bg-gray-900/60 p-2 rounded-xl border border-dashed border-gray-200 dark:border-gray-700 select-text">
+                                                                <div className="flex items-center justify-between gap-2 mb-0.5">
+                                                                    <span className="font-bold text-gray-400 text-[10px]">مشخصات فنی / ابعاد:</span>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleCopySpecText(`m-spec-${idx}`, it.specifications, 'مشخصات فنی')}
+                                                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-gray-100 hover:bg-indigo-100 dark:bg-gray-800 dark:hover:bg-indigo-900/60 text-[10px] font-bold text-gray-600 dark:text-gray-300 cursor-pointer transition-colors"
+                                                                        title="کپی متن مشخصات فنی"
+                                                                    >
+                                                                        {copiedSpecKey === `m-spec-${idx}` ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                                                                        <span>{copiedSpecKey === `m-spec-${idx}` ? 'کپی شد' : 'کپی'}</span>
+                                                                    </button>
+                                                                </div>
+                                                                <p className="leading-relaxed select-text cursor-text whitespace-pre-wrap">{it.specifications}</p>
                                                             </div>
                                                         )}
                                                         {it.itemCode && (
-                                                            <div className="text-[10px] font-mono text-gray-400">کد کالا: {it.itemCode}</div>
+                                                            <div className="text-[10px] font-mono text-gray-400 select-text cursor-text">کد کالا: {it.itemCode}</div>
                                                         )}
                                                         <div className="flex items-center justify-end gap-2 pt-1 border-t border-indigo-100/40 dark:border-gray-700">
                                                             <button 
                                                                 type="button" 
-                                                                onClick={() => setViewingPartDataSheet(partForSheet)}
+                                                                onClick={() => setViewingPartDataSheet({ part: partForSheet, extraSpecifications: it.specifications })}
                                                                 className="text-[10px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 px-2.5 py-1 rounded-lg flex items-center gap-1 border border-indigo-200 dark:border-indigo-800 transition-all cursor-pointer"
                                                                 title="مشاهده شناسنامه فنی، مشخصات، ابعاد و پیوست‌های کالا"
                                                             >
@@ -3880,9 +3941,9 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
                                                         return (
                                                             <tr key={it.id || idx} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                                                                 <td className="p-3 text-center font-mono font-bold text-gray-400">{idx + 1}</td>
-                                                                <td className="p-3 font-black text-gray-800 dark:text-gray-200">
-                                                                    <div>{it.itemName}</div>
-                                                                    {it.itemCode && <div className="text-[10px] font-mono text-gray-400 font-normal">کد: {it.itemCode}</div>}
+                                                                 <td className="p-3 font-black text-gray-800 dark:text-gray-200 select-text cursor-text">
+                                                                    <div className="select-text cursor-text">{it.itemName}</div>
+                                                                    {it.itemCode && <div className="text-[10px] font-mono text-gray-400 font-normal select-text cursor-text">کد: {it.itemCode}</div>}
                                                                 </td>
                                                                 <td className="p-3 text-center font-black text-indigo-600">{it.quantity} {it.unit}</td>
                                                                 {/* Sayan Stock Column */}
@@ -3920,11 +3981,25 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
                                                                         </button>
                                                                     )}
                                                                 </td>
-                                                                <td className="p-3 text-gray-600 dark:text-gray-400">{it.specifications || '---'}</td>
+                                                                <td className="p-3 text-gray-600 dark:text-gray-400 select-text cursor-text">
+                                                                    <div className="flex items-start justify-between gap-2">
+                                                                        <span className="select-text cursor-text whitespace-pre-wrap break-words flex-1">{it.specifications || '---'}</span>
+                                                                        {it.specifications && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleCopySpecText(`d-spec-${idx}`, it.specifications, 'مشخصات فنی')}
+                                                                                className="shrink-0 p-1 rounded-lg bg-gray-100 hover:bg-indigo-100 dark:bg-gray-800 dark:hover:bg-indigo-900/60 text-gray-500 hover:text-indigo-600 dark:text-gray-300 cursor-pointer transition-colors"
+                                                                                title="کپی مشخصات فنی"
+                                                                            >
+                                                                                {copiedSpecKey === `d-spec-${idx}` ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
                                                                 <td className="p-3 text-center">
                                                                     <button 
                                                                         type="button" 
-                                                                        onClick={() => setViewingPartDataSheet(partForSheet)}
+                                                                        onClick={() => setViewingPartDataSheet({ part: partForSheet, extraSpecifications: it.specifications })}
                                                                         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-black text-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 rounded-xl border border-indigo-200 dark:border-indigo-800 transition-all active:scale-95 cursor-pointer shadow-2xs"
                                                                         title="مشاهده شناسنامه فنی، مشخصات، ابعاد و پیوست‌های کالا"
                                                                     >
@@ -3954,13 +4029,26 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <div><label className="text-[10px] font-bold text-gray-400 block mb-1">نام قطعه / کالا:</label><p className="text-sm font-black text-gray-800 dark:text-gray-200">{request.itemName}</p></div>
+                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 select-text">
+                                        <div><label className="text-[10px] font-bold text-gray-400 block mb-1">نام قطعه / کالا:</label><p className="text-sm font-black text-gray-800 dark:text-gray-200 select-text cursor-text">{request.itemName}</p></div>
                                         <div><label className="text-[10px] font-bold text-gray-400 block mb-1">تعداد درخواستی:</label><p className="text-lg font-black text-indigo-600">{request.quantity} {request.unit}</p></div>
                                         <div className="col-span-full flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-gray-50 dark:bg-gray-800 p-3 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
-                                            <div className="flex-1">
-                                                <label className="text-[10px] font-bold text-gray-400 block mb-1">مشخصات فنی و ملاحظات:</label>
-                                                <p className="text-xs text-gray-600 dark:text-gray-400 font-medium leading-relaxed">{request.specifications || '---'}</p>
+                                            <div className="flex-1 select-text">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <label className="text-[10px] font-bold text-gray-400 block">مشخصات فنی و ملاحظات:</label>
+                                                    {request.specifications && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleCopySpecText('single-spec', request.specifications || '', 'مشخصات فنی')}
+                                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 hover:bg-indigo-50 text-[10px] font-bold text-gray-600 dark:text-gray-300 cursor-pointer transition-colors"
+                                                            title="کپی مشخصات فنی"
+                                                        >
+                                                            {copiedSpecKey === 'single-spec' ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+                                                            <span>{copiedSpecKey === 'single-spec' ? 'کپی شد' : 'کپی'}</span>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-gray-600 dark:text-gray-400 font-medium leading-relaxed select-text cursor-text whitespace-pre-wrap">{request.specifications || '---'}</p>
                                             </div>
                                             {(() => {
                                                 const matchedPart = parts.find(p => (p.name && request.itemName && p.name.trim().toLowerCase() === request.itemName.trim().toLowerCase()));
@@ -3977,8 +4065,8 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
                                                 };
                                                 return (
                                                     <button 
-                                                        type="button"
-                                                        onClick={() => setViewingPartDataSheet(partForSheet)}
+                                                        type="button" 
+                                                        onClick={() => setViewingPartDataSheet({ part: partForSheet, extraSpecifications: request.specifications })}
                                                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-indigo-700 bg-white dark:bg-gray-900 hover:bg-indigo-50 dark:hover:bg-gray-800 rounded-xl border border-indigo-200 dark:border-gray-700 transition-all shadow-sm shrink-0 cursor-pointer"
                                                         title="مشاهده شناسنامه فنی، ابعاد و پیوست‌های کالا"
                                                     >
@@ -5007,7 +5095,8 @@ const ViewRequestModal = ({ request, onClose, currentUser, onSuccess, settings, 
 
                 {viewingPartDataSheet && (
                     <DataSheetModal 
-                        part={viewingPartDataSheet} 
+                        part={viewingPartDataSheet.part} 
+                        extraSpecifications={viewingPartDataSheet.extraSpecifications}
                         onClose={() => setViewingPartDataSheet(null)} 
                     />
                 )}

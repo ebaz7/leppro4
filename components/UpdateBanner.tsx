@@ -179,7 +179,7 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
   const fileNameText = isAndroid
     ? (updateInfo.androidFileName || `dlkam-android-v${targetVer}.apk`)
     : isDesktop
-      ? (updateInfo.desktopFileName || `dlkam-desktop-v${targetVer}.exe`)
+      ? (updateInfo.desktopFileName || (isElectron ? `dlkam-electron-setup-v${targetVer}.exe` : `dlkam-desktop-v${targetVer}.exe`))
       : (updateInfo.buildNumber ? `بیلد ${updateInfo.buildNumber}` : `نسخه ${targetVer}`);
 
   const actionButtonText = isUpdating

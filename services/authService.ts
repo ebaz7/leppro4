@@ -37,9 +37,45 @@ export const decodeSavedPassword = (str: string): string => {
     }
 };
 
+const syncElectronKV = (key: string, value: string | null): void => {
+    try {
+        if (typeof window === 'undefined') return;
+        const api = (window as any).electronAPI;
+        if (!api) return;
+        if (value === null || value === undefined) {
+            if (typeof api.removePersistentKV === 'function') {
+                api.removePersistentKV(key).catch?.(() => {});
+            }
+        } else if (typeof api.syncPersistentKV === 'function') {
+            api.syncPersistentKV(key, String(value)).catch?.(() => {});
+        }
+    } catch {}
+};
+
+const readElectronKVValue = (key: string): string | null => {
+    try {
+        if (typeof window === 'undefined') return null;
+        const api = (window as any).electronAPI;
+        if (!api || typeof api.getPersistentKVSync !== 'function') return null;
+        const disk = api.getPersistentKVSync();
+        if (disk && typeof disk[key] === 'string' && disk[key].trim().length > 0) {
+            return disk[key];
+        }
+    } catch {}
+    return null;
+};
+
 export const getSavedAccounts = (): SavedAccountEntry[] => {
     try {
-        const raw = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
+        let raw = localStorage.getItem(SAVED_ACCOUNTS_STORAGE_KEY);
+        if (!raw || raw === '[]') {
+            const fallbackRaw = readElectronKVValue(SAVED_ACCOUNTS_STORAGE_KEY);
+            if (fallbackRaw && fallbackRaw !== '[]') {
+                raw = fallbackRaw;
+                try { localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, fallbackRaw); } catch {}
+            }
+        }
+
         let list: SavedAccountEntry[] = [];
         if (raw) {
             const parsed = JSON.parse(raw);
@@ -49,7 +85,14 @@ export const getSavedAccounts = (): SavedAccountEntry[] => {
         }
 
         // Migrate legacy single-account keys ('dlkam_saved_credentials' and 'saved_username') if not yet in list
-        const legacyCredsRaw = localStorage.getItem('dlkam_saved_credentials');
+        let legacyCredsRaw = localStorage.getItem('dlkam_saved_credentials');
+        if (!legacyCredsRaw) {
+            const fallbackCreds = readElectronKVValue('dlkam_saved_credentials');
+            if (fallbackCreds) {
+                legacyCredsRaw = fallbackCreds;
+                try { localStorage.setItem('dlkam_saved_credentials', fallbackCreds); } catch {}
+            }
+        }
         if (legacyCredsRaw) {
             try {
                 const legacyCreds = JSON.parse(legacyCredsRaw);
@@ -68,7 +111,14 @@ export const getSavedAccounts = (): SavedAccountEntry[] => {
             } catch {}
         }
 
-        const legacyUsername = localStorage.getItem('saved_username');
+        let legacyUsername = localStorage.getItem('saved_username');
+        if (!legacyUsername) {
+            const fallbackUser = readElectronKVValue('saved_username');
+            if (fallbackUser) {
+                legacyUsername = fallbackUser;
+                try { localStorage.setItem('saved_username', fallbackUser); } catch {}
+            }
+        }
         if (legacyUsername && legacyUsername.trim()) {
             const cleanUser = legacyUsername.trim();
             const exists = list.some(a => a.username.toLowerCase() === cleanUser.toLowerCase());
@@ -111,16 +161,22 @@ export const saveAccountOnLogin = (
         };
 
         const updated = [newEntry, ...existing];
-        localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(updated));
+        const serializedList = JSON.stringify(updated);
+        localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, serializedList);
         localStorage.setItem('saved_username', cleanUsername);
+        syncElectronKV(SAVED_ACCOUNTS_STORAGE_KEY, serializedList);
+        syncElectronKV('saved_username', cleanUsername);
 
         if (rememberPassword) {
-            localStorage.setItem('dlkam_saved_credentials', JSON.stringify({
+            const serializedCreds = JSON.stringify({
                 username: cleanUsername,
                 password: newEntry.encodedPassword
-            }));
+            });
+            localStorage.setItem('dlkam_saved_credentials', serializedCreds);
+            syncElectronKV('dlkam_saved_credentials', serializedCreds);
         } else {
             localStorage.removeItem('dlkam_saved_credentials');
+            syncElectronKV('dlkam_saved_credentials', null);
         }
 
         return updated;
@@ -133,13 +189,18 @@ export const removeSavedAccount = (username: string): SavedAccountEntry[] => {
     try {
         const clean = (username || '').trim().toLowerCase();
         const filtered = getSavedAccounts().filter(a => a.username.toLowerCase() !== clean);
-        localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, JSON.stringify(filtered));
+        const serializedList = JSON.stringify(filtered);
+        localStorage.setItem(SAVED_ACCOUNTS_STORAGE_KEY, serializedList);
+        syncElectronKV(SAVED_ACCOUNTS_STORAGE_KEY, serializedList);
+
         const legacyUser = localStorage.getItem('saved_username');
         if (legacyUser && legacyUser.trim().toLowerCase() === clean) {
             if (filtered.length > 0) {
                 localStorage.setItem('saved_username', filtered[0].username);
+                syncElectronKV('saved_username', filtered[0].username);
             } else {
                 localStorage.removeItem('saved_username');
+                syncElectronKV('saved_username', null);
             }
         }
         const legacyCredsRaw = localStorage.getItem('dlkam_saved_credentials');
@@ -148,6 +209,7 @@ export const removeSavedAccount = (username: string): SavedAccountEntry[] => {
                 const parsed = JSON.parse(legacyCredsRaw);
                 if (parsed?.username?.trim().toLowerCase() === clean) {
                     localStorage.removeItem('dlkam_saved_credentials');
+                    syncElectronKV('dlkam_saved_credentials', null);
                 }
             } catch {}
         }

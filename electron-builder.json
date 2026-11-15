@@ -6,9 +6,12 @@
   },
   "files": [
     "dist/**/*",
+    "!dist/downloads/**",
+    "!dist/assets/aistudio/**",
     "electron/**/*",
     "app-icon.png"
   ],
+  "afterAllArtifactBuild": "electron/after-build.cjs",
   "extraMetadata": {
     "main": "electron/main.cjs"
   },

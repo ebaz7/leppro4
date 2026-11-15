@@ -1,10 +1,23 @@
-
 import React, { useState } from 'react';
 import { PartMasterData } from '../types';
 import { resolveImageUrl } from '../services/apiService';
-import { ChevronRight, ChevronLeft } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Copy, Check } from 'lucide-react';
+import { copyTextToClipboard } from '../utils/clipboard';
+import toast from 'react-hot-toast';
 
-const PrintPartDataSheet: React.FC<{ part: PartMasterData; activeImageIndex?: number; onSelectImageIndex?: (idx: number) => void }> = ({ part, activeImageIndex, onSelectImageIndex }) => {
+interface PrintPartDataSheetProps {
+    part: PartMasterData;
+    extraSpecifications?: string;
+    activeImageIndex?: number;
+    onSelectImageIndex?: (idx: number) => void;
+}
+
+const PrintPartDataSheet: React.FC<PrintPartDataSheetProps> = ({
+    part,
+    extraSpecifications,
+    activeImageIndex,
+    onSelectImageIndex
+}) => {
     const allImages = React.useMemo(() => {
         const list = Array.isArray(part.images) && part.images.length > 0
             ? part.images.filter(Boolean)
@@ -13,6 +26,7 @@ const PrintPartDataSheet: React.FC<{ part: PartMasterData; activeImageIndex?: nu
     }, [part.images, part.image]);
 
     const [internalIdx, setInternalIdx] = useState(0);
+    const [copiedField, setCopiedField] = useState<string | null>(null);
     const currentIdx = activeImageIndex !== undefined ? activeImageIndex : internalIdx;
     const setIdx = (next: number) => {
         if (onSelectImageIndex) onSelectImageIndex(next);
@@ -22,11 +36,30 @@ const PrintPartDataSheet: React.FC<{ part: PartMasterData; activeImageIndex?: nu
     const safeIdx = allImages.length > 0 ? Math.min(currentIdx, allImages.length - 1) : 0;
     const currentImageUrl = allImages.length > 0 ? resolveImageUrl(allImages[safeIdx]) : '';
 
+    const normalizedDims = (part.dimensions || '').trim();
+    const normalizedExtra = (extraSpecifications || '').trim();
+    const showRequestSpecsRow = Boolean(normalizedExtra && normalizedExtra !== normalizedDims);
+
+    const handleCopy = async (fieldKey: string, value: string, label: string) => {
+        const clean = (value || '').trim();
+        if (!clean || clean === '-') return;
+        const ok = await copyTextToClipboard(clean);
+        if (ok) {
+            setCopiedField(fieldKey);
+            toast.success(`${label} کپی شد ✓`);
+            setTimeout(() => {
+                setCopiedField(prev => (prev === fieldKey ? null : prev));
+            }, 1800);
+        } else {
+            toast.error('امکان کپی خودکار فراهم نشد — متن را انتخاب کرده و Ctrl+C بزنید.');
+        }
+    };
+
     return (
-        <div className="p-8 bg-white text-black font-sans dir-rtl text-right print-p-0">
+        <div className="p-8 bg-white text-black font-sans dir-rtl text-right print-p-0 select-text">
             {/* Header */}
             <div className="border-4 border-black p-4 mb-6 flex justify-between items-center bg-gray-50">
-                <div className="flex-1">
+                <div className="flex-1 select-text">
                     <h1 className="text-2xl font-black mb-1">شناسنامه کالا / قطعه (Data Sheet)</h1>
                     <p className="text-xs font-bold text-gray-600 tracking-widest uppercase">M.S.G Industrial Group - Technical Specification</p>
                 </div>
@@ -43,7 +76,7 @@ const PrintPartDataSheet: React.FC<{ part: PartMasterData; activeImageIndex?: nu
                             );
                         })}
                     </div>
-                    <span className="text-[8px] font-mono tracking-wider font-bold mt-1 text-black uppercase">{part.id.slice(0, 16).toUpperCase()}</span>
+                    <span className="text-[8px] font-mono tracking-wider font-bold mt-1 text-black uppercase select-text cursor-text">{part.id.slice(0, 16).toUpperCase()}</span>
                 </div>
                 <div className="w-24 h-24 border-2 border-black flex items-center justify-center bg-white p-1 relative">
                     {currentImageUrl ? (
@@ -60,27 +93,71 @@ const PrintPartDataSheet: React.FC<{ part: PartMasterData; activeImageIndex?: nu
             </div>
 
             {/* Main Info Table */}
-            <div className="grid grid-cols-2 border-2 border-black">
+            <div className="grid grid-cols-2 border-2 border-black select-text">
                 <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">نام کالا / قطعه</div>
-                <div className="border-b border-black p-3 text-sm font-black">{part.name}</div>
+                <div className="border-b border-black p-3 text-sm font-black flex items-center justify-between gap-2 select-text cursor-text">
+                    <span className="select-text cursor-text">{part.name}</span>
+                    {part.name && (
+                        <button
+                            type="button"
+                            onClick={() => handleCopy('name', part.name, 'نام کالا')}
+                            className="print:hidden shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-gray-300 bg-gray-50 hover:bg-indigo-50 hover:border-indigo-300 text-[11px] font-bold text-gray-600 hover:text-indigo-700 cursor-pointer transition-colors"
+                            title="کپی نام کالا"
+                        >
+                            {copiedField === 'name' ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                            <span>{copiedField === 'name' ? 'کپی شد' : 'کپی'}</span>
+                        </button>
+                    )}
+                </div>
                 
                 <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">نوع / دسته‌بندی</div>
-                <div className="border-b border-black p-3 text-sm">{part.type} / {part.category}</div>
+                <div className="border-b border-black p-3 text-sm select-text cursor-text">{part.type} / {part.category}</div>
                 
                 <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">زیر گروه</div>
-                <div className="border-b border-black p-3 text-sm">{part.subCategory || '-'}</div>
+                <div className="border-b border-black p-3 text-sm select-text cursor-text">{part.subCategory || '-'}</div>
 
                 <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">نام دستگاه</div>
-                <div className="border-b border-black p-3 text-sm font-black">{part.machineName || '-'}</div>
+                <div className="border-b border-black p-3 text-sm font-black select-text cursor-text">{part.machineName || '-'}</div>
                 
                 <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">مشخصات ابعادی / فنی</div>
-                <div className="border-b border-black p-3 text-sm font-mono">{part.dimensions || '-'}</div>
+                <div className="border-b border-black p-3 text-sm font-mono flex items-start justify-between gap-2 select-text cursor-text">
+                    <span className="select-text cursor-text whitespace-pre-wrap break-words flex-1">{normalizedDims || normalizedExtra || '-'}</span>
+                    {(normalizedDims || normalizedExtra) && (
+                        <button
+                            type="button"
+                            onClick={() => handleCopy('dimensions', normalizedDims || normalizedExtra, 'مشخصات فنی و ابعاد')}
+                            className="print:hidden shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-gray-300 bg-gray-50 hover:bg-indigo-50 hover:border-indigo-300 text-[11px] font-sans font-bold text-gray-600 hover:text-indigo-700 cursor-pointer transition-colors"
+                            title="کپی مشخصات ابعادی و فنی"
+                        >
+                            {copiedField === 'dimensions' ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                            <span>{copiedField === 'dimensions' ? 'کپی شد' : 'کپی'}</span>
+                        </button>
+                    )}
+                </div>
+
+                {showRequestSpecsRow && (
+                    <>
+                        <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">مشخصات فنی در درخواست</div>
+                        <div className="border-b border-black p-3 text-sm flex items-start justify-between gap-2 select-text cursor-text">
+                            <span className="select-text cursor-text whitespace-pre-wrap break-words flex-1">{normalizedExtra}</span>
+                            <button
+                                type="button"
+                                onClick={() => handleCopy('reqSpecs', normalizedExtra, 'مشخصات فنی درخواست')}
+                                className="print:hidden shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-gray-300 bg-gray-50 hover:bg-indigo-50 hover:border-indigo-300 text-[11px] font-bold text-gray-600 hover:text-indigo-700 cursor-pointer transition-colors"
+                                title="کپی مشخصات درخواست"
+                            >
+                                {copiedField === 'reqSpecs' ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                                <span>{copiedField === 'reqSpecs' ? 'کپی شد' : 'کپی'}</span>
+                            </button>
+                        </div>
+                    </>
+                )}
                 
                 <div className="border-b border-l border-black p-3 bg-gray-100 font-bold text-sm">واحد اندازه‌گیری</div>
-                <div className="border-b border-black p-3 text-sm">{part.unit}</div>
+                <div className="border-b border-black p-3 text-sm select-text cursor-text">{part.unit}</div>
                 
                 <div className="border-l border-black p-3 bg-gray-100 font-bold text-sm">حداقل موجودی (نقطه سفارش)</div>
-                <div className="p-3 text-sm font-black text-red-600">{part.minStock} {part.unit}</div>
+                <div className="p-3 text-sm font-black text-red-600 select-text cursor-text">{part.minStock} {part.unit}</div>
             </div>
 
             {/* Visuals & QR Section */}
@@ -157,7 +234,7 @@ const PrintPartDataSheet: React.FC<{ part: PartMasterData; activeImageIndex?: nu
                 </div>
             </div>
 
-            <div className="mt-4 text-[9px] text-gray-400 flex justify-between font-mono">
+            <div className="mt-4 text-[9px] text-gray-400 flex justify-between font-mono select-text">
                 <span>SYSTEM ID: {part.id}</span>
                 <span>PRINT DATE: {new Date().toLocaleString('fa-IR')}</span>
             </div>
