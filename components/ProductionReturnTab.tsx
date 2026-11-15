@@ -11,7 +11,7 @@ import * as XLSX from "xlsx";
 import * as jalaali from "jalaali-js";
 import { AiSayanReportModal } from "./AiSayanReportModal";
 import { uploadFileChunked } from "../services/storageService";
-import { generatePdfFromHtml } from "../utils/pdfGenerator";
+import { generatePdfFromHtml, exportReportHtmlSmart } from "../utils/pdfGenerator";
 import { openSendToChat } from "../services/chatShareService";
 
 interface ProductionReturnTabProps {
@@ -842,12 +842,6 @@ export default function ProductionReturnTab({
 
     // Print Single Document
     const handlePrintSingleDoc = (doc: any) => {
-        const printWindow = window.open("", "_blank");
-        if (!printWindow) {
-            toast.error("لطفاً اجازه باز شدن پنجره پاپ‌آپ چاپ را بدهید");
-            return;
-        }
-
         const rowsHtml = (doc.rows || []).map((row: any, idx: number) => `
             <tr>
                 <td style="text-align: center;">${idx + 1}</td>
@@ -861,7 +855,7 @@ export default function ProductionReturnTab({
             </tr>
         `).join("");
 
-        printWindow.document.write(`
+        const docHtml = `
             <!DOCTYPE html>
             <html dir="rtl" lang="fa">
             <head>
@@ -930,13 +924,10 @@ export default function ProductionReturnTab({
                     <div>امضا انباردار / تحویل‌گیرنده: ....................</div>
                     <div>تاریخ چاپ: ${new Date().toLocaleDateString("fa-IR")}</div>
                 </div>
-                <script>
-                    window.onload = function() { window.print(); };
-                </script>
             </body>
             </html>
-        `);
-        printWindow.document.close();
+        `;
+        void exportReportHtmlSmart(docHtml, `Production_Return_${doc.docNo}.pdf`, 'auto');
     };
 
     // Export to Excel

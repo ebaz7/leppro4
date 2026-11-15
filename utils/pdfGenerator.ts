@@ -2,7 +2,9 @@ import { toJpeg } from 'html-to-image';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { Capacitor } from '@capacitor/core';
+import toast from 'react-hot-toast';
 import { saveBlobAndOpenFile } from '../services/fileService';
+import { isAndroidApp } from './platformDetection';
 
 type PdfFormat = 'A4' | 'A5';
 export type PdfOrientation = 'portrait' | 'landscape';
@@ -109,7 +111,8 @@ export const injectOrientationStylesIntoHtml = (
 export const printHtmlInPage = (
     htmlString: string,
     orientationSetting: PdfOrientationSetting = 'auto',
-    filename: string = ''
+    filename: string = '',
+    options?: { skipStyleInjection?: boolean }
 ): void => {
     if (!htmlString) return;
     const resolvedOrientation: PdfOrientation =
@@ -117,7 +120,9 @@ export const printHtmlInPage = (
             ? detectHtmlOrientation(htmlString, filename)
             : orientationSetting;
 
-    const resolvedHtml = injectOrientationStylesIntoHtml(htmlString, resolvedOrientation);
+    const resolvedHtml = options?.skipStyleInjection
+        ? htmlString
+        : injectOrientationStylesIntoHtml(htmlString, resolvedOrientation);
     const existingFrame = document.getElementById('dlkam-hidden-print-iframe');
     if (existingFrame && existingFrame.parentNode) {
         existingFrame.parentNode.removeChild(existingFrame);
@@ -128,10 +133,10 @@ export const printHtmlInPage = (
     iframe.style.position = 'fixed';
     iframe.style.right = '0';
     iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
     iframe.style.border = '0';
-    iframe.style.opacity = '0';
+    iframe.style.opacity = '0.01';
     iframe.style.pointerEvents = 'none';
     document.body.appendChild(iframe);
 
@@ -147,6 +152,7 @@ export const printHtmlInPage = (
     doc.close();
 
     let printed = false;
+    let readyStarted = false;
     const triggerPrint = () => {
         if (printed) return;
         printed = true;
@@ -165,6 +171,8 @@ export const printHtmlInPage = (
     };
 
     const runPrintWhenReady = () => {
+        if (readyStarted || printed) return;
+        readyStarted = true;
         const waits: Promise<unknown>[] = [];
         try {
             const imgs = Array.from(doc.querySelectorAll('img'));
@@ -178,7 +186,7 @@ export const printHtmlInPage = (
             }
         } catch {}
         if (waits.length > 0) {
-            Promise.race([Promise.all(waits), new Promise((res) => setTimeout(res, 1200))]).then(() => {
+            Promise.race([Promise.all(waits), new Promise((res) => setTimeout(res, 1500))]).then(() => {
                 setTimeout(triggerPrint, 180);
             });
         } else {
@@ -187,7 +195,48 @@ export const printHtmlInPage = (
     };
 
     iframe.onload = runPrintWhenReady;
-    setTimeout(runPrintWhenReady, 500);
+    setTimeout(runPrintWhenReady, 450);
+};
+
+/**
+ * Smart cross-platform HTML report exporter/printer:
+ * - On Android native (Capacitor): converts HTML to PDF and saves/opens locally via DlkamAndroid/Filesystem (never redirects to external web browser).
+ * - On Electron Desktop & Web: prints via hidden in-page iframe (never opens blank white Electron popup window).
+ */
+export const exportReportHtmlSmart = async (
+    htmlString: string,
+    filename: string,
+    orientationSetting: PdfOrientationSetting = 'auto'
+): Promise<void> => {
+    if (!htmlString) return;
+    const cleanName = (filename || `Report_${Date.now()}.pdf`).replace(/[\\/:*?"<>|]/g, '_');
+    const pdfFilename = cleanName.toLowerCase().endsWith('.pdf') ? cleanName : `${cleanName}.pdf`;
+
+    if (isAndroidApp() || Capacitor.isNativePlatform()) {
+        const loadingToast = toast.loading('در حال آماده‌سازی و دانلود فایل PDF...');
+        try {
+            const resolvedOrientation: PdfOrientation =
+                orientationSetting === 'auto'
+                    ? detectHtmlOrientation(htmlString, pdfFilename)
+                    : orientationSetting;
+            const blob = await generatePdfFromHtml(htmlString, pdfFilename, { orientation: resolvedOrientation });
+            if (!blob) {
+                throw new Error('PDF_GENERATION_FAILED');
+            }
+            const ok = await saveBlobAndOpenFile(blob, pdfFilename);
+            if (ok) {
+                toast.success('فایل PDF ذخیره و باز شد ✓', { id: loadingToast });
+            } else {
+                toast.error('ذخیره فایل PDF با خطا مواجه شد', { id: loadingToast });
+            }
+        } catch (err) {
+            console.error('Android PDF export error:', err);
+            toast.error('خطا در تولید و ذخیره PDF', { id: loadingToast });
+        }
+        return;
+    }
+
+    printHtmlInPage(htmlString, orientationSetting, pdfFilename);
 };
 
 /**

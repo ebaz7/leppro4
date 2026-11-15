@@ -97,7 +97,8 @@ import { AiSayanReportModal } from './AiSayanReportModal';
 import { SendToChatModal } from './SendToChatModal';
 import { ReportShareToChatModal, TrazScope } from './ReportShareToChatModal';
 import { PersonChequeLedgerModal } from './sayan-cheques/PersonChequeLedgerModal';
-import { generatePdfFromHtml } from '../utils/pdfGenerator';
+import { generatePdfFromHtml, exportReportHtmlSmart } from '../utils/pdfGenerator';
+import { saveBlobAndOpenFile } from '../services/fileService';
 import { buildProductionExecutiveA4PrintHtml, ProductionReportPrintDataset } from '../utils/productionReportPrintHtml';
 import { UserRole } from '../types';
 import { getServerHost, getAuthToken } from '../services/apiService';
@@ -227,6 +228,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         return 'traz';
     });
     const [isLoading, setIsLoading] = useState(false);
+    const [showMobileTrazTools, setShowMobileTrazTools] = useState(false);
     
     const [sendToChatOpen, setSendToChatOpen] = useState(false);
     const [sendToChatAttachment, setSendToChatAttachment] = useState<{ fileName: string; url: string } | undefined>(undefined);
@@ -1767,16 +1769,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Traz_${type}_${Date.now()}.pdf`, 'landscape');
     };
 
     // Export Traz (Debtors / Creditors / Full / Current View) to professional Excel (Auto-sorted Highest to Lowest & 100% RTL)
@@ -1982,16 +1975,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const buf = await wb.xlsx.writeBuffer();
             const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
             const filename = `Traz_${type === 'both' ? 'All' : (type === 'bed' ? 'Debtors' : 'Creditors')}_${Date.now()}.xlsx`;
-            
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
 
+            await saveBlobAndOpenFile(blob, filename);
             toast.success('فایل اکسل با موفقیت ایجاد و دانلود شد', { id: loadingToast });
         } catch (err: any) {
             console.error('Error generating Excel file:', err);
@@ -2314,16 +2299,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Statement_${selectedTafsili || 'Person'}_${Date.now()}.pdf`, 'auto');
     };
 
     const handleShareStatementToChat = async () => {
@@ -3075,16 +3051,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Today_Sales_${Date.now()}.pdf`, 'auto');
     };
 
     const handlePrintPeriodSales = (returnHtml: boolean = false) => {
@@ -3287,16 +3254,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Period_Sales_${Date.now()}.pdf`, 'auto');
     };
 
     // Preset generator for quick Period B selection
@@ -3516,16 +3474,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Comparative_Sales_${Date.now()}.pdf`, 'landscape');
     };
 
     const applyProdQuickComparePreset = (type: 'prev_year' | 'prev_season') => {
@@ -3838,16 +3787,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Comparative_Production_${Date.now()}.pdf`, 'auto');
     };
 
     const handleSendComparativeProductionBot = async () => {
@@ -4920,14 +4860,9 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         ];
         rows.push(pctRow.join(","));
 
-        const bom = "\uFEFF"; 
+        const bom = "\uFEFF";
         const blob = new Blob([bom + rows.join("\n")], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `Production_Report_${dateFrom.replace(/[\/\\]/g, '-')}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        void saveBlobAndOpenFile(blob, `Production_Report_${dateFrom.replace(/[\/\\]/g, '-')}.csv`);
         toast.success("فایل اکسل (CSV) با موفقیت دانلود شد.");
     };
 
@@ -5585,15 +5520,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-            }, 400);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Cheques_Report_${Date.now()}.pdf`, 'landscape');
     };
 
     // Export Cheques to Excel / CSV with Persian UTF-8 BOM
@@ -5644,13 +5571,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
         const csvContent = rows.join("\n");
         const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        link.setAttribute("href", url);
-        link.setAttribute("download", `Cheques_Report_${Date.now()}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        void saveBlobAndOpenFile(blob, `Cheques_Report_${Date.now()}.csv`);
         toast.success("فایل اکسل چک‌ها با موفقیت دانلود شد.");
     };
 
@@ -5850,16 +5771,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const docHtml = buildProductionExecutiveA4PrintHtml(dataset);
             if (returnHtml) return docHtml;
 
-            const printWindow = window.open('', '_blank');
-            if (printWindow) {
-                printWindow.document.open();
-                printWindow.document.write(docHtml);
-                printWindow.document.close();
-                setTimeout(() => {
-                    printWindow.focus();
-                    printWindow.print();
-                }, 500);
-            }
+            void exportReportHtmlSmart(docHtml, `Sayan_Production_Charts_${Date.now()}.pdf`, 'auto');
             return;
         } else {
             const rowsToRender = isGroup ? getGroupedProductionRows() : prodLiveItems;
@@ -5990,16 +5902,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             return docHtml;
         }
 
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-            printWindow.document.write(docHtml);
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => {
-                printWindow.print();
-                printWindow.close();
-            }, 500);
-        }
+        void exportReportHtmlSmart(docHtml, `Sayan_Production_Report_${Date.now()}.pdf`, 'auto');
     };
 
     const handleShareProductionToChat = async () => {
@@ -6436,9 +6339,161 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                 
                 {/* 1. TRAZ TAB */}
                 {activeTab === 'traz' && (
-                    <div className="w-full p-1 sm:p-6 space-y-3 sm:space-y-6">
+                    <div className="w-full p-2 sm:p-6 space-y-3 sm:space-y-6">
+                        {/* Android / Mobile Instant Debtors & Creditors Quick Access Card (No deep scrolling needed) */}
+                        <div className="block md:hidden bg-gradient-to-br from-slate-50 via-white to-blue-50/60 dark:from-zinc-800 dark:via-zinc-900 dark:to-zinc-900 rounded-2xl border border-blue-200/80 dark:border-zinc-700 p-3 space-y-2.5 shadow-xs">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                    <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                                        <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0" />
+                                        بدهکاران و بستانکاران (دسترسی سریع)
+                                    </h3>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowMobileTrazTools((v) => !v)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-[11px] font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1 shrink-0 active:scale-95"
+                                >
+                                    <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
+                                    <span>{showMobileTrazTools ? 'بستن ابزارها' : 'فیلترها و ابزارها'}</span>
+                                </button>
+                            </div>
+
+                            {/* Compact Debtors vs Creditors KPI Summary Strip */}
+                            <div className="grid grid-cols-2 gap-2">
+                                <div className="bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/50 rounded-xl p-2">
+                                    <div className="text-[10px] font-bold text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                                        <span>جمع بدهکاران</span>
+                                        <span className="font-mono">{filteredTraz.filter(t => t.balance > 0).length.toLocaleString('fa-IR')} نفر</span>
+                                    </div>
+                                    <div className="text-xs font-black text-rose-800 dark:text-rose-200 font-mono mt-0.5 truncate" dir="ltr">
+                                        {formatMoney(filteredTraz.filter(t => t.balance > 0).reduce((sum, r) => sum + r.balance, 0))} ریال
+                                    </div>
+                                </div>
+                                <div className="bg-emerald-50/90 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/50 rounded-xl p-2">
+                                    <div className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 flex items-center justify-between">
+                                        <span>جمع بستانکاران</span>
+                                        <span className="font-mono">{filteredTraz.filter(t => t.balance < 0).length.toLocaleString('fa-IR')} نفر</span>
+                                    </div>
+                                    <div className="text-xs font-black text-emerald-800 dark:text-emerald-200 font-mono mt-0.5 truncate" dir="ltr">
+                                        {formatMoney(filteredTraz.filter(t => t.balance < 0).reduce((sum, r) => sum + Math.abs(r.balance), 0))} ریال
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Instant 1-Tap Category Switch: All / Debtors / Creditors */}
+                            <div className="grid grid-cols-3 gap-1.5">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setTrazCategory('16');
+                                        setTrazSortOrder('desc');
+                                    }}
+                                    className={`min-h-[40px] rounded-xl text-xs font-extrabold transition-all border cursor-pointer active:scale-95 ${
+                                        trazCategory === '16' || trazCategory === 'all'
+                                            ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                            : 'bg-white dark:bg-zinc-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-zinc-700'
+                                    }`}
+                                >
+                                    همه ({filteredTraz.length.toLocaleString('fa-IR')})
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setTrazCategory('debtors');
+                                        setTrazSortBy('abs_balance');
+                                        setTrazSortOrder('desc');
+                                    }}
+                                    className={`min-h-[40px] rounded-xl text-xs font-extrabold transition-all border cursor-pointer active:scale-95 ${
+                                        trazCategory === 'debtors'
+                                            ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                                            : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800/50'
+                                    }`}
+                                >
+                                    🔴 بدهکاران
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setTrazCategory('creditors');
+                                        setTrazSortBy('abs_balance');
+                                        setTrazSortOrder('desc');
+                                    }}
+                                    className={`min-h-[40px] rounded-xl text-xs font-extrabold transition-all border cursor-pointer active:scale-95 ${
+                                        trazCategory === 'creditors'
+                                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                            : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/50'
+                                    }`}
+                                >
+                                    🟢 بستانکاران
+                                </button>
+                            </div>
+
+                            {/* Direct 1-Tap Native Download Buttons (PDF & Excel directly in Android app, no web browser bounce) */}
+                            <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                    type="button"
+                                    onClick={() => handlePrintTrazReport('bed')}
+                                    className="min-h-[42px] flex items-center justify-center gap-1.5 px-2.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 transition-all cursor-pointer"
+                                >
+                                    <Download className="w-3.5 h-3.5 shrink-0" />
+                                    <span>PDF بدهکاران</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handlePrintTrazReport('bes')}
+                                    className="min-h-[42px] flex items-center justify-center gap-1.5 px-2.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs active:scale-95 transition-all cursor-pointer"
+                                >
+                                    <Download className="w-3.5 h-3.5 shrink-0" />
+                                    <span>PDF بستانکاران</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleExportTrazExcel('bed')}
+                                    className="min-h-[40px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-white dark:bg-zinc-800 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/60 rounded-xl text-[11px] font-extrabold active:scale-95 transition-all cursor-pointer"
+                                >
+                                    <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                                    <span>اکسل بدهکاران</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleExportTrazExcel('bes')}
+                                    className="min-h-[40px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-white dark:bg-zinc-800 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 rounded-xl text-[11px] font-extrabold active:scale-95 transition-all cursor-pointer"
+                                >
+                                    <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                                    <span>اکسل بستانکاران</span>
+                                </button>
+                            </div>
+
+                            {/* Mobile Quick Search & Chat Share Row */}
+                            <div className="flex items-center gap-1.5">
+                                <div className="relative flex-1">
+                                    <Search className="absolute right-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                                    <input
+                                        type="text"
+                                        placeholder="جستجوی نام، کد تفصیلی..."
+                                        className="w-full pl-3 pr-8 py-2 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-zinc-800 text-slate-900 dark:text-white"
+                                        value={trazSearch}
+                                        onChange={(e) => setTrazSearch(e.target.value)}
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setReportShareInitialScope(trazCategory === 'debtors' ? 'bed' : trazCategory === 'creditors' ? 'bes' : 'both');
+                                        setIsReportShareModalOpen(true);
+                                    }}
+                                    className="min-h-[38px] px-3 py-2 bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-xl text-[11px] font-black flex items-center gap-1 shrink-0 active:scale-95"
+                                    title="ارسال PDF به گفتگو"
+                                >
+                                    <Send className="w-3.5 h-3.5" />
+                                    <span>گفتگو</span>
+                                </button>
+                            </div>
+                        </div>
+
                         {/* Integrated Section AI Copilot Banner - Traz */}
-                        <div className="bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 text-white rounded-2xl p-3 sm:p-4 shadow-md border border-purple-700/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                        <div className={`${showMobileTrazTools ? 'flex' : 'hidden md:flex'} bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 text-white rounded-2xl p-3 sm:p-4 shadow-md border border-purple-700/40 flex-col sm:flex-row items-start sm:items-center justify-between gap-3`}>
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/30 flex items-center justify-center shrink-0">
                                     <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
@@ -6471,7 +6526,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                             </button>
                         </div>
 
-                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                        <div className={`${showMobileTrazTools ? 'flex' : 'hidden md:flex'} flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4`}>
                             <div>
                                 <h2 className="text-xl font-bold text-slate-800">مانده بدهکاران و بستانکاران (تراز سایان ERP)</h2>
                                 <p className="text-xs text-slate-500 mt-1">سورت مطابق پارامترهای سایان، تفکیک بر اساس لایه‌ها (۱۱ تا ۱۵)، مدیریت هوشمند اشخاص مستثنی و خروجی اکسل و PDF</p>
@@ -6541,7 +6596,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         </div>
 
                         {/* Fast Action Toolbar (Excel, PDF, Exclude Manager, Select Controls) */}
-                        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+                        <div className={`${showMobileTrazTools ? 'flex' : 'hidden md:flex'} flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200/80`}>
                             <div className="flex flex-wrap items-center gap-2">
                                 {/* Permanent Excluded Persons Manager Button */}
                                 <button
@@ -6702,8 +6757,8 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                             </div>
                         )}
 
-                        {/* Traz KPIs */}
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {/* Traz KPIs (Desktop — mobile shows compact summary directly in top quick card) */}
+                        <div className="hidden md:grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="bg-gradient-to-br from-white to-rose-50/40 dark:from-zinc-800 dark:to-rose-950/20 rounded-2xl border border-rose-200/80 dark:border-rose-900/40 p-4 shadow-2xs">
                                 <div className="flex items-center justify-between text-xs font-bold text-rose-800 dark:text-rose-300">
                                     <span>جمع بدهی بدهکاران (فعال در گزارش)</span>
@@ -8426,16 +8481,12 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                 <div className="flex gap-2">
                                                     <button
                                                         onClick={() => {
-                                                            
-
-        const printWindow = window.open('', '_blank');
-                                                            if (!printWindow) return;
                                                             let html = '<html dir="rtl"><head><title>چاپ مقایسه فروش</title><style>body{font-family:Tahoma,sans-serif;margin:20px;direction:rtl}table{width:100%;border-collapse:collapse;margin-top:20px;font-size:12px}th,td{border:1px solid #ccc;padding:8px;text-align:right}th{background:#f1f5f9}.diff{direction:ltr;display:inline-block}.ret{color:#e11d48;font-size:10px}</style></head><body>';
                                                             html += '<h2>گزارش مقایسه ای فروش</h2>';
                                                             if (excludedSalesGroups.length > 0) {
                                                                 html += `<p style="color: #be123c; background: #fff1f2; padding: 6px 10px; border: 1px solid #fecdd3; border-radius: 4px; font-size: 11px;"><strong>گروه‌های کالایی مستثنی شده از این گزارش:</strong> ${excludedSalesGroups.join('، ')}</p>`;
                                                             }
-                                                            html += '<table><thead><tr><th>گروه کالا</th><th>خالص A (kg)</th><th>مبلغ A (ریال)</th><th>خالص B (kg)</th><th>مبلغ B (ریال)</th><th>رشد مبلغ</th></tr></thead><tbody>';
+                                                            html += '<table><thead><tr><th>گروه کالا</th><th>خالص A (kg)</th><th>فی A</th><th>مبلغ A (ریال)</th><th>خالص B (kg)</th><th>فی B</th><th>مبلغ B (ریال)</th><th>رشد مبلغ</th></tr></thead><tbody>';
                                                             let sumA = 0, sumB = 0;
                                                             chartData.forEach(row => {
                                                                 sumA += row.netAmountA || 0;
@@ -8464,10 +8515,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                                                                 <th class="diff" style="color: ${totDiff>=0?'#16a34a':'#dc2626'}">${totDiff>0?'+':''}${totDiff.toFixed(1)}%</th>
                                                             </tr>`;
                                                             html += '</tbody></table></body></html>';
-                                                            printWindow.document.write(html);
-                                                            printWindow.document.close();
-                                                            printWindow.focus();
-                                                            setTimeout(() => { printWindow.print(); }, 500);
+                                                            void exportReportHtmlSmart(html, `Sayan_Sales_Compare_${Date.now()}.pdf`, 'landscape');
                                                         }}
                                                         className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
                                                     >

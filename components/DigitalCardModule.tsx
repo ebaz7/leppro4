@@ -12,6 +12,7 @@ import {
   Upload, Image as ImageIcon
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { exportReportHtmlSmart } from '../utils/pdfGenerator';
 
 interface DigitalCardModuleProps {
   currentUser: User | null;
@@ -398,12 +399,7 @@ export const DigitalCardModule: React.FC<DigitalCardModuleProps> = ({ currentUse
       toast.error('تصویر QR کد آماده نیست.');
       return;
     }
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      toast.error('مرورگر از باز کردن پنجره چاپ جلوگیری کرد.');
-      return;
-    }
-    printWindow.document.write(`
+    const html = `
       <html dir="rtl">
         <head>
           <title>چاپ QR کد LEPAN - ${config.companyTitle}</title>
@@ -423,14 +419,10 @@ export const DigitalCardModule: React.FC<DigitalCardModuleProps> = ({ currentUse
             <img src="${qrDataUrl}" alt="QR Code LEPAN" />
             <div class="badge">اسکن کنید (LEPAN)</div>
           </div>
-          <script>
-            window.onload = function() { window.print(); };
-          </script>
         </body>
       </html>
-    `);
-    printWindow.document.close();
-    toast.success('پنجره چاپ اختصاصی QR کد باز شد.');
+    `;
+    void exportReportHtmlSmart(html, `QR_Code_${Date.now()}.pdf`, 'portrait');
   };
 
   const handleCopyLink = () => {

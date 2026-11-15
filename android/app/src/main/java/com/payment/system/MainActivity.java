@@ -70,10 +70,14 @@ public class MainActivity extends BridgeActivity {
                 webView.addJavascriptInterface(new DlkamAndroidBridge(this), "DlkamAndroid");
                 webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
                     try {
+                        if (url == null || url.startsWith("blob:") || url.startsWith("data:")) {
+                            android.widget.Toast.makeText(getApplicationContext(), "در حال ذخیره فایل در حافظه برنامه...", android.widget.Toast.LENGTH_SHORT).show();
+                            return;
+                        }
                         android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
                         String fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
                         if (fileName == null || fileName.trim().isEmpty()) {
-                            fileName = "dlkam-android-latest.apk";
+                            fileName = "dlkam-file";
                         }
                         if (url.toLowerCase().contains(".apk") && !fileName.toLowerCase().endsWith(".apk")) {
                             fileName = fileName + ".apk";
@@ -87,24 +91,26 @@ public class MainActivity extends BridgeActivity {
                         if (userAgent != null) {
                             request.addRequestHeader("User-Agent", userAgent);
                         }
+                        try {
+                            String cookies = android.webkit.CookieManager.getInstance().getCookie(url);
+                            if (cookies != null && !cookies.isEmpty()) {
+                                request.addRequestHeader("Cookie", cookies);
+                            }
+                        } catch (Exception ignored) {}
                         request.setTitle(fileName);
-                        request.setDescription("در حال دانلود فایل بروزرسانی سامانه...");
+                        request.setDescription("در حال دانلود فایل...");
                         request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                        request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                        request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Dlkam/" + fileName);
                         android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
                         if (dm != null) {
                             dm.enqueue(request);
-                            android.widget.Toast.makeText(getApplicationContext(), "دانلود فایل آغاز شد (پوشه Downloads)...", android.widget.Toast.LENGTH_LONG).show();
+                            android.widget.Toast.makeText(getApplicationContext(), "دانلود فایل در پوشه Downloads/Dlkam آغاز شد...", android.widget.Toast.LENGTH_LONG).show();
                             return;
                         }
                     } catch (Exception dlErr) {
-                        Log.w(TAG, "DownloadManager enqueue failed, falling back to ACTION_VIEW", dlErr);
+                        Log.w(TAG, "DownloadManager enqueue failed", dlErr);
                     }
-                    try {
-                        Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                        browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(browserIntent);
-                    } catch (Exception ignored) {}
+                    android.widget.Toast.makeText(getApplicationContext(), "خطا در دانلود مستقیم فایل؛ لطفاً مجدداً تلاش کنید.", android.widget.Toast.LENGTH_SHORT).show();
                 });
             }
         } catch (Exception e) {

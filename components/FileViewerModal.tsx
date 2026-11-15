@@ -4,6 +4,8 @@ import { X, Download, ZoomIn, ZoomOut, RotateCw, Printer, FileText, AlertCircle,
 import { downloadAndOpenFile, saveImageToGallery } from '../services/fileService';
 import { getServerHost } from '../services/apiService';
 import { openSendToChat } from '../services/chatShareService';
+import { printHtmlInPage, printPdfOrImageInPage, PdfOrientation } from '../utils/pdfGenerator';
+import { isAndroidApp } from '../utils/platformDetection';
 import {
   clampZoom,
   clampPanOffsets,
@@ -65,6 +67,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   // Interactive Canvas PDF states for reliable Android/WebView pinch-zoom & 4-way panning
   const [pdfPageImages, setPdfPageImages] = useState<string[]>([]);
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
+  const [pdfOrientation, setPdfOrientation] = useState<PdfOrientation>('portrait');
   const [isRenderingPdfPages, setIsRenderingPdfPages] = useState<boolean>(false);
   const [useIframePdfFallback, setUseIframePdfFallback] = useState<boolean>(false);
 
@@ -207,6 +210,9 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           if (isCancelled) return;
           const page = await pdfDoc.getPage(pageNum);
           const baseViewport = page.getViewport({ scale: 1 });
+          if (pageNum === 1 && !isCancelled) {
+            setPdfOrientation(baseViewport.width > baseViewport.height ? 'landscape' : 'portrait');
+          }
           const targetScale = baseViewport.width < 900 ? 2.0 : 1.6;
           const viewport = page.getViewport({ scale: targetScale });
           const canvas = document.createElement('canvas');
@@ -609,51 +615,89 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   };
 
   const handlePrint = () => {
-    const printWin = window.open('', '_blank');
-    if (!printWin) {
-      window.print();
+    // On Android native app, save and open locally instead of spawning web popup
+    if (isAndroidApp()) {
+      void handleDownload();
       return;
     }
 
+    const safeTitle = (fileName || 'سند').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
     if (detectedType === 'image') {
-      printWin.document.write(`
-        <html dir="rtl">
-          <head>
-            <title>${fileName}</title>
-            <style>
-              body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #fff; }
-              img { max-width: 100%; max-height: 100vh; object-fit: contain; }
-              @media print { body { margin: 0; } img { max-height: 98vh; } }
-            </style>
-          </head>
-          <body>
-            <img src="${previewUrl || resolvedUrl}" onload="setTimeout(() => { window.print(); window.close(); }, 300);" />
-          </body>
-        </html>
-      `);
-      printWin.document.close();
-    } else if (pdfPageImages.length > 0) {
-      const imgsHtml = pdfPageImages.map((src) => `<div class="page"><img src="${src}" /></div>`).join('');
-      printWin.document.write(`
-        <html dir="rtl">
-          <head>
-            <title>${fileName}</title>
-            <style>
-              body { margin: 0; background: #fff; }
-              .page { page-break-after: always; display: flex; justify-content: center; align-items: center; }
-              img { max-width: 100%; height: auto; }
-            </style>
-          </head>
-          <body>
-            ${imgsHtml}
-            <script>window.onload = function() { setTimeout(function() { window.print(); window.close(); }, 400); };</script>
-          </body>
-        </html>
-      `);
-      printWin.document.close();
-    } else {
-      printWin.location.href = previewUrl || resolvedUrl;
+      const imgSrc = previewUrl || resolvedUrl;
+      const imgDocHtml = `<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+  <head>
+    <meta charset="utf-8" />
+    <title>${safeTitle}</title>
+    <style>
+      @page { size: auto; margin: 4mm; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0 !important; padding: 0 !important; width: 100%; height: 100%; background: #ffffff; overflow: hidden; }
+      .img-wrap { width: 100%; height: 97vh; text-align: center; padding: 2mm; }
+      img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; margin: 0 auto; }
+    </style>
+  </head>
+  <body><div class="img-wrap"><img src="${imgSrc}" /></div></body>
+</html>`;
+      printHtmlInPage(imgDocHtml, 'portrait', fileName, { skipStyleInjection: true });
+      return;
     }
+
+    if (pdfPageImages.length > 0) {
+      const isLandscape = pdfOrientation === 'landscape';
+      // Stay strictly 3mm inside physical A4 bounds (210x297mm / 297x210mm) and avoid flex pagination bugs so Chrome/Electron NEVER inserts blank pages between sheets
+      const pageW = isLandscape ? '294mm' : '207mm';
+      const pageH = isLandscape ? '206mm' : '293mm';
+      const imgsHtml = pdfPageImages
+        .map((src) => `<div class="page"><img src="${src}" /></div>`)
+        .join('');
+      const pdfImagesHtml = `<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+  <head>
+    <meta charset="utf-8" />
+    <title>${safeTitle}</title>
+    <style>
+      @page { size: A4 ${pdfOrientation}; margin: 0; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0 !important; padding: 0 !important; background: #ffffff; width: 100%; }
+      .page {
+        width: ${pageW};
+        height: ${pageH};
+        max-height: ${pageH};
+        margin: 0 auto;
+        padding: 3mm;
+        overflow: hidden;
+        text-align: center;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .page:not(:last-child) {
+        page-break-after: always;
+        break-after: page;
+      }
+      .page:last-child {
+        page-break-after: auto !important;
+        break-after: auto !important;
+      }
+      .page img {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        display: block;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>${imgsHtml}</body>
+</html>`;
+      printHtmlInPage(pdfImagesHtml, pdfOrientation, fileName, { skipStyleInjection: true });
+      return;
+    }
+
+    void printPdfOrImageInPage(previewUrl || resolvedUrl, 'pdf', fileName);
   };
 
   const isCanvasViewActive = detectedType === 'image' || (detectedType === 'pdf' && !useIframePdfFallback);

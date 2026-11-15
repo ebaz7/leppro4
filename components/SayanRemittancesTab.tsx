@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { shareElementToChat } from '../services/chatShareService';
+import { exportReportHtmlSmart } from '../utils/pdfGenerator';
 import { 
   fetchSayanSalesRemittances, 
   SayanSalesRemittanceResult, 
@@ -1539,11 +1540,10 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
                   onClick={() => {
                     const printContent = document.getElementById('sayan-sales-remittance-doc');
                     if (!printContent) return;
-                    const printWindow = window.open('', '_blank');
-                    if (!printWindow) return;
-                    printWindow.document.write(`
-                      <html dir="rtl">
+                    const docHtml = `<!DOCTYPE html>
+                      <html dir="rtl" lang="fa">
                         <head>
+                          <meta charset="utf-8" />
                           <title>حواله فروش ${selectedRemittance.remittanceNumber || selectedRemittance.docNo}</title>
                           <style>
                             @page { size: A4; margin: 8mm; }
@@ -1552,13 +1552,9 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
                         </head>
                         <body>
                           ${printContent.outerHTML}
-                          <script>
-                            window.onload = function() { window.print(); window.close(); }
-                          </script>
                         </body>
-                      </html>
-                    `);
-                    printWindow.document.close();
+                      </html>`;
+                    void exportReportHtmlSmart(docHtml, `Remittance_${selectedRemittance.remittanceNumber || selectedRemittance.docNo}.pdf`, 'portrait');
                   }}
                   className="px-4 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow"
                 >

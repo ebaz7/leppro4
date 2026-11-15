@@ -5,6 +5,7 @@ import { getRolePermissions } from '../services/authService';
 import { saveSettings, getNotes, saveNote, updateNote, deleteNote } from '../services/storageService';
 import { sendNotification } from '../services/notificationService';
 import { saveBlobAndOpenFile } from '../services/fileService';
+import { exportReportHtmlSmart } from '../utils/pdfGenerator';
 
 // --- Modals for better focus handling ---
 
@@ -549,9 +550,6 @@ const KnowledgeBaseModule: React.FC<KnowledgeBaseModuleProps> = ({ currentUser, 
     };
 
     const downloadAsPdf = (company: any) => {
-        const printWindow = window.open('', '_blank');
-        if(!printWindow) return;
-        
         let html = `
         <html dir="rtl">
         <head>
@@ -592,13 +590,7 @@ const KnowledgeBaseModule: React.FC<KnowledgeBaseModuleProps> = ({ currentUser, 
         }
 
         html += `</body></html>`;
-        printWindow.document.write(html);
-        printWindow.document.close();
-        
-        // Wait for styles to load then print
-        setTimeout(() => {
-            printWindow.print();
-        }, 500);
+        void exportReportHtmlSmart(html, `${company.name || 'Company'}_Info.pdf`, 'portrait');
     };
 
     const downloadSingleBankAsTxt = (companyName: string, bank: any) => {
@@ -613,9 +605,6 @@ const KnowledgeBaseModule: React.FC<KnowledgeBaseModuleProps> = ({ currentUser, 
     };
 
     const downloadSingleBankAsPdf = (companyName: string, bank: any) => {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) return;
-
         let html = `
         <html dir="rtl">
         <head>
@@ -639,11 +628,7 @@ const KnowledgeBaseModule: React.FC<KnowledgeBaseModuleProps> = ({ currentUser, 
             </div>
         </body></html>`;
 
-        printWindow.document.write(html);
-        printWindow.document.close();
-        setTimeout(() => {
-            printWindow.print();
-        }, 500);
+        void exportReportHtmlSmart(html, `${companyName}-${bank.bankName}.pdf`, 'portrait');
     };
 
     const handleSaveItem = async () => {

@@ -12,6 +12,7 @@ import { TradeStage } from '../types';
 import { buildWarehouseOverviewPrintHtml } from '../utils/warehouseOverviewPrintHtml';
 import { exportWarehouseOverviewToExcel, WarehouseExcelScope } from '../utils/warehouseOverviewExcel';
 import { AiWarehouseAdvisorModal } from './AiWarehouseAdvisorModal';
+import { exportReportHtmlSmart } from '../utils/pdfGenerator';
 
 interface WarehouseItem {
     id?: string;
@@ -1888,14 +1889,8 @@ const getSayanGroupSum = (groupCode: string, isLastYear: boolean, field: 'weight
                         printFrame.contentWindow.print();
                     }
                 } catch (printErr: any) {
-                    console.error('Frame print failed, opening print window:', printErr);
-                    const win = window.open('', '_blank');
-                    if (win) {
-                        win.document.write(html);
-                        win.document.close();
-                        win.focus();
-                        win.print();
-                    }
+                    console.error('Frame print failed, falling back to exportReportHtmlSmart:', printErr);
+                    void exportReportHtmlSmart(html, `Warehouse_Overview_${Date.now()}.pdf`, 'landscape');
                 } finally {
                     setTimeout(() => {
                         if (document.body.contains(printFrame)) {

@@ -2215,8 +2215,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                     });
                 } catch(e: any) { console.log('Link share failed', e); }
             } else {
-                // Last resort: Open in new tab
-                window.open(fileUrl, '_blank');
+                // Direct in-app download instead of opening external browser tab
+                await downloadAndOpenFile(fileUrl, msg.attachment?.fileName || `attachment_${Date.now()}`);
             }
         }
     };
