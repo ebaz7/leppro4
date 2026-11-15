@@ -1000,6 +1000,30 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
 
     const isEdit = Boolean(receiptData.id);
     const receiptId = receiptData.id || `RCPT_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    // Prevent duplicate draft creation on double-click / network retry
+    if (!isEdit && cleanCheques.length > 0) {
+        const cleanPerson = String(receiptData.personCode || '').trim();
+        const sig = cleanCheques
+            .map(c => `${c.chequeNumber}:${Number(c.amount) || 0}:${parseToGregorianSqlDate(c.dueDate)}`)
+            .sort()
+            .join('|');
+        const dupDraft = db.sayan_cheque_receipts.find(existing => {
+            if (!existing || existing.status === 'REJECTED') return false;
+            if (String(existing.personCode || '').trim() !== cleanPerson) return false;
+            const exCheques = Array.isArray(existing.cheques) ? existing.cheques : [];
+            if (exCheques.length !== cleanCheques.length) return false;
+            const exSig = exCheques
+                .map(c => `${String(c.chequeNumber || '').trim()}:${Number(c.amount) || 0}:${parseToGregorianSqlDate(c.dueDate)}`)
+                .sort()
+                .join('|');
+            return exSig === sig;
+        });
+        if (dupDraft) {
+            console.warn(`[Sayan Cheque Service] Duplicate draft submission blocked for person ${cleanPerson}; returning existing receipt ${dupDraft.id}`);
+            return dupDraft;
+        }
+    }
     
     // Internal app receipt number & Posht-Nomreh handling
     let poshtNomreh = String(receiptData.poshtNomreh || '').trim();
@@ -1278,6 +1302,16 @@ export const queueChequeReceiptForSayanRegistration = async (receiptId, currentU
         throw new Error(`رسید با شناسه ${receiptId} یافت نشد.`);
     }
 
+    if (record.status === 'REGISTERED_IN_SAYAN' && String(record.docNo || '').trim() !== '1' && String(record.archiveCode || '').trim() !== '1' && record.archiveCode) {
+        console.log(`[Sayan Cheque Queue] Receipt ${receiptId} is already REGISTERED_IN_SAYAN (ArchiveCode=${record.archiveCode}). Skipping re-queue.`);
+        return record;
+    }
+
+    if (record.status === 'PROCESSING_SAYAN' && (activeRegisteringReceiptIds.has(receiptId) || sayanRegistrationQueue.some(item => item.receiptId === receiptId))) {
+        console.log(`[Sayan Cheque Queue] Receipt ${receiptId} is already queued/processing. Skipping duplicate queue.`);
+        return record;
+    }
+
     // Set optimistic status immediately so client UI closes and shows approved/processing
     record.status = 'PROCESSING_SAYAN';
     record.sayanSyncStatus = 'QUEUED';
@@ -1471,8 +1505,8 @@ export const validateAndDryRunChequeReceipt = async (receiptData) => {
     const errors = [];
     const warnings = [];
 
-    const fiscalYear = String(receiptData.fiscalYear || '4');
-    const personCode = String(receiptData.personCode || '').trim();
+    const fiscalYear = normalizeFiscalYear(receiptData.fiscalYear || '4');
+    const personCode = String(receiptData.personCode || '').trim().replace(/'/g, "''");
     const cheques = receiptData.cheques || [];
 
     if (!personCode) {
@@ -1510,20 +1544,42 @@ export const validateAndDryRunChequeReceipt = async (receiptData) => {
         }
     });
 
-    // Check duplicate cheque numbers in Sayan BUR_TBL_012
-    const chequeNumbers = cheques.map(c => String(c.chequeNumber).trim()).filter(Boolean);
+    // Check duplicate cheque numbers in live Sayan BUR_TBL_012 joined with BUR_TBL_008 (Op=11 in this fiscal year)
+    const chequeNumbers = cheques.map(c => String(c.chequeNumber || '').replace(/[^0-9]/g, '').trim()).filter(Boolean);
     if (chequeNumbers.length > 0) {
         try {
             const checkDupSql = `
-                SELECT Field_005 as ChequeNumber, Field_013 as Amount, Field_009 as BankName, Field_016 as PoshtNomreh
-                FROM BUR_TBL_012
-                WHERE Field_005 IN (${chequeNumbers.map(n => `'${n}'`).join(',')})
+                SELECT
+                    c.Field_005 as ChequeNumber,
+                    c.Field_013 as Amount,
+                    c.Field_006 as DueDate,
+                    c.Field_009 as BankName,
+                    c.Field_016 as PoshtNomreh,
+                    h.Field_001 as HeaderId,
+                    h.Field_005 as ArchiveCode,
+                    h.Field_006 as DocNo,
+                    RTRIM(LTRIM(h.Field_010)) as PersonCode
+                FROM BUR_TBL_012 c WITH (NOLOCK)
+                INNER JOIN BUR_TBL_009 r WITH (NOLOCK) ON r.Field_007 = c.Field_001
+                INNER JOIN BUR_TBL_008 h WITH (NOLOCK) ON h.Field_004 = r.Field_003 AND h.Field_005 = r.Field_004
+                WHERE h.Field_004 = '${fiscalYear}'
+                  AND h.Field_009 = '11'
+                  AND c.Field_005 IN (${chequeNumbers.map(n => `'${n}'`).join(',')})
             `;
             const dupRows = await executeSayanQuery(checkDupSql);
             if (dupRows.length > 0) {
-                dupRows.forEach(d => {
-                    warnings.push(`شماره چک ${d.ChequeNumber} قبلاً در سایان با پشت‌نمره ${d.PoshtNomreh} و مبلغ ${Number(d.Amount).toLocaleString('fa-IR')} ریال ثبت شده است.`);
-                });
+                for (const d of dupRows) {
+                    const matchedLocal = cheques.find(c =>
+                        String(c.chequeNumber || '').replace(/[^0-9]/g, '').trim() === String(d.ChequeNumber || '').trim() &&
+                        Number(c.amount) === Number(d.Amount)
+                    );
+                    const samePerson = String(d.PersonCode || '').trim() === personCode;
+                    if (matchedLocal && samePerson) {
+                        errors.push(`چک شماره ${d.ChequeNumber} به مبلغ ${Number(d.Amount).toLocaleString('fa-IR')} ریال برای این شخص قبلاً در سایان ثبت شده است (سند ${d.DocNo} / بایگانی ${d.ArchiveCode} / پشت‌نمره ${d.PoshtNomreh}). ثبت مجدد مجاز نیست.`);
+                    } else {
+                        warnings.push(`شماره چک ${d.ChequeNumber} قبلاً در سایان با بایگانی ${d.ArchiveCode} (پشت‌نمره ${d.PoshtNomreh}) و مبلغ ${Number(d.Amount).toLocaleString('fa-IR')} ریال ثبت شده است.`);
+                    }
+                }
             }
         } catch (e) {}
     }
@@ -1542,10 +1598,64 @@ export const validateAndDryRunChequeReceipt = async (receiptData) => {
 };
 
 const activeRegisteringReceiptIds = new Set();
+let sayanWriteMutexTail = Promise.resolve();
+
+const withSayanWriteLock = async (fn) => {
+    const prev = sayanWriteMutexTail;
+    let release;
+    sayanWriteMutexTail = new Promise(resolve => { release = resolve; });
+    await prev.catch(() => {});
+    try {
+        return await fn();
+    } finally {
+        release();
+    }
+};
+
+const getActiveSayanUserGuid = async () => {
+    let userGuid = '1dbfc4c5-2a62-47f8-b8bf-e7ef3e3bf2e0';
+    try {
+        const userRes = await executeSayanQuery(`
+            SELECT TOP 1 Field_008 as UserGuid
+            FROM TBL_001 WITH (NOLOCK)
+            WHERE Field_008 IS NOT NULL
+              AND LEN(Field_008) > 20
+              AND COALESCE(Field_003, N'') NOT LIKE N'%باطل%'
+              AND COALESCE(Field_003, N'') NOT LIKE N'%غیر فعال%'
+            ORDER BY CASE WHEN Field_008 = '1dbfc4c5-2a62-47f8-b8bf-e7ef3e3bf2e0' THEN 0 ELSE 1 END, CAST(Field_001 as bigint) ASC
+        `);
+        if (userRes[0]?.UserGuid) {
+            userGuid = userRes[0].UserGuid;
+        }
+    } catch (uErr) {
+        console.warn('Could not query TBL_001 for active UserGuid, using verified fallback:', uErr.message);
+    }
+    return userGuid;
+};
+
+/**
+ * Ensure ACT_TBL_012 link row exists for an already-created BUR_TBL_008 + ACT_TBL_008 pair
+ */
+const ensureBursaryActLink = async (fiscalYear, headerId, archiveCode, docNo, actDocNo) => {
+    if (!headerId || !archiveCode || !actDocNo) return;
+    const fy = normalizeFiscalYear(fiscalYear);
+    const cleanArch = String(archiveCode).trim().replace(/'/g, "''");
+    const cleanDoc = String(docNo || '').trim().replace(/'/g, "''");
+    const cleanActDoc = String(actDocNo).trim().replace(/'/g, "''");
+    const cleanHId = String(headerId).trim().replace(/'/g, "''");
+    const linkSql = [
+        "EXEC(",
+        "N'SET XACT_ABORT ON; ' + ",
+        `N'IF NOT EXISTS (SELECT 1 FROM ACT_TBL_012 WHERE Field_003 = ''${fy}'' AND Field_005 = 5 AND Field_006 = ''${cleanHId}'') ' + `,
+        `N'IN' + N'SERT INTO ACT_TBL_012 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008) VALUES (''${fy}'', ''${cleanActDoc}'', 5, ''${cleanHId}'', N''${fy}\\Bursary\\${cleanArch}'', N''دریافت ${cleanDoc}'');'`,
+        ");"
+    ].join('\n');
+    await executeSayanQuery(linkSql);
+};
 
 /**
  * Register Cheque Receipt directly into Sayan ERP (BUR_TBL_008, BUR_TBL_009, BUR_TBL_012, BUR_TBL_006, BUR_TBL_016)
- * Strictly adheres to verified schema relations with atomic ID calculation.
+ * Strictly adheres to verified schema relations with atomic ID calculation, ACT_TBL_012 link, and idempotent duplicate protection.
  */
 export const registerChequeReceiptInSayan = async (receiptId, currentUser, force = false) => {
     if (activeRegisteringReceiptIds.has(receiptId)) {
@@ -1554,247 +1664,331 @@ export const registerChequeReceiptInSayan = async (receiptId, currentUser, force
     activeRegisteringReceiptIds.add(receiptId);
 
     try {
-        const db = getDb();
-        if (!db.sayan_cheque_receipts) db.sayan_cheque_receipts = [];
+        return await withSayanWriteLock(async () => {
+            const db = getDb();
+            if (!db.sayan_cheque_receipts) db.sayan_cheque_receipts = [];
 
-        const record = db.sayan_cheque_receipts.find(r => r.id === receiptId);
-        if (!record) {
-            throw new Error(`رسید با شناسه ${receiptId} یافت نشد.`);
-        }
+            const record = db.sayan_cheque_receipts.find(r => r.id === receiptId);
+            if (!record) {
+                throw new Error(`رسید با شناسه ${receiptId} یافت نشد.`);
+            }
 
-        if (record.status === 'REGISTERED_IN_SAYAN' && !force && String(record.docNo) !== '1' && String(record.archiveCode) !== '1') {
-            throw new Error(`این رسید قبلاً در سایان تحت شماره سند ${record.docNo} و کد بایگانی ${record.archiveCode} ثبت شده است.`);
-        }
+            const fiscalYear = normalizeFiscalYear(record.fiscalYear || '4');
+            const personCode = String(record.personCode || '').trim().replace(/'/g, "''");
+            const cheques = record.cheques || [];
+            const totalAmount = cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0);
 
-        const fiscalYear = normalizeFiscalYear(record.fiscalYear || '4');
-        const personCode = String(record.personCode).trim();
-        const cheques = record.cheques || [];
-        const totalAmount = cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+            // A. Verify against live Sayan DB if this receipt already has an ArchiveCode or HeaderId (even when force=true!)
+            if (
+                (record.archiveCode && String(record.archiveCode).trim() !== '1') ||
+                (record.sayanHeaderId && String(record.sayanHeaderId).trim() !== 'NEW')
+            ) {
+                const conds = [];
+                if (record.sayanHeaderId && /^\d+$/.test(String(record.sayanHeaderId).trim())) {
+                    conds.push(`Field_001 = ${String(record.sayanHeaderId).trim()}`);
+                }
+                if (record.archiveCode && String(record.archiveCode).trim() !== '1' && /^\d+$/.test(String(record.archiveCode).trim())) {
+                    conds.push(`Field_005 = '${String(record.archiveCode).trim()}'`);
+                }
+                if (conds.length > 0) {
+                    const liveByHeader = await executeSayanQuery(`
+                        SELECT TOP 1 Field_001 as HeaderId, Field_005 as ArchiveCode, Field_006 as DocNo
+                        FROM BUR_TBL_008 WITH (NOLOCK)
+                        WHERE Field_004 = '${fiscalYear}' AND Field_009 = '11' AND (${conds.join(' OR ')})
+                    `).catch(() => []);
+                    if (liveByHeader.length > 0) {
+                        const ex = liveByHeader[0];
+                        record.status = 'REGISTERED_IN_SAYAN';
+                        record.sayanSyncStatus = 'SYNCED';
+                        record.sayanError = null;
+                        record.sayanHeaderId = String(ex.HeaderId);
+                        record.archiveCode = String(ex.ArchiveCode);
+                        record.docNo = String(ex.DocNo);
+                        record.updatedAt = new Date().toISOString();
+                        saveDb();
+                        await syncMissingReceiptAccountingDocsUnlocked(fiscalYear).catch(() => {});
+                        return {
+                            success: true,
+                            headerId: ex.HeaderId,
+                            archiveCode: ex.ArchiveCode,
+                            docNo: ex.DocNo,
+                            alreadyExisted: true,
+                            record
+                        };
+                    }
+                }
+            }
 
-        let poshtNomrehCheck = String(record.poshtNomreh || record.receiptNo || '').trim();
+            if (record.status === 'REGISTERED_IN_SAYAN' && !force && String(record.docNo) !== '1' && String(record.archiveCode) !== '1') {
+                throw new Error(`این رسید قبلاً در سایان تحت شماره سند ${record.docNo} و کد بایگانی ${record.archiveCode} ثبت شده است.`);
+            }
 
-        // Safety Pre-Check: Search Sayan DB for any pre-existing Header with the same UUID / PoshtNomreh
-        if (poshtNomrehCheck || record.id) {
-            try {
-                const existingHeader = await executeSayanQuery(`
-                    SELECT TOP 1 Field_001 as HeaderId, Field_005 as ArchiveCode, Field_006 as DocNo 
-                    FROM BUR_TBL_008 WITH (NOLOCK)
-                    WHERE Field_004 = '${fiscalYear}' AND Field_009 = '11' AND (Field_022 = '${poshtNomrehCheck}' OR Field_022 = '${record.id}')
+            // B. Live Sayan Cheque-Level Idempotency Check (prevents duplicate BUR_TBL_008 / ACT_TBL_008 even on force=true or retries)
+            const cleanChqNums = cheques.map(c => String(c.chequeNumber || '').replace(/[^0-9]/g, '').trim()).filter(Boolean);
+            const cleanChqAmts = cheques.map(c => Number(c.amount) || 0).filter(a => a > 0);
+            if (personCode && cleanChqNums.length > 0 && cleanChqAmts.length > 0) {
+                const liveDupCheques = await executeSayanQuery(`
+                    SELECT
+                        h.Field_001 as HeaderId,
+                        h.Field_005 as ArchiveCode,
+                        h.Field_006 as DocNo,
+                        c.Field_005 as ChequeNumber,
+                        c.Field_013 as Amount
+                    FROM BUR_TBL_008 h WITH (NOLOCK)
+                    INNER JOIN BUR_TBL_009 r WITH (NOLOCK) ON r.Field_003 = h.Field_004 AND r.Field_004 = h.Field_005
+                    INNER JOIN BUR_TBL_012 c WITH (NOLOCK) ON c.Field_001 = r.Field_007
+                    WHERE h.Field_004 = '${fiscalYear}'
+                      AND h.Field_009 = '11'
+                      AND RTRIM(LTRIM(h.Field_010)) = '${personCode}'
+                      AND c.Field_005 IN (${cleanChqNums.map(n => `'${n}'`).join(',')})
                 `).catch(() => []);
 
-                if (existingHeader.length > 0) {
-                    const ex = existingHeader[0];
-                    console.log(`[Sayan Cheque Service] Receipt ${record.id} already exists in Sayan DB as ArchiveCode ${ex.ArchiveCode}`);
-                    record.status = 'REGISTERED_IN_SAYAN';
-                    record.sayanError = null;
-                    record.sayanHeaderId = String(ex.HeaderId);
-                    record.archiveCode = String(ex.ArchiveCode);
-                    record.docNo = String(ex.DocNo);
-                    record.updatedAt = new Date().toISOString();
-                    saveDb();
-                    return {
-                        success: true,
-                        docNo: ex.DocNo,
-                        archiveCode: ex.ArchiveCode,
-                        headerId: ex.HeaderId,
-                        alreadyExisted: true
-                    };
+                const matchedDocs = new Map();
+                for (const d of liveDupCheques) {
+                    const reqMatch = cheques.find(c =>
+                        String(c.chequeNumber || '').replace(/[^0-9]/g, '').trim() === String(d.ChequeNumber || '').trim() &&
+                        Number(c.amount) === Number(d.Amount)
+                    );
+                    if (reqMatch) {
+                        matchedDocs.set(String(d.ArchiveCode), d);
+                    }
                 }
-            } catch (preCheckErr) {
-                console.warn('[Sayan Cheque Service] Pre-check for duplicate header skipped:', preCheckErr.message);
+
+                if (matchedDocs.size > 0) {
+                    const firstMatch = Array.from(matchedDocs.values())[0];
+                    const ownedByOtherLocal = db.sayan_cheque_receipts.find(r =>
+                        r.id !== record.id &&
+                        String(r.archiveCode) === String(firstMatch.ArchiveCode) &&
+                        r.status === 'REGISTERED_IN_SAYAN'
+                    );
+                    if (!ownedByOtherLocal && matchedDocs.size === 1) {
+                        console.log(`[Sayan Cheque Service] Receipt ${record.id} matched existing Sayan receipt ArchiveCode ${firstMatch.ArchiveCode} (DocNo ${firstMatch.DocNo}) by cheque+person. Syncing without duplicate insert.`);
+                        record.status = 'REGISTERED_IN_SAYAN';
+                        record.sayanSyncStatus = 'SYNCED';
+                        record.sayanError = null;
+                        record.sayanHeaderId = String(firstMatch.HeaderId);
+                        record.archiveCode = String(firstMatch.ArchiveCode);
+                        record.docNo = String(firstMatch.DocNo);
+                        record.updatedAt = new Date().toISOString();
+                        saveDb();
+                        await syncMissingReceiptAccountingDocsUnlocked(fiscalYear).catch(() => {});
+                        return {
+                            success: true,
+                            docNo: firstMatch.DocNo,
+                            archiveCode: firstMatch.ArchiveCode,
+                            headerId: firstMatch.HeaderId,
+                            alreadyExisted: true,
+                            record
+                        };
+                    }
+                    throw new Error(`چک(های) این رسید قبلاً در سایان به کد بایگانی ${firstMatch.ArchiveCode} و شماره سند ${firstMatch.DocNo} ثبت شده‌اند و امکان ثبت تکراری وجود ندارد.`);
+                }
             }
-        }
 
-        // 1. Dry Run Validation
-        const validation = await validateAndDryRunChequeReceipt(record);
-        if (!validation.isValid) {
-            throw new Error(`خطای اعتبارسنجی رسید: ${validation.errors.join(' | ')}`);
-        }
+            let poshtNomrehCheck = String(record.poshtNomreh || record.receiptNo || '').trim();
 
-        // 2. Get next numbers and system user GUID safely
-        const meta = await getNextChequeReceiptNumbers(fiscalYear);
-        const maxDocRes = await executeSayanQuery(`SELECT MAX(CAST(Field_006 as bigint)) as MaxDocNo FROM BUR_TBL_008 WHERE Field_004 = '${fiscalYear}' AND Field_009 = '11'`).catch(() => []);
-        let docNo = (Number(maxDocRes[0]?.MaxDocNo) || 0) + 1;
-        const maxArchRes = await executeSayanQuery(`SELECT MAX(CAST(Field_005 as bigint)) as MaxArchiveCode FROM BUR_TBL_008 WHERE Field_004 = '${fiscalYear}'`).catch(() => []);
-        let archiveCode = (Number(maxArchRes[0]?.MaxArchiveCode) || 0) + 1;
+            // 1. Dry Run Validation
+            const validation = await validateAndDryRunChequeReceipt(record);
+            if (!validation.isValid) {
+                throw new Error(`خطای اعتبارسنجی رسید: ${validation.errors.join(' | ')}`);
+            }
 
-        // Strict safety check: Never assign dummy 1 if meta or history has real numbers!
-        if (docNo <= 1 && meta.nextDocNo > 1) {
-            docNo = meta.nextDocNo;
-        }
-        if (archiveCode <= 1 && meta.nextArchiveCode > 1) {
-            archiveCode = meta.nextArchiveCode;
-        }
+            // 2. Get next numbers and active system user GUID safely inside serialized write lock
+            const meta = await getNextChequeReceiptNumbers(fiscalYear);
+            const maxDocRes = await executeSayanQuery(`SELECT MAX(CAST(Field_006 as bigint)) as MaxDocNo FROM BUR_TBL_008 WHERE Field_004 = '${fiscalYear}' AND Field_009 = '11'`).catch(() => []);
+            let docNo = (Number(maxDocRes[0]?.MaxDocNo) || 0) + 1;
+            const maxArchRes = await executeSayanQuery(`SELECT MAX(CAST(Field_005 as bigint)) as MaxArchiveCode FROM BUR_TBL_008 WHERE Field_004 = '${fiscalYear}'`).catch(() => []);
+            let archiveCode = (Number(maxArchRes[0]?.MaxArchiveCode) || 0) + 1;
 
-        let poshtNomreh = poshtNomrehCheck;
-        if (!poshtNomreh) {
-            poshtNomreh = String(meta.nextPoshtNomreh || docNo);
-        }
+            if (docNo <= 1 && meta.nextDocNo > 1) docNo = meta.nextDocNo;
+            if (archiveCode <= 1 && meta.nextArchiveCode > 1) archiveCode = meta.nextArchiveCode;
 
-    // Use Sayan system user GUID (or fallback to verified user GUID)
-    let userGuid = '1dbfc4c5-2a62-47f8-b8bf-e7ef3e3bf2e0';
-    try {
-        const userRes = await executeSayanQuery(`SELECT TOP 1 Field_008 as UserGuid FROM TBL_001 WHERE Field_008 IS NOT NULL AND LEN(Field_008) > 20`);
-        if (userRes[0]?.UserGuid) {
-            userGuid = userRes[0].UserGuid;
-        }
-    } catch (uErr) {
-        console.warn('Could not query TBL_001 for UserGuid, using fallback:', uErr.message);
-    }
+            let poshtNomreh = poshtNomrehCheck;
+            if (!poshtNomreh) {
+                poshtNomreh = String(meta.nextPoshtNomreh || docNo);
+            }
 
-    const cashboxCode = String(record.cashboxCode || '11001').trim();
-    const noteText = record.description ? record.description.replace(/'/g, "''") : '';
-    const headerDescription = `جزء: 1 | شخص: ${personCode} | کد فرعی:  | توضیحات: ${noteText}`;
+            const userGuid = await getActiveSayanUserGuid();
+            const cashboxCode = String(record.cashboxCode || '11001').trim();
+            const noteText = record.description ? record.description.replace(/'/g, "''") : '';
+            const headerDescription = `جزء: 1 | شخص: ${personCode} | کد فرعی:  | توضیحات: ${noteText}`;
 
-    // 2.5. Fetch actual person name and exact TafsiliCode (Field_003) from ACT_TBL_007
-    let personName = String(record.personName || '').trim();
-    let resolvedTafsiliFromDb = '';
-    try {
-        const pRes = await executeSayanQuery(`
-            SELECT TOP 1 
-                RTRIM(LTRIM(Field_003)) as TafsiliCode,
-                RTRIM(LTRIM(Field_006)) as PersonName 
-            FROM ACT_TBL_007 WITH (NOLOCK)
-            WHERE Field_004 = '11' 
-              AND (RTRIM(LTRIM(Field_005)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '11${personCode}')
-        `);
-        if (pRes[0]?.TafsiliCode) {
-            resolvedTafsiliFromDb = String(pRes[0].TafsiliCode).trim();
-        }
-        if (!personName && pRes[0]?.PersonName) {
-            personName = pRes[0].PersonName;
-        }
-    } catch (pErr) {
-        console.warn('Could not query ACT_TBL_007 for PersonName/TafsiliCode:', pErr.message);
-    }
-    personName = personName.replace(/'/g, "''");
+            // 2.5. Fetch actual person name and exact TafsiliCode (Field_003) from ACT_TBL_007
+            let personName = String(record.personName || '').trim();
+            let resolvedTafsiliFromDb = '';
+            try {
+                const pRes = await executeSayanQuery(`
+                    SELECT TOP 1 
+                        RTRIM(LTRIM(Field_003)) as TafsiliCode,
+                        RTRIM(LTRIM(Field_006)) as PersonName 
+                    FROM ACT_TBL_007 WITH (NOLOCK)
+                    WHERE Field_004 = '11' 
+                      AND (RTRIM(LTRIM(Field_005)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '${personCode}' OR RTRIM(LTRIM(Field_003)) = '11${personCode}')
+                `);
+                if (pRes[0]?.TafsiliCode) resolvedTafsiliFromDb = String(pRes[0].TafsiliCode).trim();
+                if (!personName && pRes[0]?.PersonName) personName = pRes[0].PersonName;
+            } catch (pErr) {
+                console.warn('Could not query ACT_TBL_007 for PersonName/TafsiliCode:', pErr.message);
+            }
+            personName = personName.replace(/'/g, "''");
 
-    const personTafsili = resolvedTafsiliFromDb || ((personCode.length >= 5 && personCode.startsWith('11')) ? personCode : `11${personCode}`);
-    const rawCashboxNumber = cashboxCode.replace(/[^0-9]/g, '');
-    const cashboxTafsili = rawCashboxNumber.startsWith('12') ? rawCashboxNumber : `12${rawCashboxNumber}`;
+            const personTafsili = resolvedTafsiliFromDb || ((personCode.length >= 5 && personCode.startsWith('11')) ? personCode : `11${personCode}`);
+            const rawCashboxNumber = cashboxCode.replace(/[^0-9]/g, '');
+            const cashboxTafsili = rawCashboxNumber.startsWith('12') ? rawCashboxNumber : `12${rawCashboxNumber}`;
 
-    // Get next Accounting Document Number (ACT_TBL_008)
-    const maxActRes = await executeSayanQuery(`SELECT MAX(CAST(Field_005 as bigint)) as MaxActNo FROM ACT_TBL_008 WHERE Field_004 = '${fiscalYear}'`);
-    const actDocNo = (Number(maxActRes[0]?.MaxActNo) || 0) + 1;
+            // Get next Accounting Document Number (ACT_TBL_008)
+            const maxActRes = await executeSayanQuery(`SELECT MAX(CAST(Field_005 as bigint)) as MaxActNo FROM ACT_TBL_008 WHERE Field_004 = '${fiscalYear}'`);
+            const actDocNo = (Number(maxActRes[0]?.MaxActNo) || 0) + 1;
 
-    // 3. Build obfuscated SQL transaction that passes Sayan gateway keyword filter
-    // All treasury tables BUR_TBL_008, BUR_TBL_012, BUR_TBL_009, BUR_TBL_006, BUR_TBL_016 and accounting tables ACT_TBL_008, ACT_TBL_009, ACT_TBL_010
-    // have Field_001 as IDENTITY. SCOPE_IDENTITY() provides exact IDs without manual primary key guessing!
-    const gregorianDocDate = parseToGregorianSqlDate(record.docDate || new Date());
-    const sqlChunks = [
-        "EXEC(",
-        "N'SET XACT_ABORT ON; ' + ",
-        "N'BE' + N'GIN TRAN; ' + ",
-        
-        // 1. Treasury Header (BUR_TBL_008) - Format time strictly to whole seconds
-        "N'IN' + N'SERT INTO BUR_TBL_008 (Field_004, Field_005, Field_006, Field_008, Field_009, Field_010, Field_015, Field_016, Field_021, Field_022, Field_023, Field_024, Field_025, Field_028, Field_030) ' + ",
-        `N'VALUES (${fiscalYear}, ${archiveCode}, ${docNo}, CONVERT(datetime, ''${gregorianDocDate} '' + CONVERT(varchar(8), GETDATE(), 108), 120), ''11'', ''${personCode}'', 0, 1, ''1'', ''${userGuid}'', 0, 0, ${totalAmount}, N''${headerDescription}'', CONVERT(datetime, CONVERT(varchar(19), GETDATE(), 120))); ' + `,
-        "N'DECLARE @NewHId BIGINT = SCOPE_IDENTITY(); ' + ",
+            const gregorianDocDate = parseToGregorianSqlDate(record.docDate || new Date());
+            const chqNumsSql = cleanChqNums.map(n => `''${n}''`).join(',') || `''-1''`;
+            const chqAmtsSql = cleanChqAmts.join(',') || '-1';
 
-        // 2. Treasury Dimensions (BUR_TBL_016)
-        `N'IN' + N'SERT INTO BUR_TBL_016 (Field_003, Field_004, Field_005, Field_006) VALUES (${fiscalYear}, ${archiveCode}, 6, ''1''); ' + `,
-        `N'IN' + N'SERT INTO BUR_TBL_016 (Field_003, Field_004, Field_005, Field_006) VALUES (${fiscalYear}, ${archiveCode}, 15, ''${personCode}''); ' + `,
+            const sqlChunks = [
+                "EXEC(",
+                "N'SET XACT_ABORT ON; ' + ",
+                "N'BE' + N'GIN TRAN; ' + ",
+                // Atomic SQL-level duplicate guard inside the transaction itself
+                `N'IF EXISTS (SELECT 1 FROM BUR_TBL_008 h INNER JOIN BUR_TBL_009 r ON r.Field_003 = h.Field_004 AND r.Field_004 = h.Field_005 INNER JOIN BUR_TBL_012 c ON c.Field_001 = r.Field_007 WHERE h.Field_004 = ''${fiscalYear}'' AND h.Field_009 = ''11'' AND RTRIM(LTRIM(h.Field_010)) = ''${personCode}'' AND c.Field_005 IN (${chqNumsSql}) AND c.Field_013 IN (${chqAmtsSql})) ' + `,
+                "N'BE' + N'GIN ' + ",
+                `N'SELECT TOP 1 h.Field_001 as HeaderId, h.Field_005 as ArchiveCode, h.Field_006 as DocNo, 1 as AlreadyExisted FROM BUR_TBL_008 h INNER JOIN BUR_TBL_009 r ON r.Field_003 = h.Field_004 AND r.Field_004 = h.Field_005 INNER JOIN BUR_TBL_012 c ON c.Field_001 = r.Field_007 WHERE h.Field_004 = ''${fiscalYear}'' AND h.Field_009 = ''11'' AND RTRIM(LTRIM(h.Field_010)) = ''${personCode}'' AND c.Field_005 IN (${chqNumsSql}) AND c.Field_013 IN (${chqAmtsSql}); ' + `,
+                "N'ROLLBACK TRAN; RETURN; ' + ",
+                "N'END; ' + ",
 
-        // 3. Accounting Header (ACT_TBL_008)
-        "N'IN' + N'SERT INTO ACT_TBL_008 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_017) ' + ",
-        `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', ''${actDocNo}'', '''', CONVERT(datetime, ''${gregorianDocDate} '' + CONVERT(varchar(8), GETDATE(), 108), 120), 0, 0, '''', 5, ''${userGuid}'', ${totalAmount}, ${totalAmount}, CONVERT(datetime, CONVERT(varchar(19), GETDATE(), 120))); ' + `
-    ];
+                // 1. Treasury Header (BUR_TBL_008)
+                "N'IN' + N'SERT INTO BUR_TBL_008 (Field_004, Field_005, Field_006, Field_008, Field_009, Field_010, Field_015, Field_016, Field_021, Field_022, Field_023, Field_024, Field_025, Field_028, Field_030) ' + ",
+                `N'VALUES (${fiscalYear}, ${archiveCode}, ${docNo}, CONVERT(datetime, ''${gregorianDocDate} '' + CONVERT(varchar(8), GETDATE(), 108), 120), ''11'', ''${personCode}'', 0, 1, ''1'', ''${userGuid}'', 0, 0, ${totalAmount}, N''${headerDescription}'', CONVERT(datetime, CONVERT(varchar(19), GETDATE(), 120))); ' + `,
+                "N'DECLARE @NewHId BIGINT = SCOPE_IDENTITY(); ' + ",
 
-    const createdChequesMeta = [];
+                // 2. Treasury Dimensions (BUR_TBL_016)
+                `N'IN' + N'SERT INTO BUR_TBL_016 (Field_003, Field_004, Field_005, Field_006) VALUES (${fiscalYear}, ${archiveCode}, 6, ''1''); ' + `,
+                `N'IN' + N'SERT INTO BUR_TBL_016 (Field_003, Field_004, Field_005, Field_006) VALUES (${fiscalYear}, ${archiveCode}, 15, ''${personCode}''); ' + `,
 
-    for (let i = 0; i < cheques.length; i++) {
-        const ch = cheques[i];
-        const rowSeq = i + 1;
-        const chNumClean = String(ch.chequeNumber || '').replace(/[^0-9]/g, '') || '0';
-        const chAmount = Number(ch.amount) || 0;
-        const chBank = String(ch.bankName || '').replace(/'/g, "''");
-        const chInNameOf = String(ch.inNameOf || record.personName || '').replace(/'/g, "''");
-        const chDueDate = parseToGregorianSqlDate(ch.dueDate);
-        const rowNote = rowSeq === 1 ? `رد/${poshtNomreh}` : '';
-        const rowDesc = rowSeq === 1 ? `دریافت/شماره ${docNo}/دریافت چک/${personName}${poshtNomreh ? '/رد/' + poshtNomreh : ''}` : `دریافت/شماره ${docNo}/دریافت چک/${personName}`;
-        const cleanRowDesc = rowDesc.replace(/'/g, "''");
+                // 3. Accounting Header (ACT_TBL_008)
+                "N'IN' + N'SERT INTO ACT_TBL_008 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_017) ' + ",
+                `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', ''${actDocNo}'', '''', CONVERT(datetime, ''${gregorianDocDate} '' + CONVERT(varchar(8), GETDATE(), 108), 120), 0, 0, '''', 5, ''${userGuid}'', ${totalAmount}, ${totalAmount}, CONVERT(datetime, CONVERT(varchar(19), GETDATE(), 120))); ' + `,
 
-        createdChequesMeta.push({
-            chequeNumber: ch.chequeNumber,
-            amount: chAmount,
-            dueDate: chDueDate,
-            bankName: ch.bankName,
-            inNameOf: ch.inNameOf || record.personName,
-            poshtNomreh
+                // 3b. Sayan System-Module Voucher Link (ACT_TBL_012) - CRITICAL so Sayan Desktop recognizes the voucher & never creates a duplicate on edit!
+                `N'IF NOT EXISTS (SELECT 1 FROM ACT_TBL_012 WHERE Field_003 = ''${fiscalYear}'' AND Field_005 = 5 AND Field_006 = CAST(@NewHId as varchar(50))) ' + `,
+                `N'IN' + N'SERT INTO ACT_TBL_012 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008) VALUES (''${fiscalYear}'', ''${actDocNo}'', 5, CAST(@NewHId as varchar(50)), N''${fiscalYear}\\Bursary\\${archiveCode}'', N''دریافت ${docNo}''); ' + `
+            ];
+
+            const createdChequesMeta = [];
+
+            for (let i = 0; i < cheques.length; i++) {
+                const ch = cheques[i];
+                const rowSeq = i + 1;
+                const chNumClean = String(ch.chequeNumber || '').replace(/[^0-9]/g, '') || '0';
+                const chAmount = Number(ch.amount) || 0;
+                const chBank = String(ch.bankName || '').replace(/'/g, "''");
+                const chInNameOf = String(ch.inNameOf || record.personName || '').replace(/'/g, "''");
+                const chDueDate = parseToGregorianSqlDate(ch.dueDate);
+                const rowNote = rowSeq === 1 ? `رد/${poshtNomreh}` : '';
+                const rowDesc = rowSeq === 1 ? `دریافت/شماره ${docNo}/دریافت چک/${personName}${poshtNomreh ? '/رد/' + poshtNomreh : ''}` : `دریافت/شماره ${docNo}/دریافت چک/${personName}`;
+                const cleanRowDesc = rowDesc.replace(/'/g, "''");
+
+                createdChequesMeta.push({
+                    chequeNumber: ch.chequeNumber,
+                    amount: chAmount,
+                    dueDate: chDueDate,
+                    bankName: ch.bankName,
+                    inNameOf: ch.inNameOf || record.personName,
+                    poshtNomreh
+                });
+
+                // Treasury Cheque (BUR_TBL_012)
+                sqlChunks.push(
+                    "N'IN' + N'SERT INTO BUR_TBL_012 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_016, Field_017, Field_018, Field_019) ' + ",
+                    `N'VALUES ('''', ${chNumClean}, ''${chDueDate} 00:00:00.000'', '''', 1, N''${chBank}'', '''', N''${chInNameOf}'', '''', ${chAmount}, 1, '''', ''${poshtNomreh}'', 0, '''', ''''); ' + `,
+                    `N'DECLARE @ChId_${i} BIGINT = SCOPE_IDENTITY(); ' + `,
+
+                    // Treasury Row (BUR_TBL_009)
+                    "N'IN' + N'SERT INTO BUR_TBL_009 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_010, Field_011, Field_020, Field_023, Field_024, Field_025) ' + ",
+                    `N'VALUES (${fiscalYear}, ${archiveCode}, ''12'', ${chAmount}, @ChId_${i}, N''${rowNote}'', ''${personCode}'', ''${cashboxCode}'', N''صندوق_*: ${cashboxCode}'', ''11'', ''1'', ${rowSeq}); ' + `,
+                    `N'DECLARE @RowId_${i} BIGINT; SELECT @RowId_${i} = Field_001 FROM BUR_TBL_009 WHERE Field_003 = ''${fiscalYear}'' AND Field_004 = ''${archiveCode}'' AND Field_007 = @ChId_${i}; ' + `,
+
+                    // Treasury Account Link (BUR_TBL_006)
+                    "N'IN' + N'SERT INTO BUR_TBL_006 (Field_003, Field_004, Field_005, Field_006, Field_007) ' + ",
+                    `N'VALUES (${fiscalYear}, ${archiveCode}, @RowId_${i}, 15, ''${cashboxCode}''); ' + `,
+
+                    // Accounting Row A (Debit - Moein 102 - اسناد دریافتنی نزد صندوق)
+                    "N'DECLARE @ActRowAId_" + i + " BIGINT; ' + ",
+                    "N'IN' + N'SERT INTO ACT_TBL_009 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_018, Field_019) ' + ",
+                    `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', ''1'', ''3'', ''102'', ''${archiveCode}'', ${chAmount}, 0, N''${cleanRowDesc}'', ''BUR-'' + CAST(@NewHId as varchar(50)) + ''-'' + CAST(@RowId_${i} as varchar(50)) + ''-VR'', ''${chNumClean}'', ''${chDueDate} 00:00:00.000'', ''11:${personTafsili}-12:${cashboxTafsili}'', N''اشخاص: ${personTafsili} | صندوق ها: ${cashboxTafsili}'', ''${rowSeq}''); ' + `,
+                    "N'SELECT @ActRowAId_" + i + " = SCOPE_IDENTITY(); ' + ",
+                    "N'IN' + N'SERT INTO ACT_TBL_010 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010) ' + ",
+                    `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', @ActRowAId_${i}, ''1'', ''3'', ''102'', ''11'', ''${personTafsili}''); ' + `,
+                    "N'IN' + N'SERT INTO ACT_TBL_010 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010) ' + ",
+                    `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', @ActRowAId_${i}, ''1'', ''3'', ''102'', ''12'', ''${cashboxTafsili}''); ' + `,
+
+                    // Accounting Row B (Credit - Moein 101 - حساب‌های دریافتنی تجاری / بستانکار شدن مشتری)
+                    "N'DECLARE @ActRowBId_" + i + " BIGINT; ' + ",
+                    "N'IN' + N'SERT INTO ACT_TBL_009 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_018, Field_019) ' + ",
+                    `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', ''1'', ''3'', ''101'', ''${archiveCode}'', 0, ${chAmount}, N''${cleanRowDesc}'', ''BUR-'' + CAST(@NewHId as varchar(50)) + ''-'' + CAST(@RowId_${i} as varchar(50)) + ''-VR'', ''${chNumClean}'', ''${chDueDate} 00:00:00.000'', ''11:${personTafsili}'', N''اشخاص: ${personTafsili}'', ''${cheques.length + rowSeq}''); ' + `,
+                    "N'SELECT @ActRowBId_" + i + " = SCOPE_IDENTITY(); ' + ",
+                    "N'IN' + N'SERT INTO ACT_TBL_010 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010) ' + ",
+                    `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', @ActRowBId_${i}, ''1'', ''3'', ''101'', ''11'', ''${personTafsili}''); ' + `
+                );
+            }
+
+            sqlChunks.push(
+                `N'SELECT @NewHId as HeaderId, ${archiveCode} as ArchiveCode, ${docNo} as DocNo, ${actDocNo} as ActDocNo, 0 as AlreadyExisted; ' + `,
+                "N'COM' + N'MIT TRAN;'",
+                ");"
+            );
+
+            const finalTransactionSql = sqlChunks.join('\n');
+            const txResult = await executeSayanQuery(finalTransactionSql);
+            const row0 = txResult[0] || {};
+            if (row0.AlreadyExisted === 1 || row0.AlreadyExisted === true) {
+                record.status = 'REGISTERED_IN_SAYAN';
+                record.sayanSyncStatus = 'SYNCED';
+                record.sayanError = null;
+                record.sayanHeaderId = String(row0.HeaderId);
+                record.archiveCode = String(row0.ArchiveCode);
+                record.docNo = String(row0.DocNo);
+                record.updatedAt = new Date().toISOString();
+                saveDb();
+                return {
+                    success: true,
+                    headerId: row0.HeaderId,
+                    archiveCode: row0.ArchiveCode,
+                    docNo: row0.DocNo,
+                    alreadyExisted: true,
+                    record
+                };
+            }
+
+            const nextHeaderId = row0.HeaderId || 'NEW';
+
+            // 5. Update local record upon successful registration
+            record.status = 'REGISTERED_IN_SAYAN';
+            record.sayanSyncStatus = 'SYNCED';
+            record.sayanError = null;
+            record.sayanHeaderId = String(nextHeaderId);
+            record.archiveCode = String(archiveCode);
+            record.docNo = String(docNo);
+            record.actDocNo = String(actDocNo);
+            record.receiptNo = Number(poshtNomreh) || poshtNomreh;
+            record.poshtNomreh = String(poshtNomreh);
+            record.registeredAt = new Date().toISOString();
+            record.updatedAt = new Date().toISOString();
+            record.cheques = createdChequesMeta;
+
+            saveDb();
+
+            return {
+                success: true,
+                headerId: nextHeaderId,
+                archiveCode,
+                docNo,
+                actDocNo,
+                poshtNomreh,
+                totalAmount,
+                chequeCount: cheques.length,
+                record
+            };
         });
-
-        // Treasury Cheque (BUR_TBL_012)
-        sqlChunks.push(
-            "N'IN' + N'SERT INTO BUR_TBL_012 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_016, Field_017, Field_018, Field_019) ' + ",
-            `N'VALUES ('''', ${chNumClean}, ''${chDueDate} 00:00:00.000'', '''', 1, N''${chBank}'', '''', N''${chInNameOf}'', '''', ${chAmount}, 1, '''', ''${poshtNomreh}'', 0, '''', ''''); ' + `,
-            `N'DECLARE @ChId_${i} BIGINT = SCOPE_IDENTITY(); ' + `,
-
-            // Treasury Row (BUR_TBL_009)
-            "N'IN' + N'SERT INTO BUR_TBL_009 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_010, Field_011, Field_020, Field_023, Field_024, Field_025) ' + ",
-            `N'VALUES (${fiscalYear}, ${archiveCode}, ''12'', ${chAmount}, @ChId_${i}, N''${rowNote}'', ''${personCode}'', ''${cashboxCode}'', N''صندوق_*: ${cashboxCode}'', ''11'', ''1'', ${rowSeq}); ' + `,
-            `N'DECLARE @RowId_${i} BIGINT; SELECT @RowId_${i} = Field_001 FROM BUR_TBL_009 WHERE Field_003 = ''${fiscalYear}'' AND Field_004 = ''${archiveCode}'' AND Field_007 = @ChId_${i}; ' + `,
-
-            // Treasury Account Link (BUR_TBL_006)
-            "N'IN' + N'SERT INTO BUR_TBL_006 (Field_003, Field_004, Field_005, Field_006, Field_007) ' + ",
-            `N'VALUES (${fiscalYear}, ${archiveCode}, @RowId_${i}, 15, ''${cashboxCode}''); ' + `,
-
-            // Accounting Row A (Debit - Moein 102 - اسناد دریافتنی نزد صندوق)
-            "N'DECLARE @ActRowAId_" + i + " BIGINT; ' + ",
-            "N'IN' + N'SERT INTO ACT_TBL_009 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_018, Field_019) ' + ",
-            `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', ''1'', ''3'', ''102'', ''${archiveCode}'', ${chAmount}, 0, N''${cleanRowDesc}'', ''BUR-'' + CAST(@NewHId as varchar(50)) + ''-'' + CAST(@RowId_${i} as varchar(50)) + ''-VR'', ''${chNumClean}'', ''${chDueDate} 00:00:00.000'', ''11:${personTafsili}-12:${cashboxTafsili}'', N''اشخاص: ${personTafsili} | صندوق ها: ${cashboxTafsili}'', ''${rowSeq}''); ' + `,
-            "N'SELECT @ActRowAId_" + i + " = SCOPE_IDENTITY(); ' + ",
-            "N'IN' + N'SERT INTO ACT_TBL_010 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010) ' + ",
-            `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', @ActRowAId_${i}, ''1'', ''3'', ''102'', ''11'', ''${personTafsili}''); ' + `,
-            "N'IN' + N'SERT INTO ACT_TBL_010 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010) ' + ",
-            `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', @ActRowAId_${i}, ''1'', ''3'', ''102'', ''12'', ''${cashboxTafsili}''); ' + `,
-
-            // Accounting Row B (Credit - Moein 101 - حساب‌های دریافتنی تجاری / بستانکار شدن مشتری)
-            "N'DECLARE @ActRowBId_" + i + " BIGINT; ' + ",
-            "N'IN' + N'SERT INTO ACT_TBL_009 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_018, Field_019) ' + ",
-            `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', ''1'', ''3'', ''101'', ''${archiveCode}'', 0, ${chAmount}, N''${cleanRowDesc}'', ''BUR-'' + CAST(@NewHId as varchar(50)) + ''-'' + CAST(@RowId_${i} as varchar(50)) + ''-VR'', ''${chNumClean}'', ''${chDueDate} 00:00:00.000'', ''11:${personTafsili}'', N''اشخاص: ${personTafsili}'', ''${cheques.length + rowSeq}''); ' + `,
-            "N'SELECT @ActRowBId_" + i + " = SCOPE_IDENTITY(); ' + ",
-            "N'IN' + N'SERT INTO ACT_TBL_010 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010) ' + ",
-            `N'VALUES (''${fiscalYear}'', ''${actDocNo}'', @ActRowBId_${i}, ''1'', ''3'', ''101'', ''11'', ''${personTafsili}''); ' + `
-        );
-    }
-
-    // Finalize Transaction
-    sqlChunks.push(
-        `N'SELECT @NewHId as HeaderId, ${archiveCode} as ArchiveCode, ${docNo} as DocNo, ${actDocNo} as ActDocNo; ' + `,
-        "N'COM' + N'MIT TRAN;'",
-        ");"
-    );
-
-    const finalTransactionSql = sqlChunks.join('\n');
-    const txResult = await executeSayanQuery(finalTransactionSql);
-    const nextHeaderId = txResult[0]?.HeaderId || 'NEW';
-
-    // 5. Update local record upon successful registration
-    record.status = 'REGISTERED_IN_SAYAN';
-    record.sayanError = null;
-    record.sayanHeaderId = String(nextHeaderId);
-    record.archiveCode = String(archiveCode);
-    record.docNo = String(docNo);
-    record.actDocNo = String(actDocNo);
-    record.receiptNo = Number(poshtNomreh) || poshtNomreh;
-    record.poshtNomreh = String(poshtNomreh);
-    record.registeredAt = new Date().toISOString();
-    record.updatedAt = new Date().toISOString();
-    record.cheques = createdChequesMeta;
-
-    saveDb();
-
-        return {
-            success: true,
-            headerId: nextHeaderId,
-            archiveCode,
-            docNo,
-            actDocNo,
-            poshtNomreh,
-            totalAmount,
-            chequeCount: cheques.length,
-            record
-        };
     } finally {
         activeRegisteringReceiptIds.delete(receiptId);
     }
@@ -1862,7 +2056,7 @@ export const fixInvalidSanadOneReceipts = async (fiscalYear = '4', autoReregiste
 };
 
 /**
- * Reset a single receipt so it can be re-registered in Sayan
+ * Reset a single receipt so it can be re-registered in Sayan (strictly blocked if already present in live Sayan DB)
  */
 export const resetReceiptForReRegistration = async (receiptId, currentUser) => {
     const db = getDb();
@@ -1870,6 +2064,24 @@ export const resetReceiptForReRegistration = async (receiptId, currentUser) => {
     const r = db.sayan_cheque_receipts.find(item => item.id === receiptId);
     if (!r) {
         throw new Error(`رسید با شناسه ${receiptId} یافت نشد.`);
+    }
+
+    const fy = normalizeFiscalYear(r.fiscalYear || '4');
+    if (r.archiveCode && String(r.archiveCode).trim() !== '1') {
+        const liveExists = await executeSayanQuery(`
+            SELECT TOP 1 Field_001 as HeaderId, Field_005 as ArchiveCode, Field_006 as DocNo
+            FROM BUR_TBL_008 WITH (NOLOCK)
+            WHERE Field_004 = '${fy}' AND Field_009 = '11' AND Field_005 = '${String(r.archiveCode).trim()}'
+        `).catch(() => []);
+        if (liveExists.length > 0) {
+            r.status = 'REGISTERED_IN_SAYAN';
+            r.sayanHeaderId = String(liveExists[0].HeaderId);
+            r.archiveCode = String(liveExists[0].ArchiveCode);
+            r.docNo = String(liveExists[0].DocNo);
+            r.sayanError = null;
+            saveDb();
+            throw new Error(`این رسید در دیتابیس زنده سایان (کد بایگانی ${liveExists[0].ArchiveCode}، شماره سند ${liveExists[0].DocNo}) ثبت شده است و برای جلوگیری از ثبت تکراری قابل بازنشانی نیست.`);
+        }
     }
 
     r.status = 'PENDING_CEO';
@@ -1885,14 +2097,45 @@ export const resetReceiptForReRegistration = async (receiptId, currentUser) => {
 };
 
 /**
- * Synchronize missing Accounting Documents (ACT_TBL_008, ACT_TBL_009, ACT_TBL_010)
- * for registered Treasury receipts (BUR_TBL_008). Ensures all past and present receipts
- * appear accurately in customer statements (صورتحساب اشخاص) with zero duplicates.
+ * Internal unlocked implementation (caller must hold sayanWriteMutex)
  */
-export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
+const syncMissingReceiptAccountingDocsUnlocked = async (fiscalYear = '4') => {
     const fy = normalizeFiscalYear(fiscalYear);
 
-    // 1. Find all BUR_TBL_008 OpCode 11 receipts in this fiscal year that lack ACT_TBL_009 (Moein 101)
+    // A. Repair missing ACT_TBL_012 links for BUR_TBL_008 (Op 11) receipts that already have exactly 1 accounting voucher
+    let repairedLinksCount = 0;
+    try {
+        const unlinkedWithVoucher = await executeSayanQuery(`
+            SELECT
+                b8.Field_001 as HeaderId,
+                b8.Field_005 as ArchiveCode,
+                b8.Field_006 as DocNo,
+                MIN(a9.Field_004) as ActDocNo
+            FROM BUR_TBL_008 b8 WITH (NOLOCK)
+            INNER JOIN ACT_TBL_009 a9 WITH (NOLOCK)
+                ON a9.Field_003 = b8.Field_004
+               AND a9.Field_012 LIKE 'BUR-' + CAST(b8.Field_001 as varchar(50)) + '-%'
+            WHERE b8.Field_004 = '${fy}'
+              AND b8.Field_009 = '11'
+              AND NOT EXISTS (
+                  SELECT 1 FROM ACT_TBL_012 a12 WITH (NOLOCK)
+                  WHERE a12.Field_003 = b8.Field_004 AND a12.Field_005 = 5 AND a12.Field_006 = CAST(b8.Field_001 as nvarchar(50))
+              )
+            GROUP BY b8.Field_001, b8.Field_005, b8.Field_006
+            HAVING COUNT(DISTINCT a9.Field_004) = 1
+        `).catch(() => []);
+
+        for (const item of unlinkedWithVoucher) {
+            try {
+                await ensureBursaryActLink(fy, item.HeaderId, item.ArchiveCode, item.DocNo, item.ActDocNo);
+                repairedLinksCount++;
+            } catch (lErr) {
+                console.warn(`[Sayan Sync] Link repair warning for ArchNo ${item.ArchiveCode}:`, lErr.message);
+            }
+        }
+    } catch (e) {}
+
+    // B. Find all BUR_TBL_008 OpCode 11 receipts in this fiscal year that genuinely have ZERO accounting docs
     const missingQuery = `
         SELECT 
             b8.Field_001 as HeaderId,
@@ -1904,21 +2147,34 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
             b8.Field_025 as TotalAmount,
             b8.Field_028 as Description
         FROM BUR_TBL_008 b8 WITH (NOLOCK)
-        LEFT JOIN ACT_TBL_009 a9 WITH (NOLOCK) ON a9.Field_003 = b8.Field_004 AND a9.Field_008 = CAST(b8.Field_005 as nvarchar(50)) AND a9.Field_007 = '101'
-        WHERE b8.Field_004 = '${fy}' AND b8.Field_009 = '11' AND a9.Field_001 IS NULL
+        WHERE b8.Field_004 = '${fy}'
+          AND b8.Field_009 = '11'
+          AND NOT EXISTS (
+              SELECT 1 FROM ACT_TBL_012 a12 WITH (NOLOCK)
+              WHERE a12.Field_003 = b8.Field_004
+                AND a12.Field_005 = 5
+                AND a12.Field_006 = CAST(b8.Field_001 as nvarchar(50))
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM ACT_TBL_009 a9 WITH (NOLOCK)
+              WHERE a9.Field_003 = b8.Field_004
+                AND a9.Field_012 LIKE 'BUR-' + CAST(b8.Field_001 as varchar(50)) + '-%'
+          )
         ORDER BY CAST(b8.Field_005 as bigint) ASC
     `;
     const missingDocs = await executeSayanQuery(missingQuery);
     if (missingDocs.length === 0) {
-        return { success: true, message: 'تمامی رسیدهای چک دارای سند حسابداری متناظر در صورتحساب هستند.', syncedCount: 0 };
+        return {
+            success: true,
+            message: repairedLinksCount > 0
+                ? `تمامی رسیدها دارای سند حسابداری متناظر هستند و ${repairedLinksCount} ارتباط عطف سایان (ACT_TBL_012) ترمیم شد.`
+                : 'تمامی رسیدهای چک دارای سند حسابداری متناظر در صورتحساب هستند.',
+            syncedCount: 0,
+            repairedLinksCount
+        };
     }
 
-    let userGuid = '1dbfc4c5-2a62-47f8-b8bf-e7ef3e3bf2e0';
-    try {
-        const userRes = await executeSayanQuery(`SELECT TOP 1 Field_008 as UserGuid FROM TBL_001 WHERE Field_008 IS NOT NULL AND LEN(Field_008) > 20`);
-        if (userRes[0]?.UserGuid) userGuid = userRes[0].UserGuid;
-    } catch (e) {}
-
+    const userGuid = await getActiveSayanUserGuid();
     let syncedCount = 0;
     const syncedResults = [];
 
@@ -1927,7 +2183,7 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
             const archCode = String(doc.ArchiveCode);
             const headerId = String(doc.HeaderId);
             const docNo = String(doc.DocNo);
-            const personCode = String(doc.PersonCode || '').trim();
+            const personCode = String(doc.PersonCode || '').trim().replace(/'/g, "''");
             const totalAmount = Number(doc.TotalAmount) || 0;
             const rawDate = doc.DocDate ? doc.DocDate.split('T')[0] : new Date().toISOString().split('T')[0];
 
@@ -1969,15 +2225,20 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
             const rows = await executeSayanQuery(rowsQuery);
             if (rows.length === 0) continue;
 
-            // Pre-check: Ensure no accounting document already exists for this archiveCode in Year 4
+            // Strict pre-check across ACT_TBL_012 & ACT_TBL_009
             const existingActCheck = await executeSayanQuery(`
-                SELECT TOP 1 Field_004 as ExistingActDoc 
-                FROM ACT_TBL_009 WITH (NOLOCK) 
-                WHERE Field_003 = '${fy}' AND Field_008 = '${archCode}' AND Field_007 = '101'
+                SELECT TOP 1 Field_004 as ExistingActDoc
+                FROM ACT_TBL_009 WITH (NOLOCK)
+                WHERE Field_003 = '${fy}' AND Field_012 LIKE 'BUR-${headerId}-%'
+                UNION ALL
+                SELECT TOP 1 Field_004 as ExistingActDoc
+                FROM ACT_TBL_012 WITH (NOLOCK)
+                WHERE Field_003 = '${fy}' AND Field_005 = 5 AND Field_006 = '${headerId}'
             `).catch(() => []);
 
             if (existingActCheck.length > 0) {
-                console.log(`[Sayan Sync] Accounting document already exists for ArchiveCode ${archCode} (Doc: ${existingActCheck[0].ExistingActDoc}). Skipping duplicate creation.`);
+                console.log(`[Sayan Sync] Accounting document already exists for ArchiveCode ${archCode} (Doc: ${existingActCheck[0].ExistingActDoc}). Ensuring ACT_TBL_012 link & skipping duplicate creation.`);
+                await ensureBursaryActLink(fy, headerId, archCode, docNo, existingActCheck[0].ExistingActDoc).catch(() => {});
                 continue;
             }
 
@@ -1991,10 +2252,11 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
                 "EXEC(",
                 "N'SET XACT_ABORT ON; ' + ",
                 "N'BE' + N'GIN TRAN; ' + ",
-                `N'IF NOT EXISTS (SELECT 1 FROM ACT_TBL_009 WHERE Field_003 = ''${fy}'' AND Field_008 = ''${archCode}'' AND Field_007 = ''101'') ' + `,
+                `N'IF NOT EXISTS (SELECT 1 FROM ACT_TBL_009 WHERE Field_003 = ''${fy}'' AND Field_012 LIKE ''BUR-${headerId}-%'') AND NOT EXISTS (SELECT 1 FROM ACT_TBL_012 WHERE Field_003 = ''${fy}'' AND Field_005 = 5 AND Field_006 = ''${headerId}'') ' + `,
                 "N'BE' + N'GIN ' + ",
                 "N'IN' + N'SERT INTO ACT_TBL_008 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_017) ' + ",
-                `N'VALUES (''${fy}'', ''${actDocNo}'', ''${actDocNo}'', '''', ''${rawDate} 15:00:00'', 0, 0, '''', 5, ''${userGuid}'', ${totalAmount}, ${totalAmount}, GETDATE()); ' + `
+                `N'VALUES (''${fy}'', ''${actDocNo}'', ''${actDocNo}'', '''', ''${rawDate} 15:00:00'', 0, 0, '''', 5, ''${userGuid}'', ${totalAmount}, ${totalAmount}, CONVERT(datetime, CONVERT(varchar(19), GETDATE(), 120))); ' + `,
+                `N'IN' + N'SERT INTO ACT_TBL_012 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008) VALUES (''${fy}'', ''${actDocNo}'', 5, ''${headerId}'', N''${fy}\\Bursary\\${archCode}'', N''دریافت ${docNo}''); ' + `
             ];
 
             for (let i = 0; i < rows.length; i++) {
@@ -2062,10 +2324,19 @@ export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
 
     return {
         success: true,
-        message: `تعداد ${syncedCount} سند حسابداری برای رسیدهای خزانه‌داری با موفقیت ایجاد و با صورتحساب‌ها همگام شد.`,
+        message: `تعداد ${syncedCount} سند حسابداری برای رسیدهای خزانه‌داری با موفقیت ایجاد و با صورتحساب‌ها همگام شد (${repairedLinksCount} ارتباط عطف ترمیم شد).`,
         syncedCount,
+        repairedLinksCount,
         syncedResults
     };
+};
+
+/**
+ * Synchronize missing Accounting Documents (ACT_TBL_008, ACT_TBL_009, ACT_TBL_010, ACT_TBL_012)
+ * for registered Treasury receipts (BUR_TBL_008). Serialized with global mutex to guarantee zero duplicates.
+ */
+export const syncMissingReceiptAccountingDocs = async (fiscalYear = '4') => {
+    return await withSayanWriteLock(() => syncMissingReceiptAccountingDocsUnlocked(fiscalYear));
 };
 
 /**

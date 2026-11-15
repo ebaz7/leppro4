@@ -52,9 +52,24 @@ async function buildAndPublishElectron() {
   console.log(`✅ نسخه جدید الکترون ثبت شد: v${verInfo.version}`);
 
   // 2. Prepare local cache directories on install drive so C:\ drive stays clean
+  //    Also write {"type":"commonjs"} package.json in each cache dir so Node.js does not inherit
+  //    root package.json's "type":"module" when electron-builder runs CJS tools (e.g. icon-tool.js).
   ['.temp', '.cache', '.electron_cache', '.electron_builder_cache'].forEach((dirName) => {
     const dirPath = path.join(ROOT_DIR, dirName);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    const cjsPkgPath = path.join(dirPath, 'package.json');
+    try {
+      let needsWrite = !fs.existsSync(cjsPkgPath);
+      if (!needsWrite) {
+        const parsed = JSON.parse(fs.readFileSync(cjsPkgPath, 'utf8'));
+        if (parsed?.type !== 'commonjs') needsWrite = true;
+      }
+      if (needsWrite) {
+        fs.writeFileSync(cjsPkgPath, JSON.stringify({ type: 'commonjs' }, null, 2) + '\n', 'utf8');
+      }
+    } catch (_) {
+      fs.writeFileSync(cjsPkgPath, JSON.stringify({ type: 'commonjs' }, null, 2) + '\n', 'utf8');
+    }
   });
 
   // 3. Ensure all app icons are up-to-date
