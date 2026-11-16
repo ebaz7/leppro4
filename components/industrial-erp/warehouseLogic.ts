@@ -1,6 +1,9 @@
 import type {
   ErpWarehouse,
   ErpItem,
+  ErpBom,
+  ErpBomComponent,
+  ErpBomConsumptionBasis,
   ErpCartonLabel,
   ErpProductionVoucher,
   ErpWarehouseDocument,
@@ -870,7 +873,14 @@ export function computeWeightedAverageCosting(params: {
   let totalOutValueRials = 0;
 
   bucketMap.forEach(b => {
-    const wacc = b.qty > 0 ? Math.round(b.val / b.qty) : b.item.unitCost || 0;
+    const totalInQty = Number((b.openingKg + b.inKg).toFixed(3));
+    const totalInVal = b.openingVal + b.inVal;
+    const wacc =
+      b.qty > 0
+        ? Math.round(b.val / b.qty)
+        : totalInQty > 0
+        ? Math.round(totalInVal / totalInQty)
+        : b.item.unitCost || 0;
     const endVal = Math.max(0, Math.round(b.val));
     totalEndingValueRials += endVal;
     totalOutValueRials += Math.round(b.outVal);
@@ -890,6 +900,332 @@ export function computeWeightedAverageCosting(params: {
   });
 
   return { itemSummaries: summaries, totalEndingValueRials, totalOutValueRials };
+}
+
+export interface ItemLiveStockAndWaccInfo {
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  unit: string;
+  waccUnitCostRials: number;
+  costSource: 'WACC_WAREHOUSE' | 'ITEM_BASE_COST';
+  productionWhStockQty: number;
+  totalCompanyStockQty: number;
+}
+
+export function computeItemLiveWaccMap(params: {
+  warehouses: ErpWarehouse[];
+  items: ErpItem[];
+  productionVouchers: ErpProductionVoucher[];
+  cartonLabels: ErpCartonLabel[];
+  warehouseDocuments: ErpWarehouseDocument[];
+  productionWarehouseId?: string;
+}): Map<string, ItemLiveStockAndWaccInfo> {
+  const {
+    warehouses = [],
+    items = [],
+    productionVouchers = [],
+    cartonLabels = [],
+    warehouseDocuments = []
+  } = params;
+
+  const prodWh = warehouses.find(
+    w =>
+      w.id === (params.productionWarehouseId || PRODUCTION_FLOOR_WAREHOUSE_ID) ||
+      w.isProductionFloor ||
+      w.type === 'PRODUCTION_FLOOR'
+  );
+  const prodWhId = prodWh?.id || PRODUCTION_FLOOR_WAREHOUSE_ID;
+
+  const globalWacc = computeWeightedAverageCosting({
+    warehouses,
+    items,
+    productionVouchers,
+    cartonLabels,
+    warehouseDocuments,
+    warehouseFilter: 'ALL'
+  });
+
+  const prodWhWacc = computeWeightedAverageCosting({
+    warehouses,
+    items,
+    productionVouchers,
+    cartonLabels,
+    warehouseDocuments,
+    warehouseFilter: prodWhId
+  });
+
+  const globalByItem = new Map<string, { qty: number; val: number; inQty: number; inVal: number }>();
+  for (const s of globalWacc.itemSummaries) {
+    const cur = globalByItem.get(s.item.id) || { qty: 0, val: 0, inQty: 0, inVal: 0 };
+    cur.qty = Number((cur.qty + s.endingKg).toFixed(3));
+    cur.val += s.endingValueRials;
+    cur.inQty = Number((cur.inQty + s.openingKg + s.inKg).toFixed(3));
+    cur.inVal += s.openingValueRials + s.inValueRials;
+    globalByItem.set(s.item.id, cur);
+  }
+
+  const prodByItem = new Map<string, { qty: number; val: number; inQty: number; inVal: number }>();
+  for (const s of prodWhWacc.itemSummaries) {
+    const cur = prodByItem.get(s.item.id) || { qty: 0, val: 0, inQty: 0, inVal: 0 };
+    cur.qty = Number((cur.qty + s.endingKg).toFixed(3));
+    cur.val += s.endingValueRials;
+    cur.inQty = Number((cur.inQty + s.openingKg + s.inKg).toFixed(3));
+    cur.inVal += s.openingValueRials + s.inValueRials;
+    prodByItem.set(s.item.id, cur);
+  }
+
+  const result = new Map<string, ItemLiveStockAndWaccInfo>();
+  for (const it of items) {
+    const g = globalByItem.get(it.id);
+    const p = prodByItem.get(it.id);
+
+    let waccRate = 0;
+    let source: 'WACC_WAREHOUSE' | 'ITEM_BASE_COST' = 'ITEM_BASE_COST';
+
+    // Priority 1: WACC in Production Floor Warehouse if positive stock/value exists
+    if (p && p.qty > 0 && p.val > 0) {
+      waccRate = Math.round(p.val / p.qty);
+      source = 'WACC_WAREHOUSE';
+    } else if (p && p.inQty > 0 && p.inVal > 0) {
+      waccRate = Math.round(p.inVal / p.inQty);
+      source = 'WACC_WAREHOUSE';
+    } else if (g && g.qty > 0 && g.val > 0) {
+      // Priority 2: Company-wide WACC across all warehouses
+      waccRate = Math.round(g.val / g.qty);
+      source = 'WACC_WAREHOUSE';
+    } else if (g && g.inQty > 0 && g.inVal > 0) {
+      waccRate = Math.round(g.inVal / g.inQty);
+      source = 'WACC_WAREHOUSE';
+    } else {
+      // Priority 3: Defined standard unitCost on the item
+      waccRate = Math.round(Number(it.unitCost || 0));
+      source = 'ITEM_BASE_COST';
+    }
+
+    const prodStock = p ? p.qty : 0;
+    const totalStock = g && (g.inQty > 0 || g.qty !== 0) ? g.qty : Number(it.stockQty || 0);
+
+    result.set(it.id, {
+      itemId: it.id,
+      itemCode: it.code,
+      itemName: it.name,
+      unit: it.unit || 'کیلوگرم',
+      waccUnitCostRials: waccRate,
+      costSource: source,
+      productionWhStockQty: prodStock,
+      totalCompanyStockQty: totalStock
+    });
+  }
+
+  return result;
+}
+
+export function resolveComponentDefinedItem(comp: Partial<ErpBomComponent>, items: ErpItem[] = []): ErpItem | undefined {
+  if (!comp) return undefined;
+  if (comp.itemId) {
+    const byId = items.find(i => i.id === comp.itemId);
+    if (byId) return byId;
+  }
+  if (comp.itemCode) {
+    const cleanCode = normalizeFaSearch(comp.itemCode);
+    const byCode = items.find(i => normalizeFaSearch(i.code) === cleanCode);
+    if (byCode) return byCode;
+  }
+  if (comp.itemName) {
+    const cleanName = normalizeFaSearch(comp.itemName);
+    const byName = items.find(i => normalizeFaSearch(i.name) === cleanName);
+    if (byName) return byName;
+  }
+  return undefined;
+}
+
+export interface EvaluatedBomComponentResult {
+  componentId: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  isDefinedItem: boolean;
+  category: ErpBomComponent['category'];
+  consumptionBasis: ErpBomConsumptionBasis;
+  inputQtyOrPercent: number;
+  wastePercent: number;
+  unit: string;
+  effectiveQtyPerKgOutput: number;
+  batchConsumedQty: number;
+  waccUnitCostRials: number;
+  costSource: 'WACC_WAREHOUSE' | 'ITEM_BASE_COST' | 'BOM_MANUAL';
+  costPerKgOutputRials: number;
+  batchTotalCostRials: number;
+  productionWhStockQty: number;
+  totalCompanyStockQty: number;
+  hasSufficientProdWhStock: boolean;
+}
+
+export interface EvaluatedBomBatchSummary {
+  components: EvaluatedBomComponentResult[];
+  rawMaterialsCostPerKgRials: number;
+  directLaborPerKgRials: number;
+  factoryOverheadPerKgRials: number;
+  cogmPerKgRials: number;
+  batchNetWeightKg: number;
+  batchCartonsCount: number;
+  batchConesCount: number;
+  batchRawMaterialsCostRials: number;
+  batchDirectLaborCostRials: number;
+  batchFactoryOverheadCostRials: number;
+  batchTotalCogmRials: number;
+}
+
+export function evaluateBomCostAndConsumption(params: {
+  bom?: Partial<ErpBom> | null;
+  items: ErpItem[];
+  waccMap: Map<string, ItemLiveStockAndWaccInfo>;
+  batchNetWeightKg?: number;
+  batchCartonsCount?: number;
+  batchConesCount?: number;
+  fallbackItemUnitCost?: number;
+}): EvaluatedBomBatchSummary {
+  const {
+    bom,
+    items = [],
+    waccMap,
+    batchNetWeightKg = 24,
+    batchCartonsCount = 1,
+    batchConesCount = bom?.defaultConesPerCarton ?? 6,
+    fallbackItemUnitCost = 0
+  } = params;
+
+  const netKg = Math.max(0, Number(batchNetWeightKg || 0));
+  const cartons = Math.max(0, Number(batchCartonsCount || 0));
+  const cones = Math.max(0, Number(batchConesCount || 0));
+  const stdCartonNetKg = netKg > 0 && cartons > 0 ? netKg / cartons : 24;
+  const stdConesPerCarton = Math.max(1, Number(bom?.defaultConesPerCarton ?? 6));
+
+  if (!bom || !Array.isArray(bom.components)) {
+    const unitCogm = Math.max(0, Math.round(fallbackItemUnitCost));
+    return {
+      components: [],
+      rawMaterialsCostPerKgRials: unitCogm,
+      directLaborPerKgRials: 0,
+      factoryOverheadPerKgRials: 0,
+      cogmPerKgRials: unitCogm,
+      batchNetWeightKg: netKg,
+      batchCartonsCount: cartons,
+      batchConesCount: cones,
+      batchRawMaterialsCostRials: Math.round(netKg * unitCogm),
+      batchDirectLaborCostRials: 0,
+      batchFactoryOverheadCostRials: 0,
+      batchTotalCogmRials: Math.round(netKg * unitCogm)
+    };
+  }
+
+  const evaluatedComponents: EvaluatedBomComponentResult[] = [];
+  let rawMaterialsCostPerKgRials = 0;
+  let batchRawMaterialsCostRials = 0;
+
+  for (const comp of bom.components) {
+    const matchedItem = resolveComponentDefinedItem(comp, items);
+    const liveInfo = matchedItem ? waccMap.get(matchedItem.id) : undefined;
+    const basis: ErpBomConsumptionBasis = comp.consumptionBasis || 'PER_KG_NET';
+    const wastePct = Math.max(0, Number(comp.wastePercent ?? 0));
+    const wasteMultiplier = 1 + wastePct / 100;
+
+    let inputVal = Number(comp.qtyPerKgOutput || 0);
+    if (basis === 'PERCENT_OF_NET') {
+      inputVal = Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput <= 5 ? comp.qtyPerKgOutput * 100 : comp.qtyPerKgOutput));
+    }
+
+    let effectiveQtyPerKgOutput = 0;
+    let batchConsumedQty = 0;
+
+    if (basis === 'PER_KG_NET') {
+      effectiveQtyPerKgOutput = Number((inputVal * wasteMultiplier).toFixed(5));
+      batchConsumedQty = Number((netKg * effectiveQtyPerKgOutput).toFixed(3));
+    } else if (basis === 'PERCENT_OF_NET') {
+      effectiveQtyPerKgOutput = Number(((inputVal / 100) * wasteMultiplier).toFixed(5));
+      batchConsumedQty = Number((netKg * effectiveQtyPerKgOutput).toFixed(3));
+    } else if (basis === 'PER_CARTON') {
+      const perCarton = inputVal * wasteMultiplier;
+      batchConsumedQty = Number((cartons * perCarton).toFixed(3));
+      effectiveQtyPerKgOutput =
+        netKg > 0 ? Number((batchConsumedQty / netKg).toFixed(5)) : Number((perCarton / stdCartonNetKg).toFixed(5));
+    } else if (basis === 'PER_CONE') {
+      const perCone = inputVal * wasteMultiplier;
+      batchConsumedQty = Number((cones * perCone).toFixed(3));
+      effectiveQtyPerKgOutput =
+        netKg > 0
+          ? Number((batchConsumedQty / netKg).toFixed(5))
+          : Number(((perCone * stdConesPerCarton) / stdCartonNetKg).toFixed(5));
+    }
+
+    let waccUnitCostRials = 0;
+    let costSource: 'WACC_WAREHOUSE' | 'ITEM_BASE_COST' | 'BOM_MANUAL' = 'BOM_MANUAL';
+    if (liveInfo && liveInfo.waccUnitCostRials > 0) {
+      waccUnitCostRials = liveInfo.waccUnitCostRials;
+      costSource = liveInfo.costSource;
+    } else if (Number(comp.unitCostRials || 0) > 0) {
+      waccUnitCostRials = Math.round(Number(comp.unitCostRials));
+      costSource = 'BOM_MANUAL';
+    } else if (matchedItem && Number(matchedItem.unitCost || 0) > 0) {
+      waccUnitCostRials = Math.round(Number(matchedItem.unitCost));
+      costSource = 'ITEM_BASE_COST';
+    }
+
+    const costPerKgOutputRials = Math.round(effectiveQtyPerKgOutput * waccUnitCostRials);
+    const batchTotalCostRials = Math.round(batchConsumedQty * waccUnitCostRials);
+
+    rawMaterialsCostPerKgRials += costPerKgOutputRials;
+    batchRawMaterialsCostRials += batchTotalCostRials;
+
+    const prodStock = liveInfo ? liveInfo.productionWhStockQty : 0;
+    const totalStock = liveInfo ? liveInfo.totalCompanyStockQty : Number(matchedItem?.stockQty || 0);
+
+    evaluatedComponents.push({
+      componentId: comp.id,
+      itemId: matchedItem?.id || comp.itemId || '',
+      itemCode: matchedItem?.code || comp.itemCode || '',
+      itemName: matchedItem?.name || comp.itemName || '',
+      isDefinedItem: Boolean(matchedItem),
+      category: comp.category || 'RAW_MATERIAL',
+      consumptionBasis: basis,
+      inputQtyOrPercent: inputVal,
+      wastePercent: wastePct,
+      unit: matchedItem?.unit || comp.unit || 'کیلوگرم',
+      effectiveQtyPerKgOutput,
+      batchConsumedQty,
+      waccUnitCostRials,
+      costSource,
+      costPerKgOutputRials,
+      batchTotalCostRials,
+      productionWhStockQty: prodStock,
+      totalCompanyStockQty: totalStock,
+      hasSufficientProdWhStock: prodStock >= batchConsumedQty
+    });
+  }
+
+  const directLaborPerKgRials = Math.max(0, Math.round(Number(bom.directLaborPerKg || 0)));
+  const factoryOverheadPerKgRials = Math.max(0, Math.round(Number(bom.factoryOverheadPerKg || 0)));
+  const cogmPerKgRials = rawMaterialsCostPerKgRials + directLaborPerKgRials + factoryOverheadPerKgRials;
+
+  const batchDirectLaborCostRials = Math.round(netKg * directLaborPerKgRials);
+  const batchFactoryOverheadCostRials = Math.round(netKg * factoryOverheadPerKgRials);
+  const batchTotalCogmRials = batchRawMaterialsCostRials + batchDirectLaborCostRials + batchFactoryOverheadCostRials;
+
+  return {
+    components: evaluatedComponents,
+    rawMaterialsCostPerKgRials,
+    directLaborPerKgRials,
+    factoryOverheadPerKgRials,
+    cogmPerKgRials,
+    batchNetWeightKg: netKg,
+    batchCartonsCount: cartons,
+    batchConesCount: cones,
+    batchRawMaterialsCostRials,
+    batchDirectLaborCostRials,
+    batchFactoryOverheadCostRials,
+    batchTotalCogmRials
+  };
 }
 
 export function buildWarehouseAccountingVoucher(params: {

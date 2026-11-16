@@ -102,13 +102,17 @@ export interface ErpItem {
   isTareLocked?: boolean;
 }
 
+export type ErpBomConsumptionBasis = 'PER_KG_NET' | 'PERCENT_OF_NET' | 'PER_CARTON' | 'PER_CONE';
+
 export interface ErpBomComponent {
   id: string;
   itemId?: string;
   itemCode?: string;
   itemName: string;
   category: 'RAW_MATERIAL' | 'PACKAGING' | 'CHEMICAL' | 'AUXILIARY';
+  consumptionBasis?: ErpBomConsumptionBasis;
   qtyPerKgOutput: number;
+  consumptionPercent?: number;
   unit: string;
   unitCostRials?: number;
   wastePercent?: number;
@@ -225,6 +229,17 @@ export interface ErpCartonLabel {
   history?: ErpCartonHistoryEvent[];
 }
 
+export interface ErpProductionConsumedLine {
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  unit: string;
+  consumptionBasis: ErpBomConsumptionBasis;
+  consumedQty: number;
+  waccUnitCostRials: number;
+  totalCostRials: number;
+}
+
 export interface ErpProductionVoucher {
   id: string;
   voucherNo: string;
@@ -249,6 +264,17 @@ export interface ErpProductionVoucher {
   deliveredWarehouseId?: string;
   deliveredWarehouseName?: string;
   deliveredDocNo?: string;
+  bomId?: string;
+  bomCode?: string;
+  bomTitle?: string;
+  consumptionDocId?: string;
+  consumptionDocNo?: string;
+  consumedMaterials?: ErpProductionConsumedLine[];
+  rawMaterialsCostRials?: number;
+  directLaborCostRials?: number;
+  factoryOverheadCostRials?: number;
+  unitCostPerKgRials?: number;
+  totalProductionCostRials?: number;
   notes?: string;
 }
 

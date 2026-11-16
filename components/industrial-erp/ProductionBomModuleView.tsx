@@ -51,6 +51,10 @@ import {
   ErpProductionVoucher,
   ErpBom,
   ErpBomComponent,
+  ErpBomConsumptionBasis,
+  ErpProductionConsumedLine,
+  ErpWarehouseDocument,
+  ErpWarehouseDocItemLine,
   ErpBarcodeType,
   ErpLabelTemplateConfig,
   DEFAULT_LABEL_TEMPLATE_CONFIG,
@@ -70,7 +74,10 @@ import {
 import {
   ensureProductionFloorWarehouse,
   PRODUCTION_FLOOR_WAREHOUSE_ID,
-  PRODUCTION_FLOOR_WAREHOUSE_NAME
+  PRODUCTION_FLOOR_WAREHOUSE_NAME,
+  computeItemLiveWaccMap,
+  evaluateBomCostAndConsumption,
+  resolveComponentDefinedItem
 } from './warehouseLogic';
 import { User } from '../../types';
 
@@ -117,6 +124,23 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const activeYarnItems: ErpItem[] = useMemo(() => {
     return yarnItems.filter(i => i.isActive !== false);
   }, [yarnItems]);
+
+  // Live Weighted Average Cost (WACC) & Production Warehouse Stock per Item
+  const itemWaccMap = useMemo(() => {
+    return computeItemLiveWaccMap({
+      warehouses: erpState.warehouses || [],
+      items: erpState.items || [],
+      productionVouchers: erpState.productionVouchers || [],
+      cartonLabels: erpState.cartonLabels || [],
+      warehouseDocuments: erpState.warehouseDocuments || []
+    });
+  }, [
+    erpState.warehouses,
+    erpState.items,
+    erpState.productionVouchers,
+    erpState.cartonLabels,
+    erpState.warehouseDocuments
+  ]);
 
   // Label Template & Scale Config (Persisted in ERP state per company)
   const labelTemplate: ErpLabelTemplateConfig = useMemo(() => {
@@ -724,6 +748,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const referenceCode = buildCartonReferenceCode(currentLine, nextCounter, effectiveNetKg);
     const qrPayload = `DLKAM-ERP|REF:${referenceCode}|ITEM:${currentItem.code}|LOT:${lotNumber}|NET:${effectiveNetKg}KG|CONES:${effectiveConesCount}|TIME:${exactTime}`;
 
+    // Evaluate active BOM COGM (Cost of Goods Manufactured) using live Weighted Average Cost (WACC)
+    const activeBom = tareSpec.bom;
+    const cartonCostEval = activeBom
+      ? evaluateBomCostAndConsumption({
+          bom: activeBom,
+          items: erpState.items || [],
+          waccMap: itemWaccMap,
+          batchNetWeightKg: effectiveNetKg,
+          batchCartonsCount: 1,
+          batchConesCount: effectiveConesCount,
+          fallbackItemUnitCost: Number(currentItem.unitCost || 0)
+        })
+      : null;
+    const effectiveUnitCostPerKg =
+      cartonCostEval && cartonCostEval.cogmPerKgRials > 0
+        ? cartonCostEval.cogmPerKgRials
+        : Number(currentItem.unitCost || 0);
+    const effectiveTotalCostRials =
+      cartonCostEval && cartonCostEval.batchTotalCogmRials > 0
+        ? cartonCostEval.batchTotalCogmRials
+        : Math.round(effectiveUnitCostPerKg * effectiveNetKg);
+
     const newCarton: ErpCartonLabel = {
       id: `carton_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       serialNumber,
@@ -744,8 +790,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       cartonWeightGrams: effectiveCartonGrams,
       totalTareKg: effectiveTareKg,
       netWeightKg: effectiveNetKg,
-      unitCostPerKg: currentItem.unitCost,
-      totalCostRials: Math.round(currentItem.unitCost * effectiveNetKg),
+      unitCostPerKg: effectiveUnitCostPerKg,
+      totalCostRials: effectiveTotalCostRials,
       warehouseId: PRODUCTION_FLOOR_WAREHOUSE_ID,
       status: 'IN_STOCK',
       isSalesLocked: false,
@@ -764,7 +810,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
           dateJalali: dateToday,
           timeExact: exactTime,
           actor: currentUser?.fullName || 'اپراتور خط',
-          details: `توزین در ${currentLine?.name || 'خط'} | ناخالص: ${grossWeightKg} Kg | خالص: ${effectiveNetKg} Kg | دوک: ${effectiveConesCount} | انبار: ${PRODUCTION_FLOOR_WAREHOUSE_NAME}`
+          details: `توزین در ${currentLine?.name || 'خط'} | ناخالص: ${grossWeightKg} Kg | خالص: ${effectiveNetKg} Kg | دوک: ${effectiveConesCount} | فی تمام‌شده: ${effectiveUnitCostPerKg.toLocaleString()} ریال | انبار: ${PRODUCTION_FLOOR_WAREHOUSE_NAME}`
         }
       ]
     };
@@ -788,8 +834,39 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const batchTotalGrossWeight = useMemo(() => {
     return Number(currentBatchCartons.reduce((sum, c) => sum + c.grossWeightKg, 0).toFixed(3));
   }, [currentBatchCartons]);
+  const batchTotalCones = useMemo(() => {
+    return currentBatchCartons.reduce((sum, c) => sum + (c.conesCount || 0), 0);
+  }, [currentBatchCartons]);
+
+  // Live BOM consumption & COGM preview for the current weighing station / batch
+  const activeWeighingBom = selectedItemTareSpec.bom;
+  const liveBatchOrSingleEval = useMemo(() => {
+    if (!activeWeighingBom) return null;
+    const targetNetKg = currentBatchCartons.length > 0 ? batchTotalNetWeight : calculatedNetKg;
+    const targetCartons = currentBatchCartons.length > 0 ? batchTotalCartons : 1;
+    const targetCones = currentBatchCartons.length > 0 ? batchTotalCones : conesCount;
+    return evaluateBomCostAndConsumption({
+      bom: activeWeighingBom,
+      items: erpState.items || [],
+      waccMap: itemWaccMap,
+      batchNetWeightKg: targetNetKg,
+      batchCartonsCount: targetCartons,
+      batchConesCount: targetCones
+    });
+  }, [
+    activeWeighingBom,
+    erpState.items,
+    itemWaccMap,
+    currentBatchCartons.length,
+    batchTotalNetWeight,
+    batchTotalCartons,
+    batchTotalCones,
+    calculatedNetKg,
+    conesCount
+  ]);
 
   // Finalize Batch & Generate Production Voucher with automatic placement in Production Floor Warehouse
+  // AND automatic deduction of consumed BOM materials from Production Floor Warehouse (ISSUE_PRODUCTION)
   const handleFinalizeBatchAndIssueVoucher = async () => {
     if (currentBatchCartons.length === 0) {
       showToast?.('error', 'هیچ کارتنی برای ثبت نهایی در این نوبت وزن‌کشی نشده است');
@@ -809,15 +886,138 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       currentUser?.fullName || 'سرپرست تولید'
     );
 
-    // Stamp cartons with voucher, archive code, and automatic entry into Production Floor Warehouse
+    const totalConesInBatch = currentBatchCartons.reduce((sum, c) => sum + (c.conesCount || 0), 0);
+    const activeBom = selectedItemTareSpec.bom;
+    const batchEval = activeBom
+      ? evaluateBomCostAndConsumption({
+          bom: activeBom,
+          items: erpState.items || [],
+          waccMap: itemWaccMap,
+          batchNetWeightKg: batchTotalNetWeight,
+          batchCartonsCount: currentBatchCartons.length,
+          batchConesCount: totalConesInBatch,
+          fallbackItemUnitCost: Number(currentItem?.unitCost || 0)
+        })
+      : null;
+
+    const finalUnitCostPerKg =
+      batchEval && batchEval.cogmPerKgRials > 0
+        ? batchEval.cogmPerKgRials
+        : Number(currentItem?.unitCost || 0);
+    const finalTotalProductionCost =
+      batchEval && batchEval.batchTotalCogmRials > 0
+        ? batchEval.batchTotalCogmRials
+        : Math.round(finalUnitCostPerKg * batchTotalNetWeight);
+
+    // Stamp cartons with voucher, archive code, calculated COGM, and automatic entry into Production Floor Warehouse
     const finalizedCartons = currentBatchCartons.map(c => ({
       ...c,
       warehouseId: productionWarehouse.id,
       status: 'IN_STOCK' as const,
       isSalesLocked: false,
       productionVoucherNo: voucherNo,
-      productionArchiveCode: archiveCode
+      productionArchiveCode: archiveCode,
+      unitCostPerKg: finalUnitCostPerKg,
+      totalCostRials: Math.round(c.netWeightKg * finalUnitCostPerKg)
     }));
+
+    // Build automatic ISSUE_PRODUCTION warehouse document to deduct consumed BOM materials from Production Floor Warehouse
+    const consumedLines: ErpProductionConsumedLine[] = (batchEval?.components || [])
+      .filter(l => l.batchConsumedQty > 0)
+      .map(l => ({
+        itemId: l.itemId,
+        itemCode: l.itemCode,
+        itemName: l.itemName,
+        unit: l.unit,
+        consumptionBasis: l.consumptionBasis,
+        consumedQty: l.batchConsumedQty,
+        waccUnitCostRials: l.waccUnitCostRials,
+        totalCostRials: l.batchTotalCostRials
+      }));
+
+    const existingDocs = erpState.warehouseDocuments || [];
+    let consumptionDoc: ErpWarehouseDocument | null = null;
+    if (consumedLines.length > 0) {
+      const nextDocNo = getNextPlainSequentialNumber(existingDocs.map(d => d.docNo), 1);
+      const nextDocArchive = getNextPlainSequentialNumber(existingDocs.map(d => d.archiveCode), 5001);
+      const docItems: ErpWarehouseDocItemLine[] = consumedLines.map((cl, idx) => ({
+        id: `docline_${Date.now()}_${idx}`,
+        itemId: cl.itemId,
+        itemCode: cl.itemCode,
+        itemName: cl.itemName,
+        grade: 'A',
+        cartonsCount: cl.consumptionBasis === 'PER_CARTON' ? Math.round(cl.consumedQty) : 0,
+        grossWeightKg: cl.consumedQty,
+        netWeightKg: cl.consumedQty,
+        unitCostRials: cl.waccUnitCostRials,
+        totalCostRials: cl.totalCostRials,
+        notes: `کسر خودکار مصرف تولید سند ${voucherNo} (${currentItem?.name || ''}) طبق فرمول ${activeBom?.code || ''}`
+      }));
+
+      consumptionDoc = {
+        id: `whdoc_prd_consume_${Date.now()}`,
+        docNo: nextDocNo,
+        archiveCode: nextDocArchive,
+        docType: 'ISSUE_PRODUCTION',
+        dateJalali: dateToday,
+        timeExact: exactTime,
+        createdAtMs: Date.now(),
+        sourceWarehouseId: productionWarehouse.id,
+        sourceWarehouseName: productionWarehouse.name,
+        partyName: `${currentLine?.name || 'خط تولید'} — تولید ${currentItem?.name || ''} (سند تولید ${voucherNo})`,
+        productionVoucherId: `prdv_${Date.now()}`,
+        cartonIds: [],
+        cartonsCount: 0,
+        totalGrossWeightKg: Number(consumedLines.reduce((s, x) => s + x.consumedQty, 0).toFixed(3)),
+        totalNetWeightKg: Number(consumedLines.reduce((s, x) => s + x.consumedQty, 0).toFixed(3)),
+        totalCostRials: consumedLines.reduce((s, x) => s + x.totalCostRials, 0),
+        status: 'COMPLETED',
+        createdBy: currentUser?.fullName || 'سیستم اتوماتیک تولید (BOM)',
+        notes: `حواله مصرف خودکار خط تولید بابت تولید ${batchTotalNetWeight} کیلوگرم (${finalizedCartons.length} کارتن / ${totalConesInBatch} دوک) محصول «${currentItem?.name || ''}» بر اساس فرمول ساخت ${activeBom?.code || ''} (${activeBom?.title || ''}) به نرخ میانگین موزون انبار`,
+        docItems
+      };
+    }
+
+    // Update item stocks & Weighted Average Cost of finished product in erpState.items
+    const consumedByItemId = new Map<string, number>();
+    for (const cl of consumedLines) {
+      if (cl.itemId) {
+        consumedByItemId.set(cl.itemId, (consumedByItemId.get(cl.itemId) || 0) + cl.consumedQty);
+      }
+    }
+
+    const updatedItems = (erpState.items || []).map(itm => {
+      let nextStock = Number(itm.stockQty || 0);
+      let nextUnitCost = Number(itm.unitCost || 0);
+
+      // If this item is the finished product being produced: update its stock and WACC unitCost
+      if (itm.id === selectedItemId) {
+        const oldStock = Math.max(0, nextStock);
+        const oldCost = Math.max(0, nextUnitCost);
+        const addedKg = batchTotalNetWeight;
+        if (addedKg > 0 && finalUnitCostPerKg > 0) {
+          nextUnitCost = Math.round(
+            (oldStock * oldCost + addedKg * finalUnitCostPerKg) / (oldStock + addedKg)
+          );
+        }
+        nextStock = Number((nextStock + addedKg).toFixed(3));
+      }
+
+      // If this item was consumed as a BOM component: deduct from its stockQty
+      const consumedQty = consumedByItemId.get(itm.id);
+      if (consumedQty && consumedQty > 0) {
+        nextStock = Number((nextStock - consumedQty).toFixed(3));
+      }
+
+      if (nextStock !== itm.stockQty || nextUnitCost !== itm.unitCost) {
+        return {
+          ...itm,
+          stockQty: nextStock,
+          unitCost: nextUnitCost
+        };
+      }
+      return itm;
+    });
 
     const newVoucher: ErpProductionVoucher = {
       id: `prdv_${Date.now()}`,
@@ -838,20 +1038,39 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       cartonIds: finalizedCartons.map(c => c.id),
       status: 'IN_PRODUCTION_WAREHOUSE',
       productionWarehouseId: productionWarehouse.id,
-      notes: `تولید نوبت ${shiftName} در ${currentLine?.name} — ورود خودکار به ${productionWarehouse.name}`
+      bomId: activeBom?.id,
+      bomCode: activeBom?.code,
+      bomTitle: activeBom?.title,
+      consumptionDocId: consumptionDoc?.id,
+      consumptionDocNo: consumptionDoc?.docNo,
+      consumedMaterials: consumedLines,
+      rawMaterialsCostRials: batchEval?.batchRawMaterialsCostRials ?? 0,
+      directLaborCostRials: batchEval?.batchDirectLaborCostRials ?? 0,
+      factoryOverheadCostRials: batchEval?.batchFactoryOverheadCostRials ?? 0,
+      unitCostPerKgRials: finalUnitCostPerKg,
+      totalProductionCostRials: finalTotalProductionCost,
+      notes: `تولید نوبت ${shiftName} در ${currentLine?.name} — ورود خودکار به ${productionWarehouse.name}${
+        consumptionDoc
+          ? ` | کسر خودکار مواد مصرفی طی حواله مصرف شماره ${consumptionDoc.docNo} | بهای تمام‌شده هر کیلو: ${finalUnitCostPerKg.toLocaleString()} ریال`
+          : ''
+      }`
     };
 
     const nextState: IndustrialErpState = {
       ...erpState,
       warehouses: nextWarehouses,
+      items: updatedItems,
       cartonLabels: [...finalizedCartons, ...erpState.cartonLabels],
       productionVouchers: [newVoucher, ...(erpState.productionVouchers || [])],
+      warehouseDocuments: consumptionDoc ? [consumptionDoc, ...existingDocs] : existingDocs,
       nextSerialCounter: (erpState.nextSerialCounter || 1000) + finalizedCartons.length
     };
 
     await persistErpState(
       nextState,
-      `سند تولید ${voucherNo} (${finalizedCartons.length} کارتن) ثبت و موجودی وارد «${productionWarehouse.name}» شد.`
+      consumptionDoc
+        ? `سند تولید ${voucherNo} ثبت شد؛ مواد مصرفی طبق فرمول (${activeBom?.code}) از «${productionWarehouse.name}» کسر و بهای تمام‌شده (${finalUnitCostPerKg.toLocaleString()} ریال/کیلو) محاسبه گردید.`
+        : `سند تولید ${voucherNo} (${finalizedCartons.length} کارتن) ثبت و موجودی وارد «${productionWarehouse.name}» شد.`
     );
     setCurrentBatchCartons([]);
   };
@@ -985,9 +1204,66 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     });
   }, [allBoms, erpState.items, bomSearch, bomProductFilter]);
 
+  // All defined items that can be used as BOM components (prioritizing RAW_MATERIAL and PACKAGING first)
+  const bomComponentCandidateItems = useMemo(() => {
+    const list = [...(erpState.items || [])];
+    const orderRank = (cat?: string) => {
+      if (cat === 'RAW_MATERIAL') return 1;
+      if (cat === 'PACKAGING') return 2;
+      if (cat === 'WASTE') return 3;
+      return 4;
+    };
+    return list.sort((a, b) => {
+      const rA = orderRank(a.category);
+      const rB = orderRank(b.category);
+      if (rA !== rB) return rA - rB;
+      return (a.code || '').localeCompare(b.code || '');
+    });
+  }, [erpState.items]);
+
   const handleOpenAddBom = () => {
     const preselectedIds = bomProductFilter !== 'ALL' ? [bomProductFilter] : [];
     const primaryProduct = preselectedIds.length > 0 ? erpState.items.find(i => i.id === preselectedIds[0]) : undefined;
+
+    // Try to pre-populate default components from actual defined items in the system if available
+    const rawCandidate = bomComponentCandidateItems.find(i => i.category === 'RAW_MATERIAL');
+    const packCandidate = bomComponentCandidateItems.find(i => i.category === 'PACKAGING');
+
+    const defaultComponents: ErpBomComponent[] = [];
+    if (rawCandidate) {
+      const wacc = itemWaccMap.get(rawCandidate.id)?.waccUnitCostRials ?? Number(rawCandidate.unitCost || 0);
+      defaultComponents.push({
+        id: `cmp_${Date.now()}_1`,
+        itemId: rawCandidate.id,
+        itemCode: rawCandidate.code,
+        itemName: rawCandidate.name,
+        category: 'RAW_MATERIAL',
+        consumptionBasis: 'PERCENT_OF_NET',
+        consumptionPercent: 98.5,
+        qtyPerKgOutput: 0.985,
+        unit: rawCandidate.unit || 'کیلوگرم',
+        unitCostRials: wacc,
+        wastePercent: 2.5,
+        totalCostRials: Math.round(0.985 * 1.025 * wacc)
+      });
+    }
+    if (packCandidate) {
+      const wacc = itemWaccMap.get(packCandidate.id)?.waccUnitCostRials ?? Number(packCandidate.unitCost || 0);
+      defaultComponents.push({
+        id: `cmp_${Date.now()}_2`,
+        itemId: packCandidate.id,
+        itemCode: packCandidate.code,
+        itemName: packCandidate.name,
+        category: 'PACKAGING',
+        consumptionBasis: 'PER_CARTON',
+        qtyPerKgOutput: 1,
+        unit: packCandidate.unit || 'عدد',
+        unitCostRials: wacc,
+        wastePercent: 0,
+        totalCostRials: Math.round((1 / 23.5) * wacc)
+      });
+    }
+
     const newBom: Partial<ErpBom> = {
       code: `BOM-${String(allBoms.length + 1).padStart(3, '0')}`,
       title: primaryProduct ? `فرمول استاندارد تولید ${primaryProduct.name}` : 'فرمول ساخت نخ تکسچره',
@@ -1006,38 +1282,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       directLaborPerKg: 155000,
       factoryOverheadPerKg: 185000,
       status: 'ACTIVE',
-      components: [
-        {
-          id: `cmp_${Date.now()}_1`,
-          itemName: 'نخ اولیه POY پلی‌استر',
-          category: 'RAW_MATERIAL',
-          qtyPerKgOutput: 1.025,
-          unit: 'کیلوگرم',
-          unitCostRials: 780000,
-          wastePercent: 2.5,
-          totalCostRials: 799500
-        },
-        {
-          id: `cmp_${Date.now()}_2`,
-          itemName: 'روغن تکسچرایزینگ (Spin Finish)',
-          category: 'CHEMICAL',
-          qtyPerKgOutput: 0.025,
-          unit: 'کیلوگرم',
-          unitCostRials: 1200000,
-          wastePercent: 0,
-          totalCostRials: 30000
-        },
-        {
-          id: `cmp_${Date.now()}_3`,
-          itemName: 'ملزومات بسته‌بندی (کارتن، دوک، نایلون و تسمه)',
-          category: 'PACKAGING',
-          qtyPerKgOutput: 0.043,
-          unit: 'ست کارتن',
-          unitCostRials: 650000,
-          wastePercent: 0,
-          totalCostRials: 27950
-        }
-      ]
+      components: defaultComponents
     };
     setBomModalItemSearch('');
     setEditingBom(newBom);
@@ -1053,6 +1298,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     cloned.cartonWeightGrams = bom.cartonWeightGrams ?? primaryItem?.cartonWeightGrams ?? 1450;
     cloned.coneWeightGrams = bom.coneWeightGrams ?? primaryItem?.coneWeightGrams ?? 110;
     cloned.isTareLocked = bom.isTareLocked !== undefined ? Boolean(bom.isTareLocked) : Boolean(primaryItem?.isTareLocked);
+    // Resolve any component that wasn't yet linked by itemId to a defined item & refresh live WACC if unitCostRials is 0
+    cloned.components = (cloned.components || []).map(comp => {
+      const matched = resolveComponentDefinedItem(comp, erpState.items || []);
+      const waccInfo = matched ? itemWaccMap.get(matched.id) : undefined;
+      const effectiveCost =
+        waccInfo && waccInfo.waccUnitCostRials > 0
+          ? waccInfo.waccUnitCostRials
+          : Number(comp.unitCostRials || matched?.unitCost || 0);
+      return {
+        ...comp,
+        itemId: matched?.id || comp.itemId,
+        itemCode: matched?.code || comp.itemCode,
+        itemName: matched?.name || comp.itemName,
+        unit: matched?.unit || comp.unit || 'کیلوگرم',
+        consumptionBasis: comp.consumptionBasis || 'PER_KG_NET',
+        consumptionPercent:
+          comp.consumptionBasis === 'PERCENT_OF_NET'
+            ? comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 0) * 100).toFixed(2))
+            : comp.consumptionPercent,
+        unitCostRials: effectiveCost
+      };
+    });
     setBomModalItemSearch('');
     setEditingBom(cloned);
     setShowAddEditBomModal(true);
@@ -1104,15 +1371,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
 
   const handleAddComponentToEditingBom = () => {
     if (!editingBom) return;
+    const firstDefined = bomComponentCandidateItems[0];
+    const wacc = firstDefined ? itemWaccMap.get(firstDefined.id)?.waccUnitCostRials ?? Number(firstDefined.unitCost || 0) : 0;
+    const defaultCategory: ErpBomComponent['category'] =
+      firstDefined?.category === 'PACKAGING'
+        ? 'PACKAGING'
+        : 'RAW_MATERIAL';
+    const defaultBasis: ErpBomConsumptionBasis =
+      firstDefined?.category === 'PACKAGING' ? 'PER_CARTON' : 'PER_KG_NET';
+
     const newComp: ErpBomComponent = {
-      id: `cmp_${Date.now()}`,
-      itemName: '',
-      category: 'RAW_MATERIAL',
+      id: `cmp_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      itemId: firstDefined?.id || '',
+      itemCode: firstDefined?.code || '',
+      itemName: firstDefined?.name || '',
+      category: defaultCategory,
+      consumptionBasis: defaultBasis,
+      consumptionPercent: undefined,
       qtyPerKgOutput: 1,
-      unit: 'کیلوگرم',
-      unitCostRials: 0,
+      unit: firstDefined?.unit || 'کیلوگرم',
+      unitCostRials: wacc,
       wastePercent: 0,
-      totalCostRials: 0
+      totalCostRials: wacc
     };
     setEditingBom({
       ...editingBom,
@@ -1120,13 +1400,84 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     });
   };
 
+  const handleSelectDefinedItemForComponent = (idx: number, selectedItemIdForComp: string) => {
+    if (!editingBom || !editingBom.components) return;
+    const matched = (erpState.items || []).find(i => i.id === selectedItemIdForComp);
+    if (!matched) {
+      handleUpdateComponentInEditingBom(idx, { itemId: '', itemCode: '' });
+      return;
+    }
+    const waccInfo = itemWaccMap.get(matched.id);
+    const liveWacc = waccInfo ? waccInfo.waccUnitCostRials : Number(matched.unitCost || 0);
+    const mappedCat: ErpBomComponent['category'] =
+      matched.category === 'PACKAGING'
+        ? 'PACKAGING'
+        : matched.category === 'RAW_MATERIAL'
+        ? 'RAW_MATERIAL'
+        : 'AUXILIARY';
+    const currentComp = editingBom.components[idx];
+    const suggestedBasis: ErpBomConsumptionBasis =
+      currentComp?.consumptionBasis ||
+      (matched.category === 'PACKAGING'
+        ? matched.name.includes('دوک')
+          ? 'PER_CONE'
+          : 'PER_CARTON'
+        : 'PER_KG_NET');
+
+    handleUpdateComponentInEditingBom(idx, {
+      itemId: matched.id,
+      itemCode: matched.code,
+      itemName: matched.name,
+      unit: matched.unit || 'کیلوگرم',
+      category: mappedCat,
+      consumptionBasis: suggestedBasis,
+      unitCostRials: liveWacc
+    });
+  };
+
+  const handleSyncEditingBomWithWarehouseWacc = () => {
+    if (!editingBom || !editingBom.components) return;
+    const nextComps = editingBom.components.map(comp => {
+      const matched = resolveComponentDefinedItem(comp, erpState.items || []);
+      if (!matched) return comp;
+      const waccInfo = itemWaccMap.get(matched.id);
+      const liveWacc = waccInfo ? waccInfo.waccUnitCostRials : Number(matched.unitCost || 0);
+      return {
+        ...comp,
+        itemId: matched.id,
+        itemCode: matched.code,
+        itemName: matched.name,
+        unit: matched.unit || comp.unit,
+        unitCostRials: liveWacc
+      };
+    });
+    setEditingBom({ ...editingBom, components: nextComps });
+    showToast?.('success', 'نرخ تمامی اجزای فرمول از میانگین موزون لحظه‌ای انبار (WACC) بروزرسانی شد');
+  };
+
   const handleUpdateComponentInEditingBom = (idx: number, updates: Partial<ErpBomComponent>) => {
     if (!editingBom || !editingBom.components) return;
     const nextComps = [...editingBom.components];
     const target = { ...nextComps[idx], ...updates };
-    const qty = Number(target.qtyPerKgOutput || 0);
+    const basis: ErpBomConsumptionBasis = target.consumptionBasis || 'PER_KG_NET';
+    if (basis === 'PERCENT_OF_NET') {
+      const pct = Number(target.consumptionPercent ?? (target.qtyPerKgOutput || 0) * 100);
+      target.consumptionPercent = pct;
+      target.qtyPerKgOutput = Number((pct / 100).toFixed(6));
+    }
+    const wasteFactor = 1 + Math.max(0, Number(target.wastePercent || 0)) / 100;
+    const conesPerCarton = Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6));
+    const stdCartonNetKg = 23.5;
+    let effectiveQtyPerKg = Number(target.qtyPerKgOutput || 0) * wasteFactor;
+    if (basis === 'PERCENT_OF_NET') {
+      effectiveQtyPerKg = (Number(target.consumptionPercent || 0) / 100) * wasteFactor;
+    } else if (basis === 'PER_CARTON') {
+      effectiveQtyPerKg = (Number(target.qtyPerKgOutput || 0) * wasteFactor) / stdCartonNetKg;
+    } else if (basis === 'PER_CONE') {
+      effectiveQtyPerKg = (Number(target.qtyPerKgOutput || 0) * conesPerCarton * wasteFactor) / stdCartonNetKg;
+    }
     const unitCost = Number(target.unitCostRials || 0);
-    target.totalCostRials = Math.round(qty * unitCost);
+    target.totalCostRials = Math.round(effectiveQtyPerKg * unitCost);
     nextComps[idx] = target;
     setEditingBom({ ...editingBom, components: nextComps });
   };
@@ -1142,11 +1493,37 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       showToast?.('error', 'لطفاً کد و عنوان فرمول ساخت (BOM) را وارد نمایید');
       return;
     }
-    const comps = editingBom.components || [];
-    const totalMaterialsCost = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
-    const labor = Number(editingBom.directLaborPerKg || 0);
-    const overhead = Number(editingBom.factoryOverheadPerKg || 0);
-    const totalCostPerKg = totalMaterialsCost + labor + overhead;
+    const comps = (editingBom.components || []).filter(c => (c.itemName || '').trim() || c.itemId);
+    if (comps.length === 0) {
+      showToast?.('error', 'لطفاً حداقل یک کالای مصرفی از کالاهای تعریف‌شده سیستم به فرمول اضافه نمایید');
+      return;
+    }
+    const evalResult = evaluateBomCostAndConsumption({
+      bom: editingBom,
+      items: erpState.items || [],
+      waccMap: itemWaccMap,
+      batchNetWeightKg: 23.5,
+      batchCartonsCount: 1,
+      batchConesCount: Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6))
+    });
+    const totalMaterialsCost = evalResult.rawMaterialsCostPerKgRials;
+    const labor = evalResult.directLaborPerKgRials;
+    const overhead = evalResult.factoryOverheadPerKgRials;
+    const totalCostPerKg = evalResult.cogmPerKgRials;
+
+    // Normalize components with their evaluated totalCostRials per 1 kg output
+    const normalizedComps: ErpBomComponent[] = comps.map((c, idx) => {
+      const lineEval = evalResult.components[idx];
+      return {
+        ...c,
+        itemId: lineEval?.itemId || c.itemId,
+        itemCode: lineEval?.itemCode || c.itemCode,
+        itemName: lineEval?.itemName || c.itemName,
+        unit: lineEval?.unit || c.unit,
+        unitCostRials: lineEval?.waccUnitCostRials ?? c.unitCostRials,
+        totalCostRials: lineEval?.costPerKgOutputRials ?? c.totalCostRials
+      };
+    });
 
     const selectedIds = Array.from(new Set(getBomFinishedItemIds(editingBom)));
     const selectedProducts = selectedIds
@@ -1175,7 +1552,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       wastePercent: Number(editingBom.wastePercent || 0),
       directLaborPerKg: labor,
       factoryOverheadPerKg: overhead,
-      components: comps,
+      components: normalizedComps,
       totalRawMaterialsCostPerKg: totalMaterialsCost,
       totalCostPerKg: totalCostPerKg,
       status: (editingBom.status as any) || 'ACTIVE',
@@ -1190,7 +1567,19 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       ? allBoms.map(b => (b.id === savedBom.id ? savedBom : b))
       : [...allBoms, savedBom];
 
-    await persistErpState({ ...erpState, boms: nextBoms }, 'فرمول ساخت (BOM) با موفقیت در دیتابیس ذخیره شد');
+    // Also update the base unitCost of assigned finished products if their unitCost was not yet set or to reflect BOM COGM
+    const assignedSet = new Set(selectedIds);
+    const nextItems = (erpState.items || []).map(itm => {
+      if (assignedSet.has(itm.id) && totalCostPerKg > 0) {
+        return { ...itm, unitCost: totalCostPerKg };
+      }
+      return itm;
+    });
+
+    await persistErpState(
+      { ...erpState, boms: nextBoms, items: nextItems },
+      `فرمول ساخت (${savedBom.code}) با بهای تمام‌شده میانگین موزون ${totalCostPerKg.toLocaleString()} ریال/کیلو ذخیره شد`
+    );
     setShowAddEditBomModal(false);
     setEditingBom(null);
   };
@@ -2330,13 +2719,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             </div>
 
             {/* Batch Stats Summary */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-slate-50 dark:bg-slate-800/40 p-3 rounded-xl border border-slate-100 dark:border-slate-800 text-xs">
               <div>
-                <span className="text-slate-400 block text-[10px]">تعداد کارتن این نوبت:</span>
-                <span className="font-black text-sm text-slate-800 dark:text-slate-100">{batchTotalCartons} کارتن</span>
+                <span className="text-slate-400 block text-[10px]">تعداد کارتن / دوک این نوبت:</span>
+                <span className="font-black text-sm text-slate-800 dark:text-slate-100">
+                  {batchTotalCartons} کارتن ({batchTotalCones} دوک)
+                </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px]">مجموع وزن خالص:</span>
+                <span className="text-slate-400 block text-[10px]">مجموع وزن خالص لیبل‌ها:</span>
                 <span className="font-mono font-black text-sm text-emerald-600" dir="ltr">{batchTotalNetWeight.toFixed(3)} Kg</span>
               </div>
               <div>
@@ -2344,12 +2735,107 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 <span className="font-mono font-black text-sm text-slate-700 dark:text-slate-300" dir="ltr">{batchTotalGrossWeight.toFixed(3)} Kg</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px]">میانگین وزن خالص کارتن:</span>
-                <span className="font-mono font-black text-sm text-blue-600" dir="ltr">
-                  {batchTotalCartons > 0 ? (batchTotalNetWeight / batchTotalCartons).toFixed(3) : '0.000'} Kg
+                <span className="text-slate-400 block text-[10px]">بهای تمام‌شده هر کیلو (COGM):</span>
+                <span className="font-mono font-black text-sm text-indigo-600 dark:text-indigo-400" dir="ltr">
+                  {(liveBatchOrSingleEval?.cogmPerKgRials || selectedItemObj?.unitCost || 0).toLocaleString()} ریال
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px]">ارزش کل تولید این نوبت:</span>
+                <span className="font-mono font-black text-sm text-orange-600" dir="ltr">
+                  {Math.round(
+                    batchTotalNetWeight * (liveBatchOrSingleEval?.cogmPerKgRials || selectedItemObj?.unitCost || 0)
+                  ).toLocaleString()}{' '}
+                  ریال
                 </span>
               </div>
             </div>
+
+            {/* Live Automatic BOM Material Deduction & WACC Costing Preview */}
+            {activeWeighingBom && liveBatchOrSingleEval && liveBatchOrSingleEval.components.length > 0 && (
+              <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-2.5 text-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Calculator size={16} className="text-indigo-600 shrink-0" />
+                    <div>
+                      <span className="font-black text-slate-800 dark:text-slate-100">
+                        محاسبه استاندارد حسابداری: کسر خودکار مواد مصرفی از «{PRODUCTION_FLOOR_WAREHOUSE_NAME}» و بهای تمام‌شده (میانگین موزون WACC)
+                      </span>
+                      <span className="block text-[11px] text-slate-500">
+                        بر اساس فرمول <strong className="font-mono text-indigo-600">{activeWeighingBom.code}</strong> برای{' '}
+                        {currentBatchCartons.length > 0
+                          ? `کل بچ جاری (${batchTotalNetWeight.toFixed(3)} Kg خالص در ${batchTotalCartons} کارتن و ${batchTotalCones} دوک)`
+                          : `لیبل فعلی روی باسکول (${calculatedNetKg.toFixed(3)} Kg خالص در ۱ کارتن و ${conesCount} دوک)`}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+                    <span className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 text-[11px] font-black text-emerald-600" dir="ltr">
+                      COGM: {liveBatchOrSingleEval.cogmPerKgRials.toLocaleString()} Rials/Kg
+                    </span>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-indigo-200/70 dark:border-indigo-800/70 rounded-xl bg-white dark:bg-slate-900">
+                  <table className="w-full text-right text-[11px]">
+                    <thead className="bg-indigo-50/70 dark:bg-indigo-950/40 font-black text-slate-600 dark:text-slate-300 border-b border-indigo-100 dark:border-indigo-800">
+                      <tr>
+                        <th className="p-2">کالای مصرفی (تعریف‌شده در سیستم)</th>
+                        <th className="p-2 text-center">مبنای مصرف در فرمول</th>
+                        <th className="p-2 text-center font-black text-rose-600">مقدار کسر از انبار تولید</th>
+                        <th className="p-2 text-center">موجودی فعلی انبار تولید</th>
+                        <th className="p-2 text-center">نرخ میانگین موزون (WACC)</th>
+                        <th className="p-2 text-center font-black text-emerald-600">سهم در بهای تمام‌شده</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {liveBatchOrSingleEval.components.map((line, i) => {
+                        const isLowStock = !line.hasSufficientProdWhStock;
+                        const basisText =
+                          line.consumptionBasis === 'PERCENT_OF_NET'
+                            ? `${line.inputQtyOrPercent}% وزن خالص لیبل`
+                            : line.consumptionBasis === 'PER_CARTON'
+                            ? `${line.inputQtyOrPercent} ${line.unit} در هر کارتن`
+                            : line.consumptionBasis === 'PER_CONE'
+                            ? `${line.inputQtyOrPercent} ${line.unit} در هر دوک`
+                            : `${line.inputQtyOrPercent} ${line.unit} در هر کیلو خالص`;
+                        return (
+                          <tr key={`${line.itemId}_${i}`}>
+                            <td className="p-2 font-bold text-slate-800 dark:text-slate-100">
+                              <span className="font-mono text-orange-600 ml-1.5">{line.itemCode}</span>
+                              <span>{line.itemName}</span>
+                              {!line.isDefinedItem && (
+                                <span className="mr-1.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-black">
+                                  نیاز به تطبیق با کالای سیستم
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2 text-center text-slate-600 dark:text-slate-300">
+                              {basisText}
+                              {line.wastePercent > 0 ? ` (+${line.wastePercent}% پرت)` : ''}
+                            </td>
+                            <td className="p-2 text-center font-mono font-black text-rose-600" dir="ltr">
+                              -{line.batchConsumedQty.toLocaleString()} {line.unit}
+                            </td>
+                            <td className="p-2 text-center font-mono" dir="ltr">
+                              <span className={isLowStock ? 'text-amber-600 font-black' : 'text-slate-600 dark:text-slate-300 font-bold'}>
+                                {line.productionWhStockQty.toLocaleString()} {line.unit}
+                              </span>
+                            </td>
+                            <td className="p-2 text-center font-mono text-slate-700 dark:text-slate-200" dir="ltr">
+                              {line.waccUnitCostRials.toLocaleString()} ریال
+                            </td>
+                            <td className="p-2 text-center font-mono font-black text-emerald-600" dir="ltr">
+                              {line.batchTotalCostRials.toLocaleString()} ریال
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {currentBatchCartons.length === 0 ? (
               <div className="py-8 text-center text-xs font-bold text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
@@ -2719,12 +3205,20 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {filteredBoms.map(bom => {
-                      const totalMat = (bom.components || []).reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
-                      const labor = bom.directLaborPerKg || 0;
-                      const overhead = bom.factoryOverheadPerKg || 0;
-                      const grandTotal = totalMat + labor + overhead;
-                      const assignedItems = getBomAssignedItemsList(bom);
                       const conesVal = bom.defaultConesPerCarton ?? 6;
+                      const bomLiveEval = evaluateBomCostAndConsumption({
+                        bom,
+                        items: erpState.items || [],
+                        waccMap: itemWaccMap,
+                        batchNetWeightKg: 23.5,
+                        batchCartonsCount: 1,
+                        batchConesCount: conesVal
+                      });
+                      const totalMat = bomLiveEval.rawMaterialsCostPerKgRials;
+                      const labor = bomLiveEval.directLaborPerKgRials;
+                      const overhead = bomLiveEval.factoryOverheadPerKgRials;
+                      const grandTotal = bomLiveEval.cogmPerKgRials;
+                      const assignedItems = getBomAssignedItemsList(bom);
                       const cartonGramsVal = bom.cartonWeightGrams ?? 1450;
                       const coneGramsVal = bom.coneWeightGrams ?? 110;
 
@@ -3149,14 +3643,63 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   type="text"
                   value={itemForm.name || ''}
                   onChange={e => setItemForm({ ...itemForm, name: e.target.value })}
-                  placeholder="مثال: نخ تکسچره پلی‌استر DTY 150/48 NIM سفید"
+                  placeholder="مثال: نخ تکسچره پلی‌استر DTY 150/48 NIM سفید / نخ POY / دوک مقوایی"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 />
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">ماهیت / دسته‌بندی کالا</label>
+                  <select
+                    value={itemForm.category || 'FINISHED_YARN'}
+                    onChange={e => {
+                      const nextCat = e.target.value as ErpItem['category'];
+                      const nextUnit =
+                        nextCat === 'PACKAGING' && (itemForm.unit === 'کیلوگرم' || !itemForm.unit)
+                          ? 'عدد'
+                          : itemForm.unit || 'کیلوگرم';
+                      setItemForm({ ...itemForm, category: nextCat, unit: nextUnit });
+                    }}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  >
+                    <option value="FINISHED_YARN">محصول نهایی / نخ تولیدی</option>
+                    <option value="RAW_MATERIAL">ماده اولیه مصرفی (POY، رنگ، روغن و...)</option>
+                    <option value="PACKAGING">ملزومات بسته‌بندی (کارتن، دوک، نایلون و...)</option>
+                    <option value="WASTE">ضایعات تولید</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">واحد سنجش انبار و مصرف</label>
+                  <select
+                    value={itemForm.unit || 'کیلوگرم'}
+                    onChange={e => setItemForm({ ...itemForm, unit: e.target.value })}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
+                  >
+                    <option value="کیلوگرم">کیلوگرم (Kg)</option>
+                    <option value="عدد">عدد (Pcs)</option>
+                    <option value="ست">ست / بسته</option>
+                    <option value="گرم">گرم (g)</option>
+                    <option value="لیتر">لیتر (L)</option>
+                    <option value="متر">متر (m)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">نرخ پایه / میانگین اولیه (ریال)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={itemForm.unitCost ?? 0}
+                    onChange={e => setItemForm({ ...itemForm, unitCost: Math.max(0, parseFloat(e.target.value) || 0) })}
+                    placeholder="نرخ هر واحد (ریال)"
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="font-bold block mb-1">نمره نخ</label>
+                  <label className="font-bold block mb-1">نمره نخ / مشخصه فنی</label>
                   <input
                     type="text"
                     value={itemForm.yarnCount || ''}
@@ -3166,7 +3709,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   />
                 </div>
                 <div>
-                  <label className="font-bold block mb-1">رنگ نخ</label>
+                  <label className="font-bold block mb-1">رنگ / نوع</label>
                   <input
                     type="text"
                     value={itemForm.colorName || ''}
@@ -3274,7 +3817,65 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               <div>وزن ناخالص: <strong className="font-mono">{selectedVoucherForView.totalGrossWeightKg} Kg</strong></div>
               <div>وزن خالص کل: <strong className="font-mono text-emerald-600">{selectedVoucherForView.totalNetWeightKg} Kg</strong></div>
               <div>ثبت‌کننده: <strong>{selectedVoucherForView.operatorName}</strong></div>
+              {selectedVoucherForView.bomCode && (
+                <div>فرمول ساخت: <strong className="font-mono text-indigo-600">{selectedVoucherForView.bomCode}</strong></div>
+              )}
+              {selectedVoucherForView.consumptionDocNo && (
+                <div>حواله مصرف انبار تولید: <strong className="font-mono text-rose-600">#{selectedVoucherForView.consumptionDocNo}</strong></div>
+              )}
+              {selectedVoucherForView.unitCostPerKgRials ? (
+                <div>بهای تمام‌شده هر کیلو: <strong className="font-mono text-emerald-600">{selectedVoucherForView.unitCostPerKgRials.toLocaleString()} ریال</strong></div>
+              ) : null}
+              {selectedVoucherForView.totalProductionCostRials ? (
+                <div>بهای کل تولید بچ: <strong className="font-mono text-orange-600">{selectedVoucherForView.totalProductionCostRials.toLocaleString()} ریال</strong></div>
+              ) : null}
             </div>
+
+            {selectedVoucherForView.consumedMaterials && selectedVoucherForView.consumedMaterials.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-indigo-700 dark:text-indigo-300">
+                    اقلام و مواد اولیه کسرشده از «{PRODUCTION_FLOOR_WAREHOUSE_NAME}» طبق فرمول تولید (به نرخ میانگین موزون WACC):
+                  </h4>
+                  {selectedVoucherForView.consumptionDocNo && (
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-600 border border-rose-200 dark:border-rose-800">
+                      حواله مصرف انبار: #{selectedVoucherForView.consumptionDocNo}
+                    </span>
+                  )}
+                </div>
+                <div className="border border-indigo-200 dark:border-indigo-800 rounded-xl overflow-hidden">
+                  <table className="w-full text-right text-[11px]">
+                    <thead className="bg-indigo-50/70 dark:bg-indigo-950/40 font-bold text-slate-600 dark:text-slate-300">
+                      <tr>
+                        <th className="p-2">کد و نام کالای مصرفی</th>
+                        <th className="p-2 text-center">مقدار کسرشده</th>
+                        <th className="p-2 text-center">نرخ میانگین موزون (ریال)</th>
+                        <th className="p-2 text-center">جمع بهای مصرفی (ریال)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {selectedVoucherForView.consumedMaterials.map((cm, idx) => (
+                        <tr key={`${cm.itemId}_${idx}`}>
+                          <td className="p-2 font-bold">
+                            <span className="font-mono text-orange-600 ml-1">{cm.itemCode}</span>
+                            <span>{cm.itemName}</span>
+                          </td>
+                          <td className="p-2 text-center font-mono font-black text-rose-600" dir="ltr">
+                            -{cm.consumedQty.toLocaleString()} {cm.unit}
+                          </td>
+                          <td className="p-2 text-center font-mono" dir="ltr">
+                            {cm.waccUnitCostRials.toLocaleString()}
+                          </td>
+                          <td className="p-2 text-center font-mono font-black text-emerald-600" dir="ltr">
+                            {cm.totalCostRials.toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             <h4 className="text-xs font-black text-slate-700 dark:text-slate-300">فهرست کارتن‌های ثبت شده در این سند:</h4>
             <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
@@ -4146,64 +4747,213 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </div>
             </div>
 
-            {/* Components Table */}
-            <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <div className="flex items-center justify-between">
+            {/* Components Table (Selected strictly from defined system items + WACC costing) */}
+            <div className="space-y-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h4 className="text-xs font-black text-slate-800 dark:text-slate-100">
-                    اقلام و ملزومات مصرفی در ۱ کیلوگرم نخ نهایی خروجی:
+                    اجزای مصرفی فرمول تولید (انتخاب از کالاهای تعریف‌شده سیستم و کسر خودکار از «{PRODUCTION_FLOOR_WAREHOUSE_NAME}»):
                   </h4>
-                  <p className="text-[11px] text-slate-400">مقدار مصرف استاندارد و نرخ خرید هر قلم را مشخص نمایید</p>
+                  <p className="text-[11px] text-slate-500">
+                    هر قلم مصرفی را از کالاهای تعریف‌شده انتخاب کرده و مبنای کسر (وزن در ۱ کیلو، درصد از وزن خالص لیبل، تعداد در هر کارتن یا تعداد در هر دوک) را تعیین کنید.
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleAddComponentToEditingBom}
-                  className="px-3 py-1.5 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 border border-orange-200 dark:border-orange-800 text-xs font-black flex items-center gap-1 hover:bg-orange-100 cursor-pointer"
-                >
-                  <Plus size={14} />
-                  <span>افزودن قلم به فرمول</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => openCreateItemAt(selectedGroupId)}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-[11px] font-bold flex items-center gap-1 hover:bg-slate-200 cursor-pointer"
+                    title="تعریف کالای ماده اولیه یا بسته‌بندی جدید در درخت کالا"
+                  >
+                    <Plus size={13} />
+                    <span>تعریف کالای جدید در سیستم</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSyncEditingBomWithWarehouseWacc}
+                    className="px-2.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[11px] font-black flex items-center gap-1 hover:bg-indigo-100 cursor-pointer"
+                    title="بروزرسانی نرخ واحد کلیه اقلام از میانگین موزون لحظه‌ای انبار (WACC)"
+                  >
+                    <RefreshCw size={13} />
+                    <span>بروزرسانی نرخ از میانگین موزون انبار</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddComponentToEditingBom}
+                    className="px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black flex items-center gap-1 shadow-xs cursor-pointer"
+                  >
+                    <Plus size={14} />
+                    <span>افزودن جزء مصرفی به فرمول</span>
+                  </button>
+                </div>
               </div>
 
               <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
                 <table className="w-full text-right text-xs">
                   <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
                     <tr>
-                      <th className="p-2.5 text-center w-10">ردیف</th>
-                      <th className="p-2.5 w-44">دسته‌بندی قلم</th>
-                      <th className="p-2.5">شرح قلم مصرفی</th>
-                      <th className="p-2.5 text-center w-24">واحد</th>
-                      <th className="p-2.5 text-center w-28">مقدار در ۱ کیلو</th>
-                      <th className="p-2.5 text-center w-32">نرخ واحد (ریال)</th>
-                      <th className="p-2.5 text-center w-36">بهای جزء (ریال)</th>
-                      <th className="p-2.5 text-center w-12">حذف</th>
+                      <th className="p-2.5 text-center w-9">ردیف</th>
+                      <th className="p-2.5 min-w-[230px]">انتخاب کالای مصرفی (از کالاهای تعریف‌شده سیستم)</th>
+                      <th className="p-2.5 w-44">مبنای مصرف و کسر از انبار</th>
+                      <th className="p-2.5 text-center w-28">مقدار / درصد</th>
+                      <th className="p-2.5 text-center w-20">پرت جزء (%)</th>
+                      <th className="p-2.5 text-center w-20">واحد</th>
+                      <th className="p-2.5 text-center w-36">نرخ میانگین موزون (ریال)</th>
+                      <th className="p-2.5 text-center w-32">سهم در ۱ کیلو محصول</th>
+                      <th className="p-2.5 text-center w-10">حذف</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {(editingBom.components || []).map((comp, idx) => {
-                      const totalPart = Math.round((comp.qtyPerKgOutput || 0) * (comp.unitCostRials || 0));
+                      const matchedItem = resolveComponentDefinedItem(comp, erpState.items || []);
+                      const waccInfo = matchedItem ? itemWaccMap.get(matchedItem.id) : undefined;
+                      const basis: ErpBomConsumptionBasis = comp.consumptionBasis || 'PER_KG_NET';
+                      const conesPerCarton = Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6));
+                      const stdCartonNetKg = 23.5;
+                      const wasteFactor = 1 + Math.max(0, Number(comp.wastePercent || 0)) / 100;
+                      let effectivePer1Kg = Number(comp.qtyPerKgOutput || 0) * wasteFactor;
+                      if (basis === 'PERCENT_OF_NET') {
+                        const pct = Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput || 0) * 100);
+                        effectivePer1Kg = (pct / 100) * wasteFactor;
+                      } else if (basis === 'PER_CARTON') {
+                        effectivePer1Kg = (Number(comp.qtyPerKgOutput || 0) * wasteFactor) / stdCartonNetKg;
+                      } else if (basis === 'PER_CONE') {
+                        effectivePer1Kg = (Number(comp.qtyPerKgOutput || 0) * conesPerCarton * wasteFactor) / stdCartonNetKg;
+                      }
+                      const effectiveRate =
+                        waccInfo && waccInfo.costSource === 'WACC_WAREHOUSE' && waccInfo.waccUnitCostRials > 0
+                          ? waccInfo.waccUnitCostRials
+                          : Number(comp.unitCostRials || matchedItem?.unitCost || 0);
+                      const totalPartPerKg = Math.round(effectivePer1Kg * effectiveRate);
+
                       return (
-                        <tr key={comp.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
-                          <td className="p-2 text-center font-mono text-slate-400">{idx + 1}</td>
+                        <tr key={comp.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 align-top">
+                          <td className="p-2 text-center font-mono text-slate-400 pt-3">{idx + 1}</td>
+                          <td className="p-2 space-y-1">
+                            <select
+                              value={matchedItem?.id || comp.itemId || ''}
+                              onChange={e => handleSelectDefinedItemForComponent(idx, e.target.value)}
+                              className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[11px]"
+                            >
+                              <option value="">-- انتخاب کالا از فهرست کالاهای تعریف‌شده --</option>
+                              {bomComponentCandidateItems.map(itm => {
+                                const catLabel =
+                                  itm.category === 'RAW_MATERIAL'
+                                    ? 'ماده اولیه'
+                                    : itm.category === 'PACKAGING'
+                                    ? 'بسته‌بندی'
+                                    : itm.category === 'WASTE'
+                                    ? 'ضایعات'
+                                    : 'نخ/کالا';
+                                const info = itemWaccMap.get(itm.id);
+                                const prdStock = info?.productionWhStockQty ?? 0;
+                                return (
+                                  <option key={itm.id} value={itm.id}>
+                                    [{catLabel}] {itm.code} — {itm.name} ({itm.unit || 'کیلوگرم'} | موجودی انبار تولید: {prdStock})
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            {matchedItem ? (
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold">
+                                  کالای متصل: {matchedItem.code}
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-mono">
+                                  موجودی انبار تولید: {(waccInfo?.productionWhStockQty ?? 0).toLocaleString()} {matchedItem.unit}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={comp.itemName}
+                                  onChange={e => handleUpdateComponentInEditingBom(idx, { itemName: e.target.value })}
+                                  placeholder="نام قلم یا انتخاب از لیست بالا..."
+                                  className="w-full px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-950/20 text-[11px] font-bold"
+                                />
+                              </div>
+                            )}
+                          </td>
                           <td className="p-2">
                             <select
-                              value={comp.category}
-                              onChange={e => handleUpdateComponentInEditingBom(idx, { category: e.target.value as any })}
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[11px]"
+                              value={basis}
+                              onChange={e => {
+                                const nextBasis = e.target.value as ErpBomConsumptionBasis;
+                                if (nextBasis === 'PERCENT_OF_NET') {
+                                  const pct = comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 1) * 100).toFixed(2));
+                                  handleUpdateComponentInEditingBom(idx, {
+                                    consumptionBasis: nextBasis,
+                                    consumptionPercent: pct,
+                                    qtyPerKgOutput: Number((pct / 100).toFixed(6))
+                                  });
+                                } else if (nextBasis === 'PER_CARTON' || nextBasis === 'PER_CONE') {
+                                  handleUpdateComponentInEditingBom(idx, {
+                                    consumptionBasis: nextBasis,
+                                    qtyPerKgOutput: comp.qtyPerKgOutput && comp.qtyPerKgOutput >= 1 ? comp.qtyPerKgOutput : 1,
+                                    unit: matchedItem?.unit || 'عدد'
+                                  });
+                                } else {
+                                  handleUpdateComponentInEditingBom(idx, {
+                                    consumptionBasis: nextBasis
+                                  });
+                                }
+                              }}
+                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[11px]"
                             >
-                              <option value="RAW_MATERIAL">نخ خام / POY</option>
-                              <option value="PACKAGING">ملزومات بسته‌بندی</option>
-                              <option value="CHEMICAL">روغن و شیمیایی</option>
-                              <option value="AUXILIARY">سایر اقلام کمکی</option>
+                              <option value="PER_KG_NET">ضریب در ۱ کیلو خالص</option>
+                              <option value="PERCENT_OF_NET">درصد از وزن خالص لیبل (%)</option>
+                              <option value="PER_CARTON">تعداد در هر کارتن تولیدی</option>
+                              <option value="PER_CONE">تعداد در هر دوک داخل کارتن</option>
                             </select>
                           </td>
                           <td className="p-2">
+                            {basis === 'PERCENT_OF_NET' ? (
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  value={comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 0) * 100).toFixed(2))}
+                                  onChange={e => {
+                                    const pct = parseFloat(e.target.value) || 0;
+                                    handleUpdateComponentInEditingBom(idx, {
+                                      consumptionPercent: pct,
+                                      qtyPerKgOutput: Number((pct / 100).toFixed(6))
+                                    });
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50/40 dark:bg-indigo-950/20 text-center font-mono font-black text-indigo-700 dark:text-indigo-300"
+                                />
+                                <span className="block text-[9px] text-center text-slate-400 mt-0.5 font-mono">
+                                  ={(Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput || 0) * 100) / 100).toFixed(3)} در کیلو
+                                </span>
+                              </div>
+                            ) : (
+                              <div>
+                                <input
+                                  type="number"
+                                  step={basis === 'PER_KG_NET' ? '0.001' : '1'}
+                                  value={comp.qtyPerKgOutput}
+                                  onChange={e => handleUpdateComponentInEditingBom(idx, { qtyPerKgOutput: parseFloat(e.target.value) || 0 })}
+                                  className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
+                                />
+                                <span className="block text-[9px] text-center text-slate-400 mt-0.5">
+                                  {basis === 'PER_CARTON'
+                                    ? 'در هر کارتن'
+                                    : basis === 'PER_CONE'
+                                    ? `در هر دوک (×${conesPerCarton})`
+                                    : 'در هر ۱ کیلو خالص'}
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2">
                             <input
-                              type="text"
-                              value={comp.itemName}
-                              onChange={e => handleUpdateComponentInEditingBom(idx, { itemName: e.target.value })}
-                              placeholder="مثال: نخ POY پلی‌استر سفید"
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold"
+                              type="number"
+                              step="0.1"
+                              min={0}
+                              value={comp.wastePercent ?? 0}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { wastePercent: Math.max(0, parseFloat(e.target.value) || 0) })}
+                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold text-amber-600"
                             />
                           </td>
                           <td className="p-2">
@@ -4212,16 +4962,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                               value={comp.unit}
                               onChange={e => handleUpdateComponentInEditingBom(idx, { unit: e.target.value })}
                               placeholder="کیلوگرم"
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-bold text-[11px]"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              step="0.001"
-                              value={comp.qtyPerKgOutput}
-                              onChange={e => handleUpdateComponentInEditingBom(idx, { qtyPerKgOutput: parseFloat(e.target.value) || 0 })}
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
+                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-bold text-[11px]"
                             />
                           </td>
                           <td className="p-2">
@@ -4229,17 +4970,24 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                               type="number"
                               value={comp.unitCostRials || 0}
                               onChange={e => handleUpdateComponentInEditingBom(idx, { unitCostRials: parseFloat(e.target.value) || 0 })}
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
+                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
                             />
+                            {waccInfo && (
+                              <span className="block text-[9px] text-center mt-0.5 font-bold text-indigo-600 dark:text-indigo-400">
+                                {waccInfo.costSource === 'WACC_WAREHOUSE'
+                                  ? `میانگین موزون انبار: ${waccInfo.waccUnitCostRials.toLocaleString()}`
+                                  : `نرخ پایه کالا: ${waccInfo.waccUnitCostRials.toLocaleString()}`}
+                              </span>
+                            )}
                           </td>
-                          <td className="p-2 text-center font-mono font-black text-slate-700 dark:text-slate-200" dir="ltr">
-                            {totalPart.toLocaleString()}
+                          <td className="p-2 text-center font-mono font-black text-slate-700 dark:text-slate-200 pt-3" dir="ltr">
+                            {totalPartPerKg.toLocaleString()}
                           </td>
-                          <td className="p-2 text-center">
+                          <td className="p-2 text-center pt-2.5">
                             <button
                               type="button"
                               onClick={() => handleRemoveComponentFromEditingBom(idx)}
-                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 cursor-pointer"
                             >
                               <Trash2 size={14} />
                             </button>
@@ -4249,8 +4997,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     })}
                     {(editingBom.components || []).length === 0 && (
                       <tr>
-                        <td colSpan={8} className="p-6 text-center text-slate-400 font-bold">
-                          هنوز هیچ قلمی به این فرمول افزوده نشده است. دکمه «افزودن قلم به فرمول» را بزنید.
+                        <td colSpan={9} className="p-6 text-center text-slate-400 font-bold">
+                          هنوز هیچ جزء مصرفی به این فرمول افزوده نشده است. دکمه «افزودن جزء مصرفی به فرمول» را بزنید.
                         </td>
                       </tr>
                     )}
@@ -4259,18 +5007,25 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </div>
             </div>
 
-            {/* Live Cost Calculation Engine Bar */}
+            {/* Live Cost Calculation Engine Bar (Accounting Standard WACC + Direct Labor + Factory Overhead = COGM) */}
             {(() => {
-              const comps = editingBom.components || [];
-              const totalMaterialsCost = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
-              const labor = Number(editingBom.directLaborPerKg || 0);
-              const overhead = Number(editingBom.factoryOverheadPerKg || 0);
-              const totalCostPerKg = totalMaterialsCost + labor + overhead;
+              const liveModalEval = evaluateBomCostAndConsumption({
+                bom: editingBom,
+                items: erpState.items || [],
+                waccMap: itemWaccMap,
+                batchNetWeightKg: 23.5,
+                batchCartonsCount: 1,
+                batchConesCount: Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6))
+              });
+              const totalMaterialsCost = liveModalEval.rawMaterialsCostPerKgRials;
+              const labor = liveModalEval.directLaborPerKgRials;
+              const overhead = liveModalEval.factoryOverheadPerKgRials;
+              const totalCostPerKg = liveModalEval.cogmPerKgRials;
 
               return (
                 <div className="bg-gradient-to-l from-slate-900 via-indigo-950 to-slate-900 text-white p-4 rounded-2xl border border-indigo-500/20 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <span className="text-slate-400 block text-[10px]">مجموع بهای مواد اولیه:</span>
+                    <span className="text-slate-400 block text-[10px]">بهای مواد مصرفی هر کیلو (میانگین موزون WACC):</span>
                     <strong className="font-mono font-black text-sm text-amber-300" dir="ltr">{totalMaterialsCost.toLocaleString()} ریال</strong>
                   </div>
                   <div>
@@ -4282,7 +5037,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <strong className="font-mono font-black text-sm text-purple-300" dir="ltr">{overhead.toLocaleString()} ریال</strong>
                   </div>
                   <div className="bg-emerald-500/20 p-2 rounded-xl border border-emerald-400/30">
-                    <span className="text-emerald-300 block text-[10px] font-bold">بهای تمام‌شده کل هر کیلو:</span>
+                    <span className="text-emerald-300 block text-[10px] font-bold">بهای تمام‌شده ۱ کیلو محصول نهایی (COGM):</span>
                     <strong className="font-mono font-black text-base text-emerald-400" dir="ltr">{totalCostPerKg.toLocaleString()} ریال</strong>
                   </div>
                 </div>
@@ -4331,7 +5086,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       {/* --------------------------------------------------------------------------------- */}
       {showSimulationModal && simulationBom && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-3xl w-full p-6 shadow-2xl space-y-4 my-8">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-4xl w-full p-6 shadow-2xl space-y-4 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 flex items-center justify-center border border-indigo-200 dark:border-indigo-800">
@@ -4339,9 +5094,9 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 </div>
                 <div>
                   <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
-                    شبیه‌سازی سفارش تولید و محاسبه مواد مورد نیاز (BOM Calculator)
+                    شبیه‌سازی سفارش تولید، محاسبه مواد مصرفی و بهای تمام‌شده (میانگین موزون WACC)
                   </h3>
-                  <p className="text-xs text-slate-400">محاسبه دقیق اقلام مصرفی، بهای تمام‌شده و ضایعات بر اساس وزن تولید هدف</p>
+                  <p className="text-xs text-slate-400">محاسبه دقیق اقلام کسرشونده از انبار تولید بر اساس وزن، درصد، کارتن و دوک</p>
                 </div>
               </div>
               <button
@@ -4402,18 +5157,25 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             {/* Simulation Results Printable Card */}
             <div id="bom-simulation-ticket" className="space-y-4">
               {(() => {
-                const comps = simulationBom.components || [];
                 const simAssignedItems = getBomAssignedItemsList(simulationBom);
                 const batchKg = simulationBatchQtyKg;
-                const totalMatPerKg = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
-                const laborPerKg = simulationBom.directLaborPerKg || 0;
-                const overheadPerKg = simulationBom.factoryOverheadPerKg || 0;
-                const costPerKg = totalMatPerKg + laborPerKg + overheadPerKg;
+                const estCartons = Math.max(1, Math.round(batchKg / 23.5));
+                const conesPerCarton = Math.max(1, Number(simulationBom.defaultConesPerCarton ?? 6));
+                const estCones = estCartons * conesPerCarton;
+                const simEval = evaluateBomCostAndConsumption({
+                  bom: simulationBom,
+                  items: erpState.items || [],
+                  waccMap: itemWaccMap,
+                  batchNetWeightKg: batchKg,
+                  batchCartonsCount: estCartons,
+                  batchConesCount: estCones
+                });
 
-                const batchMaterialsCost = totalMatPerKg * batchKg;
-                const batchLaborCost = laborPerKg * batchKg;
-                const batchOverheadCost = overheadPerKg * batchKg;
-                const batchTotalCost = costPerKg * batchKg;
+                const costPerKg = simEval.cogmPerKgRials;
+                const batchMaterialsCost = simEval.batchRawMaterialsCostRials;
+                const batchLaborCost = simEval.batchDirectLaborCostRials;
+                const batchOverheadCost = simEval.batchFactoryOverheadCostRials;
+                const batchTotalCost = simEval.batchTotalCogmRials;
 
                 return (
                   <>
@@ -4430,7 +5192,9 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                       <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-800">
                         <span className="text-slate-400 block text-[10px]">تولید نخ خالص هدف:</span>
-                        <strong className="font-mono font-black text-sm text-slate-800 dark:text-slate-100" dir="ltr">{batchKg.toLocaleString()} Kg</strong>
+                        <strong className="font-mono font-black text-sm text-slate-800 dark:text-slate-100" dir="ltr">
+                          {batchKg.toLocaleString()} Kg (~{estCartons} کارتن)
+                        </strong>
                       </div>
                       <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30">
                         <span className="text-amber-700 dark:text-amber-400 block text-[10px]">ضایعات استاندارد:</span>
@@ -4439,7 +5203,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         </strong>
                       </div>
                       <div className="p-3 rounded-2xl bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/30">
-                        <span className="text-blue-700 dark:text-blue-400 block text-[10px]">بهای تمام‌شده هر کیلو:</span>
+                        <span className="text-blue-700 dark:text-blue-400 block text-[10px]">بهای تمام‌شده هر کیلو (COGM):</span>
                         <strong className="font-mono font-black text-sm text-blue-700 dark:text-blue-300" dir="ltr">{costPerKg.toLocaleString()} ریال</strong>
                       </div>
                       <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
@@ -4454,40 +5218,46 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
                           <tr>
                             <th className="p-2.5 text-center">ردیف</th>
-                            <th className="p-2.5">قلم مصرفی</th>
-                            <th className="p-2.5 text-center">دسته‌بندی</th>
-                            <th className="p-2.5 text-center">سهم در ۱ کیلو</th>
+                            <th className="p-2.5">کالای مصرفی</th>
+                            <th className="p-2.5 text-center">مبنای مصرف</th>
                             <th className="p-2.5 text-center font-black text-indigo-600">کل مقدار مورد نیاز در بچ</th>
-                            <th className="p-2.5 text-center">نرخ واحد (ریال)</th>
+                            <th className="p-2.5 text-center">موجودی انبار تولید</th>
+                            <th className="p-2.5 text-center">نرخ میانگین موزون (ریال)</th>
                             <th className="p-2.5 text-center font-black text-emerald-600">مجموع هزینه قلم (ریال)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {comps.map((comp, idx) => {
-                            const reqQty = Number(((comp.qtyPerKgOutput || 0) * batchKg).toFixed(3));
-                            const reqCost = Math.round(reqQty * (comp.unitCostRials || 0));
-
+                          {simEval.components.map((line, idx) => {
+                            const basisLabel =
+                              line.consumptionBasis === 'PERCENT_OF_NET'
+                                ? `${line.inputQtyOrPercent}% وزن خالص`
+                                : line.consumptionBasis === 'PER_CARTON'
+                                ? `${line.inputQtyOrPercent} در هر کارتن`
+                                : line.consumptionBasis === 'PER_CONE'
+                                ? `${line.inputQtyOrPercent} در هر دوک`
+                                : `${line.inputQtyOrPercent} در هر کیلو`;
                             return (
-                              <tr key={comp.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                              <tr key={`${line.itemId}_${idx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                                 <td className="p-2.5 text-center font-mono text-slate-400">{idx + 1}</td>
-                                <td className="p-2.5 font-bold text-slate-800 dark:text-slate-200">{comp.itemName}</td>
-                                <td className="p-2.5 text-center text-[10px] text-slate-500">
-                                  {comp.category === 'RAW_MATERIAL' && 'مواد اولیه'}
-                                  {comp.category === 'PACKAGING' && 'ملزومات بسته‌بندی'}
-                                  {comp.category === 'CHEMICAL' && 'روغن و مواد شیمیایی'}
-                                  {comp.category === 'AUXILIARY' && 'اقلام کمکی'}
+                                <td className="p-2.5 font-bold text-slate-800 dark:text-slate-200">
+                                  <span className="font-mono text-orange-600 ml-1">{line.itemCode}</span>
+                                  <span>{line.itemName}</span>
                                 </td>
-                                <td className="p-2.5 text-center font-mono" dir="ltr">
-                                  {comp.qtyPerKgOutput} {comp.unit}
+                                <td className="p-2.5 text-center text-[11px] text-slate-500">
+                                  {basisLabel}
+                                  {line.wastePercent > 0 ? ` (+${line.wastePercent}% پرت)` : ''}
                                 </td>
                                 <td className="p-2.5 text-center font-mono font-black text-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20" dir="ltr">
-                                  {reqQty.toLocaleString()} {comp.unit}
+                                  {line.batchConsumedQty.toLocaleString()} {line.unit}
+                                </td>
+                                <td className="p-2.5 text-center font-mono" dir="ltr">
+                                  {line.productionWhStockQty.toLocaleString()} {line.unit}
                                 </td>
                                 <td className="p-2.5 text-center font-mono text-slate-500" dir="ltr">
-                                  {(comp.unitCostRials || 0).toLocaleString()}
+                                  {line.waccUnitCostRials.toLocaleString()}
                                 </td>
                                 <td className="p-2.5 text-center font-mono font-bold text-slate-800 dark:text-slate-200" dir="ltr">
-                                  {reqCost.toLocaleString()}
+                                  {line.batchTotalCostRials.toLocaleString()}
                                 </td>
                               </tr>
                             );
@@ -4495,7 +5265,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         </tbody>
                         <tfoot className="bg-slate-50 dark:bg-slate-800 font-bold border-t border-slate-200 dark:border-slate-800">
                           <tr>
-                            <td colSpan={6} className="p-2.5 text-left font-black">مجموع بهای کل مواد اولیه بچ:</td>
+                            <td colSpan={6} className="p-2.5 text-left font-black">مجموع بهای کل مواد مصرفی بچ (به نرخ میانگین موزون):</td>
                             <td className="p-2.5 text-center font-mono font-black text-emerald-600" dir="ltr">
                               {batchMaterialsCost.toLocaleString()} ریال
                             </td>
@@ -4513,7 +5283,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                             </td>
                           </tr>
                           <tr className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-black">
-                            <td colSpan={6} className="p-3 text-left text-sm">جمع کل برآورد بهای تمام‌شده تولید این سفارش:</td>
+                            <td colSpan={6} className="p-3 text-left text-sm">جمع کل بهای تمام‌شده تولید این سفارش (COGM):</td>
                             <td className="p-3 text-center font-mono text-base" dir="ltr">
                               {batchTotalCost.toLocaleString()} ریال
                             </td>
