@@ -4419,7 +4419,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       {/* --------------------------------------------------------------------------------- */}
       {showAddEditBomModal && editingBom && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-6xl w-full p-4 sm:p-6 shadow-2xl space-y-4 my-6">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-[96vw] xl:max-w-[1440px] w-full p-4 sm:p-6 shadow-2xl space-y-4 my-4">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 flex items-center justify-center border border-orange-200 dark:border-orange-800">
@@ -4799,7 +4799,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
 
               <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden bg-slate-50/40 dark:bg-slate-900/40">
                 {/* Desktop Column Header Bar */}
-                <div className="hidden lg:grid lg:grid-cols-[34px_minmax(235px,2.2fr)_minmax(175px,1.35fr)_minmax(115px,0.95fr)_minmax(95px,0.75fr)_minmax(90px,0.7fr)_minmax(160px,1.3fr)_minmax(120px,0.95fr)_38px] gap-2.5 px-3 py-2.5 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-black text-slate-700 dark:text-slate-300 items-center">
+                <div className="hidden lg:grid lg:grid-cols-[36px_minmax(0,2.5fr)_minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,1.05fr)_48px] gap-2.5 px-3 py-2.5 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-black text-slate-700 dark:text-slate-300 items-center">
                   <div className="text-center">ردیف</div>
                   <div>انتخاب کالای مصرفی (از کالاهای تعریف‌شده سیستم)</div>
                   <div>مبنای مصرف و کسر از انبار</div>
@@ -4838,10 +4838,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     return (
                       <div
                         key={comp.id || idx}
-                        className="p-3 bg-white dark:bg-slate-900 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[34px_minmax(235px,2.2fr)_minmax(175px,1.35fr)_minmax(115px,0.95fr)_minmax(95px,0.75fr)_minmax(90px,0.7fr)_minmax(160px,1.3fr)_minmax(120px,0.95fr)_38px] gap-2.5 items-start"
+                        className="p-3 bg-white dark:bg-slate-900 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[36px_minmax(0,2.5fr)_minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,1.05fr)_48px] gap-2.5 items-start"
                       >
                         {/* 1. Row Index */}
-                        <div className="flex items-center justify-between lg:justify-center sm:col-span-2 lg:col-span-1 pt-0 lg:pt-1.5">
+                        <div className="flex items-center justify-between lg:justify-center sm:col-span-2 lg:col-span-1 pt-0 lg:pt-1">
                           <span className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono font-black text-xs text-slate-700 dark:text-slate-200 flex items-center justify-center">
                             {idx + 1}
                           </span>
@@ -5060,11 +5060,11 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         </div>
 
                         {/* 9. Delete Button (Desktop) */}
-                        <div className="hidden lg:flex items-center justify-center pt-1">
+                        <div className="hidden lg:flex items-center justify-center pt-0.5">
                           <button
                             type="button"
                             onClick={() => handleRemoveComponentFromEditingBom(idx)}
-                            className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 cursor-pointer transition-colors"
+                            className="w-9 h-9 rounded-xl flex items-center justify-center bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 hover:bg-rose-600 hover:text-white cursor-pointer transition-colors shrink-0"
                             title="حذف این جزء از فرمول"
                           >
                             <Trash2 size={15} />
