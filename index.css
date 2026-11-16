@@ -1061,6 +1061,45 @@ td {
   border-color: var(--glass-border) !important;
 }
 
+/* Preserve compact padding for dense enterprise data tables & editable form tables */
+th.p-1, td.p-1,
+th.p-1\.5, td.p-1\.5,
+th.p-2, td.p-2,
+th.p-2\.5, td.p-2\.5,
+th.px-1, td.px-1,
+th.px-1\.5, td.px-1\.5,
+th.px-2, td.px-2,
+th.px-2\.5, td.px-2\.5,
+td:has(input),
+td:has(select) {
+  padding: 0.45rem 0.5rem !important;
+}
+
+/* Ensure inputs & selects inside table cells never get crushed into unreadable pills/circles */
+td input:not([type="checkbox"]):not([type="radio"]),
+td select,
+.erp-compact-input {
+  border-radius: 10px !important;
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
+  min-height: 36px;
+}
+
+/* Remove native number spinner arrows inside table cells & compact numeric inputs so all digits remain 100% visible */
+td input[type="number"]::-webkit-outer-spin-button,
+td input[type="number"]::-webkit-inner-spin-button,
+input.no-spinner::-webkit-outer-spin-button,
+input.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+td input[type="number"],
+input.no-spinner {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
 tfoot td,
 tfoot th {
   color: inherit !important;
@@ -1970,11 +2009,18 @@ html.theme-claymorphism button:not(.no-clay):active {
 html.theme-claymorphism input,
 html.theme-claymorphism select,
 html.theme-claymorphism textarea {
-  background-color: #eef2f6 !important;
-  border-radius: 16px !important;
-  border: 1.5px solid rgba(255, 255, 255, 0.9) !important;
-  box-shadow: inset 4px 4px 8px rgba(163, 177, 198, 0.45), inset -4px -4px 8px rgba(255, 255, 255, 0.85) !important;
-  color: #1e293b !important;
+  background-color: #ffffff !important;
+  border-radius: 12px !important;
+  border: 1.5px solid #cbd5e1 !important;
+  box-shadow: inset 2px 2px 5px rgba(148, 163, 184, 0.25), 0 1px 2px rgba(255, 255, 255, 0.9) !important;
+  color: #0f172a !important;
+}
+html.theme-claymorphism td input:not([type="checkbox"]):not([type="radio"]),
+html.theme-claymorphism td select,
+html.theme-claymorphism .erp-compact-input {
+  border-radius: 10px !important;
+  padding-left: 0.5rem !important;
+  padding-right: 0.5rem !important;
 }
 
 /* 4. Skeuomorphism (Realistic Tactile Beveled Style) */

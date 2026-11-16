@@ -4418,8 +4418,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       {/* MODAL: ADD / EDIT BOM (FORMULA & COST ENGINE) */}
       {/* --------------------------------------------------------------------------------- */}
       {showAddEditBomModal && editingBom && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-4xl w-full p-6 shadow-2xl space-y-4 my-8">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-6xl w-full p-4 sm:p-6 shadow-2xl space-y-4 my-6">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 flex items-center justify-center border border-orange-200 dark:border-orange-800">
@@ -4444,15 +4444,16 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             </div>
 
             {/* Basic Info Fields */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
               <div>
                 <label className="font-bold block mb-1">کد فرمول *</label>
                 <input
                   type="text"
+                  dir="ltr"
                   value={editingBom.code || ''}
                   onChange={e => setEditingBom({ ...editingBom, code: e.target.value })}
-                  placeholder="مثال: BOM-001"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                  placeholder="BOM-001"
+                  className="erp-compact-input w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-black text-center"
                 />
               </div>
 
@@ -4463,7 +4464,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   value={editingBom.title || ''}
                   onChange={e => setEditingBom({ ...editingBom, title: e.target.value })}
                   placeholder="مثال: فرمول استاندارد نخ تکسچره DTY 150/48"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  className="erp-compact-input w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 />
               </div>
 
@@ -4472,14 +4473,15 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 <div className="flex gap-1.5">
                   <input
                     type="text"
+                    dir="ltr"
                     value={editingBom.version || 'V1.0'}
                     onChange={e => setEditingBom({ ...editingBom, version: e.target.value })}
-                    className="w-1/2 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
+                    className="erp-compact-input w-1/2 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
                   />
                   <select
                     value={editingBom.status || 'ACTIVE'}
                     onChange={e => setEditingBom({ ...editingBom, status: e.target.value as any })}
-                    className="w-1/2 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
+                    className="erp-compact-input w-1/2 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
                   >
                     <option value="ACTIVE">فعال</option>
                     <option value="DRAFT">پیش‌نویس</option>
@@ -4489,34 +4491,38 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </div>
 
               <div>
-                <label className="font-bold block mb-1">ضایعات استاندارد (%)</label>
+                <label className="font-bold block mb-1">ضایعات استاندارد کل (%)</label>
                 <input
                   type="number"
                   step="0.1"
+                  dir="ltr"
                   value={editingBom.wastePercent ?? 2.5}
                   onChange={e => setEditingBom({ ...editingBom, wastePercent: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-amber-600"
+                  className="no-spinner erp-compact-input w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-black text-center text-amber-600"
                 />
               </div>
 
-              <div className="sm:col-span-2">
-                <label className="font-bold block mb-1">دستمزد مستقیم هر کیلو (ریال)</label>
-                <input
-                  type="number"
-                  value={editingBom.directLaborPerKg ?? 0}
-                  onChange={e => setEditingBom({ ...editingBom, directLaborPerKg: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold block mb-1">سربار کارخانه هر کیلو (ریال)</label>
-                <input
-                  type="number"
-                  value={editingBom.factoryOverheadPerKg ?? 0}
-                  onChange={e => setEditingBom({ ...editingBom, factoryOverheadPerKg: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
+              <div className="grid grid-cols-2 gap-2 sm:col-span-2 lg:col-span-1">
+                <div>
+                  <label className="font-bold block mb-1 truncate" title="دستمزد مستقیم هر کیلو (ریال)">دستمزد/کیلو (ریال)</label>
+                  <input
+                    type="number"
+                    dir="ltr"
+                    value={editingBom.directLaborPerKg ?? 0}
+                    onChange={e => setEditingBom({ ...editingBom, directLaborPerKg: parseFloat(e.target.value) || 0 })}
+                    className="no-spinner erp-compact-input w-full px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-black text-center"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1 truncate" title="سربار کارخانه هر کیلو (ریال)">سربار/کیلو (ریال)</label>
+                  <input
+                    type="number"
+                    dir="ltr"
+                    value={editingBom.factoryOverheadPerKg ?? 0}
+                    onChange={e => setEditingBom({ ...editingBom, factoryOverheadPerKg: parseFloat(e.target.value) || 0 })}
+                    className="no-spinner erp-compact-input w-full px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-black text-center"
+                  />
+                </div>
               </div>
             </div>
 
@@ -4614,7 +4620,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                             value={bomModalItemSearch}
                             onChange={e => setBomModalItemSearch(e.target.value)}
                             placeholder="جستجوی کالا برای تخصیص (کد، نام، نمره، رنگ)..."
-                            className="w-full pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                            className="erp-compact-input w-full pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
                           />
                         </div>
                         <button
@@ -4675,7 +4681,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       value={editingBom.finishedItemName || ''}
                       onChange={e => setEditingBom({ ...editingBom, finishedItemName: e.target.value })}
                       placeholder="نام محصول تولیدی (مثال: نخ DTY 150/48)"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold"
+                      className="erp-compact-input w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold"
                     />
                   )}
                 </div>
@@ -4708,9 +4714,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <input
                     type="number"
                     min={1}
+                    dir="ltr"
                     value={editingBom.defaultConesPerCarton ?? 6}
                     onChange={e => setEditingBom({ ...editingBom, defaultConesPerCarton: Math.max(1, parseInt(e.target.value) || 1) })}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold text-center"
+                    className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-black text-sm text-center"
                   />
                 </div>
                 <div>
@@ -4718,9 +4725,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <input
                     type="number"
                     min={0}
+                    dir="ltr"
                     value={editingBom.cartonWeightGrams ?? 1450}
                     onChange={e => setEditingBom({ ...editingBom, cartonWeightGrams: Math.max(0, parseInt(e.target.value) || 0) })}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-center"
+                    className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-black text-sm text-center"
                   />
                 </div>
                 <div>
@@ -4728,9 +4736,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <input
                     type="number"
                     min={0}
+                    dir="ltr"
                     value={editingBom.coneWeightGrams ?? 110}
                     onChange={e => setEditingBom({ ...editingBom, coneWeightGrams: Math.max(0, parseInt(e.target.value) || 0) })}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-center"
+                    className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-black text-sm text-center"
                   />
                 </div>
                 <label className="flex items-center gap-2 p-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/40 cursor-pointer h-[38px]">
@@ -4747,8 +4756,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               </div>
             </div>
 
-            {/* Components Table (Selected strictly from defined system items + WACC costing) */}
-            <div className="space-y-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {/* Components Section (Spacious Responsive Grid Row Layout - 100% Visible Digits & Labels) */}
+            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h4 className="text-xs font-black text-slate-800 dark:text-slate-100">
@@ -4788,222 +4797,289 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 </div>
               </div>
 
-              <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 font-black text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
-                    <tr>
-                      <th className="p-2.5 text-center w-9">ردیف</th>
-                      <th className="p-2.5 min-w-[230px]">انتخاب کالای مصرفی (از کالاهای تعریف‌شده سیستم)</th>
-                      <th className="p-2.5 w-44">مبنای مصرف و کسر از انبار</th>
-                      <th className="p-2.5 text-center w-28">مقدار / درصد</th>
-                      <th className="p-2.5 text-center w-20">پرت جزء (%)</th>
-                      <th className="p-2.5 text-center w-20">واحد</th>
-                      <th className="p-2.5 text-center w-36">نرخ میانگین موزون (ریال)</th>
-                      <th className="p-2.5 text-center w-32">سهم در ۱ کیلو محصول</th>
-                      <th className="p-2.5 text-center w-10">حذف</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {(editingBom.components || []).map((comp, idx) => {
-                      const matchedItem = resolveComponentDefinedItem(comp, erpState.items || []);
-                      const waccInfo = matchedItem ? itemWaccMap.get(matchedItem.id) : undefined;
-                      const basis: ErpBomConsumptionBasis = comp.consumptionBasis || 'PER_KG_NET';
-                      const conesPerCarton = Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6));
-                      const stdCartonNetKg = 23.5;
-                      const wasteFactor = 1 + Math.max(0, Number(comp.wastePercent || 0)) / 100;
-                      let effectivePer1Kg = Number(comp.qtyPerKgOutput || 0) * wasteFactor;
-                      if (basis === 'PERCENT_OF_NET') {
-                        const pct = Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput || 0) * 100);
-                        effectivePer1Kg = (pct / 100) * wasteFactor;
-                      } else if (basis === 'PER_CARTON') {
-                        effectivePer1Kg = (Number(comp.qtyPerKgOutput || 0) * wasteFactor) / stdCartonNetKg;
-                      } else if (basis === 'PER_CONE') {
-                        effectivePer1Kg = (Number(comp.qtyPerKgOutput || 0) * conesPerCarton * wasteFactor) / stdCartonNetKg;
-                      }
-                      const effectiveRate =
-                        waccInfo && waccInfo.costSource === 'WACC_WAREHOUSE' && waccInfo.waccUnitCostRials > 0
-                          ? waccInfo.waccUnitCostRials
-                          : Number(comp.unitCostRials || matchedItem?.unitCost || 0);
-                      const totalPartPerKg = Math.round(effectivePer1Kg * effectiveRate);
+              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden bg-slate-50/40 dark:bg-slate-900/40">
+                {/* Desktop Column Header Bar */}
+                <div className="hidden lg:grid lg:grid-cols-[34px_minmax(235px,2.2fr)_minmax(175px,1.35fr)_minmax(115px,0.95fr)_minmax(95px,0.75fr)_minmax(90px,0.7fr)_minmax(160px,1.3fr)_minmax(120px,0.95fr)_38px] gap-2.5 px-3 py-2.5 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-black text-slate-700 dark:text-slate-300 items-center">
+                  <div className="text-center">ردیف</div>
+                  <div>انتخاب کالای مصرفی (از کالاهای تعریف‌شده سیستم)</div>
+                  <div>مبنای مصرف و کسر از انبار</div>
+                  <div className="text-center">مقدار / درصد</div>
+                  <div className="text-center">پرت جزء (%)</div>
+                  <div className="text-center">واحد</div>
+                  <div className="text-center">نرخ میانگین موزون (ریال)</div>
+                  <div className="text-center">سهم در ۱ کیلو محصول</div>
+                  <div className="text-center">حذف</div>
+                </div>
 
-                      return (
-                        <tr key={comp.id || idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 align-top">
-                          <td className="p-2 text-center font-mono text-slate-400 pt-3">{idx + 1}</td>
-                          <td className="p-2 space-y-1">
-                            <select
-                              value={matchedItem?.id || comp.itemId || ''}
-                              onChange={e => handleSelectDefinedItemForComponent(idx, e.target.value)}
-                              className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[11px]"
-                            >
-                              <option value="">-- انتخاب کالا از فهرست کالاهای تعریف‌شده --</option>
-                              {bomComponentCandidateItems.map(itm => {
-                                const catLabel =
-                                  itm.category === 'RAW_MATERIAL'
-                                    ? 'ماده اولیه'
-                                    : itm.category === 'PACKAGING'
-                                    ? 'بسته‌بندی'
-                                    : itm.category === 'WASTE'
-                                    ? 'ضایعات'
-                                    : 'نخ/کالا';
-                                const info = itemWaccMap.get(itm.id);
-                                const prdStock = info?.productionWhStockQty ?? 0;
-                                return (
-                                  <option key={itm.id} value={itm.id}>
-                                    [{catLabel}] {itm.code} — {itm.name} ({itm.unit || 'کیلوگرم'} | موجودی انبار تولید: {prdStock})
-                                  </option>
-                                );
-                              })}
-                            </select>
-                            {matchedItem ? (
-                              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                                <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold">
-                                  کالای متصل: {matchedItem.code}
-                                </span>
-                                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-mono">
-                                  موجودی انبار تولید: {(waccInfo?.productionWhStockQty ?? 0).toLocaleString()} {matchedItem.unit}
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-1">
-                                <input
-                                  type="text"
-                                  value={comp.itemName}
-                                  onChange={e => handleUpdateComponentInEditingBom(idx, { itemName: e.target.value })}
-                                  placeholder="نام قلم یا انتخاب از لیست بالا..."
-                                  className="w-full px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-950/20 text-[11px] font-bold"
-                                />
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-2">
-                            <select
-                              value={basis}
-                              onChange={e => {
-                                const nextBasis = e.target.value as ErpBomConsumptionBasis;
-                                if (nextBasis === 'PERCENT_OF_NET') {
-                                  const pct = comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 1) * 100).toFixed(2));
+                {/* Component Rows */}
+                <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
+                  {(editingBom.components || []).map((comp, idx) => {
+                    const matchedItem = resolveComponentDefinedItem(comp, erpState.items || []);
+                    const waccInfo = matchedItem ? itemWaccMap.get(matchedItem.id) : undefined;
+                    const basis: ErpBomConsumptionBasis = comp.consumptionBasis || 'PER_KG_NET';
+                    const conesPerCarton = Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6));
+                    const stdCartonNetKg = 23.5;
+                    const wasteFactor = 1 + Math.max(0, Number(comp.wastePercent || 0)) / 100;
+                    let effectivePer1Kg = Number(comp.qtyPerKgOutput || 0) * wasteFactor;
+                    if (basis === 'PERCENT_OF_NET') {
+                      const pct = Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput || 0) * 100);
+                      effectivePer1Kg = (pct / 100) * wasteFactor;
+                    } else if (basis === 'PER_CARTON') {
+                      effectivePer1Kg = (Number(comp.qtyPerKgOutput || 0) * wasteFactor) / stdCartonNetKg;
+                    } else if (basis === 'PER_CONE') {
+                      effectivePer1Kg = (Number(comp.qtyPerKgOutput || 0) * conesPerCarton * wasteFactor) / stdCartonNetKg;
+                    }
+                    const effectiveRate =
+                      waccInfo && waccInfo.costSource === 'WACC_WAREHOUSE' && waccInfo.waccUnitCostRials > 0
+                        ? waccInfo.waccUnitCostRials
+                        : Number(comp.unitCostRials || matchedItem?.unitCost || 0);
+                    const totalPartPerKg = Math.round(effectivePer1Kg * effectiveRate);
+
+                    return (
+                      <div
+                        key={comp.id || idx}
+                        className="p-3 bg-white dark:bg-slate-900 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[34px_minmax(235px,2.2fr)_minmax(175px,1.35fr)_minmax(115px,0.95fr)_minmax(95px,0.75fr)_minmax(90px,0.7fr)_minmax(160px,1.3fr)_minmax(120px,0.95fr)_38px] gap-2.5 items-start"
+                      >
+                        {/* 1. Row Index */}
+                        <div className="flex items-center justify-between lg:justify-center sm:col-span-2 lg:col-span-1 pt-0 lg:pt-1.5">
+                          <span className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono font-black text-xs text-slate-700 dark:text-slate-200 flex items-center justify-center">
+                            {idx + 1}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveComponentFromEditingBom(idx)}
+                            className="lg:hidden px-2.5 py-1 rounded-lg text-xs font-bold text-rose-600 bg-rose-50 dark:bg-rose-950/40 flex items-center gap-1 cursor-pointer"
+                          >
+                            <Trash2 size={13} />
+                            <span>حذف ردیف</span>
+                          </button>
+                        </div>
+
+                        {/* 2. Defined Item Selector */}
+                        <div className="sm:col-span-2 lg:col-span-1 space-y-1.5 min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                            انتخاب کالای مصرفی (از کالاهای تعریف‌شده):
+                          </label>
+                          <select
+                            value={matchedItem?.id || comp.itemId || ''}
+                            onChange={e => handleSelectDefinedItemForComponent(idx, e.target.value)}
+                            className="erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-xs text-slate-900 dark:text-slate-100"
+                          >
+                            <option value="">-- انتخاب کالا از فهرست کالاهای تعریف‌شده --</option>
+                            {bomComponentCandidateItems.map(itm => {
+                              const catLabel =
+                                itm.category === 'RAW_MATERIAL'
+                                  ? 'ماده اولیه'
+                                  : itm.category === 'PACKAGING'
+                                  ? 'بسته‌بندی'
+                                  : itm.category === 'WASTE'
+                                  ? 'ضایعات'
+                                  : 'نخ/کالا';
+                              const info = itemWaccMap.get(itm.id);
+                              const prdStock = info?.productionWhStockQty ?? 0;
+                              return (
+                                <option key={itm.id} value={itm.id}>
+                                  [{catLabel}] {itm.code} — {itm.name} ({itm.unit || 'کیلوگرم'} | موجودی تولید: {prdStock})
+                                </option>
+                              );
+                            })}
+                          </select>
+                          {matchedItem ? (
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                              <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-black">
+                                کالای متصل: {matchedItem.code}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono font-bold">
+                                موجودی انبار تولید: {(waccInfo?.productionWhStockQty ?? 0).toLocaleString()} {matchedItem.unit}
+                              </span>
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              value={comp.itemName}
+                              onChange={e => handleUpdateComponentInEditingBom(idx, { itemName: e.target.value })}
+                              placeholder="نام قلم یا انتخاب از لیست بالا..."
+                              className="erp-compact-input w-full px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-950/20 text-xs font-bold"
+                            />
+                          )}
+                        </div>
+
+                        {/* 3. Consumption Basis */}
+                        <div className="min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                            مبنای مصرف و کسر از انبار:
+                          </label>
+                          <select
+                            value={basis}
+                            onChange={e => {
+                              const nextBasis = e.target.value as ErpBomConsumptionBasis;
+                              if (nextBasis === 'PERCENT_OF_NET') {
+                                const pct = comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 1) * 100).toFixed(2));
+                                handleUpdateComponentInEditingBom(idx, {
+                                  consumptionBasis: nextBasis,
+                                  consumptionPercent: pct,
+                                  qtyPerKgOutput: Number((pct / 100).toFixed(6))
+                                });
+                              } else if (nextBasis === 'PER_CARTON' || nextBasis === 'PER_CONE') {
+                                handleUpdateComponentInEditingBom(idx, {
+                                  consumptionBasis: nextBasis,
+                                  qtyPerKgOutput: comp.qtyPerKgOutput && comp.qtyPerKgOutput >= 1 ? comp.qtyPerKgOutput : 1,
+                                  unit: matchedItem?.unit || 'عدد'
+                                });
+                              } else {
+                                handleUpdateComponentInEditingBom(idx, {
+                                  consumptionBasis: nextBasis
+                                });
+                              }
+                            }}
+                            className="erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-black text-xs text-slate-900 dark:text-slate-100"
+                          >
+                            <option value="PER_KG_NET">ضریب در ۱ کیلو خالص</option>
+                            <option value="PERCENT_OF_NET">درصد از وزن خالص لیبل (%)</option>
+                            <option value="PER_CARTON">تعداد در هر کارتن تولیدی</option>
+                            <option value="PER_CONE">تعداد در هر دوک داخل کارتن</option>
+                          </select>
+                        </div>
+
+                        {/* 4. Quantity / Percentage */}
+                        <div className="min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                            مقدار / درصد مصرف:
+                          </label>
+                          {basis === 'PERCENT_OF_NET' ? (
+                            <div>
+                              <input
+                                type="number"
+                                step="0.1"
+                                dir="ltr"
+                                value={comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 0) * 100).toFixed(2))}
+                                onChange={e => {
+                                  const pct = parseFloat(e.target.value) || 0;
                                   handleUpdateComponentInEditingBom(idx, {
-                                    consumptionBasis: nextBasis,
                                     consumptionPercent: pct,
                                     qtyPerKgOutput: Number((pct / 100).toFixed(6))
                                   });
-                                } else if (nextBasis === 'PER_CARTON' || nextBasis === 'PER_CONE') {
-                                  handleUpdateComponentInEditingBom(idx, {
-                                    consumptionBasis: nextBasis,
-                                    qtyPerKgOutput: comp.qtyPerKgOutput && comp.qtyPerKgOutput >= 1 ? comp.qtyPerKgOutput : 1,
-                                    unit: matchedItem?.unit || 'عدد'
-                                  });
-                                } else {
-                                  handleUpdateComponentInEditingBom(idx, {
-                                    consumptionBasis: nextBasis
-                                  });
-                                }
-                              }}
-                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[11px]"
-                            >
-                              <option value="PER_KG_NET">ضریب در ۱ کیلو خالص</option>
-                              <option value="PERCENT_OF_NET">درصد از وزن خالص لیبل (%)</option>
-                              <option value="PER_CARTON">تعداد در هر کارتن تولیدی</option>
-                              <option value="PER_CONE">تعداد در هر دوک داخل کارتن</option>
-                            </select>
-                          </td>
-                          <td className="p-2">
-                            {basis === 'PERCENT_OF_NET' ? (
-                              <div className="relative">
-                                <input
-                                  type="number"
-                                  step="0.1"
-                                  value={comp.consumptionPercent ?? Number(((comp.qtyPerKgOutput || 0) * 100).toFixed(2))}
-                                  onChange={e => {
-                                    const pct = parseFloat(e.target.value) || 0;
-                                    handleUpdateComponentInEditingBom(idx, {
-                                      consumptionPercent: pct,
-                                      qtyPerKgOutput: Number((pct / 100).toFixed(6))
-                                    });
-                                  }}
-                                  className="w-full px-2 py-1.5 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50/40 dark:bg-indigo-950/20 text-center font-mono font-black text-indigo-700 dark:text-indigo-300"
-                                />
-                                <span className="block text-[9px] text-center text-slate-400 mt-0.5 font-mono">
-                                  ={(Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput || 0) * 100) / 100).toFixed(3)} در کیلو
-                                </span>
-                              </div>
-                            ) : (
-                              <div>
-                                <input
-                                  type="number"
-                                  step={basis === 'PER_KG_NET' ? '0.001' : '1'}
-                                  value={comp.qtyPerKgOutput}
-                                  onChange={e => handleUpdateComponentInEditingBom(idx, { qtyPerKgOutput: parseFloat(e.target.value) || 0 })}
-                                  className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
-                                />
-                                <span className="block text-[9px] text-center text-slate-400 mt-0.5">
-                                  {basis === 'PER_CARTON'
-                                    ? 'در هر کارتن'
-                                    : basis === 'PER_CONE'
-                                    ? `در هر دوک (×${conesPerCarton})`
-                                    : 'در هر ۱ کیلو خالص'}
-                                </span>
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              step="0.1"
-                              min={0}
-                              value={comp.wastePercent ?? 0}
-                              onChange={e => handleUpdateComponentInEditingBom(idx, { wastePercent: Math.max(0, parseFloat(e.target.value) || 0) })}
-                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold text-amber-600"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="text"
-                              value={comp.unit}
-                              onChange={e => handleUpdateComponentInEditingBom(idx, { unit: e.target.value })}
-                              placeholder="کیلوگرم"
-                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-bold text-[11px]"
-                            />
-                          </td>
-                          <td className="p-2">
-                            <input
-                              type="number"
-                              value={comp.unitCostRials || 0}
-                              onChange={e => handleUpdateComponentInEditingBom(idx, { unitCostRials: parseFloat(e.target.value) || 0 })}
-                              className="w-full px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-bold"
-                            />
+                                }}
+                                className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50/40 dark:bg-indigo-950/20 text-center font-mono font-black text-sm text-indigo-700 dark:text-indigo-300"
+                              />
+                              <span className="block text-[10px] text-center text-slate-500 mt-1 font-mono font-bold" dir="ltr">
+                                {(Number(comp.consumptionPercent ?? (comp.qtyPerKgOutput || 0) * 100) / 100).toFixed(3)} Kg/Kg
+                              </span>
+                            </div>
+                          ) : (
+                            <div>
+                              <input
+                                type="number"
+                                step={basis === 'PER_KG_NET' ? '0.001' : '1'}
+                                dir="ltr"
+                                value={comp.qtyPerKgOutput}
+                                onChange={e => handleUpdateComponentInEditingBom(idx, { qtyPerKgOutput: parseFloat(e.target.value) || 0 })}
+                                className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-black text-sm text-slate-900 dark:text-white"
+                              />
+                              <span className="block text-[10px] text-center text-slate-500 mt-1 font-bold">
+                                {basis === 'PER_CARTON'
+                                  ? 'در هر کارتن'
+                                  : basis === 'PER_CONE'
+                                  ? `در هر دوک (×${conesPerCarton})`
+                                  : 'در هر ۱ کیلو خالص'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 5. Component Waste Percent */}
+                        <div className="min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                            پرت جزء (%):
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min={0}
+                            dir="ltr"
+                            value={comp.wastePercent ?? 0}
+                            onChange={e => handleUpdateComponentInEditingBom(idx, { wastePercent: Math.max(0, parseFloat(e.target.value) || 0) })}
+                            className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/30 dark:bg-amber-950/20 text-center font-mono font-black text-sm text-amber-700 dark:text-amber-300"
+                          />
+                          <span className="block text-[10px] text-center text-amber-700/80 dark:text-amber-400 mt-1 font-mono font-bold">
+                            {Number(comp.wastePercent || 0)}% پرت
+                          </span>
+                        </div>
+
+                        {/* 6. Unit */}
+                        <div className="min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                            واحد شمارش:
+                          </label>
+                          <input
+                            type="text"
+                            value={comp.unit}
+                            onChange={e => handleUpdateComponentInEditingBom(idx, { unit: e.target.value })}
+                            placeholder="کیلوگرم"
+                            className="erp-compact-input w-full px-2 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-black text-xs text-slate-800 dark:text-slate-100"
+                          />
+                        </div>
+
+                        {/* 7. Unit Cost / WACC (Rials) */}
+                        <div className="min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                            نرخ میانگین موزون (ریال):
+                          </label>
+                          <input
+                            type="number"
+                            dir="ltr"
+                            value={comp.unitCostRials || 0}
+                            onChange={e => handleUpdateComponentInEditingBom(idx, { unitCostRials: parseFloat(e.target.value) || 0 })}
+                            className="no-spinner erp-compact-input w-full px-2.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-center font-mono font-black text-sm text-slate-900 dark:text-white"
+                          />
+                          <div className="mt-1 text-center space-y-0.5">
+                            <span className="block text-[10px] font-mono font-black text-slate-600 dark:text-slate-300" dir="ltr">
+                              {Number(comp.unitCostRials || 0).toLocaleString()} ریال
+                            </span>
                             {waccInfo && (
-                              <span className="block text-[9px] text-center mt-0.5 font-bold text-indigo-600 dark:text-indigo-400">
+                              <span className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
                                 {waccInfo.costSource === 'WACC_WAREHOUSE'
                                   ? `میانگین موزون انبار: ${waccInfo.waccUnitCostRials.toLocaleString()}`
                                   : `نرخ پایه کالا: ${waccInfo.waccUnitCostRials.toLocaleString()}`}
                               </span>
                             )}
-                          </td>
-                          <td className="p-2 text-center font-mono font-black text-slate-700 dark:text-slate-200 pt-3" dir="ltr">
-                            {totalPartPerKg.toLocaleString()}
-                          </td>
-                          <td className="p-2 text-center pt-2.5">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveComponentFromEditingBom(idx)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 cursor-pointer"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {(editingBom.components || []).length === 0 && (
-                      <tr>
-                        <td colSpan={9} className="p-6 text-center text-slate-400 font-bold">
-                          هنوز هیچ جزء مصرفی به این فرمول افزوده نشده است. دکمه «افزودن جزء مصرفی به فرمول» را بزنید.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                          </div>
+                        </div>
+
+                        {/* 8. Cost Share per 1 Kg Output */}
+                        <div className="min-w-0">
+                          <label className="lg:hidden block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                            سهم در ۱ کیلو محصول:
+                          </label>
+                          <div
+                            className="px-2.5 py-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-center font-mono font-black text-xs text-emerald-800 dark:text-emerald-300 min-h-[36px] flex items-center justify-center"
+                            dir="ltr"
+                          >
+                            {totalPartPerKg.toLocaleString()} ریال
+                          </div>
+                        </div>
+
+                        {/* 9. Delete Button (Desktop) */}
+                        <div className="hidden lg:flex items-center justify-center pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveComponentFromEditingBom(idx)}
+                            className="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 cursor-pointer transition-colors"
+                            title="حذف این جزء از فرمول"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {(editingBom.components || []).length === 0 && (
+                    <div className="p-8 text-center text-slate-400 font-bold text-xs">
+                      هنوز هیچ جزء مصرفی به این فرمول افزوده نشده است. دکمه «افزودن جزء مصرفی به فرمول» را بزنید.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
