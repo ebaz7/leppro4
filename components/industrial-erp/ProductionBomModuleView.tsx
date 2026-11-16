@@ -62,7 +62,10 @@ import {
   buildCartonReferenceCode,
   deriveLineReferencePrefix,
   getNextPlainSequentialNumber,
-  matchesSearchQuery
+  matchesSearchQuery,
+  getBomFinishedItemIds,
+  getBomsForItem,
+  resolveItemTareSpec
 } from './erpCodeUtils';
 import {
   ensureProductionFloorWarehouse,
@@ -189,7 +192,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   const [expandedGroupIds, setExpandedGroupIds] = useState<Record<string, boolean>>({});
   const [itemSearch, setItemSearch] = useState<string>('');
   const [itemStatusFilter, setItemStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
-  const [itemGradeFilter, setItemGradeFilter] = useState<'ALL' | 'A' | 'B' | 'C'>('ALL');
+  const [itemGradeFilter, setItemGradeFilter] = useState<'ALL' | 'NONE' | 'A' | 'B' | 'C'>('ALL');
   const [includeChildGroupsItems, setIncludeChildGroupsItems] = useState<boolean>(true);
   const [showInlineSubgroupBox, setShowInlineSubgroupBox] = useState<boolean>(false);
   const [inlineSubgroupName, setInlineSubgroupName] = useState<string>('');
@@ -212,16 +215,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     groupId: '',
     unit: 'کیلوگرم',
     yarnCount: '150/48',
-    grade: 'A',
+    grade: '',
     colorName: 'سفید خام',
-    defaultConesPerCarton: 6,
-    cartonWeightGrams: 1450,
-    coneWeightGrams: 110,
     stockQty: 0,
     unitCost: 1250000,
     salesPrice: 1450000,
-    isActive: true,
-    isTareLocked: false
+    isActive: true
   });
 
   // Tree hierarchy helpers
@@ -284,7 +283,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   }, [groups]);
 
   const renderGradeBadge = (g?: string) => {
-    const gradeVal = (g || 'A').toUpperCase();
+    const gradeVal = (g || '').trim().toUpperCase();
+    if (!gradeVal) {
+      return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700">بدون درجه</span>;
+    }
     if (gradeVal === 'A') {
       return <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">درجه A</span>;
     }
@@ -317,8 +319,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     } else if (itemStatusFilter === 'INACTIVE') {
       list = list.filter(i => i.isActive === false);
     }
-    if (itemGradeFilter !== 'ALL') {
-      list = list.filter(i => (i.grade || 'A') === itemGradeFilter);
+    if (itemGradeFilter === 'NONE') {
+      list = list.filter(i => !(i.grade || '').trim());
+    } else if (itemGradeFilter !== 'ALL') {
+      list = list.filter(i => (i.grade || '').trim().toUpperCase() === itemGradeFilter);
     }
     if (itemSearch.trim()) {
       list = list.filter(i =>
@@ -353,16 +357,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       groupId: groupId || '',
       unit: 'کیلوگرم',
       yarnCount: '150/48',
-      grade: 'A',
+      grade: '',
       colorName: 'سفید خام',
-      defaultConesPerCarton: 6,
-      cartonWeightGrams: 1450,
-      coneWeightGrams: 110,
       stockQty: 0,
       unitCost: 1250000,
       salesPrice: 1450000,
-      isActive: true,
-      isTareLocked: false
+      isActive: true
     });
     setShowAddItemModal(true);
     setShowInlineSubgroupBox(false);
@@ -460,6 +460,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       return;
     }
     const selGroup = groups.find(g => g.id === itemForm.groupId);
+    const existingItem = itemForm.id ? erpState.items.find(i => i.id === itemForm.id) : undefined;
     const newItem: ErpItem = {
       id: itemForm.id || `itm_${Date.now()}`,
       code: itemForm.code.trim(),
@@ -473,13 +474,13 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       unitCost: Number(itemForm.unitCost || 0),
       salesPrice: Number(itemForm.salesPrice || 0),
       yarnCount: itemForm.yarnCount || '',
-      grade: itemForm.grade || 'A',
+      grade: (itemForm.grade || '') as ErpItem['grade'],
       colorName: itemForm.colorName || '',
-      defaultConesPerCarton: Number(itemForm.defaultConesPerCarton || 6),
-      cartonWeightGrams: Number(itemForm.cartonWeightGrams ?? 1450),
-      coneWeightGrams: Number(itemForm.coneWeightGrams ?? 110),
+      defaultConesPerCarton: existingItem?.defaultConesPerCarton ?? itemForm.defaultConesPerCarton ?? 6,
+      cartonWeightGrams: existingItem?.cartonWeightGrams ?? itemForm.cartonWeightGrams ?? 1450,
+      coneWeightGrams: existingItem?.coneWeightGrams ?? itemForm.coneWeightGrams ?? 110,
       isActive: itemForm.isActive !== false,
-      isTareLocked: Boolean(itemForm.isTareLocked)
+      isTareLocked: existingItem?.isTareLocked ?? Boolean(itemForm.isTareLocked)
     };
     const exists = erpState.items.some(i => i.id === newItem.id);
     const updatedItems = exists ? erpState.items.map(i => i.id === newItem.id ? newItem : i) : [...erpState.items, newItem];
@@ -492,16 +493,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       groupId: '',
       unit: 'کیلوگرم',
       yarnCount: '150/48',
-      grade: 'A',
+      grade: '',
       colorName: 'سفید خام',
-      defaultConesPerCarton: 6,
-      cartonWeightGrams: 1450,
-      coneWeightGrams: 110,
       stockQty: 0,
       unitCost: 1250000,
       salesPrice: 1450000,
-      isActive: true,
-      isTareLocked: false
+      isActive: true
     });
   };
 
@@ -511,15 +508,6 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     await persistErpState(
       { ...erpState, items: updatedItems },
       nextActive ? `کالای «${item.name}» فعال شد` : `کالای «${item.name}» غیرفعال شد و از لیست توزین خارج گردید`
-    );
-  };
-
-  const handleToggleItemTareLock = async (item: ErpItem) => {
-    const nextLock = !item.isTareLocked;
-    const updatedItems = erpState.items.map(i => i.id === item.id ? { ...i, isTareLocked: nextLock } : i);
-    await persistErpState(
-      { ...erpState, items: updatedItems },
-      nextLock ? `وزن دوک و کارتن «${item.name}» قفل شد` : `قفل وزن دوک و کارتن «${item.name}» باز شد`
     );
   };
 
@@ -575,20 +563,45 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     return activeYarnItems.find(i => i.id === selectedItemId) || null;
   }, [activeYarnItems, selectedItemId]);
 
-  // Tare weights are locked if the item itself is locked OR global scale lock is active
-  const isTareLocked = Boolean(selectedItemObj?.isTareLocked || lockTareWeightsGlobally);
-  const isConesLocked = Boolean(selectedItemObj?.isTareLocked && lockConesCountGlobally) || lockConesCountGlobally;
+  const [selectedBomId, setSelectedBomId] = useState<string>('');
 
-  // Auto-populate tare & cones when item changes or lock turns on
+  const selectedItemTareSpec = useMemo(() => {
+    return resolveItemTareSpec(selectedItemObj, erpState.boms || [], selectedBomId);
+  }, [selectedItemObj, erpState.boms, selectedBomId]);
+
+  // Keep selectedBomId synced with matching BOMs of the selected item
+  useEffect(() => {
+    const matching = selectedItemTareSpec.matchingBoms;
+    if (matching.length === 0) {
+      if (selectedBomId) setSelectedBomId('');
+    } else if (!matching.some(b => b.id === selectedBomId)) {
+      setSelectedBomId(selectedItemTareSpec.bom?.id || matching[0].id);
+    }
+  }, [selectedItemTareSpec.matchingBoms, selectedItemTareSpec.bom, selectedBomId]);
+
+  // Tare weights are locked if the assigned BOM (or legacy item) is locked OR global scale lock is active
+  const isTareLocked = Boolean(selectedItemTareSpec.isTareLocked || lockTareWeightsGlobally);
+  const isConesLocked = Boolean(selectedItemTareSpec.isTareLocked && lockConesCountGlobally) || lockConesCountGlobally;
+
+  // Auto-populate tare & cones from active BOM (with legacy item fallback) when item/BOM changes
   useEffect(() => {
     const itm = erpState.items.find(i => i.id === selectedItemId);
     if (itm) {
-      if (itm.defaultConesPerCarton !== undefined) setConesCount(itm.defaultConesPerCarton);
-      if (itm.cartonWeightGrams !== undefined) setCartonTareGrams(itm.cartonWeightGrams);
-      if (itm.coneWeightGrams !== undefined) setConeTareGrams(itm.coneWeightGrams);
-      if (itm.grade) setGrade(itm.grade);
+      setConesCount(selectedItemTareSpec.defaultConesPerCarton);
+      setCartonTareGrams(selectedItemTareSpec.cartonWeightGrams);
+      setConeTareGrams(selectedItemTareSpec.coneWeightGrams);
+      if (itm.grade === 'A' || itm.grade === 'B' || itm.grade === 'C') {
+        setGrade(itm.grade);
+      }
     }
-  }, [selectedItemId, erpState.items, isTareLocked]);
+  }, [
+    selectedItemId,
+    selectedItemTareSpec.defaultConesPerCarton,
+    selectedItemTareSpec.cartonWeightGrams,
+    selectedItemTareSpec.coneWeightGrams,
+    erpState.items,
+    isTareLocked
+  ]);
 
   const handleToggleGlobalTareLock = async () => {
     const nextLocked = !lockTareWeightsGlobally;
@@ -689,11 +702,12 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       return;
     }
 
-    // Enforce locked tare weights & cones count from master item definition
-    const lockedByItemOrGlobal = Boolean(currentItem.isTareLocked || lockTareWeightsGlobally);
-    const effectiveCartonGrams = lockedByItemOrGlobal ? Number(currentItem.cartonWeightGrams ?? 1450) : cartonTareGrams;
-    const effectiveConeGrams = lockedByItemOrGlobal ? Number(currentItem.coneWeightGrams ?? 110) : coneTareGrams;
-    const effectiveConesCount = lockConesCountGlobally ? Number(currentItem.defaultConesPerCarton ?? 6) : conesCount;
+    // Enforce locked tare weights & cones count from active BOM definition (with legacy fallback)
+    const tareSpec = resolveItemTareSpec(currentItem, erpState.boms || [], selectedBomId);
+    const lockedByBomOrGlobal = Boolean(tareSpec.isTareLocked || lockTareWeightsGlobally);
+    const effectiveCartonGrams = lockedByBomOrGlobal ? tareSpec.cartonWeightGrams : cartonTareGrams;
+    const effectiveConeGrams = lockedByBomOrGlobal ? tareSpec.coneWeightGrams : coneTareGrams;
+    const effectiveConesCount = lockConesCountGlobally ? tareSpec.defaultConesPerCarton : conesCount;
     const effectiveTareKg = Number(((effectiveCartonGrams + effectiveConesCount * effectiveConeGrams) / 1000).toFixed(3));
     const effectiveNetKg = Number(Math.max(0, grossWeightKg - effectiveTareKg).toFixed(3));
 
@@ -866,8 +880,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       const itemObj = erpState.items.find(i => i.id === v.itemId || i.code === v.itemCode);
       if (archiveGradeFilter !== 'ALL') {
         const hasGrade = linkedCartons.length > 0
-          ? linkedCartons.some(c => (c.grade || itemObj?.grade || 'A') === archiveGradeFilter)
-          : (itemObj?.grade || 'A') === archiveGradeFilter;
+          ? linkedCartons.some(c => (c.grade || itemObj?.grade || '') === archiveGradeFilter)
+          : (itemObj?.grade || '') === archiveGradeFilter;
         if (!hasGrade) return false;
       }
       if (!archiveSearch.trim()) return true;
@@ -922,38 +936,71 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
   // TAB 5: COMPREHENSIVE BOM MANAGEMENT & COST ENGINE
   // -------------------------------------------------------------
   const finishedYarns = useMemo(() => erpState.items.filter(i => i.category === 'FINISHED_YARN'), [erpState.items]);
+  const bomAssignableItems = useMemo(() => {
+    const list = erpState.items.filter(i => i.category === 'FINISHED_YARN' || i.category === 'RAW_MATERIAL');
+    return [...list].sort((a, b) => {
+      if (a.category === b.category) return (a.code || '').localeCompare(b.code || '');
+      return a.category === 'FINISHED_YARN' ? -1 : 1;
+    });
+  }, [erpState.items]);
   const allBoms = useMemo(() => erpState.boms || [], [erpState.boms]);
-  
+
   const [bomSearch, setBomSearch] = useState<string>('');
   const [bomProductFilter, setBomProductFilter] = useState<string>('ALL');
+  const [bomModalItemSearch, setBomModalItemSearch] = useState<string>('');
   const [showAddEditBomModal, setShowAddEditBomModal] = useState<boolean>(false);
   const [editingBom, setEditingBom] = useState<Partial<ErpBom> | null>(null);
   const [showSimulationModal, setShowSimulationModal] = useState<boolean>(false);
   const [simulationBom, setSimulationBom] = useState<ErpBom | null>(null);
   const [simulationBatchQtyKg, setSimulationBatchQtyKg] = useState<number>(5000);
 
+  const getBomAssignedItemsList = (bom: Partial<ErpBom>): ErpItem[] => {
+    const ids = getBomFinishedItemIds(bom);
+    return ids
+      .map(id => erpState.items.find(i => i.id === id))
+      .filter((x): x is ErpItem => Boolean(x));
+  };
+
   // Filtered BOMs list
   const filteredBoms = useMemo(() => {
     return allBoms.filter(b => {
+      const assignedIds = getBomFinishedItemIds(b);
+      const assignedItems = assignedIds
+        .map(id => erpState.items.find(i => i.id === id))
+        .filter((x): x is ErpItem => Boolean(x));
       const matchSearch =
         !bomSearch.trim() ||
-        (b.code || '').toLowerCase().includes(bomSearch.toLowerCase()) ||
-        (b.title || '').toLowerCase().includes(bomSearch.toLowerCase()) ||
-        (b.finishedItemName || '').toLowerCase().includes(bomSearch.toLowerCase());
+        matchesSearchQuery(bomSearch, [
+          b.code,
+          b.title,
+          b.finishedItemName,
+          b.finishedItemCode,
+          ...(b.finishedItemNames || []),
+          ...(b.finishedItemCodes || []),
+          ...assignedItems.flatMap(i => [i.code, i.name, i.yarnCount, i.colorName])
+        ]);
       const matchProduct =
-        bomProductFilter === 'ALL' || b.finishedItemId === bomProductFilter;
+        bomProductFilter === 'ALL' || assignedIds.includes(bomProductFilter);
       return matchSearch && matchProduct;
     });
-  }, [allBoms, bomSearch, bomProductFilter]);
+  }, [allBoms, erpState.items, bomSearch, bomProductFilter]);
 
   const handleOpenAddBom = () => {
-    const defaultProduct = finishedYarns[0];
+    const preselectedIds = bomProductFilter !== 'ALL' ? [bomProductFilter] : [];
+    const primaryProduct = preselectedIds.length > 0 ? erpState.items.find(i => i.id === preselectedIds[0]) : undefined;
     const newBom: Partial<ErpBom> = {
       code: `BOM-${String(allBoms.length + 1).padStart(3, '0')}`,
-      title: defaultProduct ? `فرمول استاندارد تولید ${defaultProduct.name}` : 'فرمول ساخت نخ تکسچره',
-      finishedItemId: defaultProduct?.id || '',
-      finishedItemCode: defaultProduct?.code || '',
-      finishedItemName: defaultProduct?.name || '',
+      title: primaryProduct ? `فرمول استاندارد تولید ${primaryProduct.name}` : 'فرمول ساخت نخ تکسچره',
+      finishedItemId: primaryProduct?.id || '',
+      finishedItemCode: primaryProduct?.code || '',
+      finishedItemName: primaryProduct?.name || '',
+      finishedItemIds: preselectedIds,
+      finishedItemCodes: primaryProduct ? [primaryProduct.code] : [],
+      finishedItemNames: primaryProduct ? [primaryProduct.name] : [],
+      defaultConesPerCarton: primaryProduct?.defaultConesPerCarton ?? 6,
+      cartonWeightGrams: primaryProduct?.cartonWeightGrams ?? 1450,
+      coneWeightGrams: primaryProduct?.coneWeightGrams ?? 110,
+      isTareLocked: Boolean(primaryProduct?.isTareLocked),
       version: 'V1.0',
       wastePercent: 2.5,
       directLaborPerKg: 155000,
@@ -992,27 +1039,61 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
         }
       ]
     };
+    setBomModalItemSearch('');
     setEditingBom(newBom);
     setShowAddEditBomModal(true);
   };
 
   const handleOpenEditBom = (bom: ErpBom) => {
-    setEditingBom(JSON.parse(JSON.stringify(bom)));
+    const assignedIds = getBomFinishedItemIds(bom);
+    const primaryItem = assignedIds.length > 0 ? erpState.items.find(i => i.id === assignedIds[0]) : undefined;
+    const cloned: Partial<ErpBom> = JSON.parse(JSON.stringify(bom));
+    cloned.finishedItemIds = assignedIds;
+    cloned.defaultConesPerCarton = bom.defaultConesPerCarton ?? primaryItem?.defaultConesPerCarton ?? 6;
+    cloned.cartonWeightGrams = bom.cartonWeightGrams ?? primaryItem?.cartonWeightGrams ?? 1450;
+    cloned.coneWeightGrams = bom.coneWeightGrams ?? primaryItem?.coneWeightGrams ?? 110;
+    cloned.isTareLocked = bom.isTareLocked !== undefined ? Boolean(bom.isTareLocked) : Boolean(primaryItem?.isTareLocked);
+    setBomModalItemSearch('');
+    setEditingBom(cloned);
     setShowAddEditBomModal(true);
   };
 
   const handleDuplicateBom = async (sourceBom: ErpBom) => {
+    const assignedIds = getBomFinishedItemIds(sourceBom);
     const newBom: ErpBom = {
       ...sourceBom,
       id: `bom_${Date.now()}`,
       code: `${sourceBom.code || 'BOM'}-V2`,
       title: `${sourceBom.title || sourceBom.finishedItemName} (نسخه کپی)`,
+      finishedItemIds: assignedIds,
       version: 'V2.0',
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
     const nextBoms = [...allBoms, newBom];
     await persistErpState({ ...erpState, boms: nextBoms }, 'نسخه جدید فرمول ساخت با موفقیت ایجاد گردید');
+  };
+
+  const handleToggleBomTareLock = async (bom: ErpBom) => {
+    const nextLock = !bom.isTareLocked;
+    const nextBoms = allBoms.map(b =>
+      b.id === bom.id
+        ? {
+            ...b,
+            isTareLocked: nextLock,
+            defaultConesPerCarton: b.defaultConesPerCarton ?? 6,
+            cartonWeightGrams: b.cartonWeightGrams ?? 1450,
+            coneWeightGrams: b.coneWeightGrams ?? 110,
+            updatedAt: Date.now()
+          }
+        : b
+    );
+    await persistErpState(
+      { ...erpState, boms: nextBoms },
+      nextLock
+        ? `وزن دوک و کارتن فرمول «${bom.title || bom.code}» قفل شد`
+        : `قفل وزن دوک و کارتن فرمول «${bom.title || bom.code}» باز شد`
+    );
   };
 
   const handleDeleteBom = async (bomId: string) => {
@@ -1067,15 +1148,29 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
     const overhead = Number(editingBom.factoryOverheadPerKg || 0);
     const totalCostPerKg = totalMaterialsCost + labor + overhead;
 
-    const selProduct = erpState.items.find(i => i.id === editingBom.finishedItemId);
+    const selectedIds = Array.from(new Set(getBomFinishedItemIds(editingBom)));
+    const selectedProducts = selectedIds
+      .map(id => erpState.items.find(i => i.id === id))
+      .filter((x): x is ErpItem => Boolean(x));
+    const primaryProduct = selectedProducts[0];
 
     const savedBom: ErpBom = {
       id: editingBom.id || `bom_${Date.now()}`,
       code: editingBom.code.trim(),
       title: editingBom.title.trim(),
-      finishedItemId: editingBom.finishedItemId || '',
-      finishedItemCode: selProduct?.code || editingBom.finishedItemCode || '',
-      finishedItemName: selProduct?.name || editingBom.finishedItemName || 'نخ تولیدی',
+      finishedItemId: selectedIds[0] || '',
+      finishedItemCode: primaryProduct?.code || editingBom.finishedItemCode || '',
+      finishedItemName:
+        selectedProducts.length > 0
+          ? selectedProducts.map(p => p.name).join('، ')
+          : editingBom.finishedItemName?.trim() || 'فرمول عمومی تولید',
+      finishedItemIds: selectedIds,
+      finishedItemCodes: selectedProducts.map(p => p.code),
+      finishedItemNames: selectedProducts.map(p => p.name),
+      defaultConesPerCarton: Math.max(1, Number(editingBom.defaultConesPerCarton ?? 6)),
+      cartonWeightGrams: Math.max(0, Number(editingBom.cartonWeightGrams ?? 1450)),
+      coneWeightGrams: Math.max(0, Number(editingBom.coneWeightGrams ?? 110)),
+      isTareLocked: Boolean(editingBom.isTareLocked),
       version: editingBom.version || 'V1.0',
       wastePercent: Number(editingBom.wastePercent || 0),
       directLaborPerKg: labor,
@@ -1369,10 +1464,10 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               <div>
                 <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   <Layers className="w-5 h-5 text-orange-600" />
-                  تعریف درختی کالاها، زیرگروه‌ها، قفل وزن دوک و وضعیت فعال/غیرفعال
+                  تعریف درختی کالاها، زیرگروه‌ها و وضعیت فعال/غیرفعال
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  امکان حرکت پله‌پله در شاخه‌های درخت کالا، تعریف زیرگروه و کالا در هر سطح، قفل کردن وزن ظرف/دوک و فعال یا غیرفعال‌سازی کالا
+                  تعریف سلسله‌مراتبی کالاها بدون اجبار به تعیین درجه (تعیین درجه هنگام تولید و لیبل، و تنظیم وزن دوک و کارتن در فرمول تولید BOM)
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1632,6 +1727,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
                       >
                         <option value="ALL">همه درجه‌ها</option>
+                        <option value="NONE">بدون درجه</option>
                         <option value="A">درجه A</option>
                         <option value="B">درجه B</option>
                         <option value="C">درجه C</option>
@@ -1663,9 +1759,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                           <th className="p-3">نام کالا</th>
                           <th className="p-3">مسیر گروه</th>
                           <th className="p-3 text-center">نمره / درجه کالا</th>
-                          <th className="p-3 text-center">دوک</th>
-                          <th className="p-3 text-center">کارتن / دوک (گرم)</th>
-                          <th className="p-3 text-center">قفل وزن</th>
+                          <th className="p-3 text-center">فرمول تولید (BOM) / کسر ظرف</th>
                           <th className="p-3 text-center">وضعیت</th>
                           <th className="p-3 text-center">عملیات</th>
                         </tr>
@@ -1675,6 +1769,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                           const isItemActive = item.isActive !== false;
                           const itemGroup = groups.find(g => g.id === item.groupId);
                           const groupLabel = itemGroup ? getGroupHierarchyLabel(itemGroup) : (item.groupName || 'بدون گروه');
+                          const itemTareSpec = resolveItemTareSpec(item, allBoms);
 
                           return (
                             <tr
@@ -1692,31 +1787,32 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                               </td>
                               <td className="p-3 text-[11px] text-slate-500">{groupLabel}</td>
                               <td className="p-3 text-center">
-                                <div className="flex items-center justify-center gap-1.5">
+                                <div className="flex items-center justify-center gap-1.5 flex-wrap">
                                   <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded font-mono font-bold">{item.yarnCount || '—'}</span>
                                   {renderGradeBadge(item.grade)}
                                 </div>
                               </td>
-                              <td className="p-3 text-center font-bold">{item.defaultConesPerCarton || 6}</td>
-                              <td className="p-3 text-center font-mono text-[11px]">
-                                <span>{item.cartonWeightGrams ?? 1450}g</span>
-                                <span className="text-slate-400 mx-1">/</span>
-                                <span>{item.coneWeightGrams ?? 110}g</span>
-                              </td>
                               <td className="p-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleItemTareLock(item)}
-                                  className={`px-2 py-1 rounded-lg text-[10px] font-black inline-flex items-center gap-1 border transition-colors ${
-                                    item.isTareLocked
-                                      ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
-                                      : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 hover:bg-slate-100'
-                                  }`}
-                                  title={item.isTareLocked ? 'کلیک برای باز کردن قفل وزن دوک و کارتن' : 'کلیک برای قفل کردن وزن دوک و کارتن روی باسکول'}
-                                >
-                                  {item.isTareLocked ? <Lock size={11} /> : <Unlock size={11} />}
-                                  <span>{item.isTareLocked ? 'قفل' : 'آزاد'}</span>
-                                </button>
+                                {itemTareSpec.bom ? (
+                                  <div className="inline-flex flex-col items-center gap-0.5">
+                                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[10px] font-black">
+                                      <span className="font-mono">{itemTareSpec.bom.code}</span>
+                                      {itemTareSpec.isTareLocked && <Lock size={10} className="text-amber-600" />}
+                                    </div>
+                                    <span className="text-[10px] font-mono text-slate-500">
+                                      {itemTareSpec.defaultConesPerCarton} دوک | {itemTareSpec.cartonWeightGrams}g / {itemTareSpec.coneWeightGrams}g
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => openSubViewTab?.('prd_bom')}
+                                    className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-orange-50 text-slate-500 hover:text-orange-600 text-[10px] font-bold transition-colors cursor-pointer"
+                                    title="تخصیص فرمول تولید (BOM) جهت تعیین وزن دوک و کارتن"
+                                  >
+                                    تنظیم در فرمول تولید (BOM)
+                                  </button>
+                                )}
                               </td>
                               <td className="p-3 text-center">
                                 <button
@@ -1738,7 +1834,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setItemForm({ ...item, isActive: item.isActive !== false, isTareLocked: Boolean(item.isTareLocked) });
+                                      setItemForm({ ...item, grade: item.grade || '', isActive: item.isActive !== false });
                                       setShowAddItemModal(true);
                                     }}
                                     className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800"
@@ -1761,7 +1857,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         })}
                         {filteredItemsInTree.length === 0 && (
                           <tr>
-                            <td colSpan={9} className="p-8 text-center text-slate-400 font-bold">
+                            <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
                               هیچ کالایی در این شاخه یا فیلتر یافت نشد. از دکمه «افزودن کالا» استفاده فرمایید.
                             </td>
                           </tr>
@@ -1931,15 +2027,59 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       {activeYarnItems.length === 0 ? (
                         <option value="">(هیچ کالای فعالی در دسترس نیست)</option>
                       ) : (
-                        activeYarnItems.map(item => (
-                          <option key={item.id} value={item.id}>
-                            {item.code} — {item.name} ({item.yarnCount} {item.colorName}) [درجه {item.grade || 'A'}] {item.isTareLocked ? '🔒' : ''}
-                          </option>
-                        ))
+                        activeYarnItems.map(item => {
+                          const spec = resolveItemTareSpec(item, allBoms);
+                          return (
+                            <option key={item.id} value={item.id}>
+                              {item.code} — {item.name} ({item.yarnCount} {item.colorName}) {item.grade ? `[درجه ${item.grade}]` : '[بدون درجه]'} {spec.isTareLocked ? '🔒' : ''}
+                            </option>
+                          );
+                        })
                       )}
                     </select>
                   </div>
                 </div>
+
+                {/* Active BOM Tare Source Banner / Selector */}
+                {selectedItemObj && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Sparkles size={14} className="text-indigo-600 shrink-0" />
+                      {selectedItemTareSpec.matchingBoms.length > 1 ? (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-black text-indigo-800 dark:text-indigo-300">فرمول تولید فعال:</span>
+                          <select
+                            value={selectedItemTareSpec.bom?.id || ''}
+                            onChange={e => setSelectedBomId(e.target.value)}
+                            className="px-2 py-1 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 font-bold text-[11px]"
+                          >
+                            {selectedItemTareSpec.matchingBoms.map(b => (
+                              <option key={b.id} value={b.id}>
+                                {b.code} — {b.title} ({b.defaultConesPerCarton ?? 6} دوک | {b.cartonWeightGrams ?? 1450}g / {b.coneWeightGrams ?? 110}g {b.isTareLocked ? '🔒' : ''})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : selectedItemTareSpec.bom ? (
+                        <span className="font-bold text-indigo-800 dark:text-indigo-300">
+                          مبنای وزن دوک و کارتن از فرمول تولید:{' '}
+                          <strong className="font-mono">{selectedItemTareSpec.bom.code}</strong> ({selectedItemTareSpec.bom.title})
+                        </span>
+                      ) : (
+                        <span className="font-bold text-amber-700 dark:text-amber-300">
+                          برای این کالا هنوز فرمول تولید (BOM) متصل نشده است (مقادیر پیش‌فرض اعمال می‌شود).
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openSubViewTab?.('prd_bom')}
+                      className="text-[11px] font-black text-indigo-700 dark:text-indigo-300 hover:underline shrink-0 self-end sm:self-auto cursor-pointer"
+                    >
+                      مدیریت فرمول‌های تولید (BOM) ←
+                    </button>
+                  </div>
+                )}
 
                 {/* Step 3, 4, 5: Cones, Locked/Unlocked Tare & Scale Reading */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -2024,7 +2164,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <div className="text-[11px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2 flex items-center gap-2">
                     <Lock size={14} className="shrink-0" />
                     <span>
-                      وزن کارتن خالی ({cartonTareGrams} گرم) و وزن هر دوک ({coneTareGrams} گرم) قفل شده است و اپراتور باسکول مجاز به تغییر آن نمی‌باشد.
+                      وزن کارتن خالی ({cartonTareGrams} گرم) و وزن هر دوک ({coneTareGrams} گرم) در{' '}
+                      {selectedItemTareSpec.isTareLocked ? 'فرمول تولید (BOM)' : 'تنظیمات باسکول'} قفل شده است و اپراتور مجاز به تغییر آن نمی‌باشد.
                     </span>
                   </div>
                 )}
@@ -2358,8 +2499,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     const gradesPresent = Array.from(
                       new Set(
                         linkedCartons.length > 0
-                          ? linkedCartons.map(c => (c.grade || voucherItem?.grade || 'A').toUpperCase())
-                          : [(voucherItem?.grade || 'A').toUpperCase()]
+                          ? linkedCartons.map(c => (c.grade || voucherItem?.grade || '').toUpperCase())
+                          : [(voucherItem?.grade || '').toUpperCase()]
                       )
                     );
                     return (
@@ -2513,16 +2654,16 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 />
               </div>
 
-              {finishedYarns.length > 0 && (
+              {bomAssignableItems.length > 0 && (
                 <div className="flex items-center gap-1.5">
                   <Filter size={13} className="text-slate-400 shrink-0" />
                   <select
                     value={bomProductFilter}
                     onChange={e => setBomProductFilter(e.target.value)}
-                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold max-w-[230px]"
                   >
                     <option value="ALL">تمام محصولات نهایی</option>
-                    {finishedYarns.map(y => (
+                    {bomAssignableItems.map(y => (
                       <option key={y.id} value={y.id}>{y.code} — {y.name}</option>
                     ))}
                   </select>
@@ -2545,7 +2686,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 هیچ فرمول ساختی (BOM) برای این شرکت ثبت نشده است
               </h3>
               <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                دیتابیس در وضعیت کاملاً خام قرار دارد. می‌توانید با کلیک بر روی دکمه زیر، اولین فرمول تولید و ساختار مواد اولیه و ملزومات بسته‌بندی کارخانه خود را تعریف فرمایید.
+                دیتابیس در وضعیت کاملاً خام قرار دارد. می‌توانید با کلیک بر روی دکمه زیر، اولین فرمول تولید، وزن دوک و کارتن و تخصیص چندکالایی کارخانه خود را تعریف فرمایید.
               </p>
               <button
                 onClick={handleOpenAddBom}
@@ -2563,7 +2704,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                     <tr>
                       <th className="p-3">کد فرمول</th>
                       <th className="p-3">عنوان فرمول ساخت</th>
-                      <th className="p-3">محصول نهایی نخ</th>
+                      <th className="p-3">محصولات تخصیص‌یافته</th>
+                      <th className="p-3 text-center">وزن دوک / کارتن و قفل</th>
                       <th className="p-3 text-center">نسخه</th>
                       <th className="p-3 text-center">تعداد اقلام</th>
                       <th className="p-3 text-center">ضایعات (%)</th>
@@ -2581,16 +2723,65 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                       const labor = bom.directLaborPerKg || 0;
                       const overhead = bom.factoryOverheadPerKg || 0;
                       const grandTotal = totalMat + labor + overhead;
+                      const assignedItems = getBomAssignedItemsList(bom);
+                      const conesVal = bom.defaultConesPerCarton ?? 6;
+                      const cartonGramsVal = bom.cartonWeightGrams ?? 1450;
+                      const coneGramsVal = bom.coneWeightGrams ?? 110;
 
                       return (
                         <tr key={bom.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
                           <td className="p-3 font-mono font-bold text-orange-600">{bom.code}</td>
                           <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{bom.title}</td>
                           <td className="p-3">
-                            <span className="font-bold text-slate-700 dark:text-slate-300 block">{bom.finishedItemName}</span>
-                            {bom.finishedItemCode && (
-                              <span className="font-mono text-[10px] text-slate-400">{bom.finishedItemCode}</span>
+                            {assignedItems.length > 0 ? (
+                              <div className="flex flex-wrap gap-1 max-w-[240px]">
+                                {assignedItems.slice(0, 3).map(ai => (
+                                  <span
+                                    key={ai.id}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold text-slate-700 dark:text-slate-200"
+                                    title={`${ai.code} — ${ai.name}`}
+                                  >
+                                    <span className="font-mono text-orange-600">{ai.code}</span>
+                                    <span className="truncate max-w-[110px]">{ai.name}</span>
+                                  </span>
+                                ))}
+                                {assignedItems.length > 3 && (
+                                  <span
+                                    className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-[10px] font-black"
+                                    title={assignedItems.map(x => `${x.code} - ${x.name}`).join(' | ')}
+                                  >
+                                    +{assignedItems.length - 3} کالای دیگر
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div>
+                                <span className="font-bold text-slate-700 dark:text-slate-300 block">{bom.finishedItemName || 'تخصیص داده نشده'}</span>
+                                {bom.finishedItemCode && (
+                                  <span className="font-mono text-[10px] text-slate-400">{bom.finishedItemCode}</span>
+                                )}
+                              </div>
                             )}
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="font-mono text-[10px] text-slate-600 dark:text-slate-300 font-bold">
+                                {conesVal} دوک | {cartonGramsVal}g / {coneGramsVal}g
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleBomTareLock(bom)}
+                                className={`px-2 py-0.5 rounded-lg text-[10px] font-black inline-flex items-center gap-1 border transition-colors cursor-pointer ${
+                                  bom.isTareLocked
+                                    ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
+                                    : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 hover:bg-slate-100'
+                                }`}
+                                title={bom.isTareLocked ? 'کلیک برای باز کردن قفل وزن دوک و کارتن' : 'کلیک برای قفل کردن وزن دوک و کارتن روی باسکول'}
+                              >
+                                {bom.isTareLocked ? <Lock size={10} /> : <Unlock size={10} />}
+                                <span>{bom.isTareLocked ? 'قفل' : 'آزاد'}</span>
+                              </button>
+                            </div>
                           </td>
                           <td className="p-3 text-center font-mono font-bold">
                             <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px]">{bom.version || 'V1.0'}</span>
@@ -2640,7 +2831,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                               <button
                                 onClick={() => handleOpenEditBom(bom)}
                                 className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors"
-                                title="ویرایش فرمول و اقلام"
+                                title="ویرایش فرمول، کالاهای متصل و وزن دوک/کارتن"
                               >
                                 <Edit2 size={14} />
                               </button>
@@ -2656,6 +2847,13 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                         </tr>
                       );
                     })}
+                    {filteredBoms.length === 0 && (
+                      <tr>
+                        <td colSpan={13} className="p-8 text-center text-slate-400 font-bold">
+                          فرمول ساختی مطابق فیلتر انتخابی یافت نشد.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -2978,12 +3176,13 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   />
                 </div>
                 <div>
-                  <label className="font-bold block mb-1">درجه کالا (کیفیت پیش‌فرض تولید)</label>
+                  <label className="font-bold block mb-1">درجه کالا (اختیاری)</label>
                   <select
-                    value={itemForm.grade || 'A'}
+                    value={itemForm.grade || ''}
                     onChange={e => setItemForm({ ...itemForm, grade: e.target.value as any })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
                   >
+                    <option value="">بدون درجه (تعیین هنگام تولید و لیبل)</option>
                     <option value="A">درجه A (درجه ۱ ممتاز)</option>
                     <option value="B">درجه B (درجه ۲ معمولی)</option>
                     <option value="C">درجه C (درجه ۳ / ضایعاتی)</option>
@@ -2991,44 +3190,30 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 </div>
               </div>
 
-              {/* Crucial tare weights & Lock */}
-              <div className="p-3 bg-orange-50/50 dark:bg-orange-950/20 rounded-2xl border border-orange-200 dark:border-orange-800 space-y-2.5">
-                <span className="font-black text-orange-800 dark:text-orange-300 block text-[11px]">
-                  پارامترهای محاسباتی کسر ظرف خودکار هنگام توزین:
-                </span>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="text-[10px] text-slate-500 block mb-1">تعداد دوک پیش‌فرض</label>
-                    <input
-                      type="number"
-                      value={itemForm.defaultConesPerCarton ?? 6}
-                      onChange={e => setItemForm({ ...itemForm, defaultConesPerCarton: parseInt(e.target.value) || 6 })}
-                      className="w-full px-2 py-1.5 rounded-lg border bg-white dark:bg-slate-900 font-bold text-center text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 block mb-1">وزن کارتن خالی (گرم)</label>
-                    <input
-                      type="number"
-                      value={itemForm.cartonWeightGrams ?? 1450}
-                      onChange={e => setItemForm({ ...itemForm, cartonWeightGrams: parseInt(e.target.value) || 0 })}
-                      className="w-full px-2 py-1.5 rounded-lg border bg-white dark:bg-slate-900 font-mono font-bold text-center text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 block mb-1">وزن هر دوک (گرم)</label>
-                    <input
-                      type="number"
-                      value={itemForm.coneWeightGrams ?? 110}
-                      onChange={e => setItemForm({ ...itemForm, coneWeightGrams: parseInt(e.target.value) || 0 })}
-                      className="w-full px-2 py-1.5 rounded-lg border bg-white dark:bg-slate-900 font-mono font-bold text-center text-xs"
-                    />
-                  </div>
+              {/* Info card directing tare weights & lock to BOM */}
+              <div className="p-3 bg-indigo-50/60 dark:bg-indigo-950/20 rounded-2xl border border-indigo-200 dark:border-indigo-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                <div className="text-indigo-900 dark:text-indigo-200 leading-relaxed">
+                  <strong className="block font-black">تنظیم وزن دوک، کارتن و قفل آن‌ها در «فرمول تولید (BOM)»:</strong>
+                  <span className="text-indigo-700/90 dark:text-indigo-300/80">
+                    وزن کارتن خالی، وزن هر دوک، تعداد دوک و قفل بودن روی باسکول در بخش فرمول تولید تعریف شده و قابل تخصیص به چندین کالا است.
+                  </span>
                 </div>
+                {openSubViewTab && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddItemModal(false);
+                      openSubViewTab('prd_bom');
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 font-black shrink-0 hover:bg-indigo-100 cursor-pointer"
+                  >
+                    رفتن به فرمول تولید (BOM)
+                  </button>
+                )}
               </div>
 
-              {/* Active & Tare Lock switches */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              {/* Active switch */}
+              <div className="pt-1">
                 <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
                   <input
                     type="checkbox"
@@ -3039,19 +3224,6 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   <div>
                     <span className="font-black block text-slate-800 dark:text-slate-100">کالا فعال است</span>
                     <span className="text-[10px] text-slate-500">نمایش در لیست توزین باسکول</span>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(itemForm.isTareLocked)}
-                    onChange={e => setItemForm({ ...itemForm, isTareLocked: e.target.checked })}
-                    className="accent-amber-600 w-4 h-4"
-                  />
-                  <div>
-                    <span className="font-black block text-amber-800 dark:text-amber-300">قفل وزن دوک و کارتن</span>
-                    <span className="text-[10px] text-amber-700/80 dark:text-amber-400/80">اپراتور نتواند تغییر دهد</span>
                   </div>
                 </label>
               </div>
@@ -3671,8 +3843,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             </div>
 
             {/* Basic Info Fields */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
-              <div className="sm:col-span-1">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+              <div>
                 <label className="font-bold block mb-1">کد فرمول *</label>
                 <input
                   type="text"
@@ -3694,49 +3866,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 />
               </div>
 
-              <div className="sm:col-span-2">
-                <label className="font-bold block mb-1">محصول نهایی نخ</label>
-                {finishedYarns.length > 0 ? (
-                  <select
-                    value={editingBom.finishedItemId || ''}
-                    onChange={e => {
-                      const sel = finishedYarns.find(y => y.id === e.target.value);
-                      setEditingBom({
-                        ...editingBom,
-                        finishedItemId: e.target.value,
-                        finishedItemName: sel?.name || '',
-                        finishedItemCode: sel?.code || ''
-                      });
-                    }}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
-                  >
-                    <option value="">-- انتخاب محصول نهایی --</option>
-                    {finishedYarns.map(y => (
-                      <option key={y.id} value={y.id}>{y.code} — {y.name}</option>
-                    ))}
-                  </select>
-                ) : (
+              <div>
+                <label className="font-bold block mb-1">نسخه / وضعیت</label>
+                <div className="flex gap-1.5">
                   <input
                     type="text"
-                    value={editingBom.finishedItemName || ''}
-                    onChange={e => setEditingBom({ ...editingBom, finishedItemName: e.target.value })}
-                    placeholder="نام محصول تولیدی (مثال: نخ DTY 150/48)"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                    value={editingBom.version || 'V1.0'}
+                    onChange={e => setEditingBom({ ...editingBom, version: e.target.value })}
+                    className="w-1/2 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
                   />
-                )}
+                  <select
+                    value={editingBom.status || 'ACTIVE'}
+                    onChange={e => setEditingBom({ ...editingBom, status: e.target.value as any })}
+                    className="w-1/2 px-2 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-center"
+                  >
+                    <option value="ACTIVE">فعال</option>
+                    <option value="DRAFT">پیش‌نویس</option>
+                    <option value="ARCHIVED">بایگانی</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="sm:col-span-1">
-                <label className="font-bold block mb-1">نسخه</label>
-                <input
-                  type="text"
-                  value={editingBom.version || 'V1.0'}
-                  onChange={e => setEditingBom({ ...editingBom, version: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold text-center"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
+              <div>
                 <label className="font-bold block mb-1">ضایعات استاندارد (%)</label>
                 <input
                   type="number"
@@ -3757,7 +3908,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                 />
               </div>
 
-              <div className="sm:col-span-2">
+              <div>
                 <label className="font-bold block mb-1">سربار کارخانه هر کیلو (ریال)</label>
                 <input
                   type="number"
@@ -3765,6 +3916,233 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
                   onChange={e => setEditingBom({ ...editingBom, factoryOverheadPerKg: parseFloat(e.target.value) || 0 })}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
                 />
+              </div>
+            </div>
+
+            {/* Multi-Product Assignment Section */}
+            {(() => {
+              const selectedIds = getBomFinishedItemIds(editingBom);
+              const selectedSet = new Set(selectedIds);
+              const visibleItems = bomAssignableItems.filter(itm =>
+                !bomModalItemSearch.trim() ||
+                matchesSearchQuery(bomModalItemSearch, [itm.code, itm.name, itm.yarnCount, itm.colorName, itm.groupName])
+              );
+              const toggleItemSelection = (itemId: string) => {
+                const nextIds = selectedSet.has(itemId)
+                  ? selectedIds.filter(id => id !== itemId)
+                  : [...selectedIds, itemId];
+                const primary = nextIds.length > 0 ? erpState.items.find(i => i.id === nextIds[0]) : undefined;
+                setEditingBom({
+                  ...editingBom,
+                  finishedItemIds: nextIds,
+                  finishedItemId: primary?.id || '',
+                  finishedItemCode: primary?.code || '',
+                  finishedItemName: primary?.name || ''
+                });
+              };
+              const selectAllVisible = () => {
+                const merged = Array.from(new Set([...selectedIds, ...visibleItems.map(i => i.id)]));
+                const primary = merged.length > 0 ? erpState.items.find(i => i.id === merged[0]) : undefined;
+                setEditingBom({
+                  ...editingBom,
+                  finishedItemIds: merged,
+                  finishedItemId: primary?.id || '',
+                  finishedItemCode: primary?.code || '',
+                  finishedItemName: primary?.name || ''
+                });
+              };
+              const clearAllSelection = () => {
+                setEditingBom({
+                  ...editingBom,
+                  finishedItemIds: [],
+                  finishedItemId: '',
+                  finishedItemCode: '',
+                  finishedItemName: ''
+                });
+              };
+
+              return (
+                <div className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-2.5 text-xs">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <span className="font-black text-slate-800 dark:text-slate-100 block">
+                        تخصیص فرمول تولید به کالاها (امکان انتخاب یک یا چند کالا):
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        کالاهای انتخاب‌شده هنگام توزین باسکول، وزن دوک/کارتن و وضعیت قفل این فرمول را به صورت خودکار دریافت می‌کنند.
+                      </span>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-black text-[11px] shrink-0 self-start sm:self-auto">
+                      {selectedIds.length} کالا انتخاب شده
+                    </span>
+                  </div>
+
+                  {bomAssignableItems.length > 0 ? (
+                    <>
+                      {selectedIds.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {selectedIds.map(id => {
+                            const itm = erpState.items.find(i => i.id === id);
+                            if (!itm) return null;
+                            return (
+                              <span
+                                key={id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900 border border-orange-200 dark:border-orange-800 text-[11px] font-bold shadow-xs"
+                              >
+                                <span className="font-mono text-orange-600">{itm.code}</span>
+                                <span className="text-slate-800 dark:text-slate-100">{itm.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleItemSelection(id)}
+                                  className="text-slate-400 hover:text-rose-600 cursor-pointer"
+                                  title="حذف از این فرمول"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative flex-1 min-w-[180px]">
+                          <Search size={13} className="absolute right-2.5 top-2.5 text-slate-400" />
+                          <input
+                            type="text"
+                            value={bomModalItemSearch}
+                            onChange={e => setBomModalItemSearch(e.target.value)}
+                            placeholder="جستجوی کالا برای تخصیص (کد، نام، نمره، رنگ)..."
+                            className="w-full pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={selectAllVisible}
+                          className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-black text-emerald-700 dark:text-emerald-400 hover:border-emerald-400 cursor-pointer"
+                        >
+                          انتخاب همه ({visibleItems.length})
+                        </button>
+                        {selectedIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={clearAllSelection}
+                            className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-rose-600 hover:border-rose-400 cursor-pointer"
+                          >
+                            پاک کردن انتخاب
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto custom-scrollbar pr-0.5">
+                        {visibleItems.map(itm => {
+                          const isChecked = selectedSet.has(itm.id);
+                          return (
+                            <label
+                              key={itm.id}
+                              className={`flex items-center gap-2 p-2 rounded-xl border text-[11px] cursor-pointer transition-colors ${
+                                isChecked
+                                  ? 'bg-orange-50/80 dark:bg-orange-950/30 border-orange-300 dark:border-orange-700 font-black text-slate-900 dark:text-slate-100'
+                                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 font-bold text-slate-600 dark:text-slate-300 hover:border-slate-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleItemSelection(itm.id)}
+                                className="accent-orange-600 w-3.5 h-3.5 shrink-0"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate">{itm.name}</div>
+                                <div className="text-[10px] font-mono text-slate-400 truncate">
+                                  {itm.code} {itm.yarnCount ? `• ${itm.yarnCount}` : ''} {itm.colorName ? `• ${itm.colorName}` : ''}
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })}
+                        {visibleItems.length === 0 && (
+                          <div className="col-span-full py-3 text-center text-[11px] text-slate-400 font-bold">
+                            کالایی با این مشخصات یافت نشد.
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <input
+                      type="text"
+                      value={editingBom.finishedItemName || ''}
+                      onChange={e => setEditingBom({ ...editingBom, finishedItemName: e.target.value })}
+                      placeholder="نام محصول تولیدی (مثال: نخ DTY 150/48)"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold"
+                    />
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* BOM Packaging Tare Weights & Lock Section */}
+            <div className="p-3.5 rounded-2xl border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20 space-y-3 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-black text-orange-900 dark:text-orange-200">
+                    پارامترهای بسته‌بندی، وزن دوک و کارتن و قفل باسکول:
+                  </h4>
+                  <p className="text-[11px] text-orange-700/80 dark:text-orange-300/80">
+                    این مقادیر هنگام توزین خط تولید برای تمام کالاهای متصل به این فرمول اعمال می‌شوند.
+                  </p>
+                </div>
+                <span className="font-mono text-[11px] font-black px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900 border border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-300 shrink-0 self-start sm:self-auto" dir="ltr">
+                  Tare: {(
+                    ((editingBom.cartonWeightGrams ?? 1450) +
+                      (editingBom.defaultConesPerCarton ?? 6) * (editingBom.coneWeightGrams ?? 110)) /
+                    1000
+                  ).toFixed(3)} Kg
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">تعداد دوک پیش‌فرض</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={editingBom.defaultConesPerCarton ?? 6}
+                    onChange={e => setEditingBom({ ...editingBom, defaultConesPerCarton: Math.max(1, parseInt(e.target.value) || 1) })}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold text-center"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">وزن کارتن خالی (گرم)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingBom.cartonWeightGrams ?? 1450}
+                    onChange={e => setEditingBom({ ...editingBom, cartonWeightGrams: Math.max(0, parseInt(e.target.value) || 0) })}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-center"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">وزن هر دوک (گرم)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingBom.coneWeightGrams ?? 110}
+                    onChange={e => setEditingBom({ ...editingBom, coneWeightGrams: Math.max(0, parseInt(e.target.value) || 0) })}
+                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-center"
+                  />
+                </div>
+                <label className="flex items-center gap-2 p-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/90 dark:bg-amber-950/40 cursor-pointer h-[38px]">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingBom.isTareLocked)}
+                    onChange={e => setEditingBom({ ...editingBom, isTareLocked: e.target.checked })}
+                    className="accent-amber-600 w-4 h-4 shrink-0"
+                  />
+                  <span className="font-black text-[11px] text-amber-900 dark:text-amber-200 truncate">
+                    قفل وزن دوک و کارتن
+                  </span>
+                </label>
               </div>
             </div>
 
@@ -4025,6 +4403,7 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
             <div id="bom-simulation-ticket" className="space-y-4">
               {(() => {
                 const comps = simulationBom.components || [];
+                const simAssignedItems = getBomAssignedItemsList(simulationBom);
                 const batchKg = simulationBatchQtyKg;
                 const totalMatPerKg = comps.reduce((sum, c) => sum + (c.totalCostRials || 0), 0);
                 const laborPerKg = simulationBom.directLaborPerKg || 0;
@@ -4038,6 +4417,16 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
 
                 return (
                   <>
+                    {simAssignedItems.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 bg-indigo-50/50 dark:bg-indigo-950/20 px-3 py-2 rounded-xl border border-indigo-200/70 dark:border-indigo-800 text-[11px]">
+                        <span className="font-black text-indigo-800 dark:text-indigo-300">کالاهای متصل به این فرمول:</span>
+                        {simAssignedItems.map(ai => (
+                          <span key={ai.id} className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 font-bold">
+                            {ai.code} — {ai.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                       <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-800">
                         <span className="text-slate-400 block text-[10px]">تولید نخ خالص هدف:</span>

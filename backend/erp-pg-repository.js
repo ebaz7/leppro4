@@ -1234,7 +1234,7 @@ async function readCompanyStateInsideTx(tx, companyId) {
       yarnCount: r.yarnCount,
       colorCode: r.colorCode,
       colorName: r.colorName,
-      grade: r.grade,
+      grade: r.grade || '',
       coneWeightGrams: r.coneWeightGrams,
       cartonWeightGrams: r.cartonWeightGrams,
       defaultConesPerCarton: r.defaultConesPerCarton,
@@ -1249,6 +1249,12 @@ async function readCompanyStateInsideTx(tx, companyId) {
       finishedItemId: r.finishedItemId,
       finishedItemCode: r.finishedItemCode,
       finishedItemName: r.finishedItemName,
+      finishedItemIds:
+        Array.isArray(r.extra?.finishedItemIds) && r.extra.finishedItemIds.length > 0
+          ? r.extra.finishedItemIds
+          : r.finishedItemId
+          ? [r.finishedItemId]
+          : [],
       version: r.version,
       wastePercent: r.wastePercent,
       directLaborPerKg: r.directLaborPerKg,
@@ -1772,7 +1778,7 @@ async function writeCompanyStateInsideTx(tx, companyId, state, nextRevision) {
       yarnCount: safeStr(r.yarnCount),
       colorCode: safeStr(r.colorCode),
       colorName: safeStr(r.colorName),
-      grade: safeStr(r.grade, 'A'),
+      grade: safeStr(r.grade, ''),
       coneWeightGrams: safeNum(r.coneWeightGrams, 110),
       cartonWeightGrams: safeNum(r.cartonWeightGrams, 1450),
       defaultConesPerCarton: safeInt(r.defaultConesPerCarton, 6),

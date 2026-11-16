@@ -26,13 +26,21 @@ import {
   AlertTriangle,
   SlidersHorizontal,
   PackagePlus,
-  BookOpen
+  BookOpen,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Home,
+  ChevronLeft,
+  ChevronDown,
+  ArrowRight
 } from 'lucide-react';
 import {
   ErpSubViewId,
   IndustrialErpState,
   ErpCompanySummary,
   ErpWarehouse,
+  ErpWarehouseGroup,
   ErpCommodityGroup,
   ErpItem,
   ErpCartonLabel,
@@ -47,7 +55,8 @@ import {
 import {
   getNextPlainSequentialNumber,
   matchesSearchQuery,
-  normalizeFaSearch
+  normalizeFaSearch,
+  resolveItemTareSpec
 } from './erpCodeUtils';
 import {
   PRODUCTION_FLOOR_WAREHOUSE_ID,
@@ -136,6 +145,138 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
   });
   const [confirmDeleteWhId, setConfirmDeleteWhId] = useState<string | null>(null);
   const [whDeleteError, setWhDeleteError] = useState<string | null>(null);
+
+  const warehouseGroups: ErpWarehouseGroup[] = useMemo(() => erpState.warehouseGroups || [], [erpState.warehouseGroups]);
+  const [selectedWarehouseGroupId, setSelectedWarehouseGroupId] = useState<string | null>(null);
+  const [expandedWarehouseGroupIds, setExpandedWarehouseGroupIds] = useState<Record<string, boolean>>({});
+  const [showAddWhGroupModal, setShowAddWhGroupModal] = useState(false);
+  const [whGroupForm, setWhGroupForm] = useState<Partial<ErpWarehouseGroup>>({
+    code: '',
+    name: '',
+    parentId: null,
+    isActive: true,
+    description: ''
+  });
+  const [includeChildWarehouseGroups, setIncludeChildWarehouseGroups] = useState(true);
+
+  const getWarehouseGroupPath = (groupId: string | null | undefined): ErpWarehouseGroup[] => {
+    if (!groupId) return [];
+    const path: ErpWarehouseGroup[] = [];
+    const visited = new Set<string>();
+    let currId: string | null | undefined = groupId;
+    while (currId && !visited.has(currId)) {
+      visited.add(currId);
+      const found = warehouseGroups.find(g => g.id === currId);
+      if (!found) break;
+      path.unshift(found);
+      currId = found.parentId || null;
+    }
+    return path;
+  };
+
+  const getDescendantWarehouseGroupIds = (rootId: string): string[] => {
+    const result: string[] = [rootId];
+    const queue: string[] = [rootId];
+    const visited = new Set<string>([rootId]);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const children = warehouseGroups.filter(g => (g.parentId || null) === current);
+      for (const ch of children) {
+        if (!visited.has(ch.id)) {
+          visited.add(ch.id);
+          result.push(ch.id);
+          queue.push(ch.id);
+        }
+      }
+    }
+    return result;
+  };
+
+  const toggleWarehouseGroupExpand = (groupId: string) => {
+    setExpandedWarehouseGroupIds(prev => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
+  const childWarehouseGroupsAtSelected = useMemo(() => {
+    return warehouseGroups.filter(g => (g.parentId || null) === selectedWarehouseGroupId);
+  }, [warehouseGroups, selectedWarehouseGroupId]);
+
+  const filteredWarehousesInTree = useMemo(() => {
+    let list = warehouses;
+    if (selectedWarehouseGroupId) {
+      if (includeChildWarehouseGroups) {
+        const allowedIds = new Set(getDescendantWarehouseGroupIds(selectedWarehouseGroupId));
+        list = list.filter(w => w.warehouseGroupId && allowedIds.has(w.warehouseGroupId));
+      } else {
+        list = list.filter(w => w.warehouseGroupId === selectedWarehouseGroupId);
+      }
+    }
+    return list;
+  }, [warehouses, selectedWarehouseGroupId, includeChildWarehouseGroups, warehouseGroups]);
+
+  const openCreateWarehouseGroupAt = (parentId: string | null) => {
+    const siblingCount = warehouseGroups.filter(g => (g.parentId || null) === parentId).length + 1;
+    const parentCode = parentId ? warehouseGroups.find(g => g.id === parentId)?.code || 'G' : 'WHG';
+    setWhGroupForm({
+      id: `whgrp_${Date.now()}`,
+      code: `${parentCode}-${String(siblingCount).padStart(2, '0')}`,
+      name: '',
+      parentId: parentId || null,
+      isActive: true,
+      description: ''
+    });
+    setShowAddWhGroupModal(true);
+  };
+
+  const handleSaveWarehouseGroup = async () => {
+    if (!whGroupForm.name?.trim() || !whGroupForm.code?.trim()) {
+      showToast?.('error', 'لطفاً کد و نام گروه انبار را وارد نمایید');
+      return;
+    }
+    if (whGroupForm.id && whGroupForm.parentId) {
+      const descendants = getDescendantWarehouseGroupIds(whGroupForm.id);
+      if (descendants.includes(whGroupForm.parentId)) {
+        showToast?.('error', 'امکان انتخاب زیرگروه یا خود گروه به عنوان والد وجود ندارد');
+        return;
+      }
+    }
+    const newGroup: ErpWarehouseGroup = {
+      id: whGroupForm.id || `whgrp_${Date.now()}`,
+      code: whGroupForm.code.trim(),
+      name: whGroupForm.name.trim(),
+      parentId: whGroupForm.parentId || null,
+      isActive: whGroupForm.isActive !== false,
+      description: whGroupForm.description || ''
+    };
+    const currentGroups = warehouseGroups;
+    const exists = currentGroups.some(g => g.id === newGroup.id);
+    const updatedGroups = exists
+      ? currentGroups.map(g => (g.id === newGroup.id ? newGroup : g))
+      : [...currentGroups, newGroup];
+
+    if (newGroup.parentId) {
+      setExpandedWarehouseGroupIds(prev => ({ ...prev, [newGroup.parentId!]: true }));
+    }
+    await persistErpState(
+      { ...erpState, warehouseGroups: updatedGroups },
+      exists ? 'گروه انبار بروزرسانی شد' : 'گروه انبار جدید ایجاد شد'
+    );
+    setShowAddWhGroupModal(false);
+    setSelectedWarehouseGroupId(newGroup.id);
+  };
+
+  const handleDeleteWarehouseGroup = async (groupId: string) => {
+    const hasChildren = warehouseGroups.some(g => (g.parentId || null) === groupId);
+    const hasWarehouses = warehouses.some(w => w.warehouseGroupId === groupId);
+    if (hasChildren || hasWarehouses) {
+      showToast?.('error', 'این گروه دارای زیرگروه یا انبار وابسته است و قابل حذف نیست.');
+      return;
+    }
+    const updated = warehouseGroups.filter(g => g.id !== groupId);
+    await persistErpState({ ...erpState, warehouseGroups: updated }, 'گروه انبار حذف گردید');
+    if (selectedWarehouseGroupId === groupId) {
+      setSelectedWarehouseGroupId(null);
+    }
+  };
 
   const handleSaveWarehouse = async () => {
     if (!whForm.name?.trim() || !whForm.code?.trim()) {
@@ -267,9 +408,14 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
           shift: 'ابتدای دوره',
           grade: openingGrade,
           grossWeightKg: Number((thisNet + 1.8).toFixed(3)),
-          conesCount: item.defaultConesPerCarton || 6,
-          coneWeightGrams: item.coneWeightGrams || 110,
-          cartonWeightGrams: item.cartonWeightGrams || 1450,
+          ...(() => {
+            const tareSpec = resolveItemTareSpec(item, erpState.boms || []);
+            return {
+              conesCount: tareSpec.defaultConesPerCarton,
+              coneWeightGrams: tareSpec.coneWeightGrams,
+              cartonWeightGrams: tareSpec.cartonWeightGrams
+            };
+          })(),
           totalTareKg: 1.8,
           netWeightKg: thisNet,
           unitCostPerKg: rate,
@@ -1292,9 +1438,14 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
           shift: 'تعدیل',
           grade: adjGrade,
           grossWeightKg: Number((thisNet + 1.8).toFixed(3)),
-          conesCount: item.defaultConesPerCarton || 6,
-          coneWeightGrams: item.coneWeightGrams || 110,
-          cartonWeightGrams: item.cartonWeightGrams || 1450,
+          ...(() => {
+            const tareSpec = resolveItemTareSpec(item, erpState.boms || []);
+            return {
+              conesCount: tareSpec.defaultConesPerCarton,
+              coneWeightGrams: tareSpec.coneWeightGrams,
+              cartonWeightGrams: tareSpec.cartonWeightGrams
+            };
+          })(),
           totalTareKg: 1.8,
           netWeightKg: thisNet,
           unitCostPerKg: rate,
@@ -1787,215 +1938,504 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
       {/* --------------------------------------------------------------------------------- */}
       {/* 1. WH_WAREHOUSES: DEFINE, EDIT & SAFE DELETE WAREHOUSES */}
       {/* --------------------------------------------------------------------------------- */}
-      {activeSubView === 'wh_warehouses' && (
-        <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
-            <div>
-              <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                <WhIcon className="w-5 h-5 text-teal-600" />
-                تعریف، ویرایش و حذف انبارها و تخصیص گروه کالایی
-              </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                مدیریت انبار تولید (پای خط)، انبار محصول، انبار مواد اولیه، نقطه سفارش و مسئول انبار
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {!hasProductionWarehouse && (
-                <button
-                  onClick={handleEnsureProdWarehouse}
-                  className="min-h-[40px] px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus size={15} />
-                  ایجاد انبار تولید (پای خط)
-                </button>
-              )}
-              <button
-                onClick={() => {
-                  setWhForm({
-                    code: `WH-0${warehouses.length + 1}`,
-                    name: '',
-                    type: 'FINISHED_YARN',
-                    location: '',
-                    managerName: '',
-                    minStockKg: 0,
-                    assignedGroupIds: []
-                  });
-                  setShowAddWhModal(true);
-                }}
-                className="min-h-[40px] px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer"
-              >
-                <Plus size={16} />
-                تعریف انبار جدید
-              </button>
-            </div>
-          </div>
+      {activeSubView === 'wh_warehouses' && (() => {
+        const currentPath = getWarehouseGroupPath(selectedWarehouseGroupId);
+        const currentSelectedGroup = selectedWarehouseGroupId ? warehouseGroups.find(g => g.id === selectedWarehouseGroupId) || null : null;
 
-          {whDeleteError && (
-            <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-800 dark:text-rose-200 flex items-center justify-between gap-2">
-              <span>{whDeleteError}</span>
-              <button onClick={() => setWhDeleteError(null)} className="p-1 cursor-pointer">
-                <X size={14} />
-              </button>
-            </div>
-          )}
+        const renderWarehouseGroupTreeBranch = (parentId: string | null, depth: number): React.ReactNode => {
+          const branchGroups = warehouseGroups.filter(g => (g.parentId || null) === parentId);
+          if (branchGroups.length === 0) return null;
 
-          {warehouses.length === 0 ? (
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 p-10 text-center space-y-3">
-              <WhIcon size={28} className="mx-auto text-teal-600" />
-              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
-                هیچ انباری برای این شرکت تعریف نشده است
-              </h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                انبار تولید (پای خط) هنگام ثبت عملکرد خط به‌صورت خودکار ایجاد می‌شود. همچنین می‌توانید انبارهای محصول و مواد اولیه را از اینجا تعریف کنید.
-              </p>
-              <button
-                onClick={() => {
-                  setWhForm({
-                    code: 'WH-01',
-                    name: 'انبار مرکزی محصول',
-                    type: 'FINISHED_YARN',
-                    location: 'سوله شماره ۱',
-                    managerName: actorName,
-                    minStockKg: 0,
-                    assignedGroupIds: []
-                  });
-                  setShowAddWhModal(true);
-                }}
-                className="min-h-[44px] px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Plus size={15} />
-                <span>تعریف اولین انبار</span>
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {warehouses.map(w => {
-                const inStockCartons = allCartons.filter(
-                  c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || c.status === 'RETURNED' || !c.status)
-                );
-                const bulkMap = computeBulkStockByKey(warehouseDocs, w.id);
-                let bulkCartons = 0;
-                let bulkKg = 0;
-                bulkMap.forEach(b => {
-                  bulkCartons += b.bulkCartons;
-                  bulkKg += b.bulkNetKg;
-                });
-
-                const totalCount = inStockCartons.length + bulkCartons;
-                const totalKg = Number(
-                  (inStockCartons.reduce((sum, c) => sum + Number(c.netWeightKg || 0), 0) + bulkKg).toFixed(3)
-                );
-                const delCheck = canDeleteWarehouse(w.id, allCartons, warehouseDocs);
-                const isConfirmingDel = confirmDeleteWhId === w.id;
+          return (
+            <div className={depth > 0 ? 'mr-3 pr-2 border-r border-slate-200 dark:border-slate-700 space-y-1 mt-1' : 'space-y-1'}>
+              {branchGroups.map(g => {
+                const children = warehouseGroups.filter(ch => (ch.parentId || null) === g.id);
+                const hasChildren = children.length > 0;
+                const isExpanded = Boolean(expandedWarehouseGroupIds[g.id]);
+                const isSelected = selectedWarehouseGroupId === g.id;
+                const descIds = new Set(getDescendantWarehouseGroupIds(g.id));
+                const totalBranchWhs = warehouses.filter(w => w.warehouseGroupId && descIds.has(w.warehouseGroupId)).length;
 
                 return (
-                  <div
-                    key={w.id}
-                    className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 flex flex-col justify-between space-y-3"
-                  >
-                    <div className="space-y-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="font-mono font-black text-teal-600 tabular-nums">{w.code}</span>
-                          <span className="text-slate-300">/</span>
-                          <span className="text-[11px] font-bold text-slate-500">{getWarehouseTypeLabel(w.type)}</span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => {
-                              setWhForm({ ...w });
-                              setShowAddWhModal(true);
-                            }}
-                            className="p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-600 cursor-pointer"
-                            title="ویرایش انبار"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (!delCheck.allowed) {
-                                setWhDeleteError(delCheck.reason || 'امکان حذف این انبار وجود ندارد');
-                                showToast?.('error', delCheck.reason || 'امکان حذف نیست');
-                                return;
-                              }
-                              setWhDeleteError(null);
-                              setConfirmDeleteWhId(isConfirmingDel ? null : w.id);
-                            }}
-                            className="p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 cursor-pointer"
-                            title={delCheck.allowed ? 'حذف انبار' : delCheck.reason}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
+                  <div key={g.id}>
+                    <div
+                      className={`group flex items-center justify-between gap-1 px-2 py-1.5 rounded-xl text-xs cursor-pointer transition-colors ${
+                        isSelected
+                          ? 'bg-teal-50 dark:bg-teal-950/50 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 font-black'
+                          : 'hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-300 font-bold'
+                      }`}
+                    >
+                      <div
+                        className="flex items-center gap-1.5 flex-1 min-w-0"
+                        onClick={() => {
+                          setSelectedWarehouseGroupId(g.id);
+                          setExpandedWarehouseGroupIds(prev => ({ ...prev, [g.id]: true }));
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            toggleWarehouseGroupExpand(g.id);
+                          }}
+                          className={`p-0.5 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700 ${hasChildren ? 'opacity-100' : 'opacity-20'}`}
+                          title={isExpanded ? 'بستن شاخه' : 'باز کردن زیرگروه‌ها'}
+                        >
+                          {isExpanded ? <ChevronDown size={13} /> : <ChevronLeft size={13} />}
+                        </button>
+                        {isExpanded || isSelected ? (
+                          <FolderOpen size={15} className={isSelected ? 'text-teal-600 shrink-0' : 'text-amber-500 shrink-0'} />
+                        ) : (
+                          <Folder size={15} className="text-amber-500 shrink-0" />
+                        )}
+                        <span className="truncate">{g.name}</span>
+                        <span className="text-[10px] font-mono text-slate-400 shrink-0">({totalBranchWhs})</span>
                       </div>
-
-                      <div>
-                        <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">{w.name}</h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          موقعیت: {w.location || '—'} · مسئول: {w.managerName || '—'}
-                        </p>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            openCreateWarehouseGroupAt(g.id);
+                          }}
+                          className="p-1 rounded hover:bg-teal-100 dark:hover:bg-teal-900/40 text-teal-600"
+                          title="افزودن زیرگروه در این شاخه"
+                        >
+                          <FolderPlus size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setWhGroupForm(g);
+                            setShowAddWhGroupModal(true);
+                          }}
+                          className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-400 hover:text-blue-600"
+                          title="ویرایش گروه"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            handleDeleteWarehouseGroup(g.id);
+                          }}
+                          className="p-1 rounded hover:bg-rose-100 dark:hover:bg-rose-900/40 text-slate-400 hover:text-rose-600"
+                          title="حذف گروه"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
-
-                      <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-                        <div>
-                          <span className="text-slate-400 block text-[10px]">تعداد کل کارتن / بسته</span>
-                          <strong className="font-mono tabular-nums font-bold text-slate-800 dark:text-slate-200">
-                            {totalCount} کارتن
-                          </strong>
-                        </div>
-                        <div className="text-left">
-                          <span className="text-slate-400 block text-[10px]">مانده وزن خالص</span>
-                          <strong className="font-mono tabular-nums font-black text-emerald-600" dir="ltr">
-                            {totalKg.toLocaleString()} Kg
-                          </strong>
-                        </div>
-                      </div>
-
-                      {Number(w.minStockKg || 0) > 0 && (
-                        <div className="text-[11px] flex items-center justify-between text-slate-500 font-mono tabular-nums">
-                          <span>حداقل موجودی (نقطه سفارش):</span>
-                          <span className={totalKg < Number(w.minStockKg) ? 'text-rose-600 font-black' : 'text-emerald-600 font-bold'}>
-                            {Number(w.minStockKg).toLocaleString()} Kg {totalKg < Number(w.minStockKg) ? '— کمبود موجودی' : ''}
-                          </span>
-                        </div>
-                      )}
-
-                      {isConfirmingDel && (
-                        <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs space-y-2">
-                          <div className="font-bold text-rose-800 dark:text-rose-200">
-                            آیا انبار «{w.name}» برای همیشه حذف شود؟
-                          </div>
-                          <div className="flex justify-end gap-2">
-                            <button
-                              onClick={() => setConfirmDeleteWhId(null)}
-                              className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 font-bold cursor-pointer"
-                            >
-                              انصراف
-                            </button>
-                            <button
-                              onClick={() => handleConfirmDeleteWarehouse(w)}
-                              className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-black cursor-pointer"
-                            >
-                              تایید حذف
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
-
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
-                      گروه‌های مجاز:{' '}
-                      {w.assignedGroupIds && w.assignedGroupIds.length > 0
-                        ? w.assignedGroupIds.map(gid => groups.find(g => g.id === gid)?.name || gid).join(' · ')
-                        : 'همه گروه‌های کالایی'}
-                    </div>
+                    {isExpanded && hasChildren && renderWarehouseGroupTreeBranch(g.id, depth + 1)}
                   </div>
                 );
               })}
             </div>
-          )}
-        </div>
-      )}
+          );
+        };
+
+        return (
+          <div className="flex-1 flex flex-col min-h-0 p-4 space-y-4 overflow-y-auto custom-scrollbar">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div>
+                <h2 className="text-sm font-black text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <WhIcon className="w-5 h-5 text-teal-600" />
+                  تعریف درختی انبارها، زیرگروه‌ها و تخصیص کالا
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  مدیریت ساختار سلسله‌مراتبی انبارها و گروه‌های انبار (شاخه ای و زیرگروه) مشابه تعریف کالاها
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {!hasProductionWarehouse && (
+                  <button
+                    onClick={handleEnsureProdWarehouse}
+                    className="min-h-[40px] px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus size={15} />
+                    ایجاد انبار تولید (پای خط)
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => openCreateWarehouseGroupAt(selectedWarehouseGroupId)}
+                  className="px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+                >
+                  <FolderPlus size={15} className="text-teal-600" />
+                  <span>{selectedWarehouseGroupId ? 'افزودن زیرگروه انبار اینجا' : 'تعریف گروه انبار اصلی'}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setWhForm({
+                      code: `WH-0${warehouses.length + 1}`,
+                      name: '',
+                      type: 'FINISHED_YARN',
+                      location: '',
+                      managerName: '',
+                      minStockKg: 0,
+                      warehouseGroupId: selectedWarehouseGroupId || null,
+                      assignedGroupIds: []
+                    });
+                    setShowAddWhModal(true);
+                  }}
+                  className="min-h-[40px] px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-2 cursor-pointer"
+                >
+                  <Plus size={16} />
+                  تعریف انبار جدید در این شاخه
+                </button>
+              </div>
+            </div>
+
+            {whDeleteError && (
+              <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-800 dark:text-rose-200 flex items-center justify-between gap-2">
+                <span>{whDeleteError}</span>
+                <button onClick={() => setWhDeleteError(null)} className="p-1 cursor-pointer">
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+
+            {/* Split Tree Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0">
+              {/* Tree Panel */}
+              <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm flex flex-col min-h-[320px]">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5 mb-3">
+                  <span className="text-xs font-black text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                    <FolderOpen size={15} className="text-teal-600" />
+                    ساختار درختی گروه‌های انبار ({warehouseGroups.length})
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allExp: Record<string, boolean> = {};
+                        warehouseGroups.forEach(g => { allExp[g.id] = true; });
+                        setExpandedWarehouseGroupIds(allExp);
+                      }}
+                      className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                    >
+                      باز کردن همه
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedWarehouseGroupIds({})}
+                      className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                    >
+                      بستن
+                    </button>
+                  </div>
+                </div>
+
+                {/* Root Node */}
+                <div
+                  onClick={() => setSelectedWarehouseGroupId(null)}
+                  className={`flex items-center justify-between px-2.5 py-2 rounded-xl text-xs cursor-pointer mb-2 transition-colors ${
+                    selectedWarehouseGroupId === null
+                      ? 'bg-teal-600 text-white font-black shadow-sm'
+                      : 'bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 text-slate-700 dark:text-slate-200 font-bold'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Home size={14} />
+                    <span>ریشه درخت (همه انبارها)</span>
+                  </div>
+                  <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${selectedWarehouseGroupId === null ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                    {warehouses.length}
+                  </span>
+                </div>
+
+                {/* Tree Nodes */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar pr-0.5">
+                  {warehouseGroups.length === 0 ? (
+                    <div className="text-center py-8 px-3 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl space-y-2">
+                      <FolderPlus size={24} className="mx-auto text-slate-300" />
+                      <p className="text-xs text-slate-400 font-bold">هنوز گروه انباری تعریف نشده است.</p>
+                      <button
+                        type="button"
+                        onClick={() => openCreateWarehouseGroupAt(null)}
+                        className="px-3 py-1.5 rounded-lg bg-teal-50 text-teal-600 text-[11px] font-black hover:bg-teal-100"
+                      >
+                        + ساخت اولین گروه انبار اصلی
+                      </button>
+                    </div>
+                  ) : (
+                    renderWarehouseGroupTreeBranch(null, 0)
+                  )}
+                </div>
+              </div>
+
+              {/* Right Workspace: Breadcrumb + Subgroups + Warehouses Grid */}
+              <div className="lg:col-span-8 space-y-4 flex flex-col min-w-0">
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shadow-sm space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedWarehouseGroupId(null)}
+                        className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors ${
+                          selectedWarehouseGroupId === null ? 'bg-teal-100 text-teal-700 dark:bg-teal-950/60 dark:text-teal-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                        }`}
+                      >
+                        <Home size={12} />
+                        <span>ریشه</span>
+                      </button>
+                      {currentPath.map((node, idx) => (
+                        <React.Fragment key={node.id}>
+                          <ChevronLeft size={13} className="text-slate-400" />
+                          <button
+                            type="button"
+                            onClick={() => setSelectedWarehouseGroupId(node.id)}
+                            className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
+                              idx === currentPath.length - 1
+                                ? 'bg-teal-600 text-white'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200'
+                            }`}
+                          >
+                            {node.name}
+                          </button>
+                        </React.Fragment>
+                      ))}
+                    </div>
+
+                    {currentSelectedGroup && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedWarehouseGroupId(currentSelectedGroup.parentId || null)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs font-bold text-slate-600 dark:text-slate-300 flex items-center gap-1"
+                      >
+                        <ArrowRight size={13} />
+                        <span>بازگشت یک سطح به بالا</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Direct Subgroups in current branch */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-black text-slate-500">
+                        {selectedWarehouseGroupId ? `زیرگروه‌های انبار «${currentSelectedGroup?.name}» (${childWarehouseGroupsAtSelected.length})` : `گروه‌های انبار اصلی (${childWarehouseGroupsAtSelected.length})`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openCreateWarehouseGroupAt(selectedWarehouseGroupId)}
+                        className="text-[11px] font-black text-teal-600 hover:underline flex items-center gap-1"
+                      >
+                        <Plus size={12} />
+                        <span>ایجاد زیرگروه انبار جدید</span>
+                      </button>
+                    </div>
+
+                    {childWarehouseGroupsAtSelected.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                        {childWarehouseGroupsAtSelected.map(cg => {
+                          const childBranchCount = warehouseGroups.filter(x => (x.parentId || null) === cg.id).length;
+                          const descIds = new Set(getDescendantWarehouseGroupIds(cg.id));
+                          const whCount = warehouses.filter(w => w.warehouseGroupId && descIds.has(w.warehouseGroupId)).length;
+                          return (
+                            <div
+                              key={cg.id}
+                              onClick={() => {
+                                setSelectedWarehouseGroupId(cg.id);
+                                setExpandedWarehouseGroupIds(prev => ({ ...prev, [cg.id]: true }));
+                              }}
+                              className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/50 hover:border-teal-400 hover:bg-teal-50/40 dark:hover:bg-teal-950/20 cursor-pointer transition-all flex items-center justify-between gap-2"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <Folder size={15} className="text-amber-500 shrink-0" />
+                                  <span className="font-black text-xs text-slate-800 dark:text-slate-100 truncate">{cg.name}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-2 font-bold">
+                                  <span className="font-mono text-teal-600">{cg.code}</span>
+                                  <span>• {childBranchCount} زیرگروه</span>
+                                  <span>• {whCount} انبار</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setWhGroupForm(cg);
+                                    setShowAddWhGroupModal(true);
+                                  }}
+                                  className="p-1 rounded hover:bg-blue-100 text-slate-400 hover:text-blue-600"
+                                  title="ویرایش"
+                                >
+                                  <Edit2 size={12} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Warehouses Grid */}
+                <div className="flex-1 min-h-0">
+                  {filteredWarehousesInTree.length === 0 ? (
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 p-8 text-center space-y-3">
+                      <WhIcon size={24} className="mx-auto text-teal-600" />
+                      <h4 className="font-black text-xs text-slate-800 dark:text-slate-100">
+                        هیچ انباری در این شاخه یا زیرگروه وجود ندارد
+                      </h4>
+                      <button
+                        onClick={() => {
+                          setWhForm({
+                            code: `WH-0${warehouses.length + 1}`,
+                            name: '',
+                            type: 'FINISHED_YARN',
+                            location: '',
+                            managerName: '',
+                            minStockKg: 0,
+                            warehouseGroupId: selectedWarehouseGroupId || null,
+                            assignedGroupIds: []
+                          });
+                          setShowAddWhModal(true);
+                        }}
+                        className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Plus size={14} />
+                        <span>تعریف انبار در این شاخه</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {filteredWarehousesInTree.map(w => {
+                        const inStockCartons = allCartons.filter(
+                          c => c.warehouseId === w.id && (c.status === 'IN_STOCK' || c.status === 'RETURNED' || !c.status)
+                        );
+                        const bulkMap = computeBulkStockByKey(warehouseDocs, w.id);
+                        let bulkCartons = 0;
+                        let bulkKg = 0;
+                        bulkMap.forEach(b => {
+                          bulkCartons += b.bulkCartons;
+                          bulkKg += b.bulkNetKg;
+                        });
+
+                        const totalCount = inStockCartons.length + bulkCartons;
+                        const totalKg = Number(
+                          (inStockCartons.reduce((sum, c) => sum + Number(c.netWeightKg || 0), 0) + bulkKg).toFixed(3)
+                        );
+                        const delCheck = canDeleteWarehouse(w.id, allCartons, warehouseDocs);
+                        const isConfirmingDel = confirmDeleteWhId === w.id;
+                        const parentWg = warehouseGroups.find(g => g.id === w.warehouseGroupId);
+
+                        return (
+                          <div
+                            key={w.id}
+                            className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 flex flex-col justify-between space-y-3 shadow-sm"
+                          >
+                            <div className="space-y-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 text-xs">
+                                  <span className="font-mono font-black text-teal-600 tabular-nums">{w.code}</span>
+                                  <span className="text-slate-300">/</span>
+                                  <span className="text-[11px] font-bold text-slate-500">{getWarehouseTypeLabel(w.type)}</span>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    onClick={() => {
+                                      setWhForm({ ...w });
+                                      setShowAddWhModal(true);
+                                    }}
+                                    className="p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-600 cursor-pointer"
+                                    title="ویرایش انبار"
+                                  >
+                                    <Edit2 size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (!delCheck.allowed) {
+                                        setWhDeleteError(delCheck.reason || 'امکان حذف این انبار وجود ندارد');
+                                        showToast?.('error', delCheck.reason || 'امکان حذف نیست');
+                                        return;
+                                      }
+                                      setWhDeleteError(null);
+                                      setConfirmDeleteWhId(isConfirmingDel ? null : w.id);
+                                    }}
+                                    className="p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 cursor-pointer"
+                                    title={delCheck.allowed ? 'حذف انبار' : delCheck.reason}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div>
+                                <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">{w.name}</h3>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                  گروه انبار: {parentWg ? parentWg.name : 'ریشه (بدون گروه)'} · موقعیت: {w.location || '—'} · مسئول: {w.managerName || '—'}
+                                </p>
+                              </div>
+
+                              <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+                                <div>
+                                  <span className="text-slate-400 block text-[10px]">تعداد کل کارتن / بسته</span>
+                                  <strong className="font-mono tabular-nums font-bold text-slate-800 dark:text-slate-200">
+                                    {totalCount} کارتن
+                                  </strong>
+                                </div>
+                                <div className="text-left">
+                                  <span className="text-slate-400 block text-[10px]">مانده وزن خالص</span>
+                                  <strong className="font-mono tabular-nums font-black text-emerald-600" dir="ltr">
+                                    {totalKg.toLocaleString()} Kg
+                                  </strong>
+                                </div>
+                              </div>
+
+                              {Number(w.minStockKg || 0) > 0 && (
+                                <div className="text-[11px] flex items-center justify-between text-slate-500 font-mono tabular-nums">
+                                  <span>حداقل موجودی (نقطه سفارش):</span>
+                                  <span className={totalKg < Number(w.minStockKg) ? 'text-rose-600 font-black' : 'text-emerald-600 font-bold'}>
+                                    {Number(w.minStockKg).toLocaleString()} Kg {totalKg < Number(w.minStockKg) ? '— کمبود موجودی' : ''}
+                                  </span>
+                                </div>
+                              )}
+
+                              {isConfirmingDel && (
+                                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs space-y-2">
+                                  <div className="font-bold text-rose-800 dark:text-rose-200">
+                                    آیا انبار «{w.name}» برای همیشه حذف شود؟
+                                  </div>
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      onClick={() => setConfirmDeleteWhId(null)}
+                                      className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 font-bold cursor-pointer"
+                                    >
+                                      انصراف
+                                    </button>
+                                    <button
+                                      onClick={() => handleConfirmDeleteWarehouse(w)}
+                                      className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-black cursor-pointer"
+                                    >
+                                      تایید حذف
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
+                              گروه‌های کالایی مجاز:{' '}
+                              {w.assignedGroupIds && w.assignedGroupIds.length > 0
+                                ? w.assignedGroupIds.map(gid => groups.find(g => g.id === gid)?.name || gid).join(' · ')
+                                : 'همه گروه‌های کالایی'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* --------------------------------------------------------------------------------- */}
       {/* 2. WH_OPENING_BALANCE: OPENING INVENTORY ENTRY PER WAREHOUSE */}
@@ -4070,6 +4510,19 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                   />
                 </div>
               </div>
+              <div>
+                <label className="font-bold block mb-1">گروه انبار (شاخه)</label>
+                <select
+                  value={whForm.warehouseGroupId || ''}
+                  onChange={e => setWhForm({ ...whForm, warehouseGroupId: e.target.value || null })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                >
+                  <option value="">بدون گروه (ریشه)</option>
+                  {warehouseGroups.map(wg => (
+                    <option key={wg.id} value={wg.id}>{wg.code} — {wg.name}</option>
+                  ))}
+                </select>
+              </div>
               {groups.length > 0 && (
                 <div>
                   <label className="font-bold block mb-1">گروه‌های کالایی مجاز (خالی = همه گروه‌ها)</label>
@@ -4111,6 +4564,86 @@ export const WarehouseModuleView: React.FC<WarehouseModuleViewProps> = ({
                 className="min-h-[40px] px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black cursor-pointer"
               >
                 ذخیره انبار
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------------------------------- */}
+      {/* MODAL: ADD / EDIT WAREHOUSE GROUP */}
+      {/* --------------------------------------------------------------------------------- */}
+      {showAddWhGroupModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                {whGroupForm.id && warehouseGroups.some(g => g.id === whGroupForm.id) ? 'ویرایش گروه انبار' : 'تعریف گروه یا زیرگروه انبار'}
+              </h3>
+              <button onClick={() => setShowAddWhGroupModal(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 cursor-pointer">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1">کد گروه *</label>
+                  <input
+                    type="text"
+                    value={whGroupForm.code || ''}
+                    onChange={e => setWhGroupForm({ ...whGroupForm, code: e.target.value })}
+                    placeholder="WHG-01"
+                    className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1">گروه والد (بالاسری)</label>
+                  <select
+                    value={whGroupForm.parentId || ''}
+                    onChange={e => setWhGroupForm({ ...whGroupForm, parentId: e.target.value || null })}
+                    className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  >
+                    <option value="">گروه اصلی (بدون والد)</option>
+                    {warehouseGroups
+                      .filter(g => g.id !== whGroupForm.id)
+                      .map(g => (
+                        <option key={g.id} value={g.id}>{g.code} — {g.name}</option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="font-bold block mb-1">نام گروه انبار *</label>
+                <input
+                  type="text"
+                  value={whGroupForm.name || ''}
+                  onChange={e => setWhGroupForm({ ...whGroupForm, name: e.target.value })}
+                  placeholder="مثال: انبارهای مرکزی و سوله‌ها"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold block mb-1">توضیحات</label>
+                <textarea
+                  value={whGroupForm.description || ''}
+                  onChange={e => setWhGroupForm({ ...whGroupForm, description: e.target.value })}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowAddWhGroupModal(false)}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-600 cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                onClick={handleSaveWarehouseGroup}
+                className="min-h-[40px] px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black cursor-pointer"
+              >
+                ذخیره گروه انبار
               </button>
             </div>
           </div>

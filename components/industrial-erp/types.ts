@@ -54,6 +54,15 @@ export interface ErpCommodityGroup {
   description?: string;
 }
 
+export interface ErpWarehouseGroup {
+  id: string;
+  code: string;
+  name: string;
+  parentId?: string | null;
+  isActive?: boolean;
+  description?: string;
+}
+
 export interface ErpWarehouse {
   id: string;
   code: string;
@@ -63,6 +72,7 @@ export interface ErpWarehouse {
   managerName?: string;
   isProductionFloor?: boolean;
   minStockKg?: number;
+  warehouseGroupId?: string | null;
   assignedGroupIds?: string[];
   assignedItemIds?: string[];
 }
@@ -84,10 +94,10 @@ export interface ErpItem {
   ply?: string;
   colorCode?: string;
   colorName?: string;
-  grade?: 'A' | 'B' | 'C';
-  coneWeightGrams: number;
-  cartonWeightGrams: number;
-  defaultConesPerCarton: number;
+  grade?: 'A' | 'B' | 'C' | '';
+  coneWeightGrams?: number;
+  cartonWeightGrams?: number;
+  defaultConesPerCarton?: number;
   isActive?: boolean;
   isTareLocked?: boolean;
 }
@@ -113,6 +123,13 @@ export interface ErpBom {
   finishedItemId: string;
   finishedItemCode?: string;
   finishedItemName: string;
+  finishedItemIds?: string[];
+  finishedItemCodes?: string[];
+  finishedItemNames?: string[];
+  defaultConesPerCarton?: number;
+  cartonWeightGrams?: number;
+  coneWeightGrams?: number;
+  isTareLocked?: boolean;
   version: string;
   wastePercent: number;
   directLaborPerKg: number;
@@ -621,6 +638,7 @@ export interface IndustrialErpState {
   activeFiscalYear?: string;
   productionLines?: ErpProductionLine[];
   commodityGroups?: ErpCommodityGroup[];
+  warehouseGroups?: ErpWarehouseGroup[];
   productionVouchers?: ErpProductionVoucher[];
   warehouseDocuments?: ErpWarehouseDocument[];
   warehouses: ErpWarehouse[];

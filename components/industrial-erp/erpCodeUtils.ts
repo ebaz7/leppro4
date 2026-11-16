@@ -1,5 +1,6 @@
 // Pure utilities for ERP sequential plain numbering, line-derived reference codes,
-// and normalized multi-token Farsi/English archive search.
+// multi-item BOM tare resolution, and normalized multi-token Farsi/English archive search.
+import type { ErpBom, ErpItem } from './types';
 
 const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -193,4 +194,116 @@ export function matchesSearchQuery(query: string, fields: Array<unknown>): boole
     .join(' | ');
 
   return tokens.every(tok => haystack.includes(tok));
+}
+
+export function getBomFinishedItemIds(bom: Partial<ErpBom> | undefined | null): string[] {
+  if (!bom) return [];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(bom.finishedItemIds)) {
+    for (const rawId of bom.finishedItemIds) {
+      const id = String(rawId || '').trim();
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  }
+  const legacyId = String(bom.finishedItemId || '').trim();
+  if (legacyId && !seen.has(legacyId)) {
+    ids.push(legacyId);
+  }
+  return ids;
+}
+
+export function bomMatchesItem(bom: Partial<ErpBom> | undefined | null, itemId?: string | null): boolean {
+  const target = String(itemId || '').trim();
+  if (!target || !bom) return false;
+  return getBomFinishedItemIds(bom).includes(target);
+}
+
+export function getBomsForItem(boms: ErpBom[] = [], itemId?: string | null): ErpBom[] {
+  const target = String(itemId || '').trim();
+  if (!target || !Array.isArray(boms)) return [];
+  const statusRank = (s?: ErpBom['status']) => {
+    if (!s || s === 'ACTIVE') return 0;
+    if (s === 'DRAFT') return 1;
+    return 2;
+  };
+  return boms
+    .filter(b => bomMatchesItem(b, target))
+    .sort((a, b) => {
+      const rankDiff = statusRank(a.status) - statusRank(b.status);
+      if (rankDiff !== 0) return rankDiff;
+      return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+    });
+}
+
+export interface ResolvedTareSpec {
+  defaultConesPerCarton: number;
+  cartonWeightGrams: number;
+  coneWeightGrams: number;
+  isTareLocked: boolean;
+  bom: ErpBom | null;
+  matchingBoms: ErpBom[];
+  source: 'BOM' | 'ITEM_LEGACY' | 'DEFAULT';
+}
+
+export function resolveItemTareSpec(
+  item: ErpItem | undefined | null,
+  boms: ErpBom[] = [],
+  preferredBomId?: string | null
+): ResolvedTareSpec {
+  const matchingBoms = item ? getBomsForItem(boms, item.id) : [];
+  const preferred = preferredBomId
+    ? matchingBoms.find(b => b.id === preferredBomId) || null
+    : null;
+  const activeBom =
+    preferred ||
+    matchingBoms.find(b => !b.status || b.status === 'ACTIVE') ||
+    matchingBoms[0] ||
+    null;
+
+  const bomHasTare =
+    activeBom !== null &&
+    (activeBom.defaultConesPerCarton !== undefined ||
+      activeBom.cartonWeightGrams !== undefined ||
+      activeBom.coneWeightGrams !== undefined ||
+      activeBom.isTareLocked !== undefined);
+
+  const defaultConesPerCarton =
+    activeBom?.defaultConesPerCarton !== undefined
+      ? Math.max(1, Number(activeBom.defaultConesPerCarton) || 6)
+      : item?.defaultConesPerCarton !== undefined
+      ? Math.max(1, Number(item.defaultConesPerCarton) || 6)
+      : 6;
+
+  const cartonWeightGrams =
+    activeBom?.cartonWeightGrams !== undefined
+      ? Math.max(0, Number(activeBom.cartonWeightGrams) || 0)
+      : item?.cartonWeightGrams !== undefined
+      ? Math.max(0, Number(item.cartonWeightGrams) || 0)
+      : 1450;
+
+  const coneWeightGrams =
+    activeBom?.coneWeightGrams !== undefined
+      ? Math.max(0, Number(activeBom.coneWeightGrams) || 0)
+      : item?.coneWeightGrams !== undefined
+      ? Math.max(0, Number(item.coneWeightGrams) || 0)
+      : 110;
+
+  const isTareLocked =
+    activeBom?.isTareLocked !== undefined
+      ? Boolean(activeBom.isTareLocked)
+      : Boolean(item?.isTareLocked);
+
+  return {
+    defaultConesPerCarton,
+    cartonWeightGrams,
+    coneWeightGrams,
+    isTareLocked,
+    bom: activeBom,
+    matchingBoms,
+    source: bomHasTare ? 'BOM' : item ? 'ITEM_LEGACY' : 'DEFAULT'
+  };
 }
