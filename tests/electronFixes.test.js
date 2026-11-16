@@ -52,4 +52,42 @@ test('Electron scripts, hooks, and electron-builder.json are valid and consisten
   assert.ok(mainSrc.includes("'second-instance'"));
   assert.ok(mainSrc.includes("'context-menu'"));
   assert.ok(mainSrc.includes('dlkam-persistent-kv.json'));
+  assert.ok(mainSrc.includes('streamDownloadWithElectronNet'));
+  assert.ok(mainSrc.includes('finalizeDownloadedFile'));
+  assert.ok(mainSrc.includes('findMatchingInstallerInDir'));
+  assert.ok(mainSrc.includes('LAUNCH_FAILED:'));
 });
+
+test('Electron/Android update services never persist localStorage dismissal or fake installed version', () => {
+  const rootDir = process.cwd();
+  const updateServiceSrc = fs.readFileSync(path.join(rootDir, 'services/updateService.ts'), 'utf8');
+  const updateBannerSrc = fs.readFileSync(path.join(rootDir, 'components/UpdateBanner.tsx'), 'utf8');
+
+  // Native binaries use sessionStorage only on explicit user dismiss, never localStorage
+  assert.ok(updateServiceSrc.includes("if (rt === 'electron' || rt === 'tauri' || rt === 'android')"));
+  assert.ok(updateServiceSrc.includes("sessionStorage.setItem('dismissed_update_sig', sig)"));
+  assert.ok(updateServiceSrc.includes('if (!isDesktop && !isAndroid)'));
+  assert.ok(updateServiceSrc.includes('LAUNCH_FAILED:'));
+
+  // UpdateBanner must not dismiss banner when starting direct link or installer download
+  assert.ok(!updateBannerSrc.includes('dismissUpdate('));
+  assert.ok(!updateBannerSrc.includes('markPlatformUpdateInstalled('));
+});
+
+test('SecretariatModule portals modals above sidebar/dock and provides non-scrolling collapsible toolbar with Undo/Redo', () => {
+  const rootDir = process.cwd();
+  const secretariatSrc = fs.readFileSync(path.join(rootDir, 'components/SecretariatModule.tsx'), 'utf8');
+
+  assert.ok(secretariatSrc.includes('import { createPortal } from "react-dom"'));
+  assert.ok(secretariatSrc.includes('z-[9985]'));
+  assert.ok(secretariatSrc.includes('isEditorToolbarExpanded'));
+  assert.ok(secretariatSrc.includes('باز کردن نوار تنظیمات و قالب‌بندی'));
+  assert.ok(secretariatSrc.includes('<span>قبلی</span>'));
+  assert.ok(secretariatSrc.includes('<span>بعدی</span>'));
+
+  const toolbarMatch = secretariatSrc.match(/id="letter-custom-quill-toolbar"[\s\S]{0,300}/);
+  assert.ok(toolbarMatch, 'Expected #letter-custom-quill-toolbar element');
+  assert.ok(!toolbarMatch[0].includes('flex-nowrap'), 'Toolbar must wrap cleanly on all viewports');
+  assert.ok(!toolbarMatch[0].includes('overflow-x-auto'), 'Toolbar must not horizontally scroll');
+});
+

@@ -609,12 +609,12 @@ const Settings: React.FC<SettingsProps> = ({
       });
 
       // Semantic comparison using compareSemVer (only show available when server version is strictly greater)
-      const appliedVer = localStorage.getItem('applied_desktop_version') || localStorage.getItem('applied_android_version') || currentAppVersion;
-      const effectiveInstalledVer = compareSemVer(appliedVer, currentAppVersion) > 0 ? appliedVer : currentAppVersion;
-      const semVerDiff = compareSemVer(fetchedVersion, effectiveInstalledVer);
-      
       const isAndroid = runtime === 'android';
       const isWeb = runtime === 'web';
+      const effectiveInstalledVer = isWeb
+        ? (localStorage.getItem('applied_server_version') || currentAppVersion)
+        : currentAppVersion;
+      const semVerDiff = compareSemVer(fetchedVersion, effectiveInstalledVer);
       const hasValidInstaller = isWeb || (isAndroid ? rawData?.hasAndroidInstaller !== false : rawData?.hasDesktopInstaller !== false);
 
       if (semVerDiff > 0 && hasValidInstaller) {

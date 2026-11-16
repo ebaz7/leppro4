@@ -4418,33 +4418,48 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       {/* MODAL: ADD / EDIT BOM (FORMULA & COST ENGINE) */}
       {/* --------------------------------------------------------------------------------- */}
       {showAddEditBomModal && editingBom && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-[96vw] xl:max-w-[1440px] w-full p-4 sm:p-6 shadow-2xl space-y-4 my-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 flex items-center justify-center border border-orange-200 dark:border-orange-800">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-[96vw] xl:max-w-[1440px] w-full max-h-[90vh] sm:max-h-[92vh] flex flex-col overflow-hidden shadow-2xl">
+            {/* Fixed Modal Header */}
+            <div className="shrink-0 px-4 sm:px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-950/40 text-orange-600 flex items-center justify-center border border-orange-200 dark:border-orange-800 shrink-0">
                   <Sparkles size={20} />
                 </div>
-                <div>
-                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100">
+                <div className="min-w-0">
+                  <h3 className="font-black text-sm text-slate-800 dark:text-slate-100 truncate">
                     {editingBom.id ? 'ویرایش فرمول ساخت و آنالیز بهای تمام‌شده (BOM)' : 'تعریف فرمول ساخت جدید (BOM)'}
                   </h3>
-                  <p className="text-xs text-slate-400">تنظیم مصرف مواد اولیه، ضایعات استاندارد، سربار کارخانه و ملزومات بسته‌بندی</p>
+                  <p className="text-xs text-slate-400 truncate">تنظیم مصرف مواد اولیه، ضایعات استاندارد، سربار کارخانه و ملزومات بسته‌بندی</p>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setShowAddEditBomModal(false);
-                  setEditingBom(null);
-                }}
-                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 cursor-pointer"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSaveBom}
+                  className="hidden sm:inline-flex px-4 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-black shadow-xs items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCircle2 size={14} />
+                  <span>ذخیره فرمول</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddEditBomModal(false);
+                    setEditingBom(null);
+                  }}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 cursor-pointer"
+                  title="بستن پنجره"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
-            {/* Basic Info Fields */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+            {/* Scrollable Modal Body */}
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 sm:p-6 space-y-4">
+              {/* Basic Info Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
               <div>
                 <label className="font-bold block mb-1">کد فرمول *</label>
                 <input
@@ -5120,27 +5135,28 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
               );
             })()}
 
-            {/* Notes */}
-            <div>
-              <label className="font-bold text-xs block mb-1">یادداشت‌ها و مشخصات فنی فرمول</label>
-              <textarea
-                value={editingBom.notes || ''}
-                onChange={e => setEditingBom({ ...editingBom, notes: e.target.value })}
-                placeholder="توضیحات تکمیلی، استاندارد آزمایشگاهی، رطوبت مجاز و..."
-                rows={2}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
-              />
+              {/* Notes */}
+              <div>
+                <label className="font-bold text-xs block mb-1">یادداشت‌ها و مشخصات فنی فرمول</label>
+                <textarea
+                  value={editingBom.notes || ''}
+                  onChange={e => setEditingBom({ ...editingBom, notes: e.target.value })}
+                  placeholder="توضیحات تکمیلی، استاندارد آزمایشگاهی، رطوبت مجاز و..."
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                />
+              </div>
             </div>
 
-            {/* Footer Buttons */}
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+            {/* Fixed Footer Buttons */}
+            <div className="shrink-0 px-4 sm:px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-900/95 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   setShowAddEditBomModal(false);
                   setEditingBom(null);
                 }}
-                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 cursor-pointer"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 cursor-pointer"
               >
                 انصراف
               </button>
@@ -5161,8 +5177,8 @@ export const ProductionBomModuleView: React.FC<ProductionBomModuleViewProps> = (
       {/* MODAL: BOM BATCH SIMULATION & REQUIREMENTS CALCULATOR */}
       {/* --------------------------------------------------------------------------------- */}
       {showSimulationModal && simulationBom && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-4xl w-full p-6 shadow-2xl space-y-4 my-8">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 max-w-4xl w-full max-h-[90vh] sm:max-h-[92vh] overflow-y-auto custom-scrollbar p-5 sm:p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 flex items-center justify-center border border-indigo-200 dark:border-indigo-800">

@@ -3029,6 +3029,18 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
 }
 
 #letter-custom-quill-toolbar button {
+  width: auto;
+  min-width: 28px;
+  min-height: 28px;
+  white-space: nowrap;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease-in-out;
+}
+
+#letter-custom-quill-toolbar .ql-formats button {
   width: 28px !important;
   height: 28px !important;
   padding: 4px !important;
@@ -3133,6 +3145,8 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  overflow: visible;
+  max-width: 100%;
 }
 
 .dark #letter-custom-quill-toolbar {
@@ -3142,13 +3156,15 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
 
 #letter-custom-quill-toolbar .ql-formats {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   margin-right: 0 !important;
   margin-left: 6px !important;
   gap: 2px;
+  max-width: 100%;
 }
 
-#letter-custom-quill-toolbar button {
+#letter-custom-quill-toolbar .ql-formats button {
   width: 28px;
   height: 28px;
   padding: 4px;

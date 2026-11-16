@@ -8,9 +8,7 @@ import {
   openDirectUpdateLink,
   isDesktopUpdateFileReady,
   openDesktopUpdateFile,
-  openDesktopUpdateFolder,
-  markPlatformUpdateInstalled,
-  dismissUpdate
+  openDesktopUpdateFolder
 } from '../services/updateService';
 import { isTauriDesktop, isWebApp, isElectronDesktop, isTauriDesktopOnly } from '../utils/platformDetection';
 import { getEffectiveApiUrl } from '../services/apiService';
@@ -89,10 +87,16 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
     if (!rawDownloadUrl) return;
     setDownloadError('');
     await openDirectUpdateLink(rawDownloadUrl);
-    toast.success('لینک دانلود مستقیم باز شد — فایل در پوشه Downloads ذخیره می‌شود.', { duration: 5000 });
-    setTimeout(() => {
-      onDismiss?.();
-    }, 2000);
+    toast.success('لینک دانلود مستقیم در مرورگر باز شد — پس از اتمام دانلود، فایل را اجرا کنید.', { duration: 6000 });
+    // Re-check local Downloads after a few seconds in case the browser completes quickly,
+    // NEVER auto-dismiss the banner before the app binary actually upgrades.
+    if (isDesktop) {
+      setTimeout(() => {
+        isDesktopUpdateFileReady(exeFileName).then((ready) => {
+          if (ready) setIsLocalFileReady(true);
+        }).catch(() => {});
+      }, 4500);
+    }
   };
 
   const handleOpenFolderClick = async (e: React.MouseEvent) => {
@@ -117,19 +121,22 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
       setProgressText('در حال اجرای نصاب ویندوز...');
       try {
         await openDesktopUpdateFile(exeFileName);
-        if (targetVer) {
-          markPlatformUpdateInstalled(targetVer);
-        }
-        dismissUpdate(updateInfo);
         setIsSuccess(true);
         setIsUpdating(false);
-        toast.success(`پنجره نصاب نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل نمایید.`, { duration: 6000 });
+        toast.success(`پنجره نصاب نسخه v${targetVer} اجرا شد ✓ مراحل نصب را در پنجره باز شده تکمیل نمایید.`, { duration: 7000 });
+        // Keep the banner accessible (reset visual badge back after 4s) until the app actually restarts on the new version.
         setTimeout(() => {
           setIsSuccess(false);
-          onDismiss?.();
-        }, 2200);
+        }, 4000);
         return;
-      } catch (err) {
+      } catch (err: any) {
+        const msg = String(err?.message || err || '');
+        if (msg.startsWith('LAUNCH_FAILED:')) {
+          setDownloadError('فایل در پوشه Downloads موجود است اما اجرای خودکار مسدود شد — از دکمه «پوشه فایل» فایل نصاب را اجرا کنید.');
+          toast.error('فایل در پوشه Downloads موجود است — لطفاً از پوشه فایل آن را اجرا کنید.', { duration: 7000 });
+          setIsUpdating(false);
+          return;
+        }
         console.warn('Execution error, re-downloading fresh installer:', err);
         setIsLocalFileReady(false);
       }
@@ -149,20 +156,19 @@ export const UpdateBanner: React.FC<UpdateBannerProps> = ({
       if (isDesktop) {
         setIsLocalFileReady(true);
       }
-      if (targetVer && (isDesktop || isAndroid)) {
-        markPlatformUpdateInstalled(targetVer);
-        dismissUpdate(updateInfo);
-      }
       setIsSuccess(true);
       setIsUpdating(false);
+      // Do NOT dismiss or mark installed prematurely — native binary version check hides it once actually upgraded.
       setTimeout(() => {
         setIsSuccess(false);
-        if (isDesktop || isAndroid) {
-          onDismiss?.();
-        }
-      }, 2500);
+      }, 4500);
     } catch (e: any) {
       console.error('Update failed:', e);
+      if (isDesktop) {
+        isDesktopUpdateFileReady(exeFileName).then((ready) => {
+          if (ready) setIsLocalFileReady(true);
+        }).catch(() => {});
+      }
       const errText = e?.message || 'خطا در دانلود فایل آپدیت — از دکمه «لینک مستقیم» استفاده نمایید.';
       setDownloadError(errText);
       toast.error(errText, { duration: 6000 });

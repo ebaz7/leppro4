@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, shell, Tray, Menu, Notification, nativeImage, powerSaveBlocker, session, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Tray, Menu, Notification, nativeImage, powerSaveBlocker, session, clipboard, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const http = require('http');
 const https = require('https');
 
@@ -285,11 +286,46 @@ function createWindow() {
 // IPC Handlers for Desktop Auto-Updates & Local Downloads Folder Management
 
 function ensureDownloadsDir() {
-  const downloadsDir = app.getPath('downloads');
-  if (!fs.existsSync(downloadsDir)) {
-    fs.mkdirSync(downloadsDir, { recursive: true });
+  const candidates = [];
+  try { candidates.push(app.getPath('downloads')); } catch (_) {}
+  try { candidates.push(path.join(os.homedir(), 'Downloads')); } catch (_) {}
+  try { candidates.push(path.join(app.getPath('userData'), 'downloads')); } catch (_) {}
+
+  for (const dir of candidates) {
+    if (!dir) continue;
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      return dir;
+    } catch (_) {}
   }
-  return downloadsDir;
+  return app.getPath('userData');
+}
+
+function findMatchingInstallerInDir(dir, safeName) {
+  try {
+    if (!dir || !fs.existsSync(dir)) return null;
+    const direct = path.join(dir, safeName);
+    if (isValidLocalFile(direct, safeName)) return direct;
+
+    // Also match numbered copies like "dlkam-electron-setup-v1.0.62 (1).exe"
+    const ext = path.extname(safeName);
+    const stem = ext ? safeName.slice(0, -ext.length) : safeName;
+    const escapedStem = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedExt = ext.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^${escapedStem}(?:\\s*\\(\\d+\\)|_\\d+)?${escapedExt}$`, 'i');
+    const matches = fs.readdirSync(dir)
+      .filter((entry) => pattern.test(entry))
+      .map((entry) => path.join(dir, entry))
+      .filter((fullPath) => isValidLocalFile(fullPath, fullPath))
+      .sort((a, b) => {
+        try { return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs; } catch { return 0; }
+      });
+    return matches[0] || null;
+  } catch {
+    return null;
+  }
 }
 
 function sanitizeDownloadFileName(rawName) {
@@ -369,7 +405,12 @@ function purgeOldInstallers(keepFileName) {
 }
 
 async function openPathWithFallback(filePath) {
-  const errStr = await shell.openPath(filePath);
+  let errStr = await shell.openPath(filePath);
+  if (errStr && String(errStr).trim()) {
+    // Brief retry in case Windows Defender SmartScreen is still scanning the newly written .exe
+    await new Promise((r) => setTimeout(r, 750));
+    errStr = await shell.openPath(filePath);
+  }
   if (errStr && String(errStr).trim()) {
     console.warn('[Electron] shell.openPath error:', errStr, 'for', filePath);
     try {
@@ -380,7 +421,169 @@ async function openPathWithFallback(filePath) {
   return filePath;
 }
 
-function streamDownloadToFile({ url, destPath, authToken, expectedSize = 0, onProgress, redirectCount = 0 }) {
+function finalizeDownloadedFile(tempPartPath, destPath, receivedBytes, contentLength, onProgress) {
+  let finalPath = destPath;
+  if (fs.existsSync(finalPath)) {
+    try {
+      fs.unlinkSync(finalPath);
+    } catch (_) {
+      finalPath = getUniqueSavePath(path.dirname(destPath), path.basename(destPath), false);
+    }
+  }
+  try {
+    fs.renameSync(tempPartPath, finalPath);
+  } catch (renameErr) {
+    // If target filename is locked (EPERM/EBUSY by Defender/Explorer), write to unique numbered filename
+    const code = renameErr?.code || '';
+    if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+      finalPath = getUniqueSavePath(path.dirname(destPath), path.basename(destPath), false);
+      fs.renameSync(tempPartPath, finalPath);
+    } else {
+      throw renameErr;
+    }
+  }
+  if (!isValidLocalFile(finalPath, finalPath)) {
+    try { fs.unlinkSync(finalPath); } catch (_) {}
+    throw new Error('Downloaded file failed integrity verification (empty or corrupt binary)');
+  }
+  if (onProgress) {
+    onProgress({ pct: 100, loadedBytes: receivedBytes, totalBytes: contentLength || receivedBytes });
+  }
+  return { filePath: finalPath, size: receivedBytes };
+}
+
+function streamDownloadWithElectronNet({ url, destPath, authToken, expectedSize = 0, onProgress }) {
+  return new Promise((resolve, reject) => {
+    if (!net || typeof net.request !== 'function') {
+      return reject(new Error('Electron net module unavailable'));
+    }
+
+    let settled = false;
+    const failOnce = (err, writeStream, tempPartPath, req) => {
+      if (settled) return;
+      settled = true;
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      try { if (writeStream) writeStream.destroy(); } catch (_) {}
+      try { if (req && typeof req.abort === 'function') req.abort(); } catch (_) {}
+      try { if (tempPartPath && fs.existsSync(tempPartPath)) fs.unlinkSync(tempPartPath); } catch (_) {}
+      reject(err);
+    };
+
+    const tempPartPath = `${destPath}.${Date.now()}.part`;
+    let inactivityTimer = null;
+    const resetTimeout = (req, writeStream) => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        failOnce(new Error('Electron net download timed out (90s inactivity)'), writeStream, tempPartPath, req);
+      }, 90000);
+    };
+
+    try {
+      const request = net.request({
+        method: 'GET',
+        url,
+        session: session?.defaultSession,
+        useSessionCookies: true,
+        redirect: 'follow'
+      });
+
+      request.setHeader(
+        'User-Agent',
+        `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 DelkamDesktop-Electron/${app.getVersion() || '1.0.29'}`
+      );
+      request.setHeader('X-Client-Runtime', 'electron');
+      request.setHeader('Accept', '*/*');
+      request.setHeader('Cache-Control', 'no-cache');
+      if (authToken) {
+        request.setHeader('Authorization', `Bearer ${authToken}`);
+      }
+
+      let activeWriteStream = null;
+      resetTimeout(request, null);
+
+      request.on('response', (response) => {
+        resetTimeout(request, null);
+        const status = response.statusCode || 0;
+        if (status < 200 || status >= 300) {
+          let errBody = '';
+          response.on('data', (chunk) => {
+            if (errBody.length < 1024) errBody += Buffer.from(chunk).toString('utf8');
+          });
+          response.on('end', () => {
+            failOnce(new Error(`HTTP_${status}: ${errBody.slice(0, 200)}`), null, tempPartPath, request);
+          });
+          return;
+        }
+
+        const rawCt = response.headers['content-type'];
+        const contentType = String(Array.isArray(rawCt) ? rawCt[0] : (rawCt || '')).toLowerCase();
+        if (contentType.includes('text/html') && /\.(exe|msi|apk|zip|gz|xlsx|pdf)$/i.test(destPath.toLowerCase())) {
+          return failOnce(new Error('Server returned HTML error page instead of binary file'), null, tempPartPath, request);
+        }
+
+        const rawCl = response.headers['content-length'];
+        const contentLength = Number(Array.isArray(rawCl) ? rawCl[0] : rawCl) || Number(expectedSize) || 0;
+        let receivedBytes = 0;
+        let lastReportAt = 0;
+
+        activeWriteStream = fs.createWriteStream(tempPartPath);
+
+        activeWriteStream.on('error', (err) => {
+          failOnce(err, activeWriteStream, tempPartPath, request);
+        });
+
+        activeWriteStream.on('finish', () => {
+          if (settled) return;
+          try {
+            const result = finalizeDownloadedFile(tempPartPath, destPath, receivedBytes, contentLength, onProgress);
+            settled = true;
+            if (inactivityTimer) clearTimeout(inactivityTimer);
+            resolve(result);
+          } catch (finErr) {
+            failOnce(finErr, activeWriteStream, tempPartPath, request);
+          }
+        });
+
+        response.on('data', (chunk) => {
+          resetTimeout(request, activeWriteStream);
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          receivedBytes += buf.length;
+          if (!activeWriteStream.write(buf)) {
+            // Backpressure handled gracefully by Node stream buffering; avoid deadlocking Chromium response
+          }
+          const now = Date.now();
+          if (onProgress && (now - lastReportAt >= 120 || (contentLength > 0 && receivedBytes >= contentLength))) {
+            lastReportAt = now;
+            const pct = contentLength > 0
+              ? Math.min(99, Math.max(1, Math.round((receivedBytes / contentLength) * 100)))
+              : 50;
+            onProgress({ pct, loadedBytes: receivedBytes, totalBytes: contentLength });
+          }
+        });
+
+        response.on('end', () => {
+          if (activeWriteStream && !activeWriteStream.destroyed) {
+            activeWriteStream.end();
+          }
+        });
+
+        response.on('error', (err) => {
+          failOnce(err, activeWriteStream, tempPartPath, request);
+        });
+      });
+
+      request.on('error', (err) => {
+        failOnce(err, activeWriteStream, tempPartPath, request);
+      });
+
+      request.end();
+    } catch (err) {
+      failOnce(err, null, tempPartPath, null);
+    }
+  });
+}
+
+function streamDownloadWithNodeHttp({ url, destPath, authToken, expectedSize = 0, onProgress, redirectCount = 0 }) {
   return new Promise((resolve, reject) => {
     if (redirectCount > 8) {
       return reject(new Error('Too many HTTP redirects while downloading update'));
@@ -407,20 +610,19 @@ function streamDownloadToFile({ url, destPath, authToken, expectedSize = 0, onPr
     const reqOptions = {
       method: 'GET',
       headers,
-      timeout: 30000,
+      timeout: 90000,
     };
-    // Allow private LAN / localhost self-signed certificates when downloading from internal organizational server
     if (isHttps && /^(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(parsedUrl.hostname)) {
       reqOptions.rejectUnauthorized = false;
     }
 
-    const tempPartPath = `${destPath}.part`;
+    const tempPartPath = `${destPath}.${Date.now()}.part`;
     const req = client.request(parsedUrl, reqOptions, (res) => {
       const status = res.statusCode || 0;
       if (status >= 300 && status < 400 && res.headers.location) {
         res.resume();
         const nextUrl = new URL(res.headers.location, parsedUrl).toString();
-        return streamDownloadToFile({
+        return streamDownloadWithNodeHttp({
           url: nextUrl,
           destPath,
           authToken,
@@ -472,19 +674,9 @@ function streamDownloadToFile({ url, destPath, authToken, expectedSize = 0, onPr
 
       writeStream.on('finish', () => {
         try {
-          if (fs.existsSync(destPath)) {
-            try { fs.unlinkSync(destPath); } catch (_) {}
-          }
-          fs.renameSync(tempPartPath, destPath);
-          if (!isValidLocalFile(destPath, destPath)) {
-            try { fs.unlinkSync(destPath); } catch (_) {}
-            return reject(new Error('Downloaded file failed integrity verification (empty or corrupt binary)'));
-          }
-          if (onProgress) {
-            onProgress({ pct: 100, loadedBytes: receivedBytes, totalBytes: contentLength || receivedBytes });
-          }
-          resolve({ filePath: destPath, size: receivedBytes });
+          resolve(finalizeDownloadedFile(tempPartPath, destPath, receivedBytes, contentLength, onProgress));
         } catch (finErr) {
+          try { if (fs.existsSync(tempPartPath)) fs.unlinkSync(tempPartPath); } catch (_) {}
           reject(finErr);
         }
       });
@@ -516,6 +708,23 @@ function streamDownloadToFile({ url, destPath, authToken, expectedSize = 0, onPr
   });
 }
 
+async function streamDownloadToFile(opts) {
+  // 1. Prefer Electron's Chromium net.request (respects Windows VPN/System Proxy & OS certificate store)
+  try {
+    return await streamDownloadWithElectronNet(opts);
+  } catch (netErr) {
+    console.warn('[Electron] net.request download fallback to Node http/https:', netErr?.message || netErr);
+  }
+  // 2. Fallback to Node http/https with 1 automatic transient retry
+  try {
+    return await streamDownloadWithNodeHttp(opts);
+  } catch (nodeErr) {
+    console.warn('[Electron] Node download attempt 1 failed, retrying once:', nodeErr?.message || nodeErr);
+    await new Promise((r) => setTimeout(r, 800));
+    return await streamDownloadWithNodeHttp(opts);
+  }
+}
+
 // 1. Get client native version
 ipcMain.handle('get-version', () => {
   return app.getVersion() || '1.0.29';
@@ -526,15 +735,16 @@ ipcMain.handle('get-downloads-path', () => {
   return ensureDownloadsDir();
 });
 
-// 2. Check if valid file exists in Downloads or UserData
+// 2. Check if valid file exists in Downloads or UserData (also checks numbered copies e.g. "file (1).exe")
 ipcMain.handle('check-local-file-exists', async (event, fileName) => {
   try {
     const safeName = sanitizeDownloadFileName(fileName);
     const downloadsDir = ensureDownloadsDir();
     const userDataDir = app.getPath('userData');
-    const p1 = path.join(downloadsDir, safeName);
-    const p2 = path.join(userDataDir, safeName);
-    return isValidLocalFile(p1, safeName) || isValidLocalFile(p2, safeName);
+    return Boolean(
+      findMatchingInstallerInDir(downloadsDir, safeName) ||
+      findMatchingInstallerInDir(userDataDir, safeName)
+    );
   } catch {
     return false;
   }
@@ -547,25 +757,45 @@ ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = t
     const safeName = sanitizeDownloadFileName(fileName);
     const isInstaller = /^(dlkam-desktop|dlkam-electron|sayan-desktop).*\.(exe|msi)$/i.test(safeName);
     const filePath = isInstaller
-      ? path.join(downloadsDir, safeName)
+      ? getUniqueSavePath(downloadsDir, safeName, !fs.existsSync(path.join(downloadsDir, safeName)))
       : getUniqueSavePath(downloadsDir, safeName, false);
 
     const buffer = toNodeBuffer(bytes);
     if (!buffer || buffer.length === 0) {
       throw new Error('Cannot save empty file buffer');
     }
-    fs.writeFileSync(filePath, buffer);
+    try {
+      fs.writeFileSync(filePath, buffer);
+    } catch (writeErr) {
+      const altPath = getUniqueSavePath(downloadsDir, safeName, false);
+      fs.writeFileSync(altPath, buffer);
+      if (isInstaller && !isValidLocalFile(altPath, safeName)) {
+        try { fs.unlinkSync(altPath); } catch (_) {}
+        throw new Error('Saved installer failed binary validation');
+      }
+      if (isInstaller) purgeOldInstallers(path.basename(altPath));
+      if (openAfter !== false) {
+        try { await openPathWithFallback(altPath); } catch (launchErr) {
+          throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        }
+      }
+      return altPath;
+    }
 
     if (isInstaller) {
       if (!isValidLocalFile(filePath, safeName)) {
         try { fs.unlinkSync(filePath); } catch (_) {}
         throw new Error('Saved installer failed binary validation');
       }
-      purgeOldInstallers(safeName);
+      purgeOldInstallers(path.basename(filePath));
     }
 
     if (openAfter !== false) {
-      await openPathWithFallback(filePath);
+      try {
+        await openPathWithFallback(filePath);
+      } catch (launchErr) {
+        throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+      }
     }
     return filePath;
   } catch (err) {
@@ -580,25 +810,32 @@ ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) =>
     const downloadsDir = ensureDownloadsDir();
     const safeName = sanitizeDownloadFileName(fileName);
     const isInstaller = /^(dlkam-desktop|dlkam-electron|sayan-desktop).*\.(exe|msi)$/i.test(safeName);
-    const filePath = isInstaller
-      ? path.join(downloadsDir, safeName)
-      : getUniqueSavePath(downloadsDir, safeName, false);
+    let filePath = path.join(downloadsDir, safeName);
 
     const buffer = toNodeBuffer(bytes);
     if (!buffer || buffer.length === 0) {
       throw new Error('Cannot save empty file buffer');
     }
-    fs.writeFileSync(filePath, buffer);
+    try {
+      fs.writeFileSync(filePath, buffer);
+    } catch (_) {
+      filePath = getUniqueSavePath(downloadsDir, safeName, false);
+      fs.writeFileSync(filePath, buffer);
+    }
 
     if (isInstaller) {
       if (!isValidLocalFile(filePath, safeName)) {
         try { fs.unlinkSync(filePath); } catch (_) {}
         throw new Error('Saved installer failed binary validation');
       }
-      purgeOldInstallers(safeName);
+      purgeOldInstallers(path.basename(filePath));
     }
 
-    await openPathWithFallback(filePath);
+    try {
+      await openPathWithFallback(filePath);
+    } catch (launchErr) {
+      throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+    }
     return filePath;
   } catch (err) {
     console.error('Failed to save and open local update file:', err);
@@ -635,11 +872,16 @@ ipcMain.handle('download-and-save-file', async (event, { url, fileName, openAfte
     });
 
     if (isInstaller) {
-      purgeOldInstallers(safeName);
+      purgeOldInstallers(path.basename(filePath));
     }
 
     if (openAfter !== false) {
-      await openPathWithFallback(filePath);
+      try {
+        await openPathWithFallback(filePath);
+      } catch (launchErr) {
+        // File IS downloaded & verified in Downloads — distinguish launch block from download failure
+        throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+      }
     }
     return filePath;
   } catch (err) {
@@ -667,13 +909,16 @@ ipcMain.handle('open-local-file', async (event, fileName) => {
     const safeName = sanitizeDownloadFileName(fileName);
     const downloadsDir = ensureDownloadsDir();
     const userDataDir = app.getPath('userData');
-    let filePath = path.join(downloadsDir, safeName);
-    if (!isValidLocalFile(filePath, safeName)) {
-      filePath = path.join(userDataDir, safeName);
-    }
-    if (isValidLocalFile(filePath, safeName)) {
-      await openPathWithFallback(filePath);
-      return filePath;
+    const filePath =
+      findMatchingInstallerInDir(downloadsDir, safeName) ||
+      findMatchingInstallerInDir(userDataDir, safeName);
+    if (filePath && isValidLocalFile(filePath, safeName)) {
+      try {
+        await openPathWithFallback(filePath);
+        return filePath;
+      } catch (launchErr) {
+        throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+      }
     }
     throw new Error('Valid local file not found');
   } catch (err) {
@@ -688,12 +933,14 @@ ipcMain.handle('open-local-file-dir', async (event, fileName) => {
     const safeName = sanitizeDownloadFileName(fileName);
     const downloadsDir = ensureDownloadsDir();
     const userDataDir = app.getPath('userData');
-    let filePath = path.join(downloadsDir, safeName);
-    if (!fs.existsSync(filePath)) {
-      filePath = path.join(userDataDir, safeName);
-    }
-    if (fs.existsSync(filePath)) {
-      shell.showItemInFolder(filePath);
+    const matchedPath =
+      findMatchingInstallerInDir(downloadsDir, safeName) ||
+      findMatchingInstallerInDir(userDataDir, safeName) ||
+      (fs.existsSync(path.join(downloadsDir, safeName)) ? path.join(downloadsDir, safeName) : null) ||
+      (fs.existsSync(path.join(userDataDir, safeName)) ? path.join(userDataDir, safeName) : null);
+
+    if (matchedPath && fs.existsSync(matchedPath)) {
+      shell.showItemInFolder(matchedPath);
       return downloadsDir;
     } else {
       await shell.openPath(downloadsDir);

@@ -104,11 +104,17 @@ export function markPlatformUpdateInstalled(version?: string | null, runtimeOver
   if (!cleanVer || cleanVer === 'latest') return;
   try {
     const rt = runtimeOverride || (isCapacitorAndroid() ? 'android' : getDesktopRuntime());
+    // Native platforms (Electron, Tauri, Android) read their real installed version directly from
+    // app.getVersion() / App.getInfo(). Never persist assumed "installed" markers to localStorage
+    // upon starting a download/installer, otherwise failed/cancelled updates permanently hide the banner.
+    if (rt === 'electron' || rt === 'tauri' || rt === 'android') {
+      return;
+    }
     const currentRecorded = localStorage.getItem(`dlkam_installed_version_${rt}`);
     if (!currentRecorded || compareSemVer(cleanVer, currentRecorded) >= 0) {
       localStorage.setItem(`dlkam_installed_version_${rt}`, cleanVer);
     }
-    const sig = rt === 'android' ? `android_${cleanVer}` : `${rt}_desktop_${cleanVer}`;
+    const sig = `${rt}_web_${cleanVer}`;
     localStorage.setItem(`dismissed_update_sig_${rt}`, sig);
     localStorage.setItem('dismissed_update_sig', sig);
     sessionStorage.setItem('dismissed_update_sig', sig);
@@ -116,7 +122,7 @@ export function markPlatformUpdateInstalled(version?: string | null, runtimeOver
   } catch (_) {}
 }
 
-// Dismiss an update so it does not keep showing up across sessions for the same version
+// Dismiss an update temporarily (for native desktop/android, session-only so banner reappears until binary is actually upgraded)
 export function dismissUpdate(serverInfo?: AppVersionInfo | null): void {
   if (typeof window === 'undefined') return;
   const isAndroid = isCapacitorAndroid();
@@ -139,10 +145,11 @@ export function dismissUpdate(serverInfo?: AppVersionInfo | null): void {
 
   try {
     sessionStorage.setItem('dismissed_update_sig', sig);
-    localStorage.setItem('dismissed_update_sig', sig);
-    localStorage.setItem(`dismissed_update_sig_${runtime}`, sig);
-    if (isDesktop && targetVer) {
-      localStorage.setItem(`dlkam_installed_version_${runtime}`, targetVer);
+    // Only Web persists dismissal in localStorage; Desktop & Android keep dismissal session-only
+    // so an un-upgraded binary always reminds the user again on next launch.
+    if (!isDesktop && !isAndroid) {
+      localStorage.setItem('dismissed_update_sig', sig);
+      localStorage.setItem(`dismissed_update_sig_${runtime}`, sig);
     }
   } catch (_) {}
 }
@@ -202,13 +209,10 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
         }
       }
 
-      // Only fall back to localStorage recorded version if native binary version could not be read
+      // Only fall back to CURRENT_CLIENT_BUILD if native binary version could not be read
       if (!hasAuthoritativeBinaryVer) {
-        const recordedVer = getRecordedInstalledVersion(runtime);
-        if (recordedVer && compareSemVer(recordedVer, detectedVersion) > 0) {
-          detectedVersion = recordedVer;
-          detectedBuild = recordedVer;
-        }
+        detectedVersion = CURRENT_CLIENT_BUILD.version;
+        detectedBuild = CURRENT_CLIENT_BUILD.buildNumber;
       }
 
       return { version: detectedVersion, buildNumber: detectedBuild };
@@ -224,10 +228,6 @@ export async function getNativeClientVersion(): Promise<{ version: string; build
           detectedVersion = String(info.version).trim();
           detectedBuild = String(info.build || info.version).trim();
         }
-      }
-      const recordedAndroidVer = getRecordedInstalledVersion('android');
-      if (recordedAndroidVer && compareSemVer(recordedAndroidVer, detectedVersion) > 0) {
-        detectedVersion = recordedAndroidVer;
       }
       return { version: detectedVersion, buildNumber: detectedBuild };
     }
@@ -330,15 +330,26 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
         : defaultAndroidUrl;
       data.downloadUrl = data.androidDownloadUrl;
 
-      const currentServerSig = `android_${actualApkVer}`;
-      const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
-      const localDismissedSig = localStorage.getItem('dismissed_update_sig_android') || localStorage.getItem('dismissed_update_sig');
-      if (sessionDismissedSig === currentServerSig || localDismissedSig === currentServerSig) {
+      const semVerComp = compareSemVer(actualApkVer, clientVer);
+      if (semVerComp <= 0) {
         return { hasUpdate: false, serverInfo: data };
       }
 
-      const semVerComp = compareSemVer(actualApkVer, clientVer);
-      return { hasUpdate: semVerComp > 0, serverInfo: data };
+      // Recover from any stale localStorage dismissal left behind by older builds
+      try {
+        localStorage.removeItem('dismissed_update_sig_android');
+        localStorage.removeItem('dismissed_update_sig');
+        localStorage.removeItem('dlkam_installed_version_android');
+        localStorage.removeItem('applied_android_version');
+      } catch (_) {}
+
+      const currentServerSig = `android_${actualApkVer}`;
+      const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
+      if (sessionDismissedSig === currentServerSig) {
+        return { hasUpdate: false, serverInfo: data };
+      }
+
+      return { hasUpdate: true, serverInfo: data };
     }
 
     // --- 2. WINDOWS DESKTOP (Electron or Tauri) CHECK (Strictly file-based & segregated) ---
@@ -363,16 +374,24 @@ export async function checkServerUpdate(): Promise<{ hasUpdate: boolean; serverI
       }
       data.downloadUrl = resolvedUrl;
 
-      // Runtime-specific signature so Electron and Tauri don't collide
-      const currentServerSig = `${runtime}_desktop_${actualDesktopVer}`;
-      const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
-      const localDismissedSig = localStorage.getItem(`dismissed_update_sig_${runtime}`) || localStorage.getItem('dismissed_update_sig');
-      if (sessionDismissedSig === currentServerSig || localDismissedSig === currentServerSig) {
+      const semVerComp = compareSemVer(actualDesktopVer, clientVer);
+      if (semVerComp <= 0) {
         return { hasUpdate: false, serverInfo: data };
       }
 
-      const semVerComp = compareSemVer(actualDesktopVer, clientVer);
-      if (semVerComp <= 0) {
+      // Proactively clear any stale localStorage dismissal/installed markers left by prior versions
+      // whenever the running binary is actually behind the server installer version.
+      try {
+        localStorage.removeItem(`dismissed_update_sig_${runtime}`);
+        localStorage.removeItem('dismissed_update_sig');
+        localStorage.removeItem(`dlkam_installed_version_${runtime}`);
+        localStorage.removeItem('applied_desktop_version');
+      } catch (_) {}
+
+      // Only honor temporary sessionStorage dismissal (reset when user restarts the app)
+      const currentServerSig = `${runtime}_desktop_${actualDesktopVer}`;
+      const sessionDismissedSig = sessionStorage.getItem('dismissed_update_sig');
+      if (sessionDismissedSig === currentServerSig) {
         return { hasUpdate: false, serverInfo: data };
       }
 
@@ -726,12 +745,21 @@ export async function applyApplicationUpdate(
             onProgress?.(100, 'پنجره نصاب ویندوز باز شد ✓');
             toast.success(`فایل نصبی نسخه v${targetVer} از پوشه Downloads اجرا شد ✓`, { duration: 9000 });
             return;
-          } catch (openExistingErr) {
+          } catch (openExistingErr: any) {
+            const errMsg = String(openExistingErr?.message || openExistingErr || '');
+            if (errMsg.startsWith('LAUNCH_FAILED:')) {
+              // File IS already downloaded & verified in Downloads; Windows UAC/SmartScreen blocked auto-launch.
+              // Open the Downloads folder cleanly instead of needlessly re-downloading 80MB.
+              if (electronBridge?.openLocalFileDir) {
+                await electronBridge.openLocalFileDir(exeFileName).catch(() => {});
+              }
+              throw new Error('فایل نصبی در پوشه Downloads موجود است اما اجرای خودکار توسط ویندوز مسدود شد. پوشه فایل باز شد — روی نصاب راست‌کلیک و Run as administrator بزنید.');
+            }
             console.warn('Existing installer launch failed, re-downloading fresh copy:', openExistingErr);
           }
         }
 
-        // Preferred path: Native Node streaming download directly to C:\Users\...\Downloads (zero renderer memory bloat)
+        // Preferred path: Native Electron net/Node streaming download directly to C:\Users\...\Downloads
         if (electronBridge?.downloadAndSaveFile) {
           onProgress?.(2, `در حال دانلود نسخه جدید ویندوز (v${targetVer}) به پوشه Downloads...`);
           const unsubscribe = typeof electronBridge.onDownloadProgress === 'function'
@@ -754,12 +782,21 @@ export async function applyApplicationUpdate(
             onProgress?.(100, 'فایل در پوشه Downloads ذخیره و نصاب اجرا شد ✓');
             toast.success(`فایل ${exeFileName} در پوشه Downloads ذخیره و اجرا شد ✓ (${savedPath || 'Downloads'})`, { duration: 9000 });
             return;
+          } catch (streamErr: any) {
+            const streamMsg = String(streamErr?.message || streamErr || '');
+            if (streamMsg.startsWith('LAUNCH_FAILED:')) {
+              if (electronBridge?.openLocalFileDir) {
+                await electronBridge.openLocalFileDir(exeFileName).catch(() => {});
+              }
+              throw new Error('فایل با موفقیت دانلود و در پوشه Downloads ذخیره شد اما اجرای خودکار توسط ویندوز انجام نشد — لطفاً از پوشه باز شده آن را اجرا کنید.');
+            }
+            console.warn('Electron downloadAndSaveFile failed, trying renderer fetch fallback:', streamErr);
           } finally {
             if (unsubscribe) unsubscribe();
           }
         }
 
-        // Fallback path for older Electron shell builds: fetch in renderer -> save via IPC
+        // Fallback path: fetch in Chromium renderer (uses browser network stack) -> save via IPC
         if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
           onProgress?.(2, `در حال دانلود نسخه جدید ویندوز (v${targetVer})...`);
           const exeBlob = await fetchBinaryWithProgress(downloadUrl, serverInfo?.desktopFileSize || 80000000, onProgress);
@@ -777,18 +814,19 @@ export async function applyApplicationUpdate(
           return;
         }
 
-        // Last-resort fallback if Electron preload bridge is unavailable
+        // Last-resort fallback if Electron preload bridge is completely unavailable
         onProgress?.(100, 'در حال باز کردن دانلود مستقیم...');
         await openDirectUpdateLink(downloadUrl);
         toast('لینک دانلود در مرورگر سیستم باز شد — فایل در پوشه Downloads ذخیره می‌شود.');
         return;
       } catch (electronErr: any) {
-        console.warn('Electron in-app update download/exec failed, opening direct fallback:', electronErr);
-        toast.error(`دانلود درون‌برنامه‌ای با خطا مواجه شد — در حال باز کردن لینک مستقیم دانلود...`);
-        try {
-          await openDirectUpdateLink(downloadUrl);
-          return;
-        } catch (_) {}
+        const msg = String(electronErr?.message || electronErr || '');
+        console.warn('Electron in-app update download/exec failed:', electronErr);
+        // Never swallow errors silently (otherwise UpdateBanner marks the update as succeeded!).
+        // If download itself failed and file is not in Downloads yet, offer browser fallback only if not already a LAUNCH_FAILED message.
+        if (!msg.includes('Downloads')) {
+          toast.error('دانلود درون‌برنامه‌ای با خطا مواجه شد — می‌توانید از دکمه «لینک مستقیم» نیز استفاده کنید.');
+        }
         throw electronErr;
       }
     }
@@ -950,14 +988,10 @@ export async function isDesktopUpdateFileReady(fileName: string): Promise<boolea
  */
 export async function openDesktopUpdateFile(fileName: string): Promise<string> {
   if (!isTauriDesktop()) throw new Error('Not running in desktop app');
-  const extractedVer = extractSemVerFromText(fileName);
-  const runtime = getDesktopRuntime();
   const win = window as any;
   const electronBridge = win.electronAPI || win.electron;
   if (electronBridge?.openLocalFile) {
-    const p = await electronBridge.openLocalFile(fileName);
-    if (extractedVer) markPlatformUpdateInstalled(extractedVer, runtime);
-    return p;
+    return await electronBridge.openLocalFile(fileName);
   }
   const { invoke } = await import('@tauri-apps/api/tauri');
   let savedPath = '';
@@ -976,7 +1010,6 @@ export async function openDesktopUpdateFile(fileName: string): Promise<string> {
       console.debug('Tauri shell open fallback:', e);
     }
   }
-  if (extractedVer) markPlatformUpdateInstalled(extractedVer, runtime);
   return savedPath || fileName;
 }
 

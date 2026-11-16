@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import ReactQuill from "react-quill";
 import "react-quill/dist/quill.snow.css";
 
@@ -617,6 +618,12 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   // --- Modals & Forms ---
   const [showNewLetterModal, setShowNewLetterModal] = useState(false);
   const [isMetadataExpanded, setIsMetadataExpanded] = useState(false);
+  const [isEditorToolbarExpanded, setIsEditorToolbarExpanded] = useState<boolean>(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 640) {
+      return false;
+    }
+    return true;
+  });
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
   const [editingLetterId, setEditingLetterId] = useState<string | null>(null);
   const [selectedLetterForView, setSelectedLetterForView] =
@@ -991,9 +998,25 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
     }
   };
 
+  const editorModules = useMemo(
+    () => ({
+      toolbar: "#letter-custom-quill-toolbar",
+      clipboard: {
+        matchVisual: false,
+      },
+      history: {
+        delay: 400,
+        maxStack: 100,
+        userOnly: true,
+      },
+    }),
+    [],
+  );
+
   const handleUndo = () => {
     const quill = quillRef.current?.getEditor();
     if (quill) {
+      quill.focus();
       quill.history.undo();
     }
   };
@@ -1001,6 +1024,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   const handleRedo = () => {
     const quill = quillRef.current?.getEditor();
     if (quill) {
+      quill.focus();
       quill.history.redo();
     }
   };
@@ -3847,12 +3871,26 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         /* Clear any overlaps and make pickers spacious */
         .ql-snow .ql-picker.ql-font {
           width: 170px !important;
+          max-width: 100% !important;
         }
         .ql-snow .ql-picker.ql-size {
           width: 140px !important;
+          max-width: 100% !important;
         }
         .ql-snow .ql-picker.ql-header {
           width: 130px !important;
+          max-width: 100% !important;
+        }
+        @media (max-width: 639px) {
+          .ql-snow .ql-picker.ql-font {
+            width: 145px !important;
+          }
+          .ql-snow .ql-picker.ql-size {
+            width: 118px !important;
+          }
+          .ql-snow .ql-picker.ql-header {
+            width: 108px !important;
+          }
         }
         .ql-snow .ql-picker-label {
           padding-left: 8px !important;
@@ -3877,6 +3915,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           border: 1px solid #cbd5e1 !important;
           padding: 6px !important;
           background: white !important;
+          z-index: 60 !important;
         }
         .ql-snow .ql-picker-item {
           padding: 4px 8px !important;
@@ -3885,20 +3924,21 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         .ql-snow .ql-picker-item:hover {
           background-color: #f1f5f9 !important;
         }
-        /* Style Quill toolbar */
+        /* Style Quill toolbar - wrap cleanly with zero horizontal scroll clipping */
         .ql-toolbar.ql-snow,
         #letter-custom-quill-toolbar.ql-toolbar.ql-snow {
           background: #f8fafc !important;
           border: none !important;
           border-bottom: 1px solid #cbd5e1 !important;
           border-radius: 0px !important;
-          padding: 6px 12px !important;
+          padding: 6px 10px !important;
           display: flex !important;
           flex-wrap: wrap !important;
           align-items: center !important;
-          gap: 4px !important;
-          position: sticky !important;
-          top: 0 !important;
+          gap: 6px !important;
+          position: relative !important;
+          overflow: visible !important;
+          max-width: 100% !important;
           z-index: 30 !important;
         }
         .dark #letter-custom-quill-toolbar.ql-toolbar.ql-snow {
@@ -3935,12 +3975,14 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         /* Separation in toolbar */
         .ql-snow .ql-toolbar .ql-formats {
           margin-right: 0px !important;
-          margin-left: 8px !important;
+          margin-left: 6px !important;
           border-left: 1px solid #e2e8f0;
-          padding-left: 8px;
+          padding-left: 6px;
           display: inline-flex !important;
+          flex-wrap: wrap !important;
           align-items: center;
-          gap: 2px;
+          gap: 3px;
+          max-width: 100%;
         }
         .dark .ql-snow .ql-toolbar .ql-formats {
           border-left-color: #334155 !important;
@@ -4629,9 +4671,10 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         )}
 
                     {/* Template Edit / Create Modal */}
+          {typeof document !== "undefined" && createPortal(
           <AnimatePresence>
             {editingTemplate && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+              <div className="fixed inset-0 z-[9988] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
                 <motion.div
                   initial={{ scale: 0.95, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
@@ -4702,26 +4745,35 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                 </motion.div>
               </div>
             )}
-          </AnimatePresence>
+          </AnimatePresence>,
+          document.body
+          )}
 
           {/* 1. REGISTER NEW LETTER MODAL */}
+          {typeof document !== "undefined" && createPortal(
           <AnimatePresence>
             {showNewLetterModal && (
-              <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/80 p-0 sm:p-1 overflow-hidden">
+              <div
+                style={{
+                  paddingTop: "env(safe-area-inset-top, 0px)",
+                  paddingBottom: "env(safe-area-inset-bottom, 0px)",
+                }}
+                className="fixed inset-0 h-[100dvh] z-[9985] flex flex-col bg-slate-900/85 p-0 sm:p-1.5 overflow-hidden"
+              >
                 <motion.div
                   initial={{ opacity: 0, scale: 0.99 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.99 }}
-                  className="bg-slate-100 dark:bg-slate-900 w-full h-full rounded-none sm:rounded-xl border-0 sm:border border-slate-200 dark:border-slate-800 p-1.5 sm:p-2 flex flex-col overflow-hidden text-right shadow-2xl"
+                  className="bg-slate-100 dark:bg-slate-900 w-full h-full rounded-none sm:rounded-xl border-0 sm:border border-slate-200 dark:border-slate-800 p-1.5 sm:p-2.5 flex flex-col overflow-hidden text-right shadow-2xl"
                   dir="rtl"
                 >
-                  <div className="flex items-center justify-between border-b dark:border-slate-800 pb-1.5 shrink-0">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-purple-600"></span>
-                  <h3 className="text-xs sm:text-sm font-black text-gray-800 dark:text-white">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b dark:border-slate-800 pb-1.5 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-600 shrink-0"></span>
+                  <h3 className="text-xs sm:text-sm font-black text-gray-800 dark:text-white truncate">
                     {editingLetterId ? "ویرایش نامه اداری" : "ثبت و تدوین نامه اداری جدید"}
                   </h3>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-50 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-50 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300 truncate max-w-[140px] sm:max-w-none">
                     {selectedCompany?.name}
                   </span>
                 </div>
@@ -5040,11 +5092,11 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                 {/* Virtual Google Docs Workspace Canvas - Maximized Height */}
                 <div className="flex-1 min-h-0 flex flex-col bg-slate-200/90 dark:bg-slate-950 rounded-xl border border-slate-300 dark:border-slate-800 overflow-hidden shadow-inner">
                   {/* Google Docs Styled Menu Bar */}
-                  <div className="flex items-center flex-wrap gap-2 px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border-b dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 select-none relative z-40 shrink-0">
+                  <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border-b dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 select-none relative z-40 shrink-0 overflow-visible">
                     {/* Doc Icon & Subject */}
-                    <div className="flex items-center gap-1.5 border-l border-slate-300 dark:border-slate-700 pl-3 ml-1 text-purple-600 dark:text-purple-400">
+                    <div className="flex items-center gap-1.5 border-l border-slate-300 dark:border-slate-700 pl-2.5 ml-0.5 text-purple-600 dark:text-purple-400">
                       <FileText size={15} />
-                      <span className="truncate max-w-[150px]">
+                      <span className="truncate max-w-[140px] sm:max-w-[180px]">
                         {newLetterForm.subject || "پیش‌نویس بدون نام"}
                       </span>
                     </div>
@@ -5561,7 +5613,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         <span>مایکروسافت ورد و گوگل داکس/شیت</span>
                       </button>
                       {activeMenu === "office" && (
-                        <div className="absolute right-0 mt-1.5 w-72 bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-xl shadow-2xl py-1.5 text-right text-xs z-50 text-slate-800 dark:text-slate-200 divide-y divide-slate-100 dark:divide-slate-700/60 animate-in fade-in zoom-in-95">
+                        <div className="absolute left-0 sm:right-0 sm:left-auto mt-1.5 w-72 max-w-[calc(100vw-24px)] bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 rounded-xl shadow-2xl py-1.5 text-right text-xs z-50 text-slate-800 dark:text-slate-200 divide-y divide-slate-100 dark:divide-slate-700/60 animate-in fade-in zoom-in-95">
                           <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-900 text-[11px] font-bold text-blue-950 dark:text-blue-200">
                             امکانات مایکروسافت ورد و سرویس‌های گوگل:
                           </div>
@@ -5675,7 +5727,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         راهنما
                       </button>
                       {activeMenu === "help" && (
-                        <div className="absolute right-0 mt-1.5 w-64 bg-white dark:bg-slate-800 border dark:border-white/10 rounded-lg shadow-2xl py-2 px-3 text-right text-[11px] z-50 text-slate-800 dark:text-slate-200 space-y-1.5 leading-relaxed">
+                        <div className="absolute left-0 sm:right-0 sm:left-auto mt-1.5 w-64 max-w-[calc(100vw-24px)] bg-white dark:bg-slate-800 border dark:border-white/10 rounded-lg shadow-2xl py-2 px-3 text-right text-[11px] z-50 text-slate-800 dark:text-slate-200 space-y-1.5 leading-relaxed">
                           <h5 className="font-black text-purple-700 dark:text-purple-400 border-b dark:border-slate-700 pb-1">
                             نکات نگارش رسمی و سازمانی
                           </h5>
@@ -5828,12 +5880,12 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                     </div>
 
                     {/* Workspace View Mode Selector (Office Virtual Paper / Word Studio vs ONLYOFFICE vs Google Docs vs Split) */}
-                    <div className="mr-auto flex items-center gap-2">
-                      <div className="flex items-center bg-slate-200/80 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-300/60 dark:border-slate-700 text-xs shadow-xs">
+                    <div className="sm:mr-auto flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                      <div className="flex flex-wrap items-center bg-slate-200/80 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-300/60 dark:border-slate-700 text-xs shadow-xs">
                         <button
                           type="button"
                           onClick={() => changeEditorViewMode("office")}
-                          className={`flex items-center gap-1.5 px-3 py-1 rounded-md font-extrabold transition-all ${
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-extrabold transition-all ${
                             editorViewMode === "office"
                               ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs ring-1 ring-blue-500/30"
                               : "text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400"
@@ -5989,10 +6041,74 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                     className="hidden"
                   />
 
-                  {/* Docked Word-Style Formatting Ribbon Toolbar */}
+                  {/* Always-Visible Quick Bar: Undo / Redo (قبلی و بعدی) & Formatting Toolbar Expand/Collapse Toggle */}
+                  <div className="bg-slate-50 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 px-2.5 sm:px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 shrink-0 select-none z-30">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-0.5 shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={handleUndo}
+                          className="px-2 py-1 rounded-md text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-slate-700 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors flex items-center gap-1 text-[11px] font-bold cursor-pointer"
+                          title="بازگشت به عقب - Undo (Ctrl+Z)"
+                        >
+                          <Undo size={14} />
+                          <span>قبلی</span>
+                        </button>
+                        <div className="w-px h-4 bg-slate-200 dark:bg-slate-700" />
+                        <button
+                          type="button"
+                          onClick={handleRedo}
+                          className="px-2 py-1 rounded-md text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-slate-700 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors flex items-center gap-1 text-[11px] font-bold cursor-pointer"
+                          title="تکرار مجدد - Redo (Ctrl+Y)"
+                        >
+                          <Redo size={14} />
+                          <span>بعدی</span>
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleToggleFormatPainter}
+                        className={`px-2 py-1 rounded-lg border text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer select-none ${
+                          isFormatPainterActive
+                            ? "bg-amber-100 text-amber-900 dark:bg-amber-950/80 dark:text-amber-200 border-amber-500 ring-2 ring-amber-400/50 shadow-sm"
+                            : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                        }`}
+                        title={
+                          isFormatPainterActive
+                            ? "فرمت‌پینتر فعال است! روی متن مورد نظر کلیک یا درگ کنید تا استایل اعمال شود"
+                            : "فرمت‌پینتر (Format Painter)"
+                        }
+                      >
+                        <Paintbrush size={13} className={isFormatPainterActive ? "text-amber-600 dark:text-amber-400" : "text-slate-600 dark:text-slate-400"} />
+                        <span>فرمت‌پینتر</span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsEditorToolbarExpanded((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                        isEditorToolbarExpanded
+                          ? "bg-purple-50 dark:bg-purple-950/50 border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-100"
+                          : "bg-indigo-600 hover:bg-indigo-700 border-indigo-600 text-white shadow-xs"
+                      }`}
+                      title={isEditorToolbarExpanded ? "بستن نوار ابزار تنظیمات متن برای فضای بیشتر" : "باز کردن نوار ابزار تنظیمات قلم، چینش، رنگ و جدول"}
+                    >
+                      <SlidersHorizontal size={13} />
+                      <span>
+                        {isEditorToolbarExpanded
+                          ? "بستن نوار تنظیمات ▲"
+                          : "باز کردن نوار تنظیمات و قالب‌بندی ▼"}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Collapsible Docked Word-Style Formatting Ribbon Toolbar (Always mounted for ReactQuill, zero horizontal scroll) */}
+                  <div className={isEditorToolbarExpanded ? "block" : "hidden"}>
                   <div
                     id="letter-custom-quill-toolbar"
-                    className="ql-toolbar ql-snow bg-slate-100 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 px-2 sm:px-3 py-1 sm:py-1.5 flex flex-nowrap sm:flex-wrap items-center gap-1 sm:gap-1.5 shrink-0 select-none z-30 shadow-xs overflow-x-auto scrollbar-none"
+                    className="ql-toolbar ql-snow bg-slate-100 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 px-2 sm:px-3 py-1.5 flex flex-wrap items-center gap-1.5 shrink-0 select-none z-30 shadow-xs overflow-visible"
                   >
                     {/* Section 1: Undo / Redo & Format Painter */}
                     <div className="flex items-center gap-0.5 border-l dark:border-slate-700 pl-2">
@@ -6121,7 +6237,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         {showTextColorPicker && (
                           <div
                             id="color-picker-dropdown"
-                            className="absolute top-full mt-1.5 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 shadow-2xl z-50 w-52 space-y-2 text-right"
+                            className="absolute top-full mt-1.5 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 shadow-2xl z-50 w-52 max-w-[calc(100vw-24px)] space-y-2 text-right"
                           >
                             <span className="text-[10px] font-bold text-slate-500 block border-b pb-1 dark:border-slate-700">
                               انتخاب رنگ قلم:
@@ -6177,7 +6293,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         {showBgColorPicker && (
                           <div
                             id="bg-picker-dropdown"
-                            className="absolute top-full mt-1.5 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 shadow-2xl z-50 w-52 space-y-2 text-right"
+                            className="absolute top-full mt-1.5 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 shadow-2xl z-50 w-52 max-w-[calc(100vw-24px)] space-y-2 text-right"
                           >
                             <span className="text-[10px] font-bold text-slate-500 block border-b pb-1 dark:border-slate-700">
                               رنگ هایلایت متن:
@@ -6371,6 +6487,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         <button className="ql-clean" title="حذف تمام فرمت‌بندی‌ها" />
                       </span>
                     </div>
+                  </div>
                   </div>
 
                   {/* Floating Image Control Bar with Mouse Resizing, Watermark, Layout & Opacity Controls */}
@@ -6962,9 +7079,9 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
 
                     {/* MODE 2: Office Virtual Paper Workspace (A4/A5 Standard Letterhead) */}
                     {editorViewMode === "office" && (
-                      <div className="flex-1 min-h-0 p-1 sm:p-4 overflow-y-auto overflow-x-auto flex justify-center items-start w-full relative custom-scrollbar touch-pan-x touch-pan-y">
+                      <div className="flex-1 min-h-0 p-1 sm:p-4 overflow-y-auto overflow-x-auto flex justify-start sm:justify-center items-start w-full relative custom-scrollbar touch-pan-x touch-pan-y">
                         <div
-                          className="flex justify-center shrink-0"
+                          className="flex justify-center shrink-0 mx-auto"
                           style={{
                             width: editorZoom !== 100 ? `${Math.round((newLetterForm.paperSize === "A5" ? (newLetterForm.orientation === "landscape" ? 794 : 559) : (newLetterForm.orientation === "landscape" ? 1123 : 794)) * (editorZoom / 100))}px` : undefined,
                             height: editorZoom !== 100 ? `${Math.round((newLetterForm.paperSize === "A5" ? (newLetterForm.orientation === "landscape" ? 559 : 794) : (newLetterForm.orientation === "landscape" ? 794 : 1123)) * (editorZoom / 100)) + 30}px` : undefined,
@@ -7084,12 +7201,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                 }
                                 placeholder="متن رسمی و اداری خود را اینجا بنویسید..."
                                 className="text-sm border-none ql-editor-borderless flex-1 relative z-10"
-                                modules={{
-                                  toolbar: "#letter-custom-quill-toolbar",
-                                  clipboard: {
-                                    matchVisual: false,
-                                  },
-                                }}
+                                modules={editorModules}
                               />
 
                               {/* Word-style Interactive 8-Handle Image Resizer & Rotation Overlay */}
@@ -7438,9 +7550,9 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                   </div>
                 </div>
 
-                {/* Sleek Bottom Action Bar - Mobile and Android Touch-Optimized */}
+                {/* Sleek Bottom Action Bar - Mobile and Android Touch-Optimized (wraps cleanly without horizontal scroll) */}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t dark:border-slate-800 pt-2 shrink-0">
-                  <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-1 sm:pb-0 scrollbar-none">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
                       onClick={handleSaveAsTemplate}
@@ -7500,12 +7612,15 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* 1.1 ADVANCED SETTINGS & SIGNERS MODAL */}
+      {typeof document !== "undefined" && createPortal(
       <AnimatePresence>
         {showAdvancedOptionsModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[9992] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -8006,12 +8121,15 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* 1.2 SMART ENTERPRISE TABLE STUDIO MODAL */}
+      {typeof document !== "undefined" && createPortal(
       <AnimatePresence>
         {showTableModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[9992] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -8327,12 +8445,15 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* ONLYOFFICE DOCUMENT SERVER SETTINGS MODAL */}
+      {typeof document !== "undefined" && createPortal(
       <AnimatePresence>
         {showOnlyOfficeSettingsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="fixed inset-0 z-[9988] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -8515,19 +8636,28 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* 2. DETAILED LETTER VIEW MODAL */}
+      {typeof document !== "undefined" && createPortal(
       <AnimatePresence>
         {selectedLetterForView && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs overflow-hidden">
+          <div
+            style={{
+              paddingTop: "env(safe-area-inset-top, 0px)",
+              paddingBottom: "env(safe-area-inset-bottom, 0px)",
+            }}
+            className="fixed inset-0 h-[100dvh] z-[9986] flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs overflow-hidden"
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
               className={`bg-white dark:bg-slate-900 border dark:border-slate-800 shadow-2xl flex flex-col text-right transition-all duration-200 ${
                 letterViewFullscreen
-                  ? "fixed inset-0 w-full h-full max-w-none max-h-none rounded-none p-2.5 sm:p-4 z-50 overflow-hidden"
+                  ? "fixed inset-0 w-full h-full max-w-none max-h-none rounded-none p-2.5 sm:p-4 z-[9986] overflow-hidden"
                   : "rounded-2xl max-w-6xl w-full p-3 sm:p-5 max-h-[94vh]"
               }`}
               dir="rtl"
@@ -9236,9 +9366,12 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* 3. HIGH QUALITY PRINT & PDF GENERATOR LAYOUT MODAL */}
+      {typeof document !== "undefined" && createPortal(
       <AnimatePresence>
         {isPrintMode && (() => {
           const printSettings = getCompanySettingsForLetter(
@@ -9263,14 +9396,20 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                 : "297mm";
 
           return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 sm:p-4 backdrop-blur-xs overflow-y-auto">
+            <div
+              style={{
+                paddingTop: "env(safe-area-inset-top, 0px)",
+                paddingBottom: "env(safe-area-inset-bottom, 0px)",
+              }}
+              className="fixed inset-0 h-[100dvh] z-[9990] flex items-center justify-center bg-black/75 p-2 sm:p-4 backdrop-blur-xs overflow-y-auto"
+            >
               <motion.div
                 initial={{ scale: 0.96, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.96, opacity: 0 }}
                 className={`bg-white dark:bg-slate-900 border dark:border-slate-800 shadow-2xl flex flex-col text-right transition-all duration-200 ${
                   printPreviewFullscreen
-                    ? "fixed inset-0 w-full h-full max-w-none max-h-none rounded-none p-3 sm:p-5 z-50 overflow-hidden"
+                    ? "fixed inset-0 w-full h-full max-w-none max-h-none rounded-none p-3 sm:p-5 z-[9990] overflow-hidden"
                     : "rounded-2xl max-w-5xl w-full p-4 sm:p-6 max-h-[94vh]"
                 }`}
                 dir="rtl"
@@ -9596,7 +9735,9 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           </div>
           );
         })()}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {previewLetterAttachment && (
         <FileViewerModal
