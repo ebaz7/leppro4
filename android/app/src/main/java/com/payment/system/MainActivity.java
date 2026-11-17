@@ -82,7 +82,7 @@ public class MainActivity extends BridgeActivity {
                                 PublicSaveResult res = saveBytesToPublicDownloadsAndCache(getApplicationContext(), decoded, finalName, resolvedMime);
                                 if (res.ok) {
                                     android.widget.Toast.makeText(getApplicationContext(), "فایل در پوشه Downloads/Dlkam ذخیره شد: " + res.fileName, android.widget.Toast.LENGTH_LONG).show();
-                                    openSavedFileInternal(getApplicationContext(), res.fileName, resolvedMime, res.publicUri);
+                                    openSavedFileInternal(getApplicationContext(), res.fileName, resolvedMime, res.uri);
                                     return;
                                 }
                             }
