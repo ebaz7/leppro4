@@ -89,10 +89,8 @@ async fn start_server_cmd(port: Option<u16>) -> Result<String, String> {
 }
 
 fn get_desktop_app_files_dir(handle: &tauri::AppHandle) -> PathBuf {
-    let base = handle
-        .path_resolver()
-        .download_dir()
-        .or_else(|| handle.path_resolver().document_dir())
+    let base = tauri::api::path::download_dir()
+        .or_else(tauri::api::path::document_dir)
         .or_else(|| handle.path_resolver().app_local_data_dir())
         .or_else(|| handle.path_resolver().app_config_dir())
         .unwrap_or_else(|| PathBuf::from("."));
