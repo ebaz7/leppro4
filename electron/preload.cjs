@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getVersion: () => ipcRenderer.invoke('get-version'),
   getRuntime: () => 'electron',
   getDownloadsPath: () => ipcRenderer.invoke('get-downloads-path'),
+  getExportsPath: () => ipcRenderer.invoke('get-exports-path'),
   checkLocalFileExists: (fileName) => ipcRenderer.invoke('check-local-file-exists', fileName),
   saveLocalFile: (fileName, bytes, openAfter = true) => ipcRenderer.invoke('save-local-file', { fileName, bytes, openAfter }),
   saveAndOpenLocalFile: (fileName, bytes) => ipcRenderer.invoke('save-and-open-local-file', { fileName, bytes }),

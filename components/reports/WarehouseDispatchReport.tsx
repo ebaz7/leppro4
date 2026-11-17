@@ -4,6 +4,7 @@ import { formatDate, parsePersianDate, getCurrentShamsiDate } from '../../consta
 import * as XLSX from 'xlsx';
 import { Download, FileText, Printer, Search, MessageSquare, Loader2 } from 'lucide-react';
 import { shareElementToChat } from '../../services/chatShareService';
+import { saveWorkbookAndOpen } from '../../services/fileService';
 
 interface WarehouseDispatchReportProps {
     transactions: WarehouseTransaction[];
@@ -122,7 +123,7 @@ const WarehouseDispatchReport: React.FC<WarehouseDispatchReportProps> = ({ trans
         ];
 
         XLSX.utils.book_append_sheet(wb, ws, "گزارش خروج");
-        XLSX.writeFile(wb, `Dispatch_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        void saveWorkbookAndOpen(XLSX, wb, `Dispatch_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
     };
 
     const handleSendToChat = async () => {

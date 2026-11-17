@@ -1,7 +1,7 @@
 /**
  * Touch Pinch-to-Zoom & 4-Way Pan Math Utilities
- * Used by FileViewerModal for smooth two-finger pinch-to-zoom, double-tap zoom,
- * and 4-directional touch panning (left, right, top, bottom) on images and PDFs.
+ * Supports strictly two-finger pinch-to-zoom (no 1-finger zoom)
+ * and 4-directional touch panning/scrolling (left, right, top, bottom) on images and PDFs.
  */
 
 export interface Point2D {

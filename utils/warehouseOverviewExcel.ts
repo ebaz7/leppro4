@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { saveAs } from 'file-saver';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 export interface WarehouseExcelDataset {
     summary: {
@@ -804,9 +804,9 @@ export const exportWarehouseOverviewToExcel = async (
         }
     }
 
-    // Write to buffer and trigger download with FileSaver
+    // Write to buffer and trigger download into Downloads/Dlkam across Android, Desktop & Web
     const buffer = await wb.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const cleanDate = reportDate.replace(/[\/\\]/g, '-');
-    saveAs(blob, `گزارش_رسمی_موجودی_و_تراز_انبار_${cleanDate}.xlsx`);
+    await saveBlobAndOpenFile(blob, `گزارش_رسمی_موجودی_و_تراز_انبار_${cleanDate}.xlsx`);
 };

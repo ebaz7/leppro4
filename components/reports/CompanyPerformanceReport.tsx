@@ -5,6 +5,7 @@ import { formatNumberString, deformatNumberString, getCurrentShamsiDate } from '
 import { FileSpreadsheet, Printer, FileDown, RefreshCw, Loader2, MessageSquare } from 'lucide-react';
 import { generatePdf } from '../../utils/pdfGenerator'; 
 import { shareElementToChat } from '../../services/chatShareService'; 
+import { saveBlobAndOpenFile } from '../../services/fileService';
 
 interface Props {
     records: TradeRecord[];
@@ -195,12 +196,7 @@ const CompanyPerformanceReport: React.FC<Props> = ({ records }) => {
         rows.push(`"جمع کل",${Math.round(summaryByCompany.totalAll)},${Math.round(weeksPassed > 0 ? summaryByCompany.totalAll / weeksPassed : 0)}`);
         const bom = "\uFEFF"; 
         const blob = new Blob([bom + rows.join("\n")], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `Company_Performance_${selectedYear}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        void saveBlobAndOpenFile(blob, `Company_Performance_${selectedYear}.csv`);
     };
 
     const content = (

@@ -7,6 +7,7 @@ import { apiCall } from '../services/apiService';
 import PrintAllocationReport from './print/PrintAllocationReport';
 import html2canvas from 'html2canvas';
 import { shareElementToChat } from '../services/chatShareService';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 interface AllocationReportProps {
     records: TradeRecord[];
@@ -233,7 +234,8 @@ const AllocationReport: React.FC<AllocationReportProps> = ({ records, onUpdateRe
             const { jsPDF } = window.jspdf;
             const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
             pdf.addImage(imgData, 'PNG', 5, 5, 287, (canvas.height * 287) / canvas.width);
-            pdf.save(`Allocation_Report_${new Date().toISOString().slice(0,10)}.pdf`);
+            const pdfBlob = pdf.output('blob');
+            await saveBlobAndOpenFile(pdfBlob, `Allocation_Report_${new Date().toISOString().slice(0,10)}.pdf`);
         } catch (e) { console.error(e); alert("خطا در ایجاد PDF"); } finally { setIsGeneratingPdf(false); }
     };
 
@@ -302,12 +304,7 @@ const AllocationReport: React.FC<AllocationReportProps> = ({ records, onUpdateRe
         // BOM for UTF-8 Excel compatibility
         const bom = "\uFEFF"; 
         const blob = new Blob([bom + rows.join("\n")], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `Allocation_Report_${new Date().toISOString().slice(0,10)}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        void saveBlobAndOpenFile(blob, `Allocation_Report_${new Date().toISOString().slice(0,10)}.csv`);
     };
 
     const handleShareWhatsApp = async () => {

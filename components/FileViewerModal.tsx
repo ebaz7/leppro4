@@ -25,14 +25,25 @@ const resolveImageUrl = (url?: string): string => {
 };
 
 let cachedPdfJsLib: any = null;
-const loadPdfJsLibrary = async () => {
-  if (cachedPdfJsLib) return cachedPdfJsLib;
+const loadPdfJsLibrary = async (disableWorker = false) => {
+  if (cachedPdfJsLib) {
+    if (disableWorker && cachedPdfJsLib.GlobalWorkerOptions) {
+      cachedPdfJsLib.GlobalWorkerOptions.workerSrc = '';
+    }
+    return cachedPdfJsLib;
+  }
   const pdfLib = await import('pdfjs-dist');
-  // @ts-ignore
-  const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
-  const workerUrl = workerModule.default || workerModule;
-  if (pdfLib && pdfLib.GlobalWorkerOptions) {
-    pdfLib.GlobalWorkerOptions.workerSrc = workerUrl;
+  if (!disableWorker) {
+    try {
+      // @ts-ignore
+      const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+      const workerUrl = workerModule.default || workerModule;
+      if (pdfLib && pdfLib.GlobalWorkerOptions && workerUrl) {
+        pdfLib.GlobalWorkerOptions.workerSrc = workerUrl;
+      }
+    } catch {
+      // Fall back to workerless mode when bundled worker fails to resolve
+    }
   }
   cachedPdfJsLib = pdfLib;
   return cachedPdfJsLib;
@@ -89,9 +100,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     initialScale: number;
     initialDistance: number;
     initialMidpoint: { x: number; y: number };
-    lastTapTime: number;
-    lastTapX: number;
-    lastTapY: number;
     isMouseDragging: boolean;
   }>({
     mode: 'none',
@@ -102,9 +110,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     initialScale: 1,
     initialDistance: 0,
     initialMidpoint: { x: 0, y: 0 },
-    lastTapTime: 0,
-    lastTapX: 0,
-    lastTapY: 0,
     isMouseDragging: false,
   });
 
@@ -148,8 +153,10 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     (nextZoomRaw: number, focalPoint?: { x: number; y: number }) => {
       const nextZoom = clampZoom(nextZoomRaw);
       if (nextZoom <= 1.01) {
+        const bounds = getBounds();
+        const clamped = clampPanOffsets(panRef.current.x, panRef.current.y, nextZoom, bounds);
         setZoom(nextZoom);
-        setPan({ x: 0, y: 0 });
+        setPan({ x: clamped.panX, y: clamped.panY });
         return;
       }
       const prevZoom = zoomRef.current || 1;
@@ -196,15 +203,23 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     const renderPdfToImages = async (pdfSource: { data?: ArrayBuffer; url?: string }) => {
       setIsRenderingPdfPages(true);
       try {
-        const pdfjsLib = await loadPdfJsLibrary();
-        const loadingTask = pdfjsLib.getDocument(pdfSource);
-        const pdfDoc = await loadingTask.promise;
+        let pdfDoc: any = null;
+        try {
+          const pdfjsLib = await loadPdfJsLibrary(false);
+          const task = pdfjsLib.getDocument(pdfSource);
+          pdfDoc = await task.promise;
+        } catch (workerErr) {
+          console.warn('PDF worker load failed, retrying without worker:', workerErr);
+          const pdfjsLib = await loadPdfJsLibrary(true);
+          const task = pdfjsLib.getDocument({ ...pdfSource, disableWorker: true });
+          pdfDoc = await task.promise;
+        }
         if (isCancelled) return;
         const totalPages = pdfDoc.numPages || 0;
         setPdfPageCount(totalPages);
         const renderedPages: string[] = [];
 
-        // Render up to 25 pages at crisp high-DPI for pinch-to-zoom & 4-way touch pan
+        // Render up to 25 pages at crisp high-DPI for 2-finger pinch-to-zoom & 4-way touch pan
         const maxPages = Math.min(totalPages, 25);
         for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
           if (isCancelled) return;
@@ -267,8 +282,16 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           }
         } else if (detectedType === 'pdf') {
           try {
-            const response = await fetch(resolvedUrl);
-            if (!response.ok) throw new Error('Network response was not ok');
+            const authToken =
+              typeof localStorage !== 'undefined'
+                ? localStorage.getItem('token') || sessionStorage.getItem('token')
+                : null;
+            const fetchHeaders: Record<string, string> = {};
+            if (authToken && !resolvedUrl.startsWith('blob:')) {
+              fetchHeaders.Authorization = `Bearer ${authToken}`;
+            }
+            const response = await fetch(resolvedUrl, { headers: fetchHeaders });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
             const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
             objectUrlToRevoke = URL.createObjectURL(blob);
@@ -328,7 +351,24 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     };
   }, [isOpen, onClose]);
 
-  // Native non-passive touch listeners for silky-smooth 2-finger pinch-to-zoom, tap-zoom & 4-way touch pan
+  // Align multi-page PDF stacks so Page 1 starts cleanly near the top at 1x zoom
+  useEffect(() => {
+    if (!isOpen || pdfPageImages.length <= 1 || useIframePdfFallback) return;
+    const raf = requestAnimationFrame(() => {
+      const vp = viewportRef.current;
+      const ct = contentRef.current;
+      if (!vp || !ct) return;
+      if (zoomRef.current <= 1.01 && panRef.current.x === 0 && panRef.current.y === 0) {
+        const overflowY = Math.max(0, (ct.offsetHeight - vp.clientHeight) / 2);
+        if (overflowY > 0) {
+          setPan({ x: 0, y: overflowY });
+        }
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isOpen, pdfPageImages.length, useIframePdfFallback]);
+
+  // Native non-passive touch listeners for strictly 2-finger pinch-to-zoom & 4-way touch pan
   useEffect(() => {
     const el = viewportRef.current;
     if (!el || !isOpen) return;
@@ -348,33 +388,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         setIsTouchingGesture(true);
       } else if (e.touches.length === 1) {
         const touch = e.touches[0];
-        const now = Date.now();
-        const dt = now - gestureRef.current.lastTapTime;
-        const dist = Math.hypot(
-          touch.clientX - gestureRef.current.lastTapX,
-          touch.clientY - gestureRef.current.lastTapY
-        );
-
-        // Double-tap (Tap-to-Zoom) cycles 1x -> 2.5x -> 4x -> 1x centered on tap point
-        if (dt > 30 && dt < 400 && dist < 48) {
-          e.preventDefault();
-          gestureRef.current.lastTapTime = 0;
-          if (zoomRef.current < 1.8) {
-            applyZoomLevel(2.5, { x: touch.clientX, y: touch.clientY });
-          } else if (zoomRef.current < 3.4) {
-            applyZoomLevel(4, { x: touch.clientX, y: touch.clientY });
-          } else {
-            setZoom(1);
-            setPan({ x: 0, y: 0 });
-          }
-          return;
-        }
-
-        gestureRef.current.lastTapTime = now;
-        gestureRef.current.lastTapX = touch.clientX;
-        gestureRef.current.lastTapY = touch.clientY;
-
-        // Enable 1-finger 4-direction touch panning for images and PDF pages
+        // Strictly 1-finger 4-directional pan/scroll ONLY (never zoom on 1 finger tap/double-tap)
         gestureRef.current.mode = 'pan';
         gestureRef.current.startX = touch.clientX;
         gestureRef.current.startY = touch.clientY;
@@ -424,34 +438,19 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         const touch = e.touches[0];
         const dx = touch.clientX - gestureRef.current.startX;
         const dy = touch.clientY - gestureRef.current.startY;
+        const bounds = getBounds();
+        const rawPanX = gestureRef.current.initialPanX + dx;
+        const rawPanY = gestureRef.current.initialPanY + dy;
+        const clamped = clampPanOffsets(rawPanX, rawPanY, zoomRef.current, bounds);
 
-        if (zoomRef.current > 1.01) {
-          // Full 4-directional touch panning (left, right, up, down) when zoomed
+        if (
+          zoomRef.current > 1.01 ||
+          pdfPageImages.length > 1 ||
+          bounds.contentWidth > bounds.viewportWidth ||
+          bounds.contentHeight > bounds.viewportHeight
+        ) {
           e.preventDefault();
-          const rawPanX = gestureRef.current.initialPanX + dx;
-          const rawPanY = gestureRef.current.initialPanY + dy;
-          const clamped = clampPanOffsets(rawPanX, rawPanY, zoomRef.current, getBounds());
           setPan({ x: clamped.panX, y: clamped.panY });
-        } else if (pdfPageImages.length > 1) {
-          // At 1x zoom on multi-page PDF, allow vertical scrolling through pages via panY
-          e.preventDefault();
-          const bounds = getBounds();
-          const maxVerticalScroll = Math.max(0, (bounds.contentHeight - bounds.viewportHeight) / 2 + 120);
-          const nextY = Math.min(maxVerticalScroll, Math.max(-maxVerticalScroll, gestureRef.current.initialPanY + dy));
-          setPan({ x: 0, y: nextY });
-        } else {
-          // At 1x zoom on image or single page, allow 4-way pan if content overflows viewport
-          const bounds = getBounds();
-          const clamped = clampPanOffsets(
-            gestureRef.current.initialPanX + dx,
-            gestureRef.current.initialPanY + dy,
-            zoomRef.current,
-            bounds
-          );
-          if (clamped.panX !== 0 || clamped.panY !== 0) {
-            e.preventDefault();
-            setPan({ x: clamped.panX, y: clamped.panY });
-          }
         }
       }
     };
@@ -462,8 +461,10 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         gestureRef.current.mode = 'none';
         setIsTouchingGesture(false);
         if (zoomRef.current < 1) {
+          const bounds = getBounds();
+          const clamped = clampPanOffsets(panRef.current.x, panRef.current.y, 1, bounds);
           setZoom(1);
-          setPan({ x: 0, y: 0 });
+          setPan({ x: clamped.panX, y: clamped.panY });
         }
       } else if (e.touches.length === 1) {
         // Transition seamlessly from 2-finger pinch back to 1-finger 4-way pan without jumping
@@ -855,7 +856,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           >
             <Move size={14} className={zoom > 1.05 ? 'text-emerald-400' : 'text-blue-400'} />
             <span className="text-[11px] text-gray-200 hidden sm:inline">
-              {zoom > 1.05 ? 'حرکت در ۴ جهت فعال' : 'زوم با دو انگشت یا دو ضربه (Tap)'}
+              {zoom > 1.05 ? 'حرکت در ۴ جهت فعال' : 'زوم فقط با دو انگشت • حرکت در ۴ جهت'}
             </span>
             <div className="flex items-center gap-1 mr-1">
               <button

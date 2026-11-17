@@ -13,6 +13,7 @@ import { AiSayanReportModal } from "./AiSayanReportModal";
 import { uploadFileChunked } from "../services/storageService";
 import { generatePdfFromHtml, exportReportHtmlSmart } from "../utils/pdfGenerator";
 import { openSendToChat } from "../services/chatShareService";
+import { saveWorkbookAndOpen } from "../services/fileService";
 
 interface ProductionReturnTabProps {
     dateFrom: string;
@@ -931,7 +932,7 @@ export default function ProductionReturnTab({
     };
 
     // Export to Excel
-    const handleExportExcel = () => {
+    const handleExportExcel = async () => {
         try {
             const dataToExport = analyzedData.itemsList.map((item, idx) => ({
                 "ردیف": idx + 1,
@@ -948,8 +949,7 @@ export default function ProductionReturnTab({
             const ws = XLSX.utils.json_to_sheet(dataToExport);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "برگشت_از_تولید_سایان");
-            XLSX.writeFile(wb, `Production_Returns_Sayan_${dateFrom}_to_${dateTo}.xlsx`);
-            toast.success("فایل اکسل با موفقیت ایجاد و دانلود شد 📊");
+            await saveWorkbookAndOpen(XLSX, wb, `Production_Returns_Sayan_${dateFrom.replace(/[\/\\]/g, "-")}_to_${dateTo.replace(/[\/\\]/g, "-")}.xlsx`);
         } catch (err) {
             console.error("Failed to export excel", err);
             toast.error("خطا در صدور فایل اکسل");

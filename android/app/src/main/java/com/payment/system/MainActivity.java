@@ -70,15 +70,57 @@ public class MainActivity extends BridgeActivity {
                 webView.addJavascriptInterface(new DlkamAndroidBridge(this), "DlkamAndroid");
                 webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
                     try {
-                        if (url == null || url.startsWith("blob:") || url.startsWith("data:")) {
-                            android.widget.Toast.makeText(getApplicationContext(), "در حال ذخیره فایل در حافظه برنامه...", android.widget.Toast.LENGTH_SHORT).show();
+                        String guessedName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
+                        if (guessedName == null || guessedName.trim().isEmpty() || guessedName.equals("downloadfile.bin")) {
+                            guessedName = "dlkam-file";
+                        }
+                        if (url != null && url.startsWith("data:")) {
+                            byte[] decoded = decodeBase64Payload(url);
+                            if (decoded != null && decoded.length > 0) {
+                                String resolvedMime = resolveMimeType(guessedName, mimetype);
+                                final String finalName = ensureExtensionForMime(sanitizeFileName(guessedName), resolvedMime);
+                                PublicSaveResult res = saveBytesToPublicDownloadsAndCache(getApplicationContext(), decoded, finalName, resolvedMime);
+                                if (res.ok) {
+                                    android.widget.Toast.makeText(getApplicationContext(), "فایل در پوشه Downloads/Dlkam ذخیره شد: " + res.fileName, android.widget.Toast.LENGTH_LONG).show();
+                                    openSavedFileInternal(getApplicationContext(), res.fileName, resolvedMime, res.publicUri);
+                                    return;
+                                }
+                            }
+                            android.widget.Toast.makeText(getApplicationContext(), "خطا در ذخیره فایل در حافظه گوشی", android.widget.Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        if (url != null && url.startsWith("blob:")) {
+                            final String safeBlobName = sanitizeFileName(guessedName);
+                            final String safeMime = resolveMimeType(safeBlobName, mimetype);
+                            final String qUrl = org.json.JSONObject.quote(url);
+                            final String qName = org.json.JSONObject.quote(safeBlobName);
+                            final String qMime = org.json.JSONObject.quote(safeMime);
+                            webView.evaluateJavascript(
+                                "(function(){try{" +
+                                "fetch(" + qUrl + ").then(function(r){return r.blob();}).then(function(b){" +
+                                "var reader=new FileReader();" +
+                                "reader.onloadend=function(){" +
+                                "var b64=String(reader.result||'');" +
+                                "var m=b.type||" + qMime + ";" +
+                                "if(window.DlkamAndroid&&window.DlkamAndroid.saveFileToPublicDownloads){" +
+                                "var raw=window.DlkamAndroid.saveFileToPublicDownloads(b64," + qName + ",m);" +
+                                "var p={};try{p=JSON.parse(raw||'{}');}catch(e){}" +
+                                "if(p.ok&&window.DlkamAndroid.openFileFromAppFolder){window.DlkamAndroid.openFileFromAppFolder(p.fileName||" + qName + ",m);}" +
+                                "}" +
+                                "};" +
+                                "reader.readAsDataURL(b);" +
+                                "}).catch(function(){});" +
+                                "}catch(e){}})();",
+                                null
+                            );
+                            android.widget.Toast.makeText(getApplicationContext(), "در حال ذخیره فایل در پوشه Downloads/Dlkam...", android.widget.Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        if (url == null) {
                             return;
                         }
                         android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
-                        String fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
-                        if (fileName == null || fileName.trim().isEmpty()) {
-                            fileName = "dlkam-file";
-                        }
+                        String fileName = guessedName;
                         if (url.toLowerCase().contains(".apk") && !fileName.toLowerCase().endsWith(".apk")) {
                             fileName = fileName + ".apk";
                         }
@@ -473,6 +515,227 @@ public class MainActivity extends BridgeActivity {
         return "application/octet-stream";
     }
 
+    private static class PublicSaveResult {
+        boolean ok;
+        boolean publicSaved;
+        String folder = "Downloads/Dlkam";
+        String fileName = "";
+        String uri = "";
+    }
+
+    private byte[] decodeBase64Payload(String base64OrDataUrl) {
+        if (base64OrDataUrl == null) return new byte[0];
+        String cleanBase64 = base64OrDataUrl;
+        int commaIdx = cleanBase64.indexOf(',');
+        if (commaIdx >= 0) {
+            cleanBase64 = cleanBase64.substring(commaIdx + 1);
+        }
+        return Base64.decode(cleanBase64, Base64.DEFAULT);
+    }
+
+    private String ensureExtensionForMime(String safeName, String mimeType) {
+        if (safeName.contains(".")) return safeName;
+        if (mimeType == null) return safeName;
+        if (mimeType.contains("pdf")) return safeName + ".pdf";
+        if (mimeType.contains("spreadsheetml") || mimeType.contains("excel")) return safeName + ".xlsx";
+        if (mimeType.contains("wordprocessingml")) return safeName + ".docx";
+        if (mimeType.contains("csv")) return safeName + ".csv";
+        if (mimeType.contains("png")) return safeName + ".png";
+        if (mimeType.contains("jpeg") || mimeType.contains("jpg")) return safeName + ".jpg";
+        return safeName;
+    }
+
+    private File resolveUniquePublicFile(File dir, String safeName) {
+        File candidate = new File(dir, safeName);
+        if (!candidate.exists()) return candidate;
+        int dot = safeName.lastIndexOf('.');
+        String stem = dot > 0 ? safeName.substring(0, dot) : safeName;
+        String ext = dot > 0 ? safeName.substring(dot) : "";
+        for (int i = 1; i < 500; i++) {
+            File alt = new File(dir, stem + " (" + i + ")" + ext);
+            if (!alt.exists()) return alt;
+        }
+        return new File(dir, stem + "_" + System.currentTimeMillis() + ext);
+    }
+
+    private String addSuffixBeforeExt(String fileName, String suffix) {
+        int dot = fileName.lastIndexOf('.');
+        if (dot > 0) {
+            return fileName.substring(0, dot) + suffix + fileName.substring(dot);
+        }
+        return fileName + suffix;
+    }
+
+    private PublicSaveResult saveBytesToPublicDownloadsAndCache(Context ctx, byte[] bytes, String rawFileName, String mimeType) {
+        PublicSaveResult result = new PublicSaveResult();
+        if (bytes == null || bytes.length == 0) {
+            return result;
+        }
+        String safeName = sanitizeFileName(rawFileName);
+        String resolvedMime = resolveMimeType(safeName, mimeType);
+        safeName = ensureExtensionForMime(safeName, resolvedMime);
+        String savedFileName = safeName;
+
+        // 1. Write copy to app-dedicated folder so FileProvider & local open always succeed instantly
+        File cacheTarget = new File(getDedicatedAppFolder(), savedFileName);
+        try (FileOutputStream fos = new FileOutputStream(cacheTarget)) {
+            fos.write(bytes);
+            fos.flush();
+        } catch (Exception e) {
+            Log.w(TAG, "App cache copy write warning", e);
+        }
+
+        // 2. Write directly into public Downloads/Dlkam folder visible in Android File Manager ("My Files" / "Downloads/Dlkam")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentResolver resolver = ctx.getContentResolver();
+            String[] candidateNames = new String[]{
+                    savedFileName,
+                    addSuffixBeforeExt(savedFileName, "_" + (System.currentTimeMillis() % 100000))
+            };
+            for (String candName : candidateNames) {
+                Uri insertedUri = null;
+                try {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.DISPLAY_NAME, candName);
+                    values.put(MediaStore.Downloads.MIME_TYPE, resolvedMime);
+                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Dlkam");
+                    values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+                    insertedUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (insertedUri != null) {
+                        try (OutputStream os = resolver.openOutputStream(insertedUri)) {
+                            if (os != null) {
+                                os.write(bytes);
+                                os.flush();
+                            }
+                        }
+                        ContentValues updateVals = new ContentValues();
+                        updateVals.put(MediaStore.Downloads.IS_PENDING, 0);
+                        resolver.update(insertedUri, updateVals, null, null);
+
+                        savedFileName = candName;
+                        result.publicSaved = true;
+                        result.uri = insertedUri.toString();
+                        break;
+                    }
+                } catch (Exception mediaErr) {
+                    Log.w(TAG, "MediaStore.Downloads save attempt failed for " + candName, mediaErr);
+                    if (insertedUri != null) {
+                        try { resolver.delete(insertedUri, null, null); } catch (Exception ignored) {}
+                    }
+                }
+            }
+        } else {
+            try {
+                File publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File dlkamDir = new File(publicDownloads, "Dlkam");
+                if (!dlkamDir.exists()) {
+                    dlkamDir.mkdirs();
+                }
+                File publicFile = resolveUniquePublicFile(dlkamDir, savedFileName);
+                try (FileOutputStream fos = new FileOutputStream(publicFile)) {
+                    fos.write(bytes);
+                    fos.flush();
+                }
+                savedFileName = publicFile.getName();
+                result.publicSaved = true;
+                result.uri = Uri.fromFile(publicFile).toString();
+                MediaScannerConnection.scanFile(ctx, new String[]{publicFile.getAbsolutePath()}, new String[]{resolvedMime}, null);
+            } catch (Exception legacyErr) {
+                Log.w(TAG, "Legacy public Downloads/Dlkam write failed", legacyErr);
+            }
+        }
+
+        if (!savedFileName.equals(cacheTarget.getName())) {
+            try {
+                File renamedCache = new File(getDedicatedAppFolder(), savedFileName);
+                try (FileOutputStream fos = new FileOutputStream(renamedCache)) {
+                    fos.write(bytes);
+                    fos.flush();
+                }
+            } catch (Exception ignored) {}
+        }
+
+        result.ok = result.publicSaved || (cacheTarget.exists() && cacheTarget.length() > 0);
+        result.fileName = savedFileName;
+        result.folder = result.publicSaved ? "Downloads/Dlkam" : APP_FILES_FOLDER;
+        if (result.uri.isEmpty() && cacheTarget.exists()) {
+            result.uri = Uri.fromFile(cacheTarget).toString();
+        }
+        return result;
+    }
+
+    private boolean openSavedFileInternal(Context ctx, String fileName, String mimeType, String fallbackUriStr) {
+        try {
+            String safeName = sanitizeFileName(fileName);
+            String resolvedMime = resolveMimeType(safeName, mimeType);
+            File target = new File(getDedicatedAppFolder(), safeName);
+
+            if ("application/vnd.android.package-archive".equals(resolvedMime) && target.exists() && target.length() > 0) {
+                return installApkByFile(ctx, target);
+            }
+
+            Uri contentUri = null;
+            if (target.exists() && target.length() > 0) {
+                contentUri = FileProvider.getUriForFile(
+                        ctx,
+                        ctx.getPackageName() + ".fileprovider",
+                        target
+                );
+            } else if (fallbackUriStr != null && !fallbackUriStr.isEmpty()) {
+                contentUri = Uri.parse(fallbackUriStr);
+            }
+            if (contentUri == null) {
+                return false;
+            }
+
+            Intent viewIntent = new Intent(Intent.ACTION_VIEW);
+            viewIntent.setDataAndType(contentUri, resolvedMime);
+            viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            try {
+                ctx.startActivity(viewIntent);
+                return true;
+            } catch (Exception openErr) {
+                Intent chooser = Intent.createChooser(viewIntent, safeName);
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(chooser);
+                return true;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "openSavedFileInternal error", e);
+            return false;
+        }
+    }
+
+    private boolean installApkByFile(Context ctx, File target) {
+        try {
+            if (!target.exists() || target.length() == 0) {
+                return false;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!ctx.getPackageManager().canRequestPackageInstalls()) {
+                    Intent manageIntent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                    manageIntent.setData(Uri.parse("package:" + ctx.getPackageName()));
+                    manageIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    ctx.startActivity(manageIntent);
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        android.widget.Toast.makeText(ctx, "لطفاً دسترسی نصب برنامه‌های ناشناخته را برای دلکام فعال فرمایید.", android.widget.Toast.LENGTH_LONG).show()
+                    );
+                    return true;
+                }
+            }
+            Uri contentUri = FileProvider.getUriForFile(ctx, ctx.getPackageName() + ".fileprovider", target);
+            Intent installIntent = new Intent(Intent.ACTION_VIEW);
+            installIntent.setDataAndType(contentUri, "application/vnd.android.package-archive");
+            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            ctx.startActivity(installIntent);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "installApkByFile failed", e);
+            return false;
+        }
+    }
+
     public class DlkamAndroidBridge {
         private final Context context;
 
@@ -612,41 +875,33 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public String saveFileToPublicDownloads(String base64Data, String fileName, String mimeType) {
+            org.json.JSONObject json = new org.json.JSONObject();
+            try {
+                byte[] bytes = decodeBase64Payload(base64Data);
+                PublicSaveResult res = saveBytesToPublicDownloadsAndCache(context, bytes, fileName, mimeType);
+                json.put("ok", res.ok);
+                json.put("publicSaved", res.publicSaved);
+                json.put("folder", res.folder);
+                json.put("fileName", res.fileName);
+                json.put("uri", res.uri);
+            } catch (Exception e) {
+                Log.e(TAG, "saveFileToPublicDownloads error", e);
+                try {
+                    json.put("ok", false);
+                    json.put("publicSaved", false);
+                    json.put("error", e.getMessage());
+                } catch (Exception ignored) {}
+            }
+            return json.toString();
+        }
+
+        @JavascriptInterface
         public boolean saveFileToAppFolder(String base64Data, String fileName, String mimeType) {
             try {
-                String cleanBase64 = base64Data;
-                int commaIdx = cleanBase64.indexOf(',');
-                if (commaIdx >= 0) {
-                    cleanBase64 = cleanBase64.substring(commaIdx + 1);
-                }
-                byte[] bytes = Base64.decode(cleanBase64, Base64.DEFAULT);
-                String safeName = sanitizeFileName(fileName);
-                File target = new File(getDedicatedAppFolder(), safeName);
-                try (FileOutputStream fos = new FileOutputStream(target)) {
-                    fos.write(bytes);
-                    fos.flush();
-                }
-
-                // Also export a copy into public Downloads/Dlkam on Android 10+ so user can access it from File Manager too
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    try {
-                        ContentResolver resolver = context.getContentResolver();
-                        ContentValues values = new ContentValues();
-                        values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
-                        values.put(MediaStore.Downloads.MIME_TYPE, resolveMimeType(safeName, mimeType));
-                        values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Dlkam");
-                        Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                        if (uri != null) {
-                            try (OutputStream os = resolver.openOutputStream(uri)) {
-                                if (os != null) {
-                                    os.write(bytes);
-                                    os.flush();
-                                }
-                            }
-                        }
-                    } catch (Exception ignored) {}
-                }
-                return true;
+                byte[] bytes = decodeBase64Payload(base64Data);
+                PublicSaveResult res = saveBytesToPublicDownloadsAndCache(context, bytes, fileName, mimeType);
+                return res.ok;
             } catch (Exception e) {
                 Log.e(TAG, "saveFileToAppFolder error", e);
                 return false;
@@ -655,38 +910,7 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public boolean openFileFromAppFolder(String fileName, String mimeType) {
-            try {
-                String safeName = sanitizeFileName(fileName);
-                File target = new File(getDedicatedAppFolder(), safeName);
-                if (!target.exists() || target.length() == 0) {
-                    return false;
-                }
-                String resolvedMime = resolveMimeType(safeName, mimeType);
-                if ("application/vnd.android.package-archive".equals(resolvedMime)) {
-                    return installApkFromAppFolder(safeName);
-                }
-
-                Uri contentUri = FileProvider.getUriForFile(
-                        context,
-                        context.getPackageName() + ".fileprovider",
-                        target
-                );
-                Intent viewIntent = new Intent(Intent.ACTION_VIEW);
-                viewIntent.setDataAndType(contentUri, resolvedMime);
-                viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                try {
-                    context.startActivity(viewIntent);
-                    return true;
-                } catch (Exception openErr) {
-                    Intent chooser = Intent.createChooser(viewIntent, safeName);
-                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    context.startActivity(chooser);
-                    return true;
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "openFileFromAppFolder error", e);
-                return false;
-            }
+            return openSavedFileInternal(context, fileName, mimeType, "");
         }
 
         @JavascriptInterface

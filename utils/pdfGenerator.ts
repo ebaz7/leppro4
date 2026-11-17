@@ -4,7 +4,7 @@ import { jsPDF } from 'jspdf';
 import { Capacitor } from '@capacitor/core';
 import toast from 'react-hot-toast';
 import { saveBlobAndOpenFile } from '../services/fileService';
-import { isAndroidApp } from './platformDetection';
+import { isAndroidApp, isElectronDesktop, isTauriDesktopOnly } from './platformDetection';
 
 type PdfFormat = 'A4' | 'A5';
 export type PdfOrientation = 'portrait' | 'landscape';
@@ -206,14 +206,15 @@ export const printHtmlInPage = (
 export const exportReportHtmlSmart = async (
     htmlString: string,
     filename: string,
-    orientationSetting: PdfOrientationSetting = 'auto'
+    orientationSetting: PdfOrientationSetting = 'auto',
+    options?: { downloadPdf?: boolean }
 ): Promise<void> => {
     if (!htmlString) return;
     const cleanName = (filename || `Report_${Date.now()}.pdf`).replace(/[\\/:*?"<>|]/g, '_');
     const pdfFilename = cleanName.toLowerCase().endsWith('.pdf') ? cleanName : `${cleanName}.pdf`;
 
-    if (isAndroidApp() || Capacitor.isNativePlatform()) {
-        const loadingToast = toast.loading('در حال آماده‌سازی و دانلود فایل PDF...');
+    if (options?.downloadPdf || isAndroidApp() || Capacitor.isNativePlatform()) {
+        const loadingToast = toast.loading('در حال آماده‌سازی و ذخیره فایل PDF...');
         try {
             const resolvedOrientation: PdfOrientation =
                 orientationSetting === 'auto'
@@ -223,14 +224,10 @@ export const exportReportHtmlSmart = async (
             if (!blob) {
                 throw new Error('PDF_GENERATION_FAILED');
             }
-            const ok = await saveBlobAndOpenFile(blob, pdfFilename);
-            if (ok) {
-                toast.success('فایل PDF ذخیره و باز شد ✓', { id: loadingToast });
-            } else {
-                toast.error('ذخیره فایل PDF با خطا مواجه شد', { id: loadingToast });
-            }
+            toast.dismiss(loadingToast);
+            await saveBlobAndOpenFile(blob, pdfFilename);
         } catch (err) {
-            console.error('Android PDF export error:', err);
+            console.error('PDF export error:', err);
             toast.error('خطا در تولید و ذخیره PDF', { id: loadingToast });
         }
         return;
@@ -562,7 +559,7 @@ export const generatePdf = async ({
             return pdfBlob;
         }
 
-        if (Capacitor.isNativePlatform()) {
+        if (Capacitor.isNativePlatform() || isAndroidApp() || isElectronDesktop() || isTauriDesktopOnly()) {
             await saveBlobAndOpenFile(pdfBlob, finalFilename);
         } else {
             try {

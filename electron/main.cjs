@@ -303,6 +303,23 @@ function ensureDownloadsDir() {
   return app.getPath('userData');
 }
 
+function ensureDlkamExportsDir() {
+  const downloadsDir = ensureDownloadsDir();
+  const dlkamDir = path.join(downloadsDir, 'Dlkam');
+  try {
+    if (!fs.existsSync(dlkamDir)) {
+      fs.mkdirSync(dlkamDir, { recursive: true });
+    }
+    return dlkamDir;
+  } catch (_) {
+    return downloadsDir;
+  }
+}
+
+function isDesktopInstallerFileName(fileName) {
+  return /\.(exe|msi)$/i.test(String(fileName || '').trim());
+}
+
 function findMatchingInstallerInDir(dir, safeName) {
   try {
     if (!dir || !fs.existsSync(dir)) return null;
@@ -730,18 +747,24 @@ ipcMain.handle('get-version', () => {
   return app.getVersion() || '1.0.29';
 });
 
-// 1b. Get Windows Downloads directory path
+// 1b. Get Windows Downloads directory path & dedicated Dlkam exports folder (Downloads\Dlkam)
 ipcMain.handle('get-downloads-path', () => {
   return ensureDownloadsDir();
 });
 
-// 2. Check if valid file exists in Downloads or UserData (also checks numbered copies e.g. "file (1).exe")
+ipcMain.handle('get-exports-path', () => {
+  return ensureDlkamExportsDir();
+});
+
+// 2. Check if valid file exists in Downloads\Dlkam, Downloads, or UserData
 ipcMain.handle('check-local-file-exists', async (event, fileName) => {
   try {
     const safeName = sanitizeDownloadFileName(fileName);
+    const exportsDir = ensureDlkamExportsDir();
     const downloadsDir = ensureDownloadsDir();
     const userDataDir = app.getPath('userData');
     return Boolean(
+      findMatchingInstallerInDir(exportsDir, safeName) ||
       findMatchingInstallerInDir(downloadsDir, safeName) ||
       findMatchingInstallerInDir(userDataDir, safeName)
     );
@@ -750,15 +773,15 @@ ipcMain.handle('check-local-file-exists', async (event, fileName) => {
   }
 });
 
-// 3a. Save binary bytes to Downloads folder (optionally opening the file)
+// 3a. Save binary bytes to Downloads\Dlkam (or Downloads root for installers)
 ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = true }) => {
   try {
-    const downloadsDir = ensureDownloadsDir();
     const safeName = sanitizeDownloadFileName(fileName);
     const isInstaller = /^(dlkam-desktop|dlkam-electron|sayan-desktop).*\.(exe|msi)$/i.test(safeName);
+    const targetDir = isInstaller ? ensureDownloadsDir() : ensureDlkamExportsDir();
     const filePath = isInstaller
-      ? getUniqueSavePath(downloadsDir, safeName, !fs.existsSync(path.join(downloadsDir, safeName)))
-      : getUniqueSavePath(downloadsDir, safeName, false);
+      ? getUniqueSavePath(targetDir, safeName, !fs.existsSync(path.join(targetDir, safeName)))
+      : getUniqueSavePath(targetDir, safeName, false);
 
     const buffer = toNodeBuffer(bytes);
     if (!buffer || buffer.length === 0) {
@@ -767,7 +790,7 @@ ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = t
     try {
       fs.writeFileSync(filePath, buffer);
     } catch (writeErr) {
-      const altPath = getUniqueSavePath(downloadsDir, safeName, false);
+      const altPath = getUniqueSavePath(targetDir, safeName, false);
       fs.writeFileSync(altPath, buffer);
       if (isInstaller && !isValidLocalFile(altPath, safeName)) {
         try { fs.unlinkSync(altPath); } catch (_) {}
@@ -804,13 +827,15 @@ ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = t
   }
 });
 
-// 3b. Save binary bytes to Downloads folder and automatically execute/open it (backwards-compatible)
+// 3b. Save binary bytes to Downloads\Dlkam (or Downloads for installers) and automatically execute/open it
 ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) => {
   try {
-    const downloadsDir = ensureDownloadsDir();
     const safeName = sanitizeDownloadFileName(fileName);
     const isInstaller = /^(dlkam-desktop|dlkam-electron|sayan-desktop).*\.(exe|msi)$/i.test(safeName);
-    let filePath = path.join(downloadsDir, safeName);
+    const targetDir = isInstaller ? ensureDownloadsDir() : ensureDlkamExportsDir();
+    let filePath = isInstaller
+      ? path.join(targetDir, safeName)
+      : getUniqueSavePath(targetDir, safeName, false);
 
     const buffer = toNodeBuffer(bytes);
     if (!buffer || buffer.length === 0) {
@@ -819,7 +844,7 @@ ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) =>
     try {
       fs.writeFileSync(filePath, buffer);
     } catch (_) {
-      filePath = getUniqueSavePath(downloadsDir, safeName, false);
+      filePath = getUniqueSavePath(targetDir, safeName, false);
       fs.writeFileSync(filePath, buffer);
     }
 
@@ -843,15 +868,15 @@ ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) =>
   }
 });
 
-// 3c. Native Main-Process Streaming Downloader (handles 100MB+ installers without renderer heap/IPC overhead)
+// 3c. Native Main-Process Streaming Downloader (installers -> Downloads, exports/reports -> Downloads\Dlkam)
 ipcMain.handle('download-and-save-file', async (event, { url, fileName, openAfter = true, authToken = '', expectedSize = 0 }) => {
   try {
-    const downloadsDir = ensureDownloadsDir();
     const safeName = sanitizeDownloadFileName(fileName || `delkam_download_${Date.now()}`);
-    const isInstaller = /\.(exe|msi)$/i.test(safeName);
+    const isInstaller = isDesktopInstallerFileName(safeName);
+    const targetDir = isInstaller ? ensureDownloadsDir() : ensureDlkamExportsDir();
     const destPath = isInstaller
-      ? path.join(downloadsDir, safeName)
-      : getUniqueSavePath(downloadsDir, safeName, false);
+      ? path.join(targetDir, safeName)
+      : getUniqueSavePath(targetDir, safeName, false);
 
     const { filePath } = await streamDownloadToFile({
       url,
@@ -879,7 +904,7 @@ ipcMain.handle('download-and-save-file', async (event, { url, fileName, openAfte
       try {
         await openPathWithFallback(filePath);
       } catch (launchErr) {
-        // File IS downloaded & verified in Downloads — distinguish launch block from download failure
+        // File IS downloaded & verified — distinguish launch block from download failure
         throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
       }
     }
@@ -903,13 +928,15 @@ ipcMain.handle('open-external', async (event, url) => {
   }
 });
 
-// 4. Open & launch local installer executable
+// 4. Open & launch local file or installer executable
 ipcMain.handle('open-local-file', async (event, fileName) => {
   try {
     const safeName = sanitizeDownloadFileName(fileName);
+    const exportsDir = ensureDlkamExportsDir();
     const downloadsDir = ensureDownloadsDir();
     const userDataDir = app.getPath('userData');
     const filePath =
+      findMatchingInstallerInDir(exportsDir, safeName) ||
       findMatchingInstallerInDir(downloadsDir, safeName) ||
       findMatchingInstallerInDir(userDataDir, safeName);
     if (filePath && isValidLocalFile(filePath, safeName)) {
@@ -927,24 +954,28 @@ ipcMain.handle('open-local-file', async (event, fileName) => {
   }
 });
 
-// 5. Open File Explorer / Folder containing downloaded update with file highlighted
+// 5. Open File Explorer / Folder containing downloaded file with file highlighted
 ipcMain.handle('open-local-file-dir', async (event, fileName) => {
   try {
     const safeName = sanitizeDownloadFileName(fileName);
+    const exportsDir = ensureDlkamExportsDir();
     const downloadsDir = ensureDownloadsDir();
     const userDataDir = app.getPath('userData');
     const matchedPath =
+      findMatchingInstallerInDir(exportsDir, safeName) ||
       findMatchingInstallerInDir(downloadsDir, safeName) ||
       findMatchingInstallerInDir(userDataDir, safeName) ||
+      (fs.existsSync(path.join(exportsDir, safeName)) ? path.join(exportsDir, safeName) : null) ||
       (fs.existsSync(path.join(downloadsDir, safeName)) ? path.join(downloadsDir, safeName) : null) ||
       (fs.existsSync(path.join(userDataDir, safeName)) ? path.join(userDataDir, safeName) : null);
 
+    const fallbackDir = isDesktopInstallerFileName(safeName) ? downloadsDir : exportsDir;
     if (matchedPath && fs.existsSync(matchedPath)) {
       shell.showItemInFolder(matchedPath);
-      return downloadsDir;
+      return path.dirname(matchedPath);
     } else {
-      await shell.openPath(downloadsDir);
-      return downloadsDir;
+      await shell.openPath(fallbackDir);
+      return fallbackDir;
     }
   } catch (err) {
     console.error('Failed to open local file directory:', err);
@@ -1075,13 +1106,13 @@ app.whenReady().then(() => {
       session.defaultSession.setPermissionCheckHandler(() => true);
 
       // Automatically save ALL Chromium downloads (<a download>, file-saver saveAs(), blob:, downloadURL)
-      // directly into the Windows Downloads folder without blocking prompts or lost files.
+      // directly into Downloads\Dlkam (or Downloads root for installers) without blocking prompts.
       session.defaultSession.on('will-download', (event, item) => {
         try {
-          const downloadsDir = ensureDownloadsDir();
           const suggested = sanitizeDownloadFileName(item.getFilename() || `delkam_download_${Date.now()}`);
-          const isInstaller = /\.(exe|msi)$/i.test(suggested);
-          const savePath = getUniqueSavePath(downloadsDir, suggested, isInstaller);
+          const isInstaller = isDesktopInstallerFileName(suggested);
+          const targetDir = isInstaller ? ensureDownloadsDir() : ensureDlkamExportsDir();
+          const savePath = getUniqueSavePath(targetDir, suggested, isInstaller);
           item.setSavePath(savePath);
 
           item.on('updated', (_ev, state) => {

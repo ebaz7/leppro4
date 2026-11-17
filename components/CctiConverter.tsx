@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 
 import { User } from '../types';
 import { openSendToChat } from '../services/chatShareService';
+import { saveBlobAndOpenFile, saveWorkbookAndOpen } from '../services/fileService';
 
 interface CctiArchiveDetail {
     id: string;
@@ -429,7 +430,7 @@ const CctiConverter: React.FC<Props> = ({ financialYear, currentUser, canManageA
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "حافظه پرسنل");
-        XLSX.writeFile(wb, `ccti_personnel_accounts_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        void saveWorkbookAndOpen(XLSX, wb, `ccti_personnel_accounts_${new Date().toISOString().slice(0, 10)}.xlsx`);
     };
 
     const handleClearSavedPersons = () => {
@@ -775,14 +776,7 @@ ${xmlTxLines.join('\\n')}
         setArchiveMonthName('');
 
         const blob = new Blob([xmlContent], { type: 'text/plain;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        link.setAttribute("href", url);
-        link.setAttribute("download", fileName);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        void saveBlobAndOpenFile(blob, fileName);
     };
 
     const handleDeletePerson = (id: string) => {
@@ -1687,14 +1681,7 @@ ${xmlTxLines.join('\\n')}
                                         <button 
                                             onClick={() => {
                                                 const blob = new Blob([selectedArchiveView.fileContent], { type: 'text/plain;charset=utf-8;' });
-                                                const link = document.createElement("a");
-                                                const url = URL.createObjectURL(blob);
-                                                link.setAttribute("href", url);
-                                                link.setAttribute("download", `salary_${selectedArchiveView.monthName}.ccti`);
-                                                link.style.visibility = 'hidden';
-                                                document.body.appendChild(link);
-                                                link.click();
-                                                document.body.removeChild(link);
+                                                void saveBlobAndOpenFile(blob, `salary_${selectedArchiveView.monthName}.ccti`);
                                             }}
                                             className="mt-4 w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-4 rounded-xl font-bold hover:shadow-lg hover:shadow-blue-500/30 transition-all active:scale-95 hidden-print"
                                         >

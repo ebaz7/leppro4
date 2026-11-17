@@ -6,6 +6,7 @@ import { generatePdf } from '../../utils/pdfGenerator';
 import * as ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { shareElementToChat } from '../../services/chatShareService';
+import { saveBlobAndOpenFile } from '../../services/fileService';
 // from '../../utils/pdfGenerator'; 
 
 interface CurrencyReportProps {
@@ -251,12 +252,7 @@ const CurrencyReport: React.FC<CurrencyReportProps> = ({ records, onSelectTranch
             });
         });
         const blob = new Blob(["\uFEFF" + rows.join("\n")], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `Currency_Report_${selectedYear}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        void saveBlobAndOpenFile(blob, `Currency_Report_${selectedYear}.csv`);
     };
 
     const formatUSD = (val: number) => val.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });

@@ -439,28 +439,110 @@ export const initWhatsApp = (authDir) => {
                                         };
                                         MediaDataUtils.__patchedPdfCache = true;
                                     }
-                                } catch (e) {}
+                                    } catch (e) {}
+                                    try {
+                                        const WALinkify = window.require('WALinkify');
+                                        if (WALinkify && !WALinkify.__patchedSafeLinkify) {
+                                            if (typeof WALinkify.findLink === 'function') {
+                                                const origFindLink = WALinkify.findLink.bind(WALinkify);
+                                                WALinkify.findLink = function (str, ...rest) {
+                                                    if (typeof str !== 'string' || !str) return null;
+                                                    try { return origFindLink(str, ...rest); } catch (e) { return null; }
+                                                };
+                                            }
+                                            if (typeof WALinkify.findLinks === 'function') {
+                                                const origFindLinks = WALinkify.findLinks.bind(WALinkify);
+                                                WALinkify.findLinks = function (str, ...rest) {
+                                                    if (typeof str !== 'string' || !str) return [];
+                                                    try { return origFindLinks(str, ...rest); } catch (e) { return []; }
+                                                };
+                                            }
+                                            WALinkify.__patchedSafeLinkify = true;
+                                        }
+                                    } catch (e) {}
 
-                                try {
-                                    const WALinkify = window.require('WALinkify');
-                                    if (WALinkify && !WALinkify.__patchedSafeLinkify) {
-                                        if (typeof WALinkify.findLink === 'function') {
-                                            const origFindLink = WALinkify.findLink.bind(WALinkify);
-                                            WALinkify.findLink = function (str, ...rest) {
-                                                if (typeof str !== 'string' || !str) return null;
-                                                try { return origFindLink(str, ...rest); } catch (e) { return null; }
+                                    // Wrap window.WWebJS.processMediaData directly so PDFs & Images never abort on OpaqueData.formData() / InMemoryMediaBlobCache
+                                    const origProcessMedia = window.WWebJS.processMediaData;
+                                    if (typeof origProcessMedia === 'function' && !window.WWebJS.__patchedProcessMedia2026) {
+                                        window.WWebJS.__patchedProcessMedia2026 = true;
+                                        window.WWebJS.processMediaData = async (mediaInfo, opts = {}) => {
+                                            const safeInfo = {
+                                                ...mediaInfo,
+                                                filename: mediaInfo?.filename || (String(mediaInfo?.mimetype || '').startsWith('image/') ? 'image.png' : 'document.pdf'),
                                             };
-                                        }
-                                        if (typeof WALinkify.findLinks === 'function') {
-                                            const origFindLinks = WALinkify.findLinks.bind(WALinkify);
-                                            WALinkify.findLinks = function (str, ...rest) {
-                                                if (typeof str !== 'string' || !str) return [];
-                                                try { return origFindLinks(str, ...rest); } catch (e) { return []; }
-                                            };
-                                        }
-                                        WALinkify.__patchedSafeLinkify = true;
+                                            try {
+                                                const res = await origProcessMedia(safeInfo, opts);
+                                                if (safeInfo.filename && res && !res.filename) {
+                                                    try { res.filename = safeInfo.filename; } catch (e) {}
+                                                }
+                                                return res;
+                                            } catch (origErr) {
+                                                const file = window.WWebJS.mediaInfoToFile(safeInfo);
+                                                const OpaqueData = window.require('WAWebMediaOpaqueData');
+                                                const opaqueData = await OpaqueData.createFromData(file, safeInfo.mimetype);
+                                                const mediaParams = {
+                                                    asSticker: opts.forceSticker,
+                                                    asGif: opts.forceGif,
+                                                    isPtt: opts.forceVoice,
+                                                    asDocument: opts.forceDocument,
+                                                };
+                                                if (opts.forceMediaHd && file.type.indexOf('image/') === 0) {
+                                                    mediaParams.maxDimension = 2560;
+                                                }
+                                                const mediaPrep = window.require('WAWebPrepRawMedia').prepRawMedia(opaqueData, mediaParams);
+                                                const mediaData = await mediaPrep.waitForPrep();
+                                                const mediaObject = window.require('WAWebMediaStorage').getOrCreateMediaObject(mediaData.filehash);
+                                                const mediaType = window.require('WAWebMmsMediaTypes').msgToMediaType({
+                                                    type: mediaData.type,
+                                                    isGif: mediaData.isGif,
+                                                    isNewsletter: opts.sendToChannel,
+                                                });
+                                                if (!mediaData.filehash) throw origErr;
+                                                if (mediaData.mediaBlob && !(mediaData.mediaBlob instanceof OpaqueData)) {
+                                                    mediaData.mediaBlob = await OpaqueData.createFromData(mediaData.mediaBlob, mediaData.mediaBlob.type || safeInfo.mimetype);
+                                                }
+                                                if (mediaData.mediaBlob && typeof mediaData.mediaBlob.url === 'function') {
+                                                    mediaData.renderableUrl = mediaData.mediaBlob.url();
+                                                }
+                                                mediaObject.consolidate(mediaData.toJSON());
+                                                try {
+                                                    if (mediaData.mediaBlob && typeof mediaData.mediaBlob.autorelease === 'function') {
+                                                        mediaData.mediaBlob.autorelease();
+                                                    }
+                                                } catch (e) {}
+                                                const dataToUpload = {
+                                                    mimetype: mediaData.mimetype || safeInfo.mimetype,
+                                                    mediaObject,
+                                                    mediaType,
+                                                    ...(opts.sendToChannel ? { calculateToken: window.require('WAMediaCalculateFilehash').getRandomFilehash } : {}),
+                                                };
+                                                const { uploadMedia, uploadUnencryptedMedia } = window.require('WAWebMediaMmsV4Upload');
+                                                const uploadedMedia = !opts.sendToChannel ? await uploadMedia(dataToUpload) : await uploadUnencryptedMedia(dataToUpload);
+                                                const mediaEntry = uploadedMedia?.mediaEntry;
+                                                if (!mediaEntry) {
+                                                    throw new Error('mediaEntry missing: ' + (origErr?.message || 'unknown'));
+                                                }
+                                                mediaData.set({
+                                                    clientUrl: mediaEntry.mmsUrl,
+                                                    deprecatedMms3Url: mediaEntry.deprecatedMms3Url,
+                                                    directPath: mediaEntry.directPath,
+                                                    mediaKey: mediaEntry.mediaKey,
+                                                    mediaKeyTimestamp: mediaEntry.mediaKeyTimestamp,
+                                                    filehash: mediaObject.filehash,
+                                                    encFilehash: mediaEntry.encFilehash,
+                                                    uploadhash: mediaEntry.uploadHash,
+                                                    size: mediaObject.size,
+                                                    streamingSidecar: mediaEntry.sidecar,
+                                                    firstFrameSidecar: mediaEntry.firstFrameSidecar,
+                                                    mediaHandle: opts.sendToChannel ? mediaEntry.handle : null,
+                                                });
+                                                if (safeInfo.filename && !mediaData.filename) {
+                                                    try { mediaData.filename = safeInfo.filename; } catch (e) {}
+                                                }
+                                                return mediaData;
+                                            }
+                                        };
                                     }
-                                } catch (e) {}
                             }
                         }
 
@@ -967,6 +1049,87 @@ export const sendMessage = async (number, text, mediaData) => {
                         WALinkify.__patchedSafeLinkify = true;
                     }
                 } catch (e) {}
+                if (window.WWebJS && typeof window.WWebJS.processMediaData === 'function' && !window.WWebJS.__patchedProcessMedia2026) {
+                    const origProcessMedia = window.WWebJS.processMediaData;
+                    window.WWebJS.__patchedProcessMedia2026 = true;
+                    window.WWebJS.processMediaData = async (mediaInfo, opts = {}) => {
+                        const safeInfo = {
+                            ...mediaInfo,
+                            filename: mediaInfo?.filename || (String(mediaInfo?.mimetype || '').startsWith('image/') ? 'image.png' : 'document.pdf'),
+                        };
+                        try {
+                            const res = await origProcessMedia(safeInfo, opts);
+                            if (safeInfo.filename && res && !res.filename) {
+                                try { res.filename = safeInfo.filename; } catch (e) {}
+                            }
+                            return res;
+                        } catch (origErr) {
+                            const file = window.WWebJS.mediaInfoToFile(safeInfo);
+                            const OpaqueData = window.require('WAWebMediaOpaqueData');
+                            const opaqueData = await OpaqueData.createFromData(file, safeInfo.mimetype);
+                            const mediaParams = {
+                                asSticker: opts.forceSticker,
+                                asGif: opts.forceGif,
+                                isPtt: opts.forceVoice,
+                                asDocument: opts.forceDocument,
+                            };
+                            if (opts.forceMediaHd && file.type.indexOf('image/') === 0) {
+                                mediaParams.maxDimension = 2560;
+                            }
+                            const mediaPrep = window.require('WAWebPrepRawMedia').prepRawMedia(opaqueData, mediaParams);
+                            const mediaData = await mediaPrep.waitForPrep();
+                            const mediaObject = window.require('WAWebMediaStorage').getOrCreateMediaObject(mediaData.filehash);
+                            const mediaType = window.require('WAWebMmsMediaTypes').msgToMediaType({
+                                type: mediaData.type,
+                                isGif: mediaData.isGif,
+                                isNewsletter: opts.sendToChannel,
+                            });
+                            if (!mediaData.filehash) throw origErr;
+                            if (mediaData.mediaBlob && !(mediaData.mediaBlob instanceof OpaqueData)) {
+                                mediaData.mediaBlob = await OpaqueData.createFromData(mediaData.mediaBlob, mediaData.mediaBlob.type || safeInfo.mimetype);
+                            }
+                            if (mediaData.mediaBlob && typeof mediaData.mediaBlob.url === 'function') {
+                                mediaData.renderableUrl = mediaData.mediaBlob.url();
+                            }
+                            mediaObject.consolidate(mediaData.toJSON());
+                            try {
+                                if (mediaData.mediaBlob && typeof mediaData.mediaBlob.autorelease === 'function') {
+                                    mediaData.mediaBlob.autorelease();
+                                }
+                            } catch (e) {}
+                            const dataToUpload = {
+                                mimetype: mediaData.mimetype || safeInfo.mimetype,
+                                mediaObject,
+                                mediaType,
+                                ...(opts.sendToChannel ? { calculateToken: window.require('WAMediaCalculateFilehash').getRandomFilehash } : {}),
+                            };
+                            const { uploadMedia, uploadUnencryptedMedia } = window.require('WAWebMediaMmsV4Upload');
+                            const uploadedMedia = !opts.sendToChannel ? await uploadMedia(dataToUpload) : await uploadUnencryptedMedia(dataToUpload);
+                            const mediaEntry = uploadedMedia?.mediaEntry;
+                            if (!mediaEntry) {
+                                throw new Error('mediaEntry missing: ' + (origErr?.message || 'unknown'));
+                            }
+                            mediaData.set({
+                                clientUrl: mediaEntry.mmsUrl,
+                                deprecatedMms3Url: mediaEntry.deprecatedMms3Url,
+                                directPath: mediaEntry.directPath,
+                                mediaKey: mediaEntry.mediaKey,
+                                mediaKeyTimestamp: mediaEntry.mediaKeyTimestamp,
+                                filehash: mediaObject.filehash,
+                                encFilehash: mediaEntry.encFilehash,
+                                uploadhash: mediaEntry.uploadHash,
+                                size: mediaObject.size,
+                                streamingSidecar: mediaEntry.sidecar,
+                                firstFrameSidecar: mediaEntry.firstFrameSidecar,
+                                mediaHandle: opts.sendToChannel ? mediaEntry.handle : null,
+                            });
+                            if (safeInfo.filename && !mediaData.filename) {
+                                try { mediaData.filename = safeInfo.filename; } catch (e) {}
+                            }
+                            return mediaData;
+                        }
+                    };
+                }
             }).catch(() => {});
 
             if (!isReady) {
@@ -1084,6 +1247,7 @@ export const sendMessage = async (number, text, mediaData) => {
         return { success: true, chatId: targetJid };
     } catch (err) {
         console.warn(`[WhatsApp] Send attempt 1 failed for ${targetJid}: ${err.message}`);
+        addDiagnosticLog('warn', 'MESSAGE', `خطا در ارسال مرحله ۱ (${media ? 'با فایل پیوست' : 'متنی'}) به ${targetJid}: ${err.message}`);
 
         // Tier 2: Fallback via direct chat instance or direct in-page WWebJS.sendMessage evaluation
         try {
@@ -1109,6 +1273,7 @@ export const sendMessage = async (number, text, mediaData) => {
                     }
                 } catch (chatErr) {
                     console.warn(`[WhatsApp] Chat object fallback failed: ${chatErr.message}`);
+                    addDiagnosticLog('warn', 'MESSAGE', `خطا در روش Chat Object برای ${targetJid}: ${chatErr.message}`);
                 }
 
                 // 2b. Try direct in-page WWebJS.sendMessage injection (supports both PDF/image media and text!)
@@ -1153,10 +1318,32 @@ export const sendMessage = async (number, text, mediaData) => {
                     }
                 } catch (evalErr) {
                     console.warn("[WhatsApp] Direct WWebJS.sendMessage injection failed:", evalErr.message);
+                    addDiagnosticLog('warn', 'MESSAGE', `خطا در تزریق مستقیم WWebJS برای ${targetJid}: ${evalErr.message}`);
+                }
+
+                // 2c. If long caption (>900 chars) caused WA protobuf/caption limit error on media, send attachment with concise header + full text separately
+                if (media && text && text.length > 900) {
+                    try {
+                        const isImageMedia = (media.mimetype || '').startsWith('image/');
+                        const shortHeader = text.split('\n').slice(0, 3).join('\n').slice(0, 240);
+                        await client.sendMessage(targetJid, media, {
+                            caption: shortHeader,
+                            sendMediaAsDocument: !isImageMedia,
+                            linkPreview: false,
+                            sendSeen: false
+                        });
+                        await client.sendMessage(targetJid, text, { linkPreview: false, sendSeen: false });
+                        addDiagnosticLog('success', 'MESSAGE', `فایل پیوست و متن کامل گزارش به صورت مجزا به ${targetJid} ارسال شد.`);
+                        return { success: true, chatId: targetJid };
+                    } catch (splitErr) {
+                        console.warn("[WhatsApp] Split media+text send failed:", splitErr.message);
+                        addDiagnosticLog('warn', 'MESSAGE', `خطا در ارسال تفکیکی فایل و متن برای ${targetJid}: ${splitErr.message}`);
+                    }
                 }
             }
         } catch (tier2Err) {
             console.warn("[WhatsApp] Tier 2 fallback failed:", tier2Err.message);
+            addDiagnosticLog('warn', 'MESSAGE', `خطای کلی مرحله ۲ برای ${targetJid}: ${tier2Err.message}`);
         }
 
         // Tier 3: If media failed, send text caption so recipient still receives the critical notification details!
@@ -1164,7 +1351,7 @@ export const sendMessage = async (number, text, mediaData) => {
             try {
                 console.log(`[WhatsApp] Falling back to text-only send for ${targetJid}...`);
                 await client.sendMessage(targetJid, text, { sendSeen: false });
-                addDiagnosticLog('success', 'MESSAGE', `متن اطلاعیه با موفقیت به ${targetJid} ارسال شد (ارسال خودکار متن به جای فایل).`);
+                addDiagnosticLog('warn', 'MESSAGE', `فایل پیوست به ${targetJid} ارسال نشد و فقط متن پیام فرستاده شد (خطای مدیا: ${err.message}).`);
                 return { success: true, chatId: targetJid, mediaFallbackToText: true };
             } catch (textErr) {
                 console.warn("[WhatsApp] Text-only fallback also failed:", textErr.message);

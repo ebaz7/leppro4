@@ -1,10 +1,8 @@
 import { Capacitor } from '@capacitor/core';
-import { Filesystem, Directory } from '@capacitor/filesystem';
-import { Share } from '@capacitor/share';
-import { FileOpener } from '@capacitor-community/file-opener';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { getServerHost } from '../services/apiService';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 export interface MobilePrintOptions {
     title?: string;
@@ -105,7 +103,7 @@ export const executeCrossPlatformPrint = async (
         return false;
     }
 
-    // 1. Mobile (Android/iOS) Native Handling
+    // 1. Mobile (Android/iOS) Native Handling -> Save into public Downloads/Dlkam via saveBlobAndOpenFile
     if (Capacitor.isNativePlatform()) {
         try {
             let pdfBlob: Blob | null = null;
@@ -132,41 +130,24 @@ export const executeCrossPlatformPrint = async (
                 const imgWidth = pageWidth;
                 const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-                pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, Math.min(imgHeight, pageHeight));
+                let heightLeft = imgHeight;
+                let position = 0;
+                pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+
+                while (heightLeft > 12) {
+                    position = heightLeft - imgHeight;
+                    pdf.addPage();
+                    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+                }
+
                 pdfBlob = pdf.output('blob');
             }
 
             if (pdfBlob) {
-                // Convert blob to base64
-                const base64Data = await new Promise<string>((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const res = reader.result as string;
-                        resolve(res.split(',')[1]);
-                    };
-                    reader.onerror = reject;
-                    reader.readAsDataURL(pdfBlob);
-                });
-
-                const savedFile = await Filesystem.writeFile({
-                    path: fileName,
-                    data: base64Data,
-                    directory: Directory.Cache
-                });
-
-                // Try opening directly with FileOpener or Native Share
-                try {
-                    await FileOpener.open({ filePath: savedFile.uri });
-                    return true;
-                } catch {
-                    // Fallback to Native Share
-                    await Share.share({
-                        title,
-                        url: savedFile.uri,
-                        dialogTitle: `چاپ و اشتراک‌گذاری ${title}`
-                    });
-                    return true;
-                }
+                const ok = await saveBlobAndOpenFile(pdfBlob, fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`);
+                if (ok) return true;
             }
         } catch (mobileErr) {
             console.error('Mobile print generation error:', mobileErr);

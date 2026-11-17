@@ -12,6 +12,7 @@ declare global {
             hasFileInAppFolder: (fileName: string) => boolean;
             getAppFolderFilePath: (fileName: string) => string;
             saveFileToAppFolder: (base64Data: string, fileName: string, mimeType: string) => boolean;
+            saveFileToPublicDownloads?: (base64Data: string, fileName: string, mimeType: string) => string;
             openFileFromAppFolder: (fileName: string, mimeType: string) => boolean;
             saveImageToGallery: (base64Data: string, fileName: string, mimeType: string) => boolean;
         };
@@ -252,12 +253,12 @@ export const saveImageToGallery = async (
             if (savedUri) {
                 if (onProgress) onProgress(100);
                 markFileAsSavedInRegistry(fileName || finalImageName, savedUri);
-                toast.success('تصویر در حافظه برنامه ذخیره شد 📸');
+                toast.success('تصویر در پوشه Documents/Dlkam و حافظه برنامه ذخیره شد 📸');
                 return true;
             }
         }
 
-        // 3. Windows Electron Desktop (Saves directly to Windows Downloads folder)
+        // 3. Windows Electron Desktop (Saves directly to Windows Downloads\Dlkam folder)
         if (isElectronDesktop()) {
             const electronBridge = (window as any).electronAPI || (window as any).electron;
             if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
@@ -269,13 +270,13 @@ export const saveImageToGallery = async (
                         : await electronBridge.saveAndOpenLocalFile(finalImageName, bytes);
                     if (onProgress) onProgress(100);
                     markFileAsSavedInRegistry(fileName || finalImageName, savedPath || 'electron_downloads');
-                    toast.success('تصویر در پوشه دانلودهای ویندوز (Downloads) ذخیره شد ✓');
+                    toast.success('تصویر در پوشه Downloads\\Dlkam ویندوز ذخیره شد ✓');
                     return true;
                 } catch {}
             }
         }
 
-        // 4. Windows Tauri Desktop
+        // 4. Windows Tauri Desktop (Saves directly to Downloads\Dlkam folder)
         if (isTauriDesktopOnly()) {
             try {
                 const { invoke } = await import('@tauri-apps/api/tauri');
@@ -288,7 +289,7 @@ export const saveImageToGallery = async (
                 });
                 if (onProgress) onProgress(100);
                 markFileAsSavedInRegistry(fileName || finalImageName, savedPath);
-                toast.success('تصویر در پوشه اختصاصی برنامه ذخیره شد');
+                toast.success('تصویر در پوشه Downloads\\Dlkam ویندوز ذخیره شد ✓');
                 return true;
             } catch {}
         }
@@ -336,7 +337,7 @@ export const downloadAndOpenFile = async (
             return await saveImageToGallery(url, safeName, onProgress);
         }
 
-        // 1. Android Native Bridge (DlkamAndroid) - Fastest & 100% Scoped-Storage Safe
+        // 1. Android Native Bridge (DlkamAndroid) -> Saves directly to public Downloads/Dlkam + local FileProvider copy
         if (window.DlkamAndroid && typeof window.DlkamAndroid.hasFileInAppFolder === 'function') {
             if (allowCache && window.DlkamAndroid.hasFileInAppFolder(safeName)) {
                 if (onProgress) onProgress(100);
@@ -348,22 +349,38 @@ export const downloadAndOpenFile = async (
             if (onProgress) onProgress(15);
             const blob = await fetchUrlAsBlob(url, onProgress);
             const base64data = await blobToBase64(blob);
-            const saved = window.DlkamAndroid.saveFileToAppFolder(base64data, safeName, mimeType);
+            let saved = false;
+            let actualSavedName = safeName;
+            let savedFolderLabel = 'Downloads/Dlkam';
+            if (typeof window.DlkamAndroid.saveFileToPublicDownloads === 'function') {
+                try {
+                    const parsed = JSON.parse(window.DlkamAndroid.saveFileToPublicDownloads(base64data, safeName, mimeType) || '{}');
+                    saved = Boolean(parsed.ok);
+                    if (parsed.fileName) actualSavedName = parsed.fileName;
+                    if (!parsed.publicSaved) savedFolderLabel = 'حافظه اختصاصی برنامه (DlkamFiles)';
+                } catch {
+                    saved = false;
+                }
+            }
+            if (!saved) {
+                saved = window.DlkamAndroid.saveFileToAppFolder(base64data, safeName, mimeType);
+            }
             if (saved) {
                 if (onProgress) onProgress(100);
-                markFileAsSavedInRegistry(fileName, 'android_app_folder');
-                toast.success('فایل در پوشه اختصاصی برنامه ذخیره شد ✓');
-                window.DlkamAndroid.openFileFromAppFolder(safeName, mimeType);
+                markFileAsSavedInRegistry(fileName, savedFolderLabel);
+                toast.success(`فایل ${actualSavedName} در پوشه ${savedFolderLabel} ذخیره شد ✓`);
+                window.DlkamAndroid.openFileFromAppFolder(actualSavedName, mimeType);
                 return true;
             }
         }
 
-        // 2. Capacitor Native Environment (App-specific External / Data storage so Android 11-15 never blocks it)
+        // 2. Capacitor Native Environment -> Write to public Documents/Dlkam AND App External storage
         if (Capacitor.isNativePlatform()) {
             let fileUri = '';
 
             if (allowCache) {
                 const checkDirs = [
+                    { path: `Dlkam/${safeName}`, directory: Directory.Documents },
                     { path: `${APP_SUBFOLDER}/${safeName}`, directory: Directory.External },
                     { path: `${APP_SUBFOLDER}/${safeName}`, directory: Directory.Data },
                     { path: safeName, directory: Directory.Documents }
@@ -384,7 +401,17 @@ export const downloadAndOpenFile = async (
                 const blob = await fetchUrlAsBlob(url, onProgress);
                 const base64data = await blobToBase64(blob);
 
-                // Write to App's dedicated External folder first, fallback to Data folder
+                let publicDocUri = '';
+                try {
+                    const docRes = await Filesystem.writeFile({
+                        path: `Dlkam/${safeName}`,
+                        data: base64data,
+                        directory: Directory.Documents,
+                        recursive: true
+                    });
+                    if (docRes?.uri) publicDocUri = docRes.uri;
+                } catch {}
+
                 const writeTargets = [
                     { path: `${APP_SUBFOLDER}/${safeName}`, directory: Directory.External },
                     { path: `${APP_SUBFOLDER}/${safeName}`, directory: Directory.Data },
@@ -408,6 +435,9 @@ export const downloadAndOpenFile = async (
                         console.warn('Write attempt failed for target:', target.directory, writeErr);
                     }
                 }
+                if (!fileUri && publicDocUri) {
+                    fileUri = publicDocUri;
+                }
 
                 if (!fileUri) {
                     throw new Error('UNABLE_TO_WRITE_APP_STORAGE');
@@ -415,7 +445,11 @@ export const downloadAndOpenFile = async (
 
                 if (onProgress) onProgress(100);
                 markFileAsSavedInRegistry(fileName, fileUri);
-                toast.success('فایل در حافظه اختصاصی برنامه ذخیره شد ✓');
+                toast.success(
+                    publicDocUri
+                        ? `فایل ${safeName} در پوشه Documents/Dlkam ذخیره شد ✓`
+                        : `فایل ${safeName} در حافظه برنامه ذخیره شد ✓`
+                );
             } else {
                 if (onProgress) onProgress(100);
                 markFileAsSavedInRegistry(fileName, fileUri);
@@ -433,13 +467,13 @@ export const downloadAndOpenFile = async (
                         dialogTitle: `باز کردن ${safeName}`
                     });
                 } catch {
-                    toast.success('فایل در پوشه اختصاصی برنامه روی گوشی ذخیره شده است.');
+                    toast.success('فایل در پوشه دلکام روی گوشی ذخیره شده است.');
                 }
             }
             return true;
         }
 
-        // 3. Windows Electron Desktop - Save directly to Windows Downloads folder
+        // 3. Windows Electron Desktop - Save directly to Windows Downloads\Dlkam folder
         if (isElectronDesktop()) {
             const electronBridge = (window as any).electronAPI || (window as any).electron;
             try {
@@ -472,7 +506,7 @@ export const downloadAndOpenFile = async (
                         });
                         if (onProgress) onProgress(100);
                         markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
-                        toast.success(`فایل ${safeName} در پوشه Downloads ویندوز ذخیره شد ✓`);
+                        toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
                         return true;
                     } finally {
                         if (unsubscribe) unsubscribe();
@@ -489,7 +523,7 @@ export const downloadAndOpenFile = async (
                         : await electronBridge.saveAndOpenLocalFile(safeName, bytes);
                     if (onProgress) onProgress(100);
                     markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
-                    toast.success(`فایل ${safeName} در پوشه Downloads ویندوز ذخیره شد ✓`);
+                    toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
                     return true;
                 }
             } catch (electronErr) {
@@ -497,7 +531,7 @@ export const downloadAndOpenFile = async (
             }
         }
 
-        // 4. Windows Tauri Desktop - Dedicated App Folder Storage
+        // 4. Windows Tauri Desktop - Save directly to Windows Downloads\Dlkam folder
         if (isTauriDesktopOnly()) {
             try {
                 const { invoke } = await import('@tauri-apps/api/tauri');
@@ -522,14 +556,14 @@ export const downloadAndOpenFile = async (
                 });
                 if (onProgress) onProgress(100);
                 markFileAsSavedInRegistry(fileName, savedPath);
-                toast.success('فایل در پوشه اختصاصی برنامه ذخیره و باز شد ✓');
+                toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره و باز شد ✓`);
                 return true;
             } catch (tauriErr) {
                 console.warn('Tauri local file save fallback to web:', tauriErr);
             }
         }
 
-        // 4. Web Environment
+        // 5. Web Environment
         if (onProgress) onProgress(30);
         const fetchUrl = resolveImageUrl(url);
         if (fetchUrl.startsWith('data:') || fetchUrl.startsWith('blob:')) {
@@ -560,7 +594,7 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
     const safeName = sanitizeLocalFileName(fileName || `file_${Date.now()}`);
     const mimeType = blob.type || guessMimeType(safeName);
 
-    // 1. Android Native Bridge
+    // 1. Android Native Bridge -> Saves directly to public Downloads/Dlkam (or Pictures/Dlkam for images)
     if (window.DlkamAndroid && typeof window.DlkamAndroid.saveFileToAppFolder === 'function') {
         try {
             const base64data = await blobToBase64(blob);
@@ -569,15 +603,30 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
                 const ok = window.DlkamAndroid.saveImageToGallery(base64data, safeName, mimeType);
                 if (ok) {
                     markFileAsSavedInRegistry(fileName, 'gallery');
-                    toast.success('تصویر در گالری گوشی (آلبوم Dlkam) ذخیره شد 📸');
+                    toast.success('تصویر در گالری گوشی (آلبوم Pictures/Dlkam) ذخیره شد 📸');
                     return true;
                 }
             } else {
-                const ok = window.DlkamAndroid.saveFileToAppFolder(base64data, safeName, mimeType);
+                let ok = false;
+                let actualSavedName = safeName;
+                let savedFolderLabel = 'Downloads/Dlkam';
+                if (typeof window.DlkamAndroid.saveFileToPublicDownloads === 'function') {
+                    try {
+                        const parsed = JSON.parse(window.DlkamAndroid.saveFileToPublicDownloads(base64data, safeName, mimeType) || '{}');
+                        ok = Boolean(parsed.ok);
+                        if (parsed.fileName) actualSavedName = parsed.fileName;
+                        if (!parsed.publicSaved) savedFolderLabel = 'حافظه اختصاصی برنامه (DlkamFiles)';
+                    } catch {
+                        ok = false;
+                    }
+                }
+                if (!ok) {
+                    ok = window.DlkamAndroid.saveFileToAppFolder(base64data, safeName, mimeType);
+                }
                 if (ok) {
-                    markFileAsSavedInRegistry(fileName, 'android_app_folder');
-                    toast.success('فایل در پوشه اختصاصی برنامه ذخیره شد ✓');
-                    window.DlkamAndroid.openFileFromAppFolder(safeName, mimeType);
+                    markFileAsSavedInRegistry(fileName, savedFolderLabel);
+                    toast.success(`فایل ${actualSavedName} در پوشه ${savedFolderLabel} ذخیره شد ✓`);
+                    window.DlkamAndroid.openFileFromAppFolder(actualSavedName, mimeType);
                     return true;
                 }
             }
@@ -590,6 +639,17 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
     if (Capacitor.isNativePlatform()) {
         try {
             const base64data = await blobToBase64(blob);
+            let publicDocUri = '';
+            try {
+                const docRes = await Filesystem.writeFile({
+                    path: `Dlkam/${safeName}`,
+                    data: base64data,
+                    directory: Directory.Documents,
+                    recursive: true
+                });
+                if (docRes?.uri) publicDocUri = docRes.uri;
+            } catch {}
+
             let savedUri = '';
             const writeTargets = [
                 { path: `${APP_SUBFOLDER}/${safeName}`, directory: Directory.External },
@@ -609,13 +669,20 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
                     }
                 } catch {}
             }
+            if (!savedUri && publicDocUri) {
+                savedUri = publicDocUri;
+            }
 
             if (!savedUri) {
                 throw new Error('WRITE_FAILED');
             }
 
             markFileAsSavedInRegistry(fileName, savedUri);
-            toast.success('فایل در پوشه اختصاصی برنامه ذخیره شد ✓');
+            toast.success(
+                publicDocUri
+                    ? `فایل ${safeName} در پوشه Documents/Dlkam ذخیره شد ✓`
+                    : `فایل ${safeName} در پوشه اختصاصی برنامه ذخیره شد ✓`
+            );
 
             try {
                 await FileOpener.open({ filePath: savedUri, contentType: mimeType });
@@ -634,7 +701,7 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
         }
     }
 
-    // 3. Windows Electron Desktop - Save directly to Windows Downloads folder
+    // 3. Windows Electron Desktop - Save directly to Windows Downloads\Dlkam folder
     if (isElectronDesktop()) {
         const electronBridge = (window as any).electronAPI || (window as any).electron;
         if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
@@ -645,7 +712,7 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
                     ? await electronBridge.saveLocalFile(safeName, bytes, true)
                     : await electronBridge.saveAndOpenLocalFile(safeName, bytes);
                 markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
-                toast.success(`فایل ${safeName} در پوشه Downloads ویندوز ذخیره شد ✓`);
+                toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
                 return true;
             } catch (electronSaveErr) {
                 console.warn('Electron blob save error, falling back to browser download:', electronSaveErr);
@@ -653,7 +720,7 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
         }
     }
 
-    // 4. Windows Tauri Desktop
+    // 4. Windows Tauri Desktop - Save directly to Downloads\Dlkam folder
     if (isTauriDesktopOnly()) {
         try {
             const { invoke } = await import('@tauri-apps/api/tauri');
@@ -665,12 +732,12 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
                 openAfter: true
             });
             markFileAsSavedInRegistry(fileName, savedPath);
-            toast.success('فایل در پوشه اختصاصی برنامه ذخیره و باز شد ✓');
+            toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره و باز شد ✓`);
             return true;
         } catch {}
     }
 
-    // 4. Standard Web Browser
+    // 5. Standard Web Browser
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.style.display = 'none';
@@ -686,7 +753,21 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
         }, 1000);
     }, 100);
     markFileAsSavedInRegistry(fileName, 'web');
+    toast.success(`فایل ${safeName} با موفقیت دانلود شد ✓`);
     return true;
+};
+
+/**
+ * Writes a SheetJS workbook (.xlsx) via saveBlobAndOpenFile so it lands cleanly in
+ * Downloads/Dlkam on Android & Windows (Electron/Tauri) instead of failing silently in WebView.
+ */
+export const saveWorkbookAndOpen = async (XLSXLib: any, workbook: any, fileName: string): Promise<boolean> => {
+    const safeName = fileName.toLowerCase().endsWith('.xlsx') ? fileName : `${fileName}.xlsx`;
+    const wbOut = XLSXLib.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbOut], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+    return await saveBlobAndOpenFile(blob, safeName);
 };
 
 const blobToBase64 = (blob: Blob): Promise<string> => {

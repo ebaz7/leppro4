@@ -193,6 +193,8 @@ if (typeof window !== "undefined" && ReactQuill) {
 
 import { motion, AnimatePresence } from "motion/react";
 import { executeCrossPlatformPrint } from "../utils/mobilePrintService";
+import { saveBlobAndOpenFile } from "../services/fileService";
+import { clampZoom, getTouchDistance } from "../utils/touchZoomPan";
 import { FileViewerModal } from "./FileViewerModal";
 import {
   Building,
@@ -649,6 +651,82 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   );
   const [printPreviewFullscreen, setPrintPreviewFullscreen] = useState(false);
   const [isSharingLetter, setIsSharingLetter] = useState(false);
+
+  const letterViewViewportRef = useRef<HTMLDivElement | null>(null);
+  const printPreviewViewportRef = useRef<HTMLDivElement | null>(null);
+  const letterViewZoomRef = useRef(letterViewZoom);
+  const printPreviewZoomRef = useRef(printPreviewZoom);
+  letterViewZoomRef.current = letterViewZoom;
+  printPreviewZoomRef.current = printPreviewZoom;
+
+  // Strictly 2-finger pinch-to-zoom on Secretariat letter & print previews (1 finger remains native 4-way scroll)
+  useEffect(() => {
+    const attachPinchZoom = (
+      el: HTMLDivElement | null,
+      getZoom: () => number,
+      setZoom: React.Dispatch<React.SetStateAction<number>>
+    ) => {
+      if (!el) return () => {};
+      let pinchStartDist = 0;
+      let pinchStartZoom = 100;
+      let isPinching = false;
+
+      const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 2) {
+          e.preventDefault();
+          isPinching = true;
+          pinchStartDist = getTouchDistance(
+            { x: e.touches[0].clientX, y: e.touches[0].clientY },
+            { x: e.touches[1].clientX, y: e.touches[1].clientY }
+          );
+          pinchStartZoom = getZoom();
+        } else {
+          isPinching = false;
+        }
+      };
+
+      const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 2 && isPinching && pinchStartDist > 5) {
+          e.preventDefault();
+          const dist = getTouchDistance(
+            { x: e.touches[0].clientX, y: e.touches[0].clientY },
+            { x: e.touches[1].clientX, y: e.touches[1].clientY }
+          );
+          const nextScale = clampZoom((pinchStartZoom / 100) * (dist / pinchStartDist), 0.35, 2.5);
+          setZoom(Math.round(nextScale * 100));
+        }
+      };
+
+      const onTouchEnd = (e: TouchEvent) => {
+        if (e.touches.length < 2) {
+          isPinching = false;
+        }
+      };
+
+      el.addEventListener("touchstart", onTouchStart, { passive: false });
+      el.addEventListener("touchmove", onTouchMove, { passive: false });
+      el.addEventListener("touchend", onTouchEnd);
+      el.addEventListener("touchcancel", onTouchEnd);
+      return () => {
+        el.removeEventListener("touchstart", onTouchStart);
+        el.removeEventListener("touchmove", onTouchMove);
+        el.removeEventListener("touchend", onTouchEnd);
+        el.removeEventListener("touchcancel", onTouchEnd);
+      };
+    };
+
+    const cleanupView = selectedLetterForView
+      ? attachPinchZoom(letterViewViewportRef.current, () => letterViewZoomRef.current, setLetterViewZoom)
+      : () => {};
+    const cleanupPrint = isPrintMode
+      ? attachPinchZoom(printPreviewViewportRef.current, () => printPreviewZoomRef.current, setPrintPreviewZoom)
+      : () => {};
+
+    return () => {
+      cleanupView();
+      cleanupPrint();
+    };
+  }, [selectedLetterForView, isPrintMode]);
 
   const secretariatDeepLinkFetchRef = React.useRef<string | null>(null);
   useEffect(() => {
@@ -2199,15 +2277,8 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
       });
       if (!res.ok) throw new Error("خطا در ایجاد خروجی فایل Word");
       const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
       const safeNum = String(letterNum || "Letter").replace(/[\/\\]/g, "_");
-      a.download = `Letter_${safeNum}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await saveBlobAndOpenFile(blob, `Letter_${safeNum}.docx`);
     } catch (e: any) {
       alert("خطا در ایجاد و دانلود فایل Word: " + e.message);
     } finally {
@@ -2260,15 +2331,8 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
       });
       if (!res.ok) throw new Error("خطا در تولید فایل PDF");
       const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
       const safeNum = String(letterNum || "Draft").replace(/[\/\\]/g, "_");
-      a.download = `Letter_${safeNum}${noLetterhead ? "_NoLetterhead" : ""}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await saveBlobAndOpenFile(blob, `Letter_${safeNum}${noLetterhead ? "_NoLetterhead" : ""}.pdf`);
     } catch (e: any) {
       alert("خطا در ایجاد و دانلود فایل PDF: " + e.message);
     }
@@ -8892,17 +8956,21 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         </div>
                       </div>
 
-                      <div className="overflow-y-auto overflow-x-auto flex-1 flex flex-col items-center justify-start custom-scrollbar p-1 sm:p-4 touch-pan-x touch-pan-y">
-                        <div
-                          style={{
-                            width: letterViewZoom !== 100 ? `${Math.round((selectedLetterForView.paperSize === "A5" ? (selectedLetterForView.orientation === "landscape" ? 794 : 559) : (selectedLetterForView.orientation === "landscape" ? 1123 : 794)) * (letterViewZoom / 100))}px` : undefined,
-                            height: letterViewZoom !== 100 ? `${Math.round((selectedLetterForView.paperSize === "A5" ? (selectedLetterForView.orientation === "landscape" ? 559 : 794) : (selectedLetterForView.orientation === "landscape" ? 794 : 1123)) * (letterViewZoom / 100)) + 30}px` : undefined,
-                            transform: `scale(${letterViewZoom / 100})`,
-                            transformOrigin: "top center",
-                            transition: "transform 0.15s ease-out",
-                          }}
-                          className="flex justify-center shrink-0"
-                        >
+                      <div
+                        ref={letterViewViewportRef}
+                        className="overflow-auto flex-1 custom-scrollbar p-1 sm:p-4 touch-pan-x touch-pan-y"
+                      >
+                        <div className="w-max min-w-full flex justify-center items-start">
+                          <div
+                            style={{
+                              width: letterViewZoom !== 100 ? `${Math.round((selectedLetterForView.paperSize === "A5" ? (selectedLetterForView.orientation === "landscape" ? 794 : 559) : (selectedLetterForView.orientation === "landscape" ? 1123 : 794)) * (letterViewZoom / 100))}px` : undefined,
+                              height: letterViewZoom !== 100 ? `${Math.round((selectedLetterForView.paperSize === "A5" ? (selectedLetterForView.orientation === "landscape" ? 559 : 794) : (selectedLetterForView.orientation === "landscape" ? 794 : 1123)) * (letterViewZoom / 100)) + 30}px` : undefined,
+                              transform: `scale(${letterViewZoom / 100})`,
+                              transformOrigin: "top center",
+                              transition: "transform 0.15s ease-out",
+                            }}
+                            className="flex justify-center shrink-0"
+                          >
                           <div
                             id="letter-view-paper-section"
                             className="secretariat-a4-paper bg-white text-slate-900 border border-slate-200 shadow-lg rounded-sm flex flex-col justify-between text-right font-sans relative overflow-hidden shrink-0"
@@ -9083,6 +9151,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                               )}
                             </div>
                           </div>
+                        </div>
                         </div>
 
                         {/* Letter attachments view link */}
@@ -9537,18 +9606,22 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                   </div>
                 </div>
 
-                {/* SCROLLABLE PREVIEW VIEWPORT (PREVENTS CUTOFFS) */}
-                <div className="flex-1 overflow-auto p-1 sm:p-4 bg-slate-100 dark:bg-slate-950/80 rounded-xl flex justify-center items-start custom-scrollbar min-h-0 touch-pan-x touch-pan-y">
-                  <div
-                    style={{
-                      width: printPreviewZoom !== 100 ? `${Math.round((isPrintMode.paperSize === "A5" ? (isPrintMode.orientation === "landscape" ? 794 : 559) : (isPrintMode.orientation === "landscape" ? 1123 : 794)) * (printPreviewZoom / 100))}px` : undefined,
-                      height: printPreviewZoom !== 100 ? `${Math.round((isPrintMode.paperSize === "A5" ? (isPrintMode.orientation === "landscape" ? 559 : 794) : (isPrintMode.orientation === "landscape" ? 794 : 1123)) * (printPreviewZoom / 100)) + 30}px` : undefined,
-                      transform: `scale(${printPreviewZoom / 100})`,
-                      transformOrigin: "top center",
-                      transition: "transform 0.15s ease-out",
-                    }}
-                    className="flex justify-center shrink-0"
-                  >
+                {/* SCROLLABLE PREVIEW VIEWPORT (PREVENTS CUTOFFS & ALLOWS 4-WAY SCROLL + 2-FINGER ZOOM) */}
+                <div
+                  ref={printPreviewViewportRef}
+                  className="flex-1 overflow-auto p-1 sm:p-4 bg-slate-100 dark:bg-slate-950/80 rounded-xl custom-scrollbar min-h-0 touch-pan-x touch-pan-y"
+                >
+                  <div className="w-max min-w-full flex justify-center items-start">
+                    <div
+                      style={{
+                        width: printPreviewZoom !== 100 ? `${Math.round((isPrintMode.paperSize === "A5" ? (isPrintMode.orientation === "landscape" ? 794 : 559) : (isPrintMode.orientation === "landscape" ? 1123 : 794)) * (printPreviewZoom / 100))}px` : undefined,
+                        height: printPreviewZoom !== 100 ? `${Math.round((isPrintMode.paperSize === "A5" ? (isPrintMode.orientation === "landscape" ? 559 : 794) : (isPrintMode.orientation === "landscape" ? 794 : 1123)) * (printPreviewZoom / 100)) + 30}px` : undefined,
+                        transform: `scale(${printPreviewZoom / 100})`,
+                        transformOrigin: "top center",
+                        transition: "transform 0.15s ease-out",
+                      }}
+                      className="flex justify-center shrink-0"
+                    >
                     {/* PRINTABLE AREA (100% Unified with Editor & PDF) */}
                     <div
                       id="print-content-section"
@@ -9730,6 +9803,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                     )}
                   </div>
                 </div>
+              </div>
               </div>
             </motion.div>
           </div>

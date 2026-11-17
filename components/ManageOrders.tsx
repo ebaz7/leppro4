@@ -12,6 +12,7 @@ import { AiDocumentScannerModal } from './AiDocumentScannerModal';
 import { apiCall } from '../services/apiService';
 import MobileOrderCard from './mobile/MobileOrderCard';
 import { FileViewerModal } from './FileViewerModal';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 import { isInFinancialYear } from '../utils/dateUtils';
 import { normalizeDigitsToEnglish } from '../utils/notificationDeepLink';
@@ -379,12 +380,7 @@ const ManageOrders: React.FC<ManageOrdersProps> = ({ orders, refreshData, curren
       });
       const csvContent = [headers.join(','), ...rows.map(r => r.map(f => `"${String(f).replace(/"/g, '""')}"`).join(','))].join('\n');
       const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `export_${activeTab}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      void saveBlobAndOpenFile(blob, `export_${activeTab}.csv`);
   };
 
   const parseISODate = (iso: string) => parseSafeDate(iso);

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { saveBlobAndOpenFile } from '../services/fileService';
 import { 
     Sparkles, 
     X, 
@@ -180,15 +181,7 @@ export const AiSayanReportModal: React.FC<AiSayanReportModalProps> = ({
             }
 
             const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `Sayan_AI_Report_${reportSection}_${Date.now()}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            toast.success('فایل PDF گزارش مدیریتی با موفقیت دانلود شد.');
+            await saveBlobAndOpenFile(blob, `Sayan_AI_Report_${reportSection}_${Date.now()}.pdf`);
         } catch (err: any) {
             console.error('PDF Export error:', err);
             toast.error(err.message || 'خطا در دانلود خروجی PDF');

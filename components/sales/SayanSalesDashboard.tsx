@@ -17,7 +17,8 @@ import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
 import { getServerHost, apiCall } from '../../services/apiService';
-import { printHtmlInPage, PdfOrientationSetting } from '../../utils/pdfGenerator';
+import { printHtmlInPage, exportReportHtmlSmart, PdfOrientationSetting } from '../../utils/pdfGenerator';
+import { saveBlobAndOpenFile, saveWorkbookAndOpen } from '../../services/fileService';
 import { AiSayanReportModal } from '../AiSayanReportModal';
 import { SmartBotRecipientPicker } from '../SmartBotRecipientPicker';
 
@@ -312,12 +313,15 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
         backgroundColor: '#f8fafc',
         logging: false
       });
-      const dataUrl = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.download = `Sayan_Sales_Executive_Dashboard_${dateFrom.replace(/\//g, '-')}.png`;
-      link.href = dataUrl;
-      link.click();
-      toast.success('تصویر داشبورد با موفقیت تولید و دانلود شد.', { id: toastId });
+      const fileName = `Sayan_Sales_Executive_Dashboard_${dateFrom.replace(/\//g, '-')}.png`;
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (blob) {
+        await saveBlobAndOpenFile(blob, fileName);
+      } else {
+        const res = await fetch(canvas.toDataURL('image/png'));
+        await saveBlobAndOpenFile(await res.blob(), fileName);
+      }
+      toast.success('تصویر داشبورد در پوشه Downloads/Dlkam ذخیره و آماده شد.', { id: toastId });
     } catch (err: any) {
       toast.error('خطا در تولید تصویر داشبورد: ' + err.message, { id: toastId });
     } finally {
@@ -326,7 +330,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
   };
 
   // CSV Export Handler
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     try {
       let csvContent = '\uFEFF';
       if (activeTab === 'hierarchy') {
@@ -356,11 +360,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
         });
       }
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `Sayan_Sales_${activeTab}_${dateFrom.replace(/\//g, '-')}.csv`;
-      link.click();
-      toast.success('فایل CSV با موفقیت دانلود شد.');
+      await saveBlobAndOpenFile(blob, `Sayan_Sales_${activeTab}_${dateFrom.replace(/\//g, '-')}.csv`);
     } catch (e: any) {
       toast.error('خطا در ساخت CSV: ' + e.message);
     }
@@ -1104,7 +1104,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
   // ----------------------------------------------------------------------
   // EXPORT TO EXCEL
   // ----------------------------------------------------------------------
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     try {
       const wb = XLSX.utils.book_new();
 
@@ -1177,8 +1177,7 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
       const wsCust = XLSX.utils.json_to_sheet(custData);
       XLSX.utils.book_append_sheet(wb, wsCust, 'فروش مشتریان');
 
-      XLSX.writeFile(wb, `Sayan_Sales_Executive_${dateFrom.replace(/\//g, '-')}_to_${dateTo.replace(/\//g, '-')}.xlsx`);
-      toast.success('فایل اکسل با موفقیت تولید و دانلود شد.');
+      await saveWorkbookAndOpen(XLSX, wb, `Sayan_Sales_Executive_${dateFrom.replace(/\//g, '-')}_to_${dateTo.replace(/\//g, '-')}.xlsx`);
     } catch (e: any) {
       toast.error(`خطا در تولید فایل اکسل: ${e.message}`);
     }
@@ -1454,14 +1453,19 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
 
   const handlePrint = () => {
     const { htmlContent, filename, orientation } = getHtmlForCurrentTab();
-    printHtmlInPage(htmlContent, orientation, filename);
+    void exportReportHtmlSmart(htmlContent, filename, orientation);
+  };
+
+  const handleDownloadPdf = async () => {
+    const { htmlContent, filename, orientation } = getHtmlForCurrentTab();
+    await exportReportHtmlSmart(htmlContent, filename, orientation, { downloadPdf: true });
   };
   // ----------------------------------------------------------------------
   // DOWNLOAD COMPARATIVE PDF
   // ----------------------------------------------------------------------
   const handleDownloadComparePdf = async () => {
     try {
-      toast('در حال تولید و دانلود فایل PDF مقایسه‌ای...', { icon: '⏳' });
+      toast('در حال تولید و ذخیره فایل PDF مقایسه‌ای...', { icon: '⏳' });
       const isItems = compareModeType === 'items';
       const rows = isItems
         ? (comparisonMetrics ? comparisonMetrics.compareItemRows : [])
@@ -1497,15 +1501,8 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
       }
 
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Compare_Sales_Report_${dateFrom.replace(/\//g, '-')}_vs_${(salesDateFromB || 'B').replace(/\//g, '-')}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success('فایل PDF مقایسه‌ای با موفقیت دانلود گردید.');
+      const fileName = `Compare_Sales_Report_${dateFrom.replace(/\//g, '-')}_vs_${(salesDateFromB || 'B').replace(/\//g, '-')}.pdf`;
+      await saveBlobAndOpenFile(blob, fileName);
     } catch (e: any) {
       toast.error(`خطا در دریافت PDF: ${e.message}`);
     }
@@ -2103,6 +2100,15 @@ export const SayanSalesDashboard: React.FC<SayanSalesDashboardProps> = ({
                 ↕️ عمودی
               </button>
             </div>
+
+            <button
+              onClick={handleDownloadPdf}
+              className="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs rounded-xl flex items-center gap-1.5 border border-white/20 shadow-md transition-all cursor-pointer"
+              title="دانلود و ذخیره فایل PDF گزارش در پوشه Downloads/Dlkam"
+            >
+              <Download className="w-4 h-4" />
+              <span>دانلود PDF</span>
+            </button>
 
             <button
               onClick={handlePrint}

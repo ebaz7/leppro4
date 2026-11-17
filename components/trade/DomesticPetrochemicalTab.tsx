@@ -10,6 +10,7 @@ import {
 import { TradeDatePicker } from '../TradeDatePicker';
 import { PrintDomesticPetrochemical } from '../print/PrintDomesticPetrochemical';
 import { TradeAttachmentSection } from './TradeAttachmentSection';
+import { saveBlobAndOpenFile } from '../../services/fileService';
 
 interface DomesticPetrochemicalTabProps {
     record: TradeRecord;
@@ -242,7 +243,7 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
     };
 
     // Export to Excel
-    const handleExportExcel = () => {
+    const handleExportExcel = async () => {
         try {
             const fileName = `خرید_پتروشیمی_${petroData.petrochemicalName}_${record.fileNumber || 'پرونده'}.xls`;
             const htmlContent = `
@@ -295,14 +296,7 @@ export const DomesticPetrochemicalTab: React.FC<DomesticPetrochemicalTabProps> =
                 </html>
             `;
             const blob = new Blob([htmlContent], { type: 'application/vnd.ms-excel;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            await saveBlobAndOpenFile(blob, fileName);
         } catch (e) {
             console.error("Error exporting excel", e);
             alert("خطا در دانلود فایل اکسل");

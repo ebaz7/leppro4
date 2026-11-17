@@ -91,12 +91,66 @@ async fn start_server_cmd(port: Option<u16>) -> Result<String, String> {
 fn get_desktop_app_files_dir(handle: &tauri::AppHandle) -> PathBuf {
     let base = handle
         .path_resolver()
+        .download_dir()
+        .or_else(|| handle.path_resolver().document_dir())
+        .or_else(|| handle.path_resolver().app_local_data_dir())
+        .or_else(|| handle.path_resolver().app_config_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("Dlkam");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+fn get_legacy_desktop_app_files_dir(handle: &tauri::AppHandle) -> PathBuf {
+    let base = handle
+        .path_resolver()
         .app_local_data_dir()
         .or_else(|| handle.path_resolver().app_config_dir())
         .unwrap_or_else(|| PathBuf::from("."));
-    let dir = base.join("DlkamFiles");
-    let _ = fs::create_dir_all(&dir);
-    dir
+    base.join("DlkamFiles")
+}
+
+fn find_desktop_file_in_known_dirs(handle: &tauri::AppHandle, safe_name: &str) -> Option<PathBuf> {
+    let primary = get_desktop_app_files_dir(handle).join(safe_name);
+    if let Ok(meta) = fs::metadata(&primary) {
+        if meta.is_file() && meta.len() > 0 {
+            return Some(primary);
+        }
+    }
+    let legacy = get_legacy_desktop_app_files_dir(handle).join(safe_name);
+    if let Ok(meta) = fs::metadata(&legacy) {
+        if meta.is_file() && meta.len() > 0 {
+            return Some(legacy);
+        }
+    }
+    None
+}
+
+fn get_unique_desktop_export_path(dir: &PathBuf, safe_name: &str) -> PathBuf {
+    let direct = dir.join(safe_name);
+    if !direct.exists() {
+        return direct;
+    }
+    let path = std::path::Path::new(safe_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = path.extension().and_then(|e| e.to_str());
+    for i in 1..1000 {
+        let candidate_name = match ext {
+            Some(e) if !e.is_empty() => format!("{} ({}).{}", stem, i, e),
+            _ => format!("{} ({})", stem, i),
+        };
+        let candidate = dir.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{}_{}", stem, std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)))
 }
 
 fn sanitize_desktop_filename(name: &str) -> String {
@@ -123,26 +177,28 @@ fn get_app_version(handle: tauri::AppHandle) -> String {
 #[tauri::command]
 fn delete_local_file(handle: tauri::AppHandle, file_name: String) -> bool {
     let safe_name = sanitize_desktop_filename(&file_name);
-    let target = get_desktop_app_files_dir(&handle).join(safe_name);
-    if target.exists() {
-        return fs::remove_file(&target).is_ok();
+    let mut removed = false;
+    let target = get_desktop_app_files_dir(&handle).join(&safe_name);
+    if target.exists() && fs::remove_file(&target).is_ok() {
+        removed = true;
     }
-    false
+    let legacy = get_legacy_desktop_app_files_dir(&handle).join(&safe_name);
+    if legacy.exists() && fs::remove_file(&legacy).is_ok() {
+        removed = true;
+    }
+    removed
 }
 
 #[tauri::command]
 fn check_local_file_exists(handle: tauri::AppHandle, file_name: String) -> bool {
     let safe_name = sanitize_desktop_filename(&file_name);
-    let target = get_desktop_app_files_dir(&handle).join(safe_name);
-    if let Ok(meta) = fs::metadata(&target) {
-        return meta.is_file() && meta.len() > 0;
-    }
-    false
+    find_desktop_file_in_known_dirs(&handle, &safe_name).is_some()
 }
 
 fn launch_local_file_or_installer(handle: &tauri::AppHandle, target: &PathBuf) {
     let path_str = target.to_string_lossy().to_string();
     let lower = path_str.to_lowercase();
+    let is_installer = lower.ends_with(".exe") || lower.ends_with(".msi");
 
     #[cfg(target_os = "windows")]
     {
@@ -157,34 +213,33 @@ fn launch_local_file_or_installer(handle: &tauri::AppHandle, target: &PathBuf) {
             }
         }
 
-        // 2. Windows EXE installer
-        // Elevation (UAC) is needed by installer executables.
-        // Calling powershell Start-Process with -Verb RunAs prompts Windows UAC cleanly on desktop.
-        let escaped_path = path_str.replace('\'', "''");
-        let ps_cmd = format!(
-            "$p = '{}'; if (Test-Path $p) {{ Start-Process -FilePath $p -Verb RunAs }}",
-            escaped_path
-        );
+        // 2. Windows EXE installer: request elevation (UAC) cleanly
+        if is_installer {
+            let escaped_path = path_str.replace('\'', "''");
+            let ps_cmd = format!(
+                "$p = '{}'; if (Test-Path $p) {{ Start-Process -FilePath $p -Verb RunAs }}",
+                escaped_path
+            );
 
-        if let Ok(mut child) = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                &ps_cmd,
-            ])
-            .spawn()
-        {
-            let _ = child.wait();
-            return;
+            if let Ok(mut child) = std::process::Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    &ps_cmd,
+                ])
+                .spawn()
+            {
+                let _ = child.wait();
+                return;
+            }
         }
 
-        // 3. Fallback: explorer.exe "<path>"
-        // Explorer executes files in standard interactive desktop session with ShellExecuteExW
+        // 3. Standard documents / PDFs / Excel / installers fallback: open via explorer.exe
         if std::process::Command::new("explorer")
             .arg(&path_str)
             .spawn()
@@ -193,7 +248,7 @@ fn launch_local_file_or_installer(handle: &tauri::AppHandle, target: &PathBuf) {
             return;
         }
 
-        // 4. Fallback: cmd.exe /C start "" "<path>" (without CREATE_NO_WINDOW so elevation/dialogs are not suppressed)
+        // 4. Fallback: cmd.exe /C start "" "<path>"
         if std::process::Command::new("cmd")
             .args(["/C", "start", "", &path_str])
             .spawn()
@@ -223,10 +278,8 @@ fn launch_local_file_or_installer(handle: &tauri::AppHandle, target: &PathBuf) {
 #[tauri::command]
 fn open_local_file(handle: tauri::AppHandle, file_name: String) -> Result<String, String> {
     let safe_name = sanitize_desktop_filename(&file_name);
-    let target = get_desktop_app_files_dir(&handle).join(safe_name);
-    if !target.exists() {
-        return Err("FILE_NOT_FOUND".to_string());
-    }
+    let target = find_desktop_file_in_known_dirs(&handle, &safe_name)
+        .ok_or_else(|| "FILE_NOT_FOUND".to_string())?;
     let path_str = target.to_string_lossy().to_string();
     launch_local_file_or_installer(&handle, &target);
     Ok(path_str)
@@ -235,10 +288,8 @@ fn open_local_file(handle: tauri::AppHandle, file_name: String) -> Result<String
 #[tauri::command]
 fn open_local_file_dir(handle: tauri::AppHandle, file_name: String) -> Result<String, String> {
     let safe_name = sanitize_desktop_filename(&file_name);
-    let target = get_desktop_app_files_dir(&handle).join(safe_name);
-    if !target.exists() {
-        return Err("FILE_NOT_FOUND".to_string());
-    }
+    let target = find_desktop_file_in_known_dirs(&handle, &safe_name)
+        .ok_or_else(|| "FILE_NOT_FOUND".to_string())?;
     let path_str = target.to_string_lossy().to_string();
 
     #[cfg(target_os = "windows")]
@@ -293,13 +344,21 @@ fn save_and_open_local_file(
     open_after: Option<bool>,
 ) -> Result<String, String> {
     let safe_name = sanitize_desktop_filename(&file_name);
+    let lower = safe_name.to_lowercase();
+    let is_installer = lower.ends_with(".exe") || lower.ends_with(".msi");
     let dir = get_desktop_app_files_dir(&handle);
-    let target = dir.join(&safe_name);
+    let target = if is_installer {
+        dir.join(&safe_name)
+    } else {
+        get_unique_desktop_export_path(&dir, &safe_name)
+    };
     let mut file = File::create(&target).map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     file.sync_all().ok();
     drop(file);
-    cleanup_old_desktop_installers(&dir, &safe_name);
+    if is_installer {
+        cleanup_old_desktop_installers(&dir, &safe_name);
+    }
     let path_str = target.to_string_lossy().to_string();
     if open_after.unwrap_or(true) {
         launch_local_file_or_installer(&handle, &target);

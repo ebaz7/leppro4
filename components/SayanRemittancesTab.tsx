@@ -33,6 +33,7 @@ import {
 import * as XLSX from 'xlsx';
 import { shareElementToChat } from '../services/chatShareService';
 import { exportReportHtmlSmart } from '../utils/pdfGenerator';
+import { saveWorkbookAndOpen } from '../services/fileService';
 import { 
   fetchSayanSalesRemittances, 
   SayanSalesRemittanceResult, 
@@ -572,7 +573,7 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
     XLSX.utils.book_append_sheet(wb, wsItems, 'ریز اقلام حواله‌ها');
 
     const fileName = `Sayan_Sales_Remittances_${dateFrom ? dateFrom.replace(/\//g, '-') : 'all'}_to_${dateTo ? dateTo.replace(/\//g, '-') : 'now'}.xlsx`;
-    XLSX.writeFile(wb, fileName);
+    void saveWorkbookAndOpen(XLSX, wb, fileName);
   };
 
   // Convert Sayan Result to Document Format

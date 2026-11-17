@@ -13,6 +13,7 @@ import { buildWarehouseOverviewPrintHtml } from '../utils/warehouseOverviewPrint
 import { exportWarehouseOverviewToExcel, WarehouseExcelScope } from '../utils/warehouseOverviewExcel';
 import { AiWarehouseAdvisorModal } from './AiWarehouseAdvisorModal';
 import { exportReportHtmlSmart } from '../utils/pdfGenerator';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 interface WarehouseItem {
     id?: string;
@@ -1928,15 +1929,8 @@ const getSayanGroupSum = (groupCode: string, isLastYear: boolean, field: 'weight
             }
 
             const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
             const scopeSuffix = scope === 'both' ? 'Full_2Pages' : (scope === 'overview_only' ? 'Page1_Overview' : 'Page2_Variance');
-            a.download = `Warehouse_Overview_${reportDate.replace(/[\/\\]/g, '-')}_${scopeSuffix}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
+            await saveBlobAndOpenFile(blob, `Warehouse_Overview_${reportDate.replace(/[\/\\]/g, '-')}_${scopeSuffix}.pdf`);
         } catch (err: any) {
             console.warn("Server PDF error, opening browser print/save:", err);
             const userChoice = confirm(
