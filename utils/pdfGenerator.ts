@@ -280,8 +280,14 @@ export const printPdfOrImageInPage = async (
     try {
         let blobUrlToPrint = fileUrl;
         let shouldRevoke = false;
-        if (!fileUrl.startsWith('blob:')) {
-            const res = await fetch(fileUrl);
+        if (!fileUrl.startsWith('blob:') && !fileUrl.startsWith('data:')) {
+            const headers: Record<string, string> = {};
+            try {
+                const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                if (token) headers.Authorization = `Bearer ${token}`;
+            } catch {}
+            const res = await fetch(fileUrl, { headers });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const blob = await res.blob();
             const pdfBlob = new Blob([blob], { type: 'application/pdf' });
             blobUrlToPrint = URL.createObjectURL(pdfBlob);

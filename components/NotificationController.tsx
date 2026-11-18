@@ -213,12 +213,16 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
 
     registerOrUpdateSubscription();
 
+    const listenerHandles: Promise<{ remove: () => Promise<void> }>[] = [];
+    let isDisposed = false;
+
     if (Capacitor.isNativePlatform()) {
         let lastPushString = '';
         let lastPushTime = 0;
 
         // Handle incoming notifications while app is open
-        PushNotifications.addListener('pushNotificationReceived', async (notification) => {
+        listenerHandles.push(PushNotifications.addListener('pushNotificationReceived', async (notification) => {
+            if (isDisposed) return;
             console.log('Push received: ', notification);
             const notifId = notification.data?.id;
             if (notifId && hasNotificationBeenShown(notifId)) {
@@ -275,9 +279,9 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
             } catch (e) {
                 console.error('Local Notification foreground display failed', e);
             }
-        });
+        }));
 
-        PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+        listenerHandles.push(PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
             console.log('Push action performed: ', action);
             const data = action.notification?.data || {};
             const notifId = data?.id;
@@ -291,10 +295,10 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
                     body: action.notification?.body || data?.body || ''
                 });
             }
-        });
+        }));
 
         // Add LocalNotification listener as well for foreground tapped notifications
-        LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
+        listenerHandles.push(LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
             console.log('Local action performed: ', action);
             const extra = action.notification?.extra || {};
             const notifId = extra?.id;
@@ -308,10 +312,19 @@ const NotificationController: React.FC<Props> = ({ currentUser, onNotificationCl
                     body: action.notification?.body || extra?.body || ''
                 });
             }
-        });
+        }));
     }
 
-  }, [currentUser]);
+    return () => {
+        isDisposed = true;
+        listenerHandles.forEach((handlePromise) => {
+            Promise.resolve(handlePromise)
+                .then((handle) => handle?.remove?.())
+                .catch(() => {});
+        });
+    };
+
+  }, [currentUser?.username, currentUser?.role]);
 
 
   if (showIOSPrompt) {

@@ -845,9 +845,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
   /* Disable text selection highlight for app-like feel */
   -webkit-tap-highlight-color: transparent;
-  text-rendering: optimizeLegibility;
+  text-rendering: optimizeSpeed;
   transition: background 0.3s ease, color 0.3s ease;
   touch-action: pan-y pinch-zoom !important;
+}
+
+@media (hover: none), (max-width: 1023px) {
+  body {
+    background-attachment: scroll !important;
+  }
 }
 
 #root {
@@ -2903,6 +2909,18 @@ html.low-spec-mode * {
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
   will-change: auto !important;
+}
+
+html.low-spec-mode .shadow-sm,
+html.low-spec-mode .shadow-md,
+html.low-spec-mode .shadow-lg,
+html.low-spec-mode .shadow-xl,
+html.low-spec-mode .shadow-2xl {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06) !important;
+}
+
+html.low-spec-mode tr {
+  transition: none !important;
 }
 
 /* Fast scrolling optimizations */

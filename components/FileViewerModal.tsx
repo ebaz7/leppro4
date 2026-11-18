@@ -12,6 +12,15 @@ import {
   getTouchMidpoint,
 } from '../utils/touchZoomPan';
 
+const INITIAL_PDF_BATCH = 8;
+
+interface RenderedPdfPage {
+  url: string;
+  width: number;
+  height: number;
+  isBlobUrl: boolean;
+}
+
 const resolveImageUrl = (url?: string): string => {
   if (!url) return '';
   if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('http://') || url.startsWith('https://')) {
@@ -42,6 +51,46 @@ const loadPdfJsLibrary = async () => {
   return cachedPdfJsLib;
 };
 
+const canvasToPageUrl = (canvas: HTMLCanvasElement, quality: number): Promise<{ url: string; isBlobUrl: boolean }> => {
+  return new Promise((resolve) => {
+    if (typeof canvas.toBlob === 'function') {
+      try {
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve({ url: URL.createObjectURL(blob), isBlobUrl: true });
+            } else {
+              resolve({ url: canvas.toDataURL('image/jpeg', quality), isBlobUrl: false });
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+        return;
+      } catch {
+        // fallback below
+      }
+    }
+    resolve({ url: canvas.toDataURL('image/jpeg', quality), isBlobUrl: false });
+  });
+};
+
+const canvasToDataUrlForPrint = async (page: RenderedPdfPage): Promise<string> => {
+  if (!page.isBlobUrl) return page.url;
+  try {
+    const res = await fetch(page.url);
+    const blob = await res.blob();
+    return await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : page.url);
+      reader.onerror = () => resolve(page.url);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return page.url;
+  }
+};
+
 interface FileViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -67,8 +116,8 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   const [loadError, setLoadError] = useState<boolean>(false);
   const [isTouchingGesture, setIsTouchingGesture] = useState<boolean>(false);
 
-  // Interactive Canvas PDF states for reliable Android/WebView pinch-zoom & 4-way panning
-  const [pdfPageImages, setPdfPageImages] = useState<string[]>([]);
+  // Interactive Canvas PDF states for reliable Android/Mobile WebView pinch-zoom & 4-way panning
+  const [pdfPageImages, setPdfPageImages] = useState<RenderedPdfPage[]>([]);
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [pdfOrientation, setPdfOrientation] = useState<PdfOrientation>('portrait');
   const [isRenderingPdfPages, setIsRenderingPdfPages] = useState<boolean>(false);
@@ -82,8 +131,13 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
+  const pdfBytesRef = useRef<Uint8Array | null>(null);
+  const pageBlobUrlsRef = useRef<string[]>([]);
+  const activeModalSessionRef = useRef<number>(0);
 
   const isMobileTouch = isTouchMobileDevice();
+  const isNativeAndroid = isAndroidApp();
+  const shouldUseMobilePdfCanvas = isMobileTouch || isNativeAndroid;
   const showPhoneGallery = hasPhoneGallery();
 
   const resolvedUrl = resolveImageUrl(fileUrl);
@@ -106,6 +160,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   }, [fileUrl, fileName, fileType]);
 
   const isCanvasViewActive = detectedType === 'image' || (detectedType === 'pdf' && !useIframePdfFallback);
+  const isZoomedOrRotated = zoom > 1.01 || rotation !== 0;
 
   const isRotated90 = rotation % 180 === 90;
   const rawBaseW = baseSize.width || viewportSize.width || 320;
@@ -122,6 +177,15 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   zoomRef.current = zoom;
   unscaledRef.current = { w: unscaledW, h: unscaledH };
   sizerRef.current = { w: sizerW, h: sizerH };
+
+  const revokePageBlobUrls = useCallback(() => {
+    if (pageBlobUrlsRef.current.length > 0) {
+      pageBlobUrlsRef.current.forEach((u) => {
+        try { URL.revokeObjectURL(u); } catch {}
+      });
+      pageBlobUrlsRef.current = [];
+    }
+  }, []);
 
   const gestureRef = useRef<{
     mode: 'none' | 'pan' | 'pinch';
@@ -175,7 +239,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         const nextSizerH = Math.max(vpH, Math.ceil(uH * nextZoom));
 
         if (nextZoom <= 1.01) {
-          // Keep current vertical reading page position on multi-page PDFs when returning to 1x, reset horizontal
           const centerOffsetRatioY = prevSizerH > 0 ? (vp.scrollTop + vpH / 2) / prevSizerH : 0;
           const targetTop = Math.max(0, Math.min(nextSizerH - vpH, centerOffsetRatioY * nextSizerH - vpH / 2));
           pendingScrollRef.current = { left: 0, top: uH > vpH ? targetTop : 0 };
@@ -218,17 +281,21 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     const updateSizes = () => {
       if (vp) {
         setViewportSize((prev) =>
-          prev.width === vp.clientWidth && prev.height === vp.clientHeight
+          Math.abs(prev.width - vp.clientWidth) <= 1 && Math.abs(prev.height - vp.clientHeight) <= 1
             ? prev
             : { width: vp.clientWidth, height: vp.clientHeight }
         );
       }
-      if (ct) {
-        setBaseSize((prev) =>
-          prev.width === ct.offsetWidth && prev.height === ct.offsetHeight
-            ? prev
-            : { width: ct.offsetWidth, height: ct.offsetHeight }
-        );
+      if (ct && zoomRef.current <= 1.01 && rotation === 0) {
+        const w = ct.offsetWidth;
+        const h = ct.offsetHeight;
+        if (w > 0 && h > 0) {
+          setBaseSize((prev) =>
+            Math.abs(prev.width - w) <= 1 && Math.abs(prev.height - h) <= 1
+              ? prev
+              : { width: w, height: h }
+          );
+        }
       }
     };
 
@@ -238,10 +305,151 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     if (vp) ro.observe(vp);
     if (ct) ro.observe(ct);
     return () => ro.disconnect();
-  }, [isOpen, previewUrl, pdfPageImages.length, useIframePdfFallback, isFullscreen]);
+  }, [isOpen, previewUrl, pdfPageImages.length, useIframePdfFallback, isFullscreen, rotation, isZoomedOrRotated]);
+
+  const renderPdfRange = useCallback(
+    async (
+      sessionId: number,
+      startPage: number,
+      endPage: number,
+      bytes: Uint8Array | null,
+      fallbackUrl?: string
+    ) => {
+      const isCancelled = () => activeModalSessionRef.current !== sessionId;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let pdfDoc: any = null;
+      const isLowSpec =
+        typeof document !== 'undefined' && document.documentElement.classList.contains('low-spec-mode');
+
+      try {
+        const pdfjsLib = await loadPdfJsLibrary();
+        const authToken = getAuthToken();
+        const docInput = bytes
+          ? { data: new Uint8Array(bytes) }
+          : {
+              url: fallbackUrl,
+              ...(authToken && fallbackUrl && !fallbackUrl.startsWith('blob:')
+                ? { httpHeaders: { Authorization: `Bearer ${authToken}` } }
+                : {}),
+            };
+
+        const docTask = pdfjsLib.getDocument(docInput);
+        pdfDoc = await Promise.race([
+          docTask.promise,
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => {
+              try { docTask.destroy?.(); } catch {}
+              reject(new Error('PDF render timeout'));
+            }, 15000);
+          }),
+        ]);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        if (isCancelled()) return false;
+
+        const totalPages = pdfDoc.numPages || 0;
+        setPdfPageCount(totalPages);
+
+        const actualEnd = Math.min(totalPages, endPage);
+        const batchPages: RenderedPdfPage[] = [];
+        const maxPixelWidth = isLowSpec || isNativeAndroid ? 1050 : 1350;
+        const baseDpiScale = isLowSpec || isNativeAndroid ? 1.4 : 1.65;
+        const jpegQuality = isLowSpec || isNativeAndroid ? 0.82 : 0.86;
+
+        for (let pageNum = startPage; pageNum <= actualEnd; pageNum++) {
+          if (isCancelled()) return false;
+          let page: any = null;
+          const canvas = document.createElement('canvas');
+          try {
+            page = await pdfDoc.getPage(pageNum);
+            if (isCancelled()) return false;
+
+            const baseViewport = page.getViewport({ scale: 1 });
+            if (pageNum === 1 && !isCancelled()) {
+              setPdfOrientation(baseViewport.width > baseViewport.height ? 'landscape' : 'portrait');
+            }
+            const targetScale = Math.min(
+              baseDpiScale,
+              maxPixelWidth / Math.max(1, baseViewport.width)
+            );
+            const viewport = page.getViewport({ scale: Math.max(0.75, targetScale) });
+            const ctx = canvas.getContext('2d', { alpha: false });
+            canvas.width = Math.max(1, Math.floor(viewport.width));
+            canvas.height = Math.max(1, Math.floor(viewport.height));
+
+            if (ctx) {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              await page.render({ canvasContext: ctx, viewport }).promise;
+              if (isCancelled()) return false;
+
+              const { url, isBlobUrl } = await canvasToPageUrl(canvas, jpegQuality);
+              if (isCancelled()) {
+                if (isBlobUrl) {
+                  try { URL.revokeObjectURL(url); } catch {}
+                }
+                return false;
+              }
+              if (isBlobUrl) {
+                pageBlobUrlsRef.current.push(url);
+              }
+              const pageEntry: RenderedPdfPage = {
+                url,
+                width: Math.max(1, Math.round(baseViewport.width)),
+                height: Math.max(1, Math.round(baseViewport.height)),
+                isBlobUrl,
+              };
+              batchPages.push(pageEntry);
+
+              setPdfPageImages((prev) => (startPage === 1 && pageNum === 1 ? [pageEntry] : [...prev, pageEntry]));
+
+              if (pageNum === 1) {
+                setIsLoadingPreview(false);
+                setIsRenderingPdfPages(false);
+                if (actualEnd > 1) {
+                  setIsLoadingMorePdfPages(true);
+                }
+              }
+            }
+          } finally {
+            try { page?.cleanup?.(); } catch {}
+            canvas.width = 0;
+            canvas.height = 0;
+          }
+
+          // Yield between pages so touch scrolling and close actions remain 100% responsive
+          if (pageNum < actualEnd && !isCancelled()) {
+            await new Promise((r) => setTimeout(r, 16));
+          }
+        }
+
+        return batchPages.length > 0;
+      } catch (err) {
+        console.warn('PDF canvas rendering fallback:', err);
+        if (!isCancelled() && startPage === 1) {
+          setUseIframePdfFallback(true);
+        }
+        return false;
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+        try { pdfDoc?.destroy?.(); } catch {}
+        if (!isCancelled()) {
+          setIsRenderingPdfPages(false);
+          setIsLoadingMorePdfPages(false);
+        }
+      }
+    },
+    [isNativeAndroid]
+  );
 
   useEffect(() => {
+    const sessionId = ++activeModalSessionRef.current;
+
     if (!isOpen || !fileUrl) {
+      revokePageBlobUrls();
+      pdfBytesRef.current = null;
       setPreviewUrl('');
       setPdfPageImages([]);
       setPdfPageCount(0);
@@ -251,6 +459,8 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     }
 
     resetViewTransform();
+    revokePageBlobUrls();
+    pdfBytesRef.current = null;
     setLoadError(false);
     setPdfPageImages([]);
     setPdfPageCount(0);
@@ -258,84 +468,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     setBaseSize({ width: 0, height: 0 });
 
     let objectUrlToRevoke: string | null = null;
-    let isCancelled = false;
-
-    const renderPdfToImages = async (pdfSource: { data?: ArrayBuffer; url?: string }) => {
-      setIsRenderingPdfPages(true);
-      setIsLoadingMorePdfPages(false);
-      let timeoutId: ReturnType<typeof setTimeout> | null = null;
-      try {
-        const pdfjsLib = await loadPdfJsLibrary();
-        const docTask = pdfjsLib.getDocument(pdfSource);
-        const pdfDoc: any = await Promise.race([
-          docTask.promise,
-          new Promise((_, reject) => {
-            timeoutId = setTimeout(() => {
-              try { docTask.destroy?.(); } catch {}
-              reject(new Error('PDF render timeout'));
-            }, 8000);
-          }),
-        ]);
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
-        }
-        if (isCancelled) return;
-        const totalPages = pdfDoc.numPages || 0;
-        setPdfPageCount(totalPages);
-        const renderedPages: string[] = [];
-
-        // Render up to 25 pages at crisp high-DPI for pinch-to-zoom & desktop/mobile scrolling
-        const maxPages = Math.min(totalPages, 25);
-        for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-          if (isCancelled) return;
-          const page = await pdfDoc.getPage(pageNum);
-          const baseViewport = page.getViewport({ scale: 1 });
-          if (pageNum === 1 && !isCancelled) {
-            setPdfOrientation(baseViewport.width > baseViewport.height ? 'landscape' : 'portrait');
-          }
-          const targetScale = baseViewport.width < 900 ? 2.0 : 1.6;
-          const viewport = page.getViewport({ scale: targetScale });
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          canvas.width = Math.floor(viewport.width);
-          canvas.height = Math.floor(viewport.height);
-          if (ctx) {
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            await page.render({ canvasContext: ctx, viewport }).promise;
-            renderedPages.push(canvas.toDataURL('image/jpeg', 0.92));
-            if (!isCancelled) {
-              setPdfPageImages([...renderedPages]);
-              // Unblock the viewer as soon as page 1 is ready so multi-page PDFs never hang on spinner
-              if (pageNum === 1) {
-                setIsLoadingPreview(false);
-                setIsRenderingPdfPages(false);
-                if (maxPages > 1) {
-                  setIsLoadingMorePdfPages(true);
-                }
-              }
-            }
-          }
-        }
-        if (renderedPages.length === 0 && !isCancelled) {
-          setUseIframePdfFallback(true);
-        }
-      } catch (err) {
-        console.warn('PDF canvas rendering fallback to native viewer:', err);
-        if (!isCancelled) {
-          setUseIframePdfFallback(true);
-        }
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-        if (!isCancelled) {
-          setIsRenderingPdfPages(false);
-          setIsLoadingMorePdfPages(false);
-        }
-      }
-    };
+    const isCancelled = () => activeModalSessionRef.current !== sessionId;
 
     const preparePreview = async () => {
       setIsLoadingPreview(true);
@@ -353,11 +486,19 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           }
           const blob = new Blob([u8arr], { type: mime });
           objectUrlToRevoke = URL.createObjectURL(blob);
-          if (!isCancelled) {
-            setPreviewUrl(objectUrlToRevoke);
-          }
-          if (detectedType === 'pdf' && !isCancelled) {
-            await renderPdfToImages({ data: u8arr.buffer });
+          if (isCancelled()) return;
+          setPreviewUrl(objectUrlToRevoke);
+
+          if (detectedType === 'pdf') {
+            if (!shouldUseMobilePdfCanvas) {
+              // Desktop Web & Desktop Apps: native crisp vector PDF viewer, instant load, zero worker crash
+              setUseIframePdfFallback(true);
+              setIsLoadingPreview(false);
+              return;
+            }
+            pdfBytesRef.current = u8arr;
+            setIsRenderingPdfPages(true);
+            await renderPdfRange(sessionId, 1, INITIAL_PDF_BATCH, u8arr);
           }
         } else if (detectedType === 'pdf') {
           const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -379,34 +520,54 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
               throw new Error('Unexpected HTML response for PDF URL');
             }
             const arrayBuffer = await response.arrayBuffer();
+            if (isCancelled()) return;
+
             const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
             objectUrlToRevoke = URL.createObjectURL(blob);
-            if (!isCancelled) {
-              setPreviewUrl(objectUrlToRevoke);
+            setPreviewUrl(objectUrlToRevoke);
+
+            if (!shouldUseMobilePdfCanvas) {
+              // Desktop Web & Desktop Containers: render natively in vector iframe with zero pdf.js overhead or worker crash
+              setUseIframePdfFallback(true);
+              setIsLoadingPreview(false);
+              return;
             }
-            if (!isCancelled) {
-              await renderPdfToImages({ data: arrayBuffer });
-            }
-          } catch (fetchErr) {
+
+            const bytes = new Uint8Array(arrayBuffer);
+            pdfBytesRef.current = bytes;
+            setIsRenderingPdfPages(true);
+            await renderPdfRange(sessionId, 1, INITIAL_PDF_BATCH, bytes);
+          } catch (fetchErr: any) {
             if (fetchTimeout) clearTimeout(fetchTimeout);
-            console.warn('Fallback to direct PDF URL for preview:', fetchErr);
-            if (!isCancelled) {
-              setPreviewUrl(resolvedUrl);
-              await renderPdfToImages({ url: resolvedUrl });
+            console.warn('PDF fetch/preview notice:', fetchErr);
+            if (isCancelled()) return;
+
+            if (String(fetchErr?.message || '').includes('HTTP 404')) {
+              setLoadError(true);
+              return;
             }
+
+            setPreviewUrl(resolvedUrl);
+            if (!shouldUseMobilePdfCanvas) {
+              setUseIframePdfFallback(true);
+              setIsLoadingPreview(false);
+              return;
+            }
+            setIsRenderingPdfPages(true);
+            await renderPdfRange(sessionId, 1, INITIAL_PDF_BATCH, null, resolvedUrl);
           }
         } else {
-          if (!isCancelled) {
+          if (!isCancelled()) {
             setPreviewUrl(resolvedUrl);
           }
         }
       } catch (err) {
         console.error('Error preparing file preview:', err);
-        if (!isCancelled) {
+        if (!isCancelled()) {
           setPreviewUrl(resolvedUrl);
         }
       } finally {
-        if (!isCancelled) {
+        if (!isCancelled()) {
           setIsLoadingPreview(false);
           setIsRenderingPdfPages(false);
         }
@@ -416,12 +577,23 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     preparePreview();
 
     return () => {
-      isCancelled = true;
+      activeModalSessionRef.current++;
       if (objectUrlToRevoke) {
         URL.revokeObjectURL(objectUrlToRevoke);
       }
+      revokePageBlobUrls();
+      pdfBytesRef.current = null;
     };
-  }, [isOpen, fileUrl, resolvedUrl, detectedType, resetViewTransform]);
+  }, [isOpen, fileUrl, resolvedUrl, detectedType, shouldUseMobilePdfCanvas, resetViewTransform, renderPdfRange, revokePageBlobUrls]);
+
+  const handleLoadMorePdfPages = async () => {
+    if (isLoadingMorePdfPages || pdfPageImages.length >= pdfPageCount) return;
+    const sessionId = activeModalSessionRef.current;
+    const start = pdfPageImages.length + 1;
+    const end = Math.min(pdfPageCount, start + INITIAL_PDF_BATCH - 1);
+    setIsLoadingMorePdfPages(true);
+    await renderPdfRange(sessionId, start, end, pdfBytesRef.current, resolvedUrl);
+  };
 
   // Handle Escape key & Android hardware back button
   useEffect(() => {
@@ -440,9 +612,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   }, [isOpen, onClose]);
 
   // Native touch listeners (Mobile Web & Android) & Ctrl+Wheel zoom (Desktop)
-  // - When zoom <= 1.01: 1-finger touch is NOT intercepted so multi-page PDFs scroll vertically natively!
-  // - When zoom > 1.01: 1-finger touch pans freely in all 4 directions; 2-finger pinch zooms smoothly!
-  // - On Desktop: plain mouse wheel ALWAYS scrolls naturally; Ctrl/Cmd + Wheel zooms around cursor!
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp || !isOpen || !isCanvasViewActive) return;
@@ -463,7 +632,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         gestureRef.current.initialSizerH = sizerRef.current.h;
         setIsTouchingGesture(true);
       } else if (e.touches.length === 1 && zoomRef.current > 1.01) {
-        // Only hijack 1-finger drag when ALREADY zoomed in; at 1x let native vertical scroll handle PDFs!
         const touch = e.touches[0];
         gestureRef.current.mode = 'pan';
         gestureRef.current.startX = touch.clientX;
@@ -555,7 +723,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     };
 
     const handleWheel = (e: WheelEvent) => {
-      // On Windows/Desktop: plain mouse wheel ALWAYS scrolls PDF/content vertically; only Ctrl/Cmd+Wheel zooms
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const delta = e.deltaY < 0 ? 0.25 : -0.25;
@@ -666,7 +833,12 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
 
       if (navigator.share) {
         try {
-          const response = await fetch(previewUrl || resolvedUrl);
+          const authToken = getAuthToken();
+          const headers: Record<string, string> = {};
+          if (authToken && !(previewUrl || resolvedUrl).startsWith('blob:') && !(previewUrl || resolvedUrl).startsWith('data:')) {
+            headers.Authorization = `Bearer ${authToken}`;
+          }
+          const response = await fetch(previewUrl || resolvedUrl, { headers });
           const blob = await response.blob();
           const file = new File([blob], finalName, { type: blob.type });
           if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -690,8 +862,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     }
   };
 
-  const handlePrint = () => {
-    // On Android native app, save and open locally instead of spawning web popup
+  const handlePrint = async () => {
     if (isAndroidApp()) {
       void handleDownload();
       return;
@@ -720,12 +891,18 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       return;
     }
 
+    if (useIframePdfFallback || pdfPageImages.length === 0) {
+      const iframeEl = document.querySelector('#file-viewer-native-pdf-iframe') as HTMLIFrameElement | null;
+      await printPdfOrImageInPage(previewUrl || resolvedUrl, 'pdf', fileName, iframeEl);
+      return;
+    }
+
     if (pdfPageImages.length > 0) {
       const isLandscape = pdfOrientation === 'landscape';
-      // Stay strictly 3mm inside physical A4 bounds (210x297mm / 297x210mm) and avoid flex pagination bugs so Chrome/Electron NEVER inserts blank pages between sheets
       const pageW = isLandscape ? '294mm' : '207mm';
       const pageH = isLandscape ? '206mm' : '293mm';
-      const imgsHtml = pdfPageImages
+      const resolvedPrintSrcs = await Promise.all(pdfPageImages.map(canvasToDataUrlForPrint));
+      const imgsHtml = resolvedPrintSrcs
         .map((src) => `<div class="page"><img src="${src}" /></div>`)
         .join('');
       const pdfImagesHtml = `<!DOCTYPE html>
@@ -772,11 +949,12 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       printHtmlInPage(pdfImagesHtml, pdfOrientation, fileName, { skipStyleInjection: true });
       return;
     }
-
-    void printPdfOrImageInPage(previewUrl || resolvedUrl, 'pdf', fileName);
   };
 
   const subtitleText = (() => {
+    if (detectedType === 'pdf' && useIframePdfFallback) {
+      return 'سند PDF • پیش‌نمایش برداری سریع';
+    }
     if (isMobileTouch) {
       if (detectedType === 'pdf') {
         const countPart = pdfPageCount > 0 ? `سند PDF (${pdfPageCount.toLocaleString('fa-IR')} صفحه)` : 'سند PDF';
@@ -797,16 +975,59 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       : 'تصویر • برای جابجایی از دکمه بزرگنمایی استفاده کنید';
   })();
 
+  const remainingPages = Math.max(0, pdfPageCount - pdfPageImages.length);
+
+  const renderPdfPageCards = () => (
+    <>
+      {pdfPageImages.map((pageObj, idx) => (
+        <div
+          key={idx}
+          className="relative bg-white rounded-lg shadow-xl overflow-hidden shrink-0 w-full max-w-[92vw] sm:max-w-[80vw] md:max-w-[760px]"
+          style={{ aspectRatio: `${pageObj.width} / ${pageObj.height}` }}
+        >
+          <img
+            src={pageObj.url}
+            alt={`${fileName} - صفحه ${idx + 1}`}
+            decoding="async"
+            draggable={false}
+            className="w-full h-full object-contain select-none pointer-events-none block"
+          />
+          {pdfPageCount > 1 && (
+            <span className="absolute bottom-2 left-2 bg-slate-900/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+              صفحه {(idx + 1).toLocaleString('fa-IR')} از {pdfPageCount.toLocaleString('fa-IR')}
+            </span>
+          )}
+        </div>
+      ))}
+      {isLoadingMorePdfPages && (
+        <div className="flex items-center gap-2 bg-slate-900/85 text-white text-xs font-bold px-3.5 py-2 rounded-full border border-white/15 shadow-lg shrink-0" dir="rtl">
+          <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+          <span>در حال آماده‌سازی ادامه صفحات ({pdfPageImages.length.toLocaleString('fa-IR')} از {pdfPageCount.toLocaleString('fa-IR')})...</span>
+        </div>
+      )}
+      {!isLoadingMorePdfPages && remainingPages > 0 && (
+        <button
+          type="button"
+          onClick={handleLoadMorePdfPages}
+          className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg transition shrink-0 cursor-pointer"
+          dir="rtl"
+        >
+          بارگذاری {Math.min(INITIAL_PDF_BATCH, remainingPages).toLocaleString('fa-IR')} صفحه بعدی ({remainingPages.toLocaleString('fa-IR')} صفحه باقیمانده)
+        </button>
+      )}
+    </>
+  );
+
   const modalContent = (
     <div
-      className="fixed inset-0 z-[100000] bg-slate-950/95 backdrop-blur-md flex flex-col overflow-hidden animate-fade-in select-none"
+      className="fixed inset-0 z-[100000] bg-slate-950/95 flex flex-col overflow-hidden select-none"
       style={{ paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       onClick={onClose}
       dir="rtl"
     >
       {/* Top Action Bar */}
       <div
-        className="w-full px-2.5 sm:px-5 py-2.5 bg-slate-900/95 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0"
+        className="w-full px-2.5 sm:px-5 py-2.5 bg-slate-900 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 text-white min-w-0 flex-1">
@@ -970,112 +1191,110 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
               </div>
             </div>
           ) : detectedType === 'image' ? (
-            <div
-              style={{
-                width: `${sizerW}px`,
-                height: `${sizerH}px`,
-                position: 'relative',
-                margin: '0 auto',
-              }}
-            >
+            !isZoomedOrRotated ? (
+              <div className="w-full min-h-full flex items-center justify-center p-2 sm:p-4">
+                <div ref={contentRef} className="flex items-center justify-center">
+                  <img
+                    src={previewUrl || resolvedUrl}
+                    alt={fileName}
+                    onLoad={() => {
+                      if (contentRef.current) {
+                        setBaseSize({
+                          width: contentRef.current.offsetWidth,
+                          height: contentRef.current.offsetHeight,
+                        });
+                      }
+                    }}
+                    onError={() => setLoadError(true)}
+                    draggable={false}
+                    className="max-w-[94vw] max-h-[82vh] object-contain rounded-lg shadow-2xl select-none pointer-events-none"
+                  />
+                </div>
+              </div>
+            ) : (
               <div
-                ref={contentRef}
                 style={{
-                  position: 'absolute',
-                  left: '50%',
-                  top: '50%',
-                  transform: `translate(-50%, -50%) scale(${zoom}) rotate(${rotation}deg)`,
-                  transformOrigin: 'center center',
-                  transition: isTouchingGesture ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
-                  willChange: 'transform',
+                  width: `${sizerW}px`,
+                  height: `${sizerH}px`,
+                  position: 'relative',
+                  margin: '0 auto',
                 }}
-                className="flex items-center justify-center p-2 sm:p-4"
               >
-                <img
-                  src={previewUrl || resolvedUrl}
-                  alt={fileName}
-                  onLoad={() => {
-                    if (contentRef.current) {
-                      setBaseSize({
-                        width: contentRef.current.offsetWidth,
-                        height: contentRef.current.offsetHeight,
-                      });
-                    }
+                <div
+                  ref={contentRef}
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: '50%',
+                    transform: `translate(-50%, -50%) scale(${zoom}) rotate(${rotation}deg)`,
+                    transformOrigin: 'center center',
+                    transition: 'none',
                   }}
-                  onError={() => setLoadError(true)}
-                  draggable={false}
-                  className="max-w-[94vw] max-h-[82vh] object-contain rounded-lg shadow-2xl select-none pointer-events-none"
-                />
+                  className="flex items-center justify-center p-2 sm:p-4"
+                >
+                  <img
+                    src={previewUrl || resolvedUrl}
+                    alt={fileName}
+                    onError={() => setLoadError(true)}
+                    draggable={false}
+                    className="max-w-[94vw] max-h-[82vh] object-contain rounded-lg shadow-2xl select-none pointer-events-none"
+                  />
+                </div>
               </div>
-            </div>
+            )
           ) : pdfPageImages.length > 0 && !useIframePdfFallback ? (
-            <div
-              style={{
-                width: `${sizerW}px`,
-                height: `${sizerH}px`,
-                position: 'relative',
-                margin: '0 auto',
-              }}
-            >
-              <div
-                ref={contentRef}
-                dir="rtl"
-                style={{
-                  position: 'absolute',
-                  left: '50%',
-                  top: '50%',
-                  transform: `translate(-50%, -50%) scale(${zoom}) rotate(${rotation}deg)`,
-                  transformOrigin: 'center center',
-                  transition: isTouchingGesture ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
-                  willChange: 'transform',
-                }}
-                className="flex flex-col items-center gap-4 p-2 sm:p-4 max-w-[95vw]"
-              >
-                {pdfPageImages.map((pageSrc, idx) => (
-                  <div key={idx} className="relative bg-white rounded-lg shadow-2xl overflow-hidden shrink-0">
-                    <img
-                      src={pageSrc}
-                      alt={`${fileName} - صفحه ${idx + 1}`}
-                      onLoad={() => {
-                        if (contentRef.current) {
-                          setBaseSize({
-                            width: contentRef.current.offsetWidth,
-                            height: contentRef.current.offsetHeight,
-                          });
-                        }
-                      }}
-                      draggable={false}
-                      className="max-w-[92vw] sm:max-w-[80vw] w-auto h-auto object-contain select-none pointer-events-none block"
-                    />
-                    {pdfPageImages.length > 1 && (
-                      <span className="absolute bottom-2 left-2 bg-slate-900/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        صفحه {(idx + 1).toLocaleString('fa-IR')} از {pdfPageCount.toLocaleString('fa-IR')}
-                      </span>
-                    )}
-                  </div>
-                ))}
-                {isLoadingMorePdfPages && (
-                  <div className="flex items-center gap-2 bg-slate-900/80 text-white text-xs font-bold px-3.5 py-2 rounded-full border border-white/15 shadow-lg" dir="rtl">
-                    <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                    <span>در حال بارگذاری ادامه صفحات ({pdfPageImages.length.toLocaleString('fa-IR')} از {Math.min(pdfPageCount, 25).toLocaleString('fa-IR')})...</span>
-                  </div>
-                )}
+            !isZoomedOrRotated ? (
+              // Top-anchored flow at 1x guarantees Page 1 NEVER shifts/jumps when Page 2..N finish rendering below
+              <div className="w-full min-h-full flex flex-col items-center justify-start py-3 px-2 sm:px-4">
+                <div
+                  ref={contentRef}
+                  dir="rtl"
+                  className="flex flex-col items-center gap-3 w-full max-w-[94vw] sm:max-w-[82vw] md:max-w-[780px]"
+                >
+                  {renderPdfPageCards()}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="w-full h-full flex items-center justify-center p-2" dir="rtl">
+            ) : (
               <div
-                className={`bg-white rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex flex-col transition-all ${
-                  isFullscreen ? 'w-full h-full rounded-none' : 'w-[96vw] max-w-5xl h-[82vh]'
+                style={{
+                  width: `${sizerW}px`,
+                  height: `${sizerH}px`,
+                  position: 'relative',
+                  margin: '0 auto',
+                }}
+              >
+                <div
+                  ref={contentRef}
+                  dir="rtl"
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: '50%',
+                    transform: `translate(-50%, -50%) scale(${zoom}) rotate(${rotation}deg)`,
+                    transformOrigin: 'center center',
+                    transition: 'none',
+                  }}
+                  className="flex flex-col items-center gap-3 p-2 sm:p-4 w-[94vw] sm:w-[82vw] md:w-[780px]"
+                >
+                  {renderPdfPageCards()}
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="w-full h-full flex items-center justify-center p-1 sm:p-2" dir="rtl">
+              <div
+                className={`bg-white rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex flex-col ${
+                  isFullscreen ? 'w-full h-full rounded-none' : 'w-[98vw] max-w-6xl h-[86vh]'
                 }`}
               >
                 <iframe
+                  id="file-viewer-native-pdf-iframe"
                   src={`${previewUrl || resolvedUrl}#toolbar=1&navpanes=1`}
                   title={fileName}
-                  className="w-full flex-1 border-0"
+                  className="w-full flex-1 border-0 bg-white"
                   onError={() => setLoadError(true)}
                 />
-                <div className="bg-slate-900 text-gray-300 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 border-t border-white/10">
+                <div className="bg-slate-900 text-gray-300 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 border-t border-white/10 shrink-0">
                   <span>
                     {isMobileTouch
                       ? 'اگر فایل PDF در گوشی شما باز نشد، دکمه روبرو را بزنید:'
@@ -1097,7 +1316,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         {/* Floating Touch Zoom & 4-Way Pan Control Bar ONLY on Mobile Web & Android */}
         {isMobileTouch && isCanvasViewActive && !isLoadingPreview && !isRenderingPdfPages && !loadError && (
           <div
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-full border border-white/15 shadow-2xl text-xs font-bold whitespace-nowrap"
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-slate-900/95 text-white px-3 py-1.5 rounded-full border border-white/15 shadow-2xl text-xs font-bold whitespace-nowrap"
             onClick={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
             dir="rtl"

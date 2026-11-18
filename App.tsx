@@ -57,7 +57,7 @@ import { Preferences } from '@capacitor/preferences';
 import { App as CapacitorApp } from '@capacitor/app'; 
 import { PushNotifications } from '@capacitor/push-notifications'; 
 import { LocalNotifications } from '@capacitor/local-notifications'; 
-import { sendNotification, hasNotificationBeenShown, markNotificationAsShown, syncNativeShownNotifications, syncServiceWorkerShownNotifications, clearAllActiveNotifications, setupNativePushNotifications, unsubscribeFromPushNotifications, syncServiceWorkerAuth } from './services/notificationService';
+import { sendNotification, hasNotificationBeenShown, markNotificationAsShown, markNotificationsAsShownBatch, syncNativeShownNotifications, syncServiceWorkerShownNotifications, clearAllActiveNotifications, setupNativePushNotifications, unsubscribeFromPushNotifications, syncServiceWorkerAuth } from './services/notificationService';
 import { initSSENotificationClient, disconnectSSENotificationClient } from './services/sseNotificationClient';
 import { playNotificationSound, playTaskAlarmSound } from './services/soundService';
 import { motion, AnimatePresence } from 'motion/react';
@@ -1659,11 +1659,12 @@ function App() {
             }));
             
             // Clean up / Mark all read or older notifications as shown to ensure cross-device deduplication
-            mappedNotifs.forEach(n => {
-                if (n.read || isFirstLoad.current) {
-                    markNotificationAsShown(n.id);
-                }
-            });
+            const notifIdsToMark = mappedNotifs
+                .filter(n => n.read || isFirstLoad.current)
+                .map(n => n.id);
+            if (notifIdsToMark.length > 0) {
+                markNotificationsAsShownBatch(notifIdsToMark, { skipBackgroundSync: isFirstLoad.current });
+            }
 
             // Cross-Device Auto-Clear: If all notifications for this user are read (e.g. marked read on Windows),
             // automatically clear any active delivered notifications from the Android notification bar & Windows taskbar!
@@ -1732,7 +1733,7 @@ function App() {
                 });
                 
                 // Ensure marked as shown locally so they stay completely silent going forward
-                unnotifiedUnread.forEach(n => markNotificationAsShown(n.id));
+                markNotificationsAsShownBatch(unnotifiedUnread.map(n => n.id));
             }
             
             // Preserve any local test notifications created in the last 60 seconds so polling doesn't wipe them immediately
@@ -1749,12 +1750,17 @@ function App() {
 
         if (safeMessages && safeMessages.length > 0) {
             const currentU = currentUser.username.toLowerCase();
-            // 1. Cross-device read sync: mark all messages read by currentUser as shown so they never alert
-            safeMessages.forEach(m => {
+            // 1. Cross-device read sync: mark all messages read by currentUser as shown so they never alert (batched in memory)
+            const readMsgIds: string[] = [];
+            for (let i = 0; i < safeMessages.length; i++) {
+                const m = safeMessages[i];
                 if (m.readBy?.some((u: string) => u.toLowerCase() === currentU)) {
-                    markNotificationAsShown(m.id);
+                    readMsgIds.push(m.id);
                 }
-            });
+            }
+            if (readMsgIds.length > 0) {
+                markNotificationsAsShownBatch(readMsgIds, { skipBackgroundSync: true });
+            }
 
             // 2. Alert for incoming chat messages across ALL tabs (Dashboard, Warehouse, Secretariat, etc.)
             if (!isFirstLoad.current) {
@@ -2443,6 +2449,7 @@ function App() {
                 directChatTarget={directChatTarget}
                 onClearDirectChatTarget={() => setDirectChatTarget(null)}
                 onActiveChannelChange={setActiveChatChannel}
+                isActiveTab={activeTab === 'chat' || secondaryTab === 'chat' || floatingTab === 'chat'}
             />
           </div>
         );
@@ -2647,6 +2654,7 @@ function App() {
                             directChatTarget={directChatTarget}
                             onClearDirectChatTarget={() => setDirectChatTarget(null)}
                             onActiveChannelChange={setActiveChatChannel}
+                            isActiveTab={activeTab === 'chat' || secondaryTab === 'chat' || floatingTab === 'chat'}
                         />
                     </div>
                   </Suspense>

@@ -532,23 +532,51 @@ export const subscribeToPushNotifications = async () => {
 };
 
 const shownInMemory = new Set<string>();
+let shownListCache: string[] | null = null;
+let shownHydrated = false;
+
+const ensureShownCacheLoaded = (): string[] => {
+    if (shownListCache !== null && shownHydrated) return shownListCache;
+    shownHydrated = true;
+    try {
+        const raw = localStorage.getItem('shown_notifications_log');
+        const parsed = raw ? JSON.parse(raw) : [];
+        shownListCache = Array.isArray(parsed) ? parsed : [];
+        for (let i = 0; i < shownListCache.length; i++) {
+            if (shownListCache[i]) shownInMemory.add(shownListCache[i]);
+        }
+    } catch {
+        shownListCache = [];
+    }
+    return shownListCache;
+};
+
+const flushShownListToStorage = () => {
+    if (!shownListCache) return;
+    try {
+        if (shownListCache.length > 500) {
+            shownListCache.splice(0, shownListCache.length - 500);
+        }
+        localStorage.setItem('shown_notifications_log', JSON.stringify(shownListCache));
+    } catch (e) {
+        console.error('Failed to persist shown_notifications_log', e);
+    }
+};
 
 export const syncServiceWorkerShownNotifications = async () => {
     try {
         if ('caches' in window) {
             const cache = await caches.open('shown-notifications-v1');
             const requests = await cache.keys();
-            const key = 'shown_notifications_log';
-            const raw = localStorage.getItem(key);
-            const list: string[] = raw ? JSON.parse(raw) : [];
+            const list = ensureShownCacheLoaded();
             let updated = false;
 
             for (const req of requests) {
                 const parts = req.url.split('/notification-shown/');
                 if (parts.length > 1) {
                     const id = parts[1];
-                    shownInMemory.add(id);
-                    if (!list.includes(id)) {
+                    if (id && !shownInMemory.has(id)) {
+                        shownInMemory.add(id);
                         list.push(id);
                         updated = true;
                     }
@@ -556,9 +584,7 @@ export const syncServiceWorkerShownNotifications = async () => {
             }
 
             if (updated) {
-                if (list.length > 500) list.splice(0, list.length - 500);
-                localStorage.setItem(key, JSON.stringify(list));
-                console.log('[SWSync] Synchronized service worker shown notifications. New database count:', list.length);
+                flushShownListToStorage();
             }
         }
     } catch (e) {
@@ -570,30 +596,20 @@ export const syncNativeShownNotifications = async () => {
     if (!Capacitor.isNativePlatform()) return;
     try {
         const { keys } = await Preferences.keys();
-        const shownIdsFromNative: string[] = [];
+        const list = ensureShownCacheLoaded();
+        let updated = false;
         for (const k of keys) {
             if (k.startsWith('shown_')) {
-                const id = k.substring(6); // remove 'shown_'
-                shownIdsFromNative.push(id);
-            }
-        }
-        if (shownIdsFromNative.length > 0) {
-            const key = 'shown_notifications_log';
-            const raw = localStorage.getItem(key);
-            const list: string[] = raw ? JSON.parse(raw) : [];
-            let updated = false;
-            for (const id of shownIdsFromNative) {
-                shownInMemory.add(id);
-                if (!list.includes(id)) {
+                const id = k.substring(6);
+                if (id && !shownInMemory.has(id)) {
+                    shownInMemory.add(id);
                     list.push(id);
                     updated = true;
                 }
             }
-            if (updated) {
-                if (list.length > 500) list.splice(0, list.length - 500);
-                localStorage.setItem(key, JSON.stringify(list));
-                console.log('[NativeSync] Synchronized native shown notifications count:', shownIdsFromNative.length);
-            }
+        }
+        if (updated) {
+            flushShownListToStorage();
         }
     } catch (e) {
         console.error('Error synchronizing native shown notifications', e);
@@ -602,53 +618,50 @@ export const syncNativeShownNotifications = async () => {
 
 export const hasNotificationBeenShown = (id: string): boolean => {
     if (!id) return false;
-    if (shownInMemory.has(id)) return true;
-    try {
-        const key = 'shown_notifications_log';
-        const raw = localStorage.getItem(key);
-        const list: string[] = raw ? JSON.parse(raw) : [];
-        const found = list.includes(id);
-        if (found) {
-            shownInMemory.add(id);
+    ensureShownCacheLoaded();
+    return shownInMemory.has(id);
+};
+
+export const markNotificationsAsShownBatch = (ids: string[], options?: { skipBackgroundSync?: boolean }) => {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const list = ensureShownCacheLoaded();
+    const added: string[] = [];
+    for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        if (!id || shownInMemory.has(id)) continue;
+        shownInMemory.add(id);
+        list.push(id);
+        added.push(id);
+    }
+    if (added.length === 0) return;
+
+    flushShownListToStorage();
+
+    if (!options?.skipBackgroundSync) {
+        const recent = added.slice(-10);
+        if (Capacitor.isNativePlatform()) {
+            for (const id of recent) {
+                Preferences.set({ key: `shown_${id}`, value: 'true' }).catch(() => {});
+            }
         }
-        return found;
-    } catch {
-        return false;
+        if ('caches' in window) {
+            caches.open('shown-notifications-v1').then(cache => {
+                for (const id of recent) {
+                    cache.put(
+                        new Request(`/notification-shown/${id}`),
+                        new Response('true', { headers: { 'Content-Type': 'text/plain' } })
+                    ).catch(() => {});
+                }
+            }).catch(() => {});
+        }
     }
 };
 
 export const markNotificationAsShown = (id: string) => {
     if (!id) return;
-    shownInMemory.add(id);
-    try {
-        const key = 'shown_notifications_log';
-        const raw = localStorage.getItem(key);
-        const list: string[] = raw ? JSON.parse(raw) : [];
-        if (!list.includes(id)) {
-            list.push(id);
-            if (list.length > 500) {
-                list.shift();
-            }
-            localStorage.setItem(key, JSON.stringify(list));
-            
-            // Sync to native SharedPreferences as well so background worker can see it!
-            if (Capacitor.isNativePlatform()) {
-                Preferences.set({ key: `shown_${id}`, value: 'true' }).catch(console.error);
-            }
-
-            // Sync to Service Worker CacheStorage
-            if ('caches' in window) {
-                caches.open('shown-notifications-v1').then(cache => {
-                    cache.put(
-                        new Request(`/notification-shown/${id}`),
-                        new Response('true', { headers: { 'Content-Type': 'text/plain' } })
-                    ).catch(() => {});
-                }).catch(() => {});
-            }
-        }
-    } catch (e) {
-        console.error("markNotificationAsShown error", e);
-    }
+    ensureShownCacheLoaded();
+    if (shownInMemory.has(id)) return;
+    markNotificationsAsShownBatch([id]);
 };
 
 let lastNotificationString = '';

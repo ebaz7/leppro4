@@ -36,6 +36,7 @@ interface ChatRoomProps {
     onClearDirectChatTarget?: () => void;
     onActiveChannelChange?: (channel: { type: 'public' | 'private' | 'group' | 'task_group' | 'system', id: string | null } | null) => void;
     onNavigate?: (tab: string) => void;
+    isActiveTab?: boolean;
 }
 
 type TabType = 'ALL' | 'CHATS' | 'GROUPS' | 'TASKS';
@@ -211,7 +212,7 @@ const AudioPlayer: React.FC<{ url: string; isMe: boolean; duration?: number }> =
     );
 };
 
-const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onRefresh, sharedData, onClearSharedData, onMessagesRead, directChatTarget, onClearDirectChatTarget, onActiveChannelChange }) => {
+const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onRefresh, sharedData, onClearSharedData, onMessagesRead, directChatTarget, onClearDirectChatTarget, onActiveChannelChange, isActiveTab = true }) => {
     // --- Data State ---
     const [messages, setMessages] = useState<ChatMessage[]>(Array.isArray(preloadedMessages) ? preloadedMessages : []);
     const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
@@ -637,10 +638,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     }, [displayMessages]);
 
     // Windowed message count to keep DOM fast on Tauri & Android
-    const [visibleMessagesLimit, setVisibleMessagesLimit] = useState<number>(80);
+    const initialMsgWindow = Capacitor.isNativePlatform() ? 50 : 80;
+    const [visibleMessagesLimit, setVisibleMessagesLimit] = useState<number>(initialMsgWindow);
     useEffect(() => {
-        setVisibleMessagesLimit(80);
-    }, [activeChannel?.id, activeChannel?.type]);
+        setVisibleMessagesLimit(initialMsgWindow);
+    }, [activeChannel?.id, activeChannel?.type, initialMsgWindow]);
     
     // --- Selection & Actions ---
     const [selectionMode, setSelectionMode] = useState(false);
@@ -1140,14 +1142,17 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     useEffect(() => { 
         if (Array.isArray(preloadedMessages)) {
             setMessages(prev => {
-                // If the messages are identical (check last message and length), avoid unnecessary update
-                if (prev.length === preloadedMessages.length && prev.length > 0) {
+                if (prev.length === preloadedMessages.length) {
+                    if (prev.length === 0) return prev;
                     const lastPrev = prev[prev.length - 1];
                     const lastNew = preloadedMessages[preloadedMessages.length - 1];
-                    // Also check for edits if possible, but for simplicity we rely on timestamp/id
-                    if (lastPrev.id === lastNew.id && lastPrev.timestamp === lastNew.timestamp) {
-                        // Check if counts or some other property changed in existing messages
-                        return preloadedMessages; 
+                    if (
+                        lastPrev.id === lastNew.id &&
+                        lastPrev.timestamp === lastNew.timestamp &&
+                        (lastPrev.readBy?.length || 0) === (lastNew.readBy?.length || 0) &&
+                        Boolean(lastPrev.isEdited) === Boolean(lastNew.isEdited)
+                    ) {
+                        return prev;
                     }
                 }
                 return preloadedMessages;
@@ -1155,25 +1160,26 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
             // Clean up pending messages that are now on server
             const remoteIds = new Set(preloadedMessages.map(m => m.id));
             setPendingMessages(prev => {
-                if (!Array.isArray(prev) || prev.length === 0) return [];
+                if (!Array.isArray(prev) || prev.length === 0) return prev;
                 const filtered = prev.filter(pm => !remoteIds.has(pm.id));
-                return filtered;
+                return filtered.length === prev.length ? prev : filtered;
             });
         }
     }, [preloadedMessages]);
 
-    useEffect(() => { 
+    useEffect(() => {
+        if (!isActiveTab) return;
         loadMeta();
         const interval = setInterval(() => {
             if (typeof document !== 'undefined' && document.hidden) return;
             loadMeta();
         }, 30000); 
         return () => clearInterval(interval);
-    }, []);
+    }, [isActiveTab]);
 
-    // Live Presence Heartbeat while inside ChatRoom
+    // Live Presence Heartbeat while actively inside ChatRoom
     useEffect(() => {
-        if (!currentUser?.username) return;
+        if (!currentUser?.username || !isActiveTab) return;
         const sendChatHeartbeat = () => {
             if (typeof document !== 'undefined' && document.hidden) return;
             const activeChatPayload = activeChannel ? { type: activeChannel.type, id: activeChannel.id } : null;
@@ -1182,7 +1188,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         sendChatHeartbeat();
         const interval = setInterval(sendChatHeartbeat, 30000);
         return () => clearInterval(interval);
-    }, [currentUser?.username, activeChannel?.type, activeChannel?.id]);
+    }, [currentUser?.username, activeChannel?.type, activeChannel?.id, isActiveTab]);
 
     useEffect(() => {
         // Auto scroll with timeout to ensure rendering is done (Fix for Desktop)
