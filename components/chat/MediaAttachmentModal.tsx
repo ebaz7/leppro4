@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
     X, Send, Plus, Trash2, Edit3, Crop, RotateCw, Type, 
     Square, Circle, ArrowUpRight, Undo, Redo, RefreshCw, 
@@ -916,8 +917,8 @@ export const MediaAttachmentModal: React.FC<MediaAttachmentModalProps> = ({
 
     if (!isOpen || items.length === 0) return null;
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md text-white select-none overflow-hidden animate-fade-in" dir="rtl">
+    const modalContent = (
+        <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-black/95 backdrop-blur-md text-white select-none overflow-hidden animate-fade-in" dir="rtl">
             {/* Top Toolbar (WhatsApp Web Style) */}
             <div className="absolute top-0 left-0 right-0 h-14 bg-zinc-950/80 border-b border-white/10 px-4 flex items-center justify-between z-20">
                 {/* Close Button */}
@@ -1561,4 +1562,6 @@ export const MediaAttachmentModal: React.FC<MediaAttachmentModalProps> = ({
             </div>
         </div>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

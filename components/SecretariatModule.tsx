@@ -651,6 +651,8 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   );
   const [printPreviewFullscreen, setPrintPreviewFullscreen] = useState(false);
   const [isSharingLetter, setIsSharingLetter] = useState(false);
+  const [simulatorClickMode, setSimulatorClickMode] = useState<"metadata" | "marginTop">("metadata");
+  const [savingQuickMarginTop, setSavingQuickMarginTop] = useState(false);
 
   const letterViewViewportRef = useRef<HTMLDivElement | null>(null);
   const printPreviewViewportRef = useRef<HTMLDivElement | null>(null);
@@ -899,7 +901,8 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
     const activeSettings = secSettings.find(
       (s) => s.companyId === selectedCompany?.id,
     );
-    const defaultSignOff = activeSettings?.defaultSignOffText || "";
+    const hideSalutation = initialFormState.hideSalutationInLetter;
+    const defaultSignOff = hideSalutation ? "" : (activeSettings?.defaultSignOffText || "");
     setNewLetterForm({
       ...initialFormState,
       signOffText: defaultSignOff,
@@ -1238,9 +1241,55 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
     );
   };
 
-  const prepareLetterHtmlForRender = (html: string): string => {
+  const stripSalutationAndSubjectHtml = (
+    html: string,
+    opts?: { stripSalutation?: boolean; stripSubject?: boolean },
+  ): string => {
     if (!html || typeof html !== "string") return "";
-    return preserveLetterHtmlSpaces(html).replace(/<p>\s*<\/p>/gi, "<p><br /></p>");
+    const stripSalutation = Boolean(opts?.stripSalutation);
+    const stripSubject = Boolean(opts?.stripSubject);
+    if (!stripSalutation && !stripSubject) return html;
+
+    const normalizePlain = (fragment: string) =>
+      fragment
+        .replace(/<[^>]*>/g, " ")
+        .replace(/&nbsp;|&#160;/gi, " ")
+        .replace(/\u00a0/g, " ")
+        .replace(/[\u200c\u200f\u200e]/g, "")
+        .replace(/[،,;؛:.!؟?ـ\-–—\s]+/g, " ")
+        .trim();
+
+    const isStandaloneSalutationOrClosing = (plain: string) =>
+      /^(با\s*سلام(\s*و\s*عرض\s*ادب)?(\s*و\s*(تقدیم\s*)?احترام)?|سلام\s*علیکم|باسلام(\s*و\s*احترام)?|با\s*(تقدیم\s*|تجدید\s*)?احترام)$/.test(
+        plain,
+      );
+
+    const isStandaloneSubjectLine = (plain: string) =>
+      /^موضوع\s+.*$/.test(plain) && plain.length <= 180;
+
+    return html.replace(/<(p|div)\b[^>]*>[\s\S]*?<\/\1>/gi, (block) => {
+      const plain = normalizePlain(block);
+      if (!plain) return block;
+      if (stripSalutation && isStandaloneSalutationOrClosing(plain)) {
+        return "";
+      }
+      if (stripSubject && isStandaloneSubjectLine(plain)) {
+        return "";
+      }
+      return block;
+    });
+  };
+
+  const prepareLetterHtmlForRender = (
+    html: string,
+    opts?: { hideSalutation?: boolean; hideSubject?: boolean },
+  ): string => {
+    if (!html || typeof html !== "string") return "";
+    const stripped = stripSalutationAndSubjectHtml(html, {
+      stripSalutation: opts?.hideSalutation,
+      stripSubject: opts?.hideSubject,
+    });
+    return preserveLetterHtmlSpaces(stripped).replace(/<p>\s*<\/p>/gi, "<p><br /></p>");
   };
 
   const getResolvedStampForLetter = (
@@ -2329,7 +2378,12 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           date: source.date || "",
           letterNumber: letterNum,
           signers: source.signers || [],
-          signOffText: typeof source.signOffText === "string" ? source.signOffText.trim() : "",
+          signOffText:
+            (source.hideSalutationInLetter ?? true)
+              ? ""
+              : typeof source.signOffText === "string"
+                ? source.signOffText.trim()
+                : "",
           paperSize: source.paperSize || "A4",
           orientation: source.orientation || "portrait",
           companyId: (source as any).companyId || selectedCompany?.id || "",
@@ -2383,7 +2437,12 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           approvedBy: (source as any).approvedBy || [],
           signatureImageUrls: (source as any).signatureImageUrls || [],
           signaturePosition: source.signaturePosition || "bottom_left",
-          signOffText: typeof source.signOffText === "string" ? source.signOffText.trim() : "",
+          signOffText:
+            (source.hideSalutationInLetter ?? true)
+              ? ""
+              : typeof source.signOffText === "string"
+                ? source.signOffText.trim()
+                : "",
           paperSize: source.paperSize || "A4",
           orientation: source.orientation || "portrait",
           companyId: (source as any).companyId || selectedCompany?.id || "",
@@ -2394,8 +2453,8 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           attachments: source.attachments || [],
           addCompanyStamp: source.addCompanyStamp || false,
           selectedStampIds: source.selectedStampIds || ((source as any).selectedStampId ? [(source as any).selectedStampId] : []),
-          hideSalutationInLetter: true,
-          hideSubjectInLetter: true,
+          hideSalutationInLetter: source.hideSalutationInLetter ?? true,
+          hideSubjectInLetter: source.hideSubjectInLetter ?? true,
         }),
       });
       if (!res.ok) throw new Error("خطا در تولید فایل PDF");
@@ -2777,6 +2836,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
       metadataColor: "#0f172a",
       metadataFontWeight: "bold",
       metadataLineHeight: 1.8,
+      hideMetadataLabels: false,
       autoNumberingEnabled: true,
       numberingPrefixHeadquarters: "HQ",
       numberingPrefixFactory: "FC",
@@ -2862,6 +2922,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         metadataColor: "#0f172a",
         metadataFontWeight: "bold",
         metadataLineHeight: 1.8,
+        hideMetadataLabels: false,
         autoNumberingEnabled: true,
         numberingPrefixHeadquarters: "HQ",
         numberingPrefixFactory: "FC",
@@ -2895,6 +2956,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         metadataColor: activeSettings.metadataColor || "#0f172a",
         metadataFontWeight: activeSettings.metadataFontWeight || "bold",
         metadataLineHeight: activeSettings.metadataLineHeight ?? 1.8,
+        hideMetadataLabels: activeSettings.hideMetadataLabels ?? false,
         companyStampSize: activeSettings.companyStampSize ?? 120,
         companyStampOpacity: activeSettings.companyStampOpacity ?? 75,
         companyStampPosition: activeSettings.companyStampPosition || "bottom_left",
@@ -2903,11 +2965,15 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         stamps: normalizedStamps,
       });
 
-      // Update form default sign off text if creating new letter
+      // Update form default sign off text only when salutation/closing is enabled
       if (!editingLetterId) {
         setNewLetterForm((prev) => ({
           ...prev,
-          signOffText: activeSettings.defaultSignOffText !== undefined ? activeSettings.defaultSignOffText : (prev.signOffText ?? ""),
+          signOffText: prev.hideSalutationInLetter
+            ? ""
+            : activeSettings.defaultSignOffText !== undefined
+              ? activeSettings.defaultSignOffText
+              : (prev.signOffText ?? ""),
         }));
       }
     }
@@ -2966,6 +3032,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
       metadataColor: "#0f172a",
       metadataFontWeight: "bold",
       metadataLineHeight: 1.8,
+      hideMetadataLabels: false,
       autoNumberingEnabled: true,
       numberingPrefixHeadquarters: "HQ",
       numberingPrefixFactory: "FC",
@@ -3193,24 +3260,38 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
     const activeSettings = secSettings.find(
       (s) => s.companyId === selectedCompany?.id,
     );
-    const defaultBody =
-      companySettingsForm.meetingMinutesTemplate ||
-      "<p>با سلام و احترام،</p><p><br></p><p><br></p>";
+    const hideSalutation = initialFormState.hideSalutationInLetter;
+    const templateHtml = companySettingsForm.meetingMinutesTemplate || "";
+    const defaultBody = templateHtml
+      ? stripSalutationAndSubjectHtml(templateHtml, {
+          stripSalutation: hideSalutation,
+          stripSubject: initialFormState.hideSubjectInLetter,
+        }) || "<p><br></p>"
+      : hideSalutation
+        ? "<p><br></p>"
+        : "<p>با سلام و احترام،</p><p><br></p><p><br></p>";
     setNewLetterForm((p) => ({
       ...p,
       date: `${currentDate.year}/${String(currentDate.month).padStart(2, "0")}/${String(currentDate.day).padStart(2, "0")}`,
       content: defaultBody,
-      signOffText: activeSettings?.defaultSignOffText || "",
+      signOffText: hideSalutation ? "" : (activeSettings?.defaultSignOffText || ""),
     }));
     setShowNewLetterModal(true);
   };
 
   const handleEditLetterClick = (letter: SecretariatLetter) => {
-    const preservedContent = preserveLetterHtmlSpaces(letter.content || "");
+    const hideSubject = letter.hideSubjectInLetter ?? true;
+    const hideSalutation = letter.hideSalutationInLetter ?? true;
+    const preservedContent = preserveLetterHtmlSpaces(
+      stripSalutationAndSubjectHtml(letter.content || "", {
+        stripSalutation: hideSalutation,
+        stripSubject: hideSubject,
+      }),
+    );
     setNewLetterForm({
       date: letter.date || "",
       subject: letter.subject || "",
-      content: preservedContent,
+      content: preservedContent || "<p><br></p>",
       sender: letter.sender || "",
       receiver: letter.receiver || "",
       type: letter.type || "internal",
@@ -3222,13 +3303,17 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
       selectedStampIds: letter.selectedStampIds || [],
       selectedStampId: (letter.selectedStampIds && letter.selectedStampIds[0]) || "",
       isPrivate: letter.isPrivate || false,
-      signOffText: letter.signOffText !== undefined && letter.signOffText !== null ? letter.signOffText : "",
+      signOffText: hideSalutation
+        ? ""
+        : letter.signOffText !== undefined && letter.signOffText !== null
+          ? letter.signOffText
+          : "",
       signers: letter.signers || [],
       paperSize: letter.paperSize || "A4",
       orientation: letter.orientation || "portrait",
       signaturePosition: letter.signaturePosition || "bottom_left",
-      hideSubjectInLetter: letter.hideSubjectInLetter ?? true,
-      hideSalutationInLetter: letter.hideSalutationInLetter ?? true,
+      hideSubjectInLetter: hideSubject,
+      hideSalutationInLetter: hideSalutation,
     });
     setEditingLetterId(letter.id);
     setSelectedLetterForView(null);
@@ -3240,7 +3325,12 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
     e?.preventDefault();
     if (!selectedCompany || !activeSection) return;
 
-    const finalContent = syncEditorContent();
+    const rawSyncedContent = syncEditorContent();
+    const finalContent = stripSalutationAndSubjectHtml(rawSyncedContent, {
+      stripSalutation: Boolean(newLetterForm.hideSalutationInLetter),
+      stripSubject: Boolean(newLetterForm.hideSubjectInLetter),
+    });
+    const effectiveSignOffForSave = newLetterForm.hideSalutationInLetter ? "" : newLetterForm.signOffText;
 
     if (!editingLetterId) {
       const hasDesignatedReceiver = 
@@ -3282,7 +3372,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         attachmentDescription: newLetterForm.attachmentDescription || "",
         addCompanyStamp: newLetterForm.addCompanyStamp,
         isPrivate: newLetterForm.isPrivate,
-        signOffText: newLetterForm.signOffText,
+        signOffText: effectiveSignOffForSave,
         signers: newLetterForm.signers,
         paperSize: newLetterForm.paperSize,
         orientation: newLetterForm.orientation,
@@ -3332,7 +3422,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         attachmentDescription: newLetterForm.attachmentDescription || "",
         addCompanyStamp: newLetterForm.addCompanyStamp,
         isPrivate: newLetterForm.isPrivate,
-        signOffText: newLetterForm.signOffText,
+        signOffText: effectiveSignOffForSave,
         signers: newLetterForm.signers,
         paperSize: newLetterForm.paperSize,
         orientation: newLetterForm.orientation,
@@ -5347,11 +5437,52 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                   <div className="space-y-3">
                     <h4 className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5 border-b dark:border-slate-800 pb-2">
                       <Ruler size={15} className="text-purple-600" />
-                      حاشیه‌های متن روی برگه A4 (میلی‌متر)
+                      حاشیه‌های متن و نقطه شروع تایپ روی برگه A4 (میلی‌متر)
                     </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+
+                    {/* Dedicated Header Height / Start-of-Text Margin Top Slider */}
+                    <div className="p-3 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/80 dark:border-purple-800/50 space-y-2">
+                      <div className="flex items-center justify-between gap-2 text-[11px] font-black text-purple-900 dark:text-purple-200">
+                        <span>شروع تایپ متن نامه از بالای صفحه (ارتفاع هدر سربرگ)</span>
+                        <span className="font-mono text-purple-700 dark:text-purple-300 bg-white dark:bg-slate-900 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-800">
+                          {companySettingsForm.marginTop ?? 40} mm
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min={0}
+                          max={180}
+                          value={companySettingsForm.marginTop ?? 40}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              marginTop: Number(e.target.value),
+                            }))
+                          }
+                          className="flex-1 accent-purple-600"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          max={180}
+                          value={companySettingsForm.marginTop ?? 40}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              marginTop: Math.max(0, Math.min(180, Number(e.target.value) || 0)),
+                            }))
+                          }
+                          className="w-20 border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-1.5 text-xs font-mono dir-ltr text-center"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-600 dark:text-slate-400">
+                        اگر سربرگ شرکت دارای لوگو یا هدر بلند است، این مقدار را بیشتر کنید (مثلاً ۶۵ تا ۹۰ mm) تا تایپ متن زیر سربرگ شروع شود.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
                       {[
-                        { key: "marginTop" as const, label: "بالا (mm)", def: 40 },
                         { key: "marginBottom" as const, label: "پایین (mm)", def: 25 },
                         { key: "marginRight" as const, label: "راست (mm)", def: 20 },
                         { key: "marginLeft" as const, label: "چپ (mm)", def: 20 },
@@ -5529,7 +5660,43 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                       </div>
                     </div>
 
+                    <div className="space-y-1 pt-1">
+                      <div className="flex justify-between text-[11px] font-bold text-slate-500">
+                        <span>فاصله عمودی خطوط شماره / تاریخ / پیوست</span>
+                        <span className="font-mono text-purple-600">{Number(companySettingsForm.metadataLineHeight ?? 1.8).toFixed(1)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={1.0}
+                        max={3.5}
+                        step={0.1}
+                        value={companySettingsForm.metadataLineHeight ?? 1.8}
+                        onChange={(e) =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            metadataLineHeight: Number(e.target.value),
+                          }))
+                        }
+                        className="w-full accent-purple-600"
+                      />
+                    </div>
+
                     <label className="flex items-center gap-2 pt-2 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={companySettingsForm.hideMetadataLabels || false}
+                        onChange={(e) =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            hideMetadataLabels: e.target.checked,
+                          }))
+                        }
+                        className="w-4 h-4 rounded text-purple-600"
+                      />
+                      <span>حذف کلمات «شماره / تاریخ / پیوست» (نمایش فقط مقادیر برای سربرگ‌های دارای عنوان چاپی)</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 pt-1 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={companySettingsForm.hideAutoFooter || false}
@@ -5548,12 +5715,38 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
 
                 {/* Live A4 Calibration Simulator */}
                 <div className="bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col items-center justify-center space-y-2.5 select-none">
-                  <div className="w-full flex items-center justify-between text-[11px] font-bold text-slate-500">
+                  <div className="w-full flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-slate-500">
                     <span>پیش‌نمایش زنده برگه A4</span>
-                    <span className="text-[10px] text-purple-600 bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 rounded">
-                      برای جانمایی شماره/تاریخ روی صفحه کلیک کنید
-                    </span>
+                    <div className="flex items-center gap-1 bg-white dark:bg-slate-900 p-0.5 rounded-lg border border-slate-200 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setSimulatorClickMode("metadata")}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                          simulatorClickMode === "metadata"
+                            ? "bg-purple-600 text-white"
+                            : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        جانمایی شماره/تاریخ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSimulatorClickMode("marginTop")}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                          simulatorClickMode === "marginTop"
+                            ? "bg-sky-600 text-white"
+                            : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        خط شروع تایپ متن
+                      </button>
+                    </div>
                   </div>
+                  <p className="w-full text-[10px] text-center font-bold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/50 px-2 py-1 rounded-lg">
+                    {simulatorClickMode === "metadata"
+                      ? "روی برگه A4 کلیک کنید تا جایگاه «شماره / تاریخ / پیوست» تنظیم شود"
+                      : "روی ارتفاع مورد نظر کلیک کنید تا خط شروع تایپ متن نامه تنظیم شود"}
+                  </p>
 
                   <div
                     className="relative bg-white shadow-md border border-slate-300 w-full max-w-[290px] cursor-crosshair rounded overflow-hidden"
@@ -5562,11 +5755,18 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                       const rect = e.currentTarget.getBoundingClientRect();
                       const mmX = Math.round(((e.clientX - rect.left) / rect.width) * 210);
                       const mmY = Math.round(((e.clientY - rect.top) / rect.height) * 297);
-                      setCompanySettingsForm((prev) => ({
-                        ...prev,
-                        metadataLeft: Math.max(0, Math.min(190, mmX)),
-                        metadataTop: Math.max(0, Math.min(270, mmY)),
-                      }));
+                      if (simulatorClickMode === "marginTop") {
+                        setCompanySettingsForm((prev) => ({
+                          ...prev,
+                          marginTop: Math.max(0, Math.min(180, mmY)),
+                        }));
+                      } else {
+                        setCompanySettingsForm((prev) => ({
+                          ...prev,
+                          metadataLeft: Math.max(0, Math.min(190, mmX)),
+                          metadataTop: Math.max(0, Math.min(270, mmY)),
+                        }));
+                      }
                     }}
                   >
                     {getEffectiveLetterheadDisplayUrl(companySettingsForm) && (
@@ -5578,14 +5778,20 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                     )}
                     {/* Content Margins Guide */}
                     <div
-                      className="absolute border border-dashed border-sky-400/70 pointer-events-none z-10"
+                      className="absolute border border-dashed border-sky-500/80 pointer-events-none z-10"
                       style={{
                         top: `${((companySettingsForm.marginTop ?? 40) / 297) * 100}%`,
                         bottom: `${((companySettingsForm.marginBottom ?? 25) / 297) * 100}%`,
                         right: `${((companySettingsForm.marginRight ?? 20) / 210) * 100}%`,
                         left: `${((companySettingsForm.marginLeft ?? 20) / 210) * 100}%`,
                       }}
-                    />
+                    >
+                      <div className="w-full border-t-2 border-sky-600/90 relative">
+                        <span className="absolute right-1 -top-3.5 bg-sky-600 text-white text-[8px] font-bold px-1 rounded shadow-2xs whitespace-nowrap">
+                          شروع تایپ متن ({companySettingsForm.marginTop ?? 40}mm)
+                        </span>
+                      </div>
+                    </div>
                     {/* Metadata Box */}
                     <div
                       className="absolute border border-dashed border-rose-500 bg-white/85 px-1 py-0.5 rounded pointer-events-none z-20 text-right whitespace-nowrap"
@@ -5597,16 +5803,16 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         fontWeight: companySettingsForm.metadataFontWeight || "bold",
                         opacity: (companySettingsForm.metadataOpacity ?? 100) / 100,
                         fontFamily: companySettingsForm.letterheadFontFamily || "Vazirmatn",
-                        lineHeight: "1.3",
+                        lineHeight: String(companySettingsForm.metadataLineHeight ?? 1.8),
                       }}
                     >
-                      <div>شماره: ۱۴۰۵/۰۰۱</div>
-                      <div>تاریخ: ۱۴۰۵/۰۱/۱۰</div>
-                      <div>پیوست: ندارد</div>
+                      <div>{companySettingsForm.hideMetadataLabels ? "۱۴۰۵/۰۰۱" : "شماره: ۱۴۰۵/۰۰۱"}</div>
+                      <div>{companySettingsForm.hideMetadataLabels ? "۱۴۰۵/۰۱/۱۰" : "تاریخ: ۱۴۰۵/۰۱/۱۰"}</div>
+                      <div>{companySettingsForm.hideMetadataLabels ? "ندارد" : "پیوست: ندارد"}</div>
                     </div>
                   </div>
-                  <div className="text-[10px] font-mono text-slate-400">
-                    چپ: {companySettingsForm.metadataLeft ?? 20}mm | بالا: {companySettingsForm.metadataTop ?? 25}mm
+                  <div className="text-[10px] font-mono text-slate-400 text-center">
+                    شروع متن از بالا: {companySettingsForm.marginTop ?? 40}mm | شماره/تاریخ چپ: {companySettingsForm.metadataLeft ?? 20}mm | بالا: {companySettingsForm.metadataTop ?? 25}mm
                   </div>
                 </div>
               </div>
@@ -6108,8 +6314,9 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         updatedAt: Date.now(),
                         letterNumber: existingNum || "پیش‌نویس",
                         date: newLetterForm.date || "پیش‌نویس",
-                        hideSubjectInLetter: true,
-                        hideSalutationInLetter: true,
+                        hideSubjectInLetter: newLetterForm.hideSubjectInLetter ?? true,
+                        hideSalutationInLetter: newLetterForm.hideSalutationInLetter ?? true,
+                        signOffText: (newLetterForm.hideSalutationInLetter ?? true) ? "" : (newLetterForm.signOffText || ""),
                       };
                       setIsPrintMode(fakeLetter);
                     }}
@@ -6304,12 +6511,21 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           <input
                             type="checkbox"
                             checked={newLetterForm.hideSubjectInLetter}
-                            onChange={(e) =>
-                              setNewLetterForm({
-                                ...newLetterForm,
-                                hideSubjectInLetter: e.target.checked,
-                              })
-                            }
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              const currentHtml = syncEditorContent();
+                              let nextHtml = currentHtml;
+                              if (checked) {
+                                nextHtml =
+                                  stripSalutationAndSubjectHtml(currentHtml, { stripSubject: true }) ||
+                                  "<p><br></p>";
+                              }
+                              setNewLetterForm((prev) => ({
+                                ...prev,
+                                hideSubjectInLetter: checked,
+                                content: nextHtml,
+                              }));
+                            }}
                             className="rounded text-purple-600 focus:ring-purple-500 w-3.5 h-3.5"
                           />
                           حذف موضوع از متن
@@ -6318,12 +6534,34 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           <input
                             type="checkbox"
                             checked={newLetterForm.hideSalutationInLetter}
-                            onChange={(e) =>
-                              setNewLetterForm({
-                                ...newLetterForm,
-                                hideSalutationInLetter: e.target.checked,
-                              })
-                            }
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              const currentHtml = syncEditorContent();
+                              let nextHtml = currentHtml;
+                              if (checked) {
+                                nextHtml =
+                                  stripSalutationAndSubjectHtml(currentHtml, { stripSalutation: true }) ||
+                                  "<p><br></p>";
+                              } else {
+                                const plainStart = currentHtml
+                                  .replace(/<[^>]*>/g, " ")
+                                  .replace(/&nbsp;|&#160;/gi, " ")
+                                  .trim();
+                                if (!plainStart.startsWith("با سلام")) {
+                                  nextHtml = `<p>با سلام و احترام،</p>${currentHtml === "<p><br></p>" ? "<p><br></p>" : currentHtml}`;
+                                }
+                              }
+                              setNewLetterForm((prev) => ({
+                                ...prev,
+                                hideSalutationInLetter: checked,
+                                content: nextHtml,
+                                signOffText: checked
+                                  ? ""
+                                  : prev.signOffText ||
+                                    activeCompanySettings?.defaultSignOffText ||
+                                    "با احترام",
+                              }));
+                            }}
                             className="rounded text-purple-600 focus:ring-purple-500 w-3.5 h-3.5"
                           />
                           حذف عبارت «با سلام و احترام»
@@ -8456,7 +8694,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                               left: `${companySettingsForm.metadataLeft ?? 20}mm`,
                               fontSize: `${companySettingsForm.metadataFontSize ?? 11}px`,
                               color: companySettingsForm.metadataColor || "#0f172a",
-                              lineHeight: "1.8",
+                              lineHeight: String(companySettingsForm.metadataLineHeight ?? 1.8),
                               fontWeight: companySettingsForm.metadataFontWeight || "bold",
                               opacity: (companySettingsForm.metadataOpacity ?? 100) / 100,
                               fontFamily:
@@ -8468,7 +8706,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                             }}
                           >
                             <div>
-                              شماره:{" "}
+                              {!companySettingsForm.hideMetadataLabels && "شماره: "}
                               <span style={{ direction: "ltr", display: "inline-block" }}>
                                 {toPersianDigits(
                                   editingLetterId
@@ -8479,13 +8717,13 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                               </span>
                             </div>
                             <div>
-                              تاریخ:{" "}
+                              {!companySettingsForm.hideMetadataLabels && "تاریخ: "}
                               <span style={{ direction: "ltr", display: "inline-block" }}>
                                 {toPersianDigits(newLetterForm.date || "-")}
                               </span>
                             </div>
                             <div>
-                              پیوست:{" "}
+                              {!companySettingsForm.hideMetadataLabels && "پیوست: "}
                               {newLetterForm.hasAttachment ||
                               (newLetterForm.attachments &&
                                 newLetterForm.attachments.length > 0)
@@ -8828,8 +9066,65 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      <span className="text-slate-500">زبان: فارسی (RTL)</span>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                      <div className="flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-1.5 py-0.5">
+                        <span className="text-[10px] font-bold text-slate-600 dark:text-slate-300">شروع تایپ از بالا:</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              marginTop: Math.max(0, (prev.marginTop ?? 40) - 2),
+                            }))
+                          }
+                          className="hover:bg-slate-100 dark:hover:bg-slate-700 px-1.5 rounded font-mono font-bold text-purple-700 dark:text-purple-300"
+                          title="بالاتر بردن شروع متن (کاهش حاشیه بالا)"
+                        >
+                          -
+                        </button>
+                        <span className="font-mono font-bold text-slate-800 dark:text-slate-100 min-w-[38px] text-center">
+                          {toPersianDigits(companySettingsForm.marginTop ?? 40)}mm
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              marginTop: Math.min(180, (prev.marginTop ?? 40) + 2),
+                            }))
+                          }
+                          className="hover:bg-slate-100 dark:hover:bg-slate-700 px-1.5 rounded font-mono font-bold text-purple-700 dark:text-purple-300"
+                          title="پایین‌تر آوردن شروع متن (افزایش حاشیه بالا)"
+                        >
+                          +
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingQuickMarginTop || !selectedCompany}
+                          onClick={async () => {
+                            if (!selectedCompany) return;
+                            setSavingQuickMarginTop(true);
+                            try {
+                              const payload: SecretariatCompanySettings = {
+                                ...companySettingsForm,
+                                companyId: selectedCompany.id,
+                              };
+                              const updated = await saveSecretariatSettings(payload);
+                              if (Array.isArray(updated)) setSecSettings(updated);
+                            } catch (err) {
+                              console.warn("Quick marginTop save error:", err);
+                            } finally {
+                              setSavingQuickMarginTop(false);
+                            }
+                          }}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-800 disabled:opacity-50"
+                          title="ذخیره دائمی موقعیت شروع تایپ برای این شرکت"
+                        >
+                          {savingQuickMarginTop ? "..." : "ذخیره"}
+                        </button>
+                      </div>
+                      <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
+                      <span className="text-slate-500 hidden sm:inline">زبان: فارسی (RTL)</span>
                       <span className="text-slate-300 dark:text-slate-700">|</span>
                       <div className="flex items-center gap-1.5">
                         <span>بزرگ‌نمایی:</span>
@@ -10270,7 +10565,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                 left: `${viewCompanySettings.metadataLeft ?? 20}mm`,
                                 fontSize: `${viewCompanySettings.metadataFontSize ?? 11}px`,
                                 color: viewCompanySettings.metadataColor || "#0f172a",
-                                lineHeight: "1.8",
+                                lineHeight: String(viewCompanySettings.metadataLineHeight ?? 1.8),
                                 fontWeight:
                                   viewCompanySettings.metadataFontWeight || "bold",
                                 opacity:
@@ -10285,7 +10580,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                               }}
                             >
                               <div>
-                                شماره:{" "}
+                                {!viewCompanySettings.hideMetadataLabels && "شماره: "}
                                 <span
                                   style={{
                                     direction: "ltr",
@@ -10298,7 +10593,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                 </span>
                               </div>
                               <div>
-                                تاریخ:{" "}
+                                {!viewCompanySettings.hideMetadataLabels && "تاریخ: "}
                                 <span
                                   style={{
                                     direction: "ltr",
@@ -10309,7 +10604,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                 </span>
                               </div>
                               <div>
-                                پیوست:{" "}
+                                {!viewCompanySettings.hideMetadataLabels && "پیوست: "}
                                 {selectedLetterForView.hasAttachment ||
                                 selectedLetterForView.attachments?.length > 0
                                   ? "دارد"
@@ -10324,6 +10619,10 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                 dangerouslySetInnerHTML={{
                                   __html: prepareLetterHtmlForRender(
                                     selectedLetterForView.content || "",
+                                    {
+                                      hideSalutation: Boolean(selectedLetterForView.hideSalutationInLetter),
+                                      hideSubject: Boolean(selectedLetterForView.hideSubjectInLetter),
+                                    },
                                   ),
                                 }}
                               />
@@ -10920,7 +11219,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           left: `${printSettings.metadataLeft ?? 20}mm`,
                           fontSize: `${printSettings.metadataFontSize ?? 11}px`,
                           color: printSettings.metadataColor || "#0f172a",
-                          lineHeight: "1.8",
+                          lineHeight: String(printSettings.metadataLineHeight ?? 1.8),
                           fontWeight: printSettings.metadataFontWeight || "bold",
                           opacity: (printSettings.metadataOpacity ?? 100) / 100,
                           fontFamily:
@@ -10932,7 +11231,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         }}
                       >
                         <div>
-                          شماره:{" "}
+                          {!printSettings.hideMetadataLabels && "شماره: "}
                           <span
                             style={{ direction: "ltr", display: "inline-block" }}
                           >
@@ -10940,7 +11239,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           </span>
                         </div>
                         <div>
-                          تاریخ:{" "}
+                          {!printSettings.hideMetadataLabels && "تاریخ: "}
                           <span
                             style={{ direction: "ltr", display: "inline-block" }}
                           >
@@ -10948,7 +11247,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           </span>
                         </div>
                         <div>
-                          پیوست:{" "}
+                          {!printSettings.hideMetadataLabels && "پیوست: "}
                           {isPrintMode.hasAttachment ||
                           isPrintMode.attachments?.length > 0
                             ? "دارد"
@@ -10963,6 +11262,10 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           dangerouslySetInnerHTML={{
                             __html: prepareLetterHtmlForRender(
                               isPrintMode.content || "",
+                              {
+                                hideSalutation: Boolean(isPrintMode.hideSalutationInLetter),
+                                hideSubject: Boolean(isPrintMode.hideSubjectInLetter),
+                              },
                             ),
                           }}
                         />

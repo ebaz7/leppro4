@@ -302,6 +302,346 @@
             if (typeof this.removeListener === 'function') this.removeListener(listener);
           };
         }
+
+        // Promise.try polyfill (iOS < 18.2 / older Chromium)
+        if (typeof Promise.try !== 'function') {
+          Promise.try = function(fn) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            return new Promise(function(resolve) {
+              resolve(fn.apply(undefined, args));
+            });
+          };
+        }
+
+        // Object.groupBy & Map.groupBy polyfills (iOS < 17.4)
+        if (typeof Object.groupBy !== 'function') {
+          Object.groupBy = function(items, callbackfn) {
+            var obj = Object.create(null);
+            var i = 0;
+            var arr = Array.from(items || []);
+            for (; i < arr.length; i++) {
+              var key = callbackfn(arr[i], i);
+              if (!Object.prototype.hasOwnProperty.call(obj, key)) {
+                obj[key] = [];
+              }
+              obj[key].push(arr[i]);
+            }
+            return obj;
+          };
+        }
+        if (typeof Map !== 'undefined' && typeof Map.groupBy !== 'function') {
+          Map.groupBy = function(items, callbackfn) {
+            var map = new Map();
+            var arr = Array.from(items || []);
+            for (var i = 0; i < arr.length; i++) {
+              var key = callbackfn(arr[i], i);
+              var list = map.get(key);
+              if (!list) {
+                list = [];
+                map.set(key, list);
+              }
+              list.push(arr[i]);
+            }
+            return map;
+          };
+        }
+
+        // Map/WeakMap getOrInsert & getOrInsertComputed polyfills (ES2026 - needed by pdfjs-dist & modern libs on iOS/Chrome)
+        if (typeof Map !== 'undefined' && Map.prototype) {
+          if (typeof Map.prototype.getOrInsert !== 'function') {
+            Map.prototype.getOrInsert = function(key, defaultValue) {
+              if (this.has(key)) return this.get(key);
+              this.set(key, defaultValue);
+              return defaultValue;
+            };
+          }
+          if (typeof Map.prototype.getOrInsertComputed !== 'function') {
+            Map.prototype.getOrInsertComputed = function(key, callbackfn) {
+              if (this.has(key)) return this.get(key);
+              var val = callbackfn(key);
+              this.set(key, val);
+              return val;
+            };
+          }
+        }
+        if (typeof WeakMap !== 'undefined' && WeakMap.prototype) {
+          if (typeof WeakMap.prototype.getOrInsert !== 'function') {
+            WeakMap.prototype.getOrInsert = function(key, defaultValue) {
+              if (this.has(key)) return this.get(key);
+              this.set(key, defaultValue);
+              return defaultValue;
+            };
+          }
+          if (typeof WeakMap.prototype.getOrInsertComputed !== 'function') {
+            WeakMap.prototype.getOrInsertComputed = function(key, callbackfn) {
+              if (this.has(key)) return this.get(key);
+              var val = callbackfn(key);
+              this.set(key, val);
+              return val;
+            };
+          }
+        }
+
+        // Math.sumPrecise polyfill (ES2025/2026)
+        if (typeof Math.sumPrecise !== 'function') {
+          Math.sumPrecise = function(items) {
+            var sum = 0;
+            var arr = Array.from(items || []);
+            for (var i = 0; i < arr.length; i++) {
+              sum += Number(arr[i]);
+            }
+            return sum;
+          };
+        }
+
+        // Uint8Array.fromBase64 & Uint8Array.prototype.toBase64 polyfills
+        if (typeof Uint8Array !== 'undefined') {
+          if (typeof Uint8Array.fromBase64 !== 'function') {
+            Uint8Array.fromBase64 = function(str) {
+              var bin = atob(String(str || '').replace(/[\r\n\s]/g, '').replace(/-/g, '+').replace(/_/g, '/'));
+              var out = new Uint8Array(bin.length);
+              for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+              return out;
+            };
+          }
+          if (Uint8Array.prototype && typeof Uint8Array.prototype.toBase64 !== 'function') {
+            Uint8Array.prototype.toBase64 = function() {
+              var bin = '';
+              for (var i = 0; i < this.length; i++) bin += String.fromCharCode(this[i]);
+              return btoa(bin);
+            };
+          }
+        }
+
+        // Set methods polyfills (iOS < 17)
+        if (typeof Set !== 'undefined' && Set.prototype) {
+          if (typeof Set.prototype.union !== 'function') {
+            Set.prototype.union = function(other) {
+              var res = new Set(this);
+              Array.from(other).forEach(function(v) { res.add(v); });
+              return res;
+            };
+          }
+          if (typeof Set.prototype.intersection !== 'function') {
+            Set.prototype.intersection = function(other) {
+              var res = new Set();
+              var otherSet = other instanceof Set ? other : new Set(Array.from(other));
+              this.forEach(function(v) { if (otherSet.has(v)) res.add(v); });
+              return res;
+            };
+          }
+          if (typeof Set.prototype.difference !== 'function') {
+            Set.prototype.difference = function(other) {
+              var res = new Set(this);
+              Array.from(other).forEach(function(v) { res.delete(v); });
+              return res;
+            };
+          }
+          if (typeof Set.prototype.isSubsetOf !== 'function') {
+            Set.prototype.isSubsetOf = function(other) {
+              var otherSet = other instanceof Set ? other : new Set(Array.from(other));
+              var ok = true;
+              this.forEach(function(v) { if (!otherSet.has(v)) ok = false; });
+              return ok;
+            };
+          }
+        }
+
+        // ES2025 Iterator global & Iterator Helpers polyfill (fixes ReferenceError: Can't find variable: Iterator on older iOS)
+        if (typeof globalThis.Iterator === 'undefined') {
+          var NativeIterProto = null;
+          try {
+            if (typeof Symbol !== 'undefined' && Symbol.iterator && Array.prototype[Symbol.iterator]) {
+              NativeIterProto = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+            }
+          } catch (_) {}
+
+          var IteratorPolyfill = function Iterator() {
+            if (this && this.constructor === IteratorPolyfill) {
+              throw new TypeError('Abstract class Iterator not directly constructable');
+            }
+          };
+
+          var iterProto = NativeIterProto && NativeIterProto !== Object.prototype
+            ? NativeIterProto
+            : IteratorPolyfill.prototype;
+
+          IteratorPolyfill.prototype = iterProto;
+          if (typeof iterProto.constructor !== 'function') {
+            iterProto.constructor = IteratorPolyfill;
+          }
+
+          if (typeof Symbol !== 'undefined' && Symbol.iterator && typeof iterProto[Symbol.iterator] !== 'function') {
+            iterProto[Symbol.iterator] = function() { return this; };
+          }
+          if (typeof Symbol !== 'undefined' && Symbol.toStringTag && !iterProto[Symbol.toStringTag]) {
+            try {
+              Object.defineProperty(iterProto, Symbol.toStringTag, { value: 'Iterator', configurable: true });
+            } catch (_) {}
+          }
+
+          var wrapIterator = function(nextFn) {
+            var obj = Object.create(iterProto);
+            obj.next = nextFn;
+            return obj;
+          };
+
+          if (typeof iterProto.toArray !== 'function') {
+            iterProto.toArray = function() {
+              var out = [];
+              var step;
+              while (!(step = this.next()).done) {
+                out.push(step.value);
+              }
+              return out;
+            };
+          }
+          if (typeof iterProto.forEach !== 'function') {
+            iterProto.forEach = function(fn) {
+              var i = 0;
+              var step;
+              while (!(step = this.next()).done) {
+                fn(step.value, i++);
+              }
+            };
+          }
+          if (typeof iterProto.map !== 'function') {
+            iterProto.map = function(fn) {
+              var self = this;
+              var i = 0;
+              return wrapIterator(function() {
+                var step = self.next();
+                if (step.done) return { value: undefined, done: true };
+                return { value: fn(step.value, i++), done: false };
+              });
+            };
+          }
+          if (typeof iterProto.filter !== 'function') {
+            iterProto.filter = function(fn) {
+              var self = this;
+              var i = 0;
+              return wrapIterator(function() {
+                while (true) {
+                  var step = self.next();
+                  if (step.done) return { value: undefined, done: true };
+                  if (fn(step.value, i++)) return { value: step.value, done: false };
+                }
+              });
+            };
+          }
+          if (typeof iterProto.take !== 'function') {
+            iterProto.take = function(limit) {
+              var self = this;
+              var remaining = Math.max(0, Number(limit) || 0);
+              return wrapIterator(function() {
+                if (remaining <= 0) return { value: undefined, done: true };
+                remaining--;
+                return self.next();
+              });
+            };
+          }
+          if (typeof iterProto.drop !== 'function') {
+            iterProto.drop = function(limit) {
+              var self = this;
+              var remaining = Math.max(0, Number(limit) || 0);
+              return wrapIterator(function() {
+                while (remaining > 0) {
+                  remaining--;
+                  var skipped = self.next();
+                  if (skipped.done) return { value: undefined, done: true };
+                }
+                return self.next();
+              });
+            };
+          }
+          if (typeof iterProto.flatMap !== 'function') {
+            iterProto.flatMap = function(fn) {
+              var self = this;
+              var i = 0;
+              var inner = null;
+              return wrapIterator(function() {
+                while (true) {
+                  if (inner) {
+                    var innerStep = inner.next();
+                    if (!innerStep.done) return innerStep;
+                    inner = null;
+                  }
+                  var step = self.next();
+                  if (step.done) return { value: undefined, done: true };
+                  var mapped = fn(step.value, i++);
+                  inner = IteratorPolyfill.from(mapped);
+                }
+              });
+            };
+          }
+          if (typeof iterProto.reduce !== 'function') {
+            iterProto.reduce = function(fn) {
+              var hasInit = arguments.length > 1;
+              var acc = hasInit ? arguments[1] : undefined;
+              var i = 0;
+              var step;
+              if (!hasInit) {
+                step = this.next();
+                if (step.done) throw new TypeError('Reduce of empty iterator with no initial value');
+                acc = step.value;
+                i = 1;
+              }
+              while (!(step = this.next()).done) {
+                acc = fn(acc, step.value, i++);
+              }
+              return acc;
+            };
+          }
+          if (typeof iterProto.some !== 'function') {
+            iterProto.some = function(fn) {
+              var i = 0;
+              var step;
+              while (!(step = this.next()).done) {
+                if (fn(step.value, i++)) return true;
+              }
+              return false;
+            };
+          }
+          if (typeof iterProto.every !== 'function') {
+            iterProto.every = function(fn) {
+              var i = 0;
+              var step;
+              while (!(step = this.next()).done) {
+                if (!fn(step.value, i++)) return false;
+              }
+              return true;
+            };
+          }
+          if (typeof iterProto.find !== 'function') {
+            iterProto.find = function(fn) {
+              var i = 0;
+              var step;
+              while (!(step = this.next()).done) {
+                if (fn(step.value, i++)) return step.value;
+              }
+              return undefined;
+            };
+          }
+
+          IteratorPolyfill.from = function(obj) {
+            if (obj == null) throw new TypeError('Iterator.from called on null or undefined');
+            if (typeof Symbol !== 'undefined' && Symbol.iterator && typeof obj[Symbol.iterator] === 'function') {
+              return obj[Symbol.iterator]();
+            }
+            if (typeof obj.next === 'function') {
+              return obj;
+            }
+            var arr = Array.from(obj);
+            var idx = 0;
+            return wrapIterator(function() {
+              if (idx < arr.length) return { value: arr[idx++], done: false };
+              return { value: undefined, done: true };
+            });
+          };
+
+          globalThis.Iterator = IteratorPolyfill;
+          window.Iterator = IteratorPolyfill;
+        }
       })();
     </script>
     
@@ -361,9 +701,13 @@
     </div>
     <script>
       window.__hardResetAppCache = function() {
+        var didReload = false;
         var finishReload = function() {
+          if (didReload) return;
+          didReload = true;
           window.location.replace(window.location.pathname + '?_refresh=' + Date.now() + (window.location.hash || ''));
         };
+        setTimeout(finishReload, 1500);
         try {
           sessionStorage.removeItem('chunk_reload_attempted');
           var tasks = [];
@@ -401,6 +745,12 @@
             if (msg) showBootRecovery('جزئیات خطا: ' + msg);
           }
         });
+        window.addEventListener('unhandledrejection', function(ev) {
+          if (!window.__APP_MOUNTED__) {
+            var msg = (ev && ev.reason && (ev.reason.message || ev.reason)) ? String(ev.reason.message || ev.reason) : '';
+            if (msg) showBootRecovery('جزئیات خطا: ' + msg);
+          }
+        });
         setTimeout(function() {
           if (!window.__APP_MOUNTED__) {
             showBootRecovery('بارگذاری بیش از حد طول کشید. ممکن است کش مرورگر قدیمی باشد یا ارتباط با سرور برقرار نشود.');
@@ -426,18 +776,18 @@
 
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
-          // Purge any legacy caches (< v10) that might have cached non-HTML responses or ES2020 chunks
+          // Purge any legacy caches (< v11) that might have cached non-HTML responses or ES2020 chunks
           if ('caches' in window) {
             caches.keys().then(function(names) {
               names.forEach(function(name) {
-                if (name.indexOf('finance-app-') === 0 && name !== 'finance-app-v10') {
+                if (name.indexOf('finance-app-') === 0 && name !== 'finance-app-v11') {
                   caches.delete(name).catch(function() {});
                 }
               });
             }).catch(function() {});
           }
 
-          navigator.serviceWorker.register('/sw.js?v=10', { updateViaCache: 'none' })
+          navigator.serviceWorker.register('/sw.js?v=11', { updateViaCache: 'none' })
             .then(function(reg) {
               console.log('SW Registered!', reg.scope);
               try { reg.update(); } catch (e) {}

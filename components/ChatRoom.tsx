@@ -781,6 +781,22 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     const [pendingAttachmentModalFiles, setPendingAttachmentModalFiles] = useState<File[] | null>(null);
     const [isDragOverChat, setIsDragOverChat] = useState(false);
     const dragCounterRef = useRef(0);
+
+    useEffect(() => {
+        if (!isDragOverChat) return;
+        const resetDragOverlay = () => {
+            dragCounterRef.current = 0;
+            setIsDragOverChat(false);
+        };
+        window.addEventListener('drop', resetDragOverlay, true);
+        window.addEventListener('dragend', resetDragOverlay, true);
+        window.addEventListener('blur', resetDragOverlay);
+        return () => {
+            window.removeEventListener('drop', resetDragOverlay, true);
+            window.removeEventListener('dragend', resetDragOverlay, true);
+            window.removeEventListener('blur', resetDragOverlay);
+        };
+    }, [isDragOverChat]);
     const [showGroupModal, setShowGroupModal] = useState<string | false>(false);
     const [mutedChannels, setMutedChannels] = useState<Set<string>>(new Set());
     const [newGroupName, setNewGroupName] = useState('');
@@ -2222,6 +2238,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     };
 
     const handleOpenAttachmentModal = (files: FileList | File[] | null) => {
+        dragCounterRef.current = 0;
+        setIsDragOverChat(false);
         if (!files || files.length === 0) return;
         setPendingAttachmentModalFiles(Array.from(files));
     };
@@ -2339,16 +2357,22 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         }
     };
 
+    const isFileDragEvent = (e: React.DragEvent) => {
+        const types = e.dataTransfer?.types;
+        if (!types) return false;
+        return Array.from(types).includes('Files');
+    };
+
     const handleContainerDragEnter = (e: React.DragEvent) => {
+        if (!isFileDragEvent(e)) return;
         e.preventDefault();
         e.stopPropagation();
         dragCounterRef.current++;
-        if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-            setIsDragOverChat(true);
-        }
+        setIsDragOverChat(true);
     };
 
     const handleContainerDragOver = (e: React.DragEvent) => {
+        if (!isFileDragEvent(e)) return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'copy';
@@ -2356,6 +2380,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     };
 
     const handleContainerDragLeave = (e: React.DragEvent) => {
+        if (!isFileDragEvent(e) && dragCounterRef.current <= 0) return;
         e.preventDefault();
         e.stopPropagation();
         dragCounterRef.current--;
@@ -2370,21 +2395,25 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         e.stopPropagation();
         dragCounterRef.current = 0;
         setIsDragOverChat(false);
-        const files = e.dataTransfer.files;
+        const files = e.dataTransfer?.files;
         if (files && files.length > 0) {
             handleOpenAttachmentModal(files);
         }
     };
 
     const handleDragOver = (e: React.DragEvent) => {
+        if (!isFileDragEvent(e)) return;
         e.preventDefault();
         e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
     };
 
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        const files = e.dataTransfer.files;
+        dragCounterRef.current = 0;
+        setIsDragOverChat(false);
+        const files = e.dataTransfer?.files;
         if (files && files.length > 0) {
             handleOpenAttachmentModal(files);
         }
@@ -3333,7 +3362,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                 onDrop={handleContainerDrop}
             >
                 {/* Visual Full-Screen Drag & Drop Overlay */}
-                {isDragOverChat && (
+                {isDragOverChat && !(pendingAttachmentModalFiles && pendingAttachmentModalFiles.length > 0) && (
                     <div className="absolute inset-0 z-50 bg-blue-600/15 dark:bg-blue-900/40 backdrop-blur-sm border-4 border-dashed border-blue-500 rounded-3xl flex flex-col items-center justify-center pointer-events-none animate-fade-in p-6 text-center m-2 shadow-2xl">
                         <div className="w-16 h-16 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-xl mb-3 animate-bounce">
                             <UploadCloud size={32} />
@@ -4836,7 +4865,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                 } : null}
                 onCancelReply={() => setReplyingTo(null)}
                 initialCaption={inputText.trim() ? inputText : undefined}
-                onClose={() => setPendingAttachmentModalFiles(null)}
+                onClose={() => {
+                    dragCounterRef.current = 0;
+                    setIsDragOverChat(false);
+                    setPendingAttachmentModalFiles(null);
+                }}
                 onSend={handleSendFromAttachmentModal}
             />
         </div>

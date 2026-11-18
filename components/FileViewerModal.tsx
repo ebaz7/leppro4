@@ -23,25 +23,20 @@ const resolveImageUrl = (url?: string): string => {
 };
 
 let cachedPdfJsLib: any = null;
-const loadPdfJsLibrary = async (disableWorker = false) => {
+const loadPdfJsLibrary = async () => {
   if (cachedPdfJsLib) {
-    if (disableWorker && cachedPdfJsLib.GlobalWorkerOptions) {
-      cachedPdfJsLib.GlobalWorkerOptions.workerSrc = '';
-    }
     return cachedPdfJsLib;
   }
-  const pdfLib = await import('pdfjs-dist');
-  if (!disableWorker) {
-    try {
-      // @ts-ignore
-      const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
-      const workerUrl = workerModule.default || workerModule;
-      if (pdfLib && pdfLib.GlobalWorkerOptions && workerUrl) {
-        pdfLib.GlobalWorkerOptions.workerSrc = workerUrl;
-      }
-    } catch {
-      // Fall back to workerless mode when bundled worker fails to resolve
+  const pdfLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  try {
+    // @ts-ignore
+    const workerModule = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
+    const workerUrl = workerModule.default || workerModule;
+    if (pdfLib && pdfLib.GlobalWorkerOptions && workerUrl) {
+      pdfLib.GlobalWorkerOptions.workerSrc = workerUrl;
     }
+  } catch (workerImportErr) {
+    console.warn('PDF legacy worker URL import warning:', workerImportErr);
   }
   cachedPdfJsLib = pdfLib;
   return cachedPdfJsLib;
@@ -77,6 +72,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [pdfOrientation, setPdfOrientation] = useState<PdfOrientation>('portrait');
   const [isRenderingPdfPages, setIsRenderingPdfPages] = useState<boolean>(false);
+  const [isLoadingMorePdfPages, setIsLoadingMorePdfPages] = useState<boolean>(false);
   const [useIframePdfFallback, setUseIframePdfFallback] = useState<boolean>(false);
 
   // Measured container & content base dimensions for exact scrollable sizer math
@@ -266,17 +262,23 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
 
     const renderPdfToImages = async (pdfSource: { data?: ArrayBuffer; url?: string }) => {
       setIsRenderingPdfPages(true);
+      setIsLoadingMorePdfPages(false);
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
       try {
-        let pdfDoc: any = null;
-        try {
-          const pdfjsLib = await loadPdfJsLibrary(false);
-          const task = pdfjsLib.getDocument(pdfSource);
-          pdfDoc = await task.promise;
-        } catch (workerErr) {
-          console.warn('PDF worker load failed, retrying without worker:', workerErr);
-          const pdfjsLib = await loadPdfJsLibrary(true);
-          const task = pdfjsLib.getDocument({ ...pdfSource, disableWorker: true });
-          pdfDoc = await task.promise;
+        const pdfjsLib = await loadPdfJsLibrary();
+        const docTask = pdfjsLib.getDocument(pdfSource);
+        const pdfDoc: any = await Promise.race([
+          docTask.promise,
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => {
+              try { docTask.destroy?.(); } catch {}
+              reject(new Error('PDF render timeout'));
+            }, 8000);
+          }),
+        ]);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
         }
         if (isCancelled) return;
         const totalPages = pdfDoc.numPages || 0;
@@ -305,6 +307,14 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             renderedPages.push(canvas.toDataURL('image/jpeg', 0.92));
             if (!isCancelled) {
               setPdfPageImages([...renderedPages]);
+              // Unblock the viewer as soon as page 1 is ready so multi-page PDFs never hang on spinner
+              if (pageNum === 1) {
+                setIsLoadingPreview(false);
+                setIsRenderingPdfPages(false);
+                if (maxPages > 1) {
+                  setIsLoadingMorePdfPages(true);
+                }
+              }
             }
           }
         }
@@ -317,8 +327,12 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           setUseIframePdfFallback(true);
         }
       } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         if (!isCancelled) {
           setIsRenderingPdfPages(false);
+          setIsLoadingMorePdfPages(false);
         }
       }
     };
@@ -346,14 +360,24 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             await renderPdfToImages({ data: u8arr.buffer });
           }
         } else if (detectedType === 'pdf') {
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const fetchTimeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
           try {
             const authToken = getAuthToken();
             const fetchHeaders: Record<string, string> = {};
             if (authToken && !resolvedUrl.startsWith('blob:')) {
               fetchHeaders.Authorization = `Bearer ${authToken}`;
             }
-            const response = await fetch(resolvedUrl, { headers: fetchHeaders });
+            const response = await fetch(resolvedUrl, {
+              headers: fetchHeaders,
+              signal: controller ? controller.signal : undefined,
+            });
+            if (fetchTimeout) clearTimeout(fetchTimeout);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const contentType = (response.headers.get('content-type') || '').toLowerCase();
+            if (contentType.includes('text/html')) {
+              throw new Error('Unexpected HTML response for PDF URL');
+            }
             const arrayBuffer = await response.arrayBuffer();
             const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
             objectUrlToRevoke = URL.createObjectURL(blob);
@@ -364,6 +388,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
               await renderPdfToImages({ data: arrayBuffer });
             }
           } catch (fetchErr) {
+            if (fetchTimeout) clearTimeout(fetchTimeout);
             console.warn('Fallback to direct PDF URL for preview:', fetchErr);
             if (!isCancelled) {
               setPreviewUrl(resolvedUrl);
@@ -383,6 +408,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       } finally {
         if (!isCancelled) {
           setIsLoadingPreview(false);
+          setIsRenderingPdfPages(false);
         }
       }
     };
@@ -1028,6 +1054,12 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                     )}
                   </div>
                 ))}
+                {isLoadingMorePdfPages && (
+                  <div className="flex items-center gap-2 bg-slate-900/80 text-white text-xs font-bold px-3.5 py-2 rounded-full border border-white/15 shadow-lg" dir="rtl">
+                    <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                    <span>در حال بارگذاری ادامه صفحات ({pdfPageImages.length.toLocaleString('fa-IR')} از {Math.min(pdfPageCount, 25).toLocaleString('fa-IR')})...</span>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

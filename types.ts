@@ -2137,6 +2137,7 @@ export interface SecretariatCompanySettings {
     metadataFontWeight?: 'normal' | 'bold' | 'bolder' | 'black'; // میزان ضخامت متون سربرگ
     metadataColor?: string;            // رنگ متن مشخصات سربرگ (کد رنگ)
     metadataLineHeight?: number;       // فاصله بین خطوط مشخصات سربرگ (مثلا 1.8)
+    hideMetadataLabels?: boolean;      // حذف کلمات «شماره / تاریخ / پیوست» و نمایش فقط مقادیر
     
     // Stamp Settings
     companyStampUrl?: string;          // تصویر مهر رسمی شرکت

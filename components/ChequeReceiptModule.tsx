@@ -27,9 +27,9 @@ let cachedPdfLib: any = null;
 export const getPdfLib = async () => {
   if (cachedPdfLib) return cachedPdfLib;
   try {
-    const pdfLib = await import('pdfjs-dist');
+    const pdfLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
     // @ts-ignore
-    const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+    const workerModule = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
     const workerUrl = workerModule.default || workerModule;
     if (pdfLib && pdfLib.GlobalWorkerOptions) {
       pdfLib.GlobalWorkerOptions.workerSrc = workerUrl;

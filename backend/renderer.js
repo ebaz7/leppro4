@@ -2295,6 +2295,43 @@ const resolveSecretariatStampForLetter = (letter, companySettings) => {
   };
 };
 
+const stripSecretariatSalutationAndSubject = (
+  rawHtml = "",
+  { stripSalutation = false, stripSubject = false } = {},
+) => {
+  let html = String(rawHtml || "");
+  if (!html || (!stripSalutation && !stripSubject)) return html;
+
+  const normalizePlain = (fragment = "") =>
+    String(fragment || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;|&#160;/gi, " ")
+      .replace(/\u00a0/g, " ")
+      .replace(/[\u200c\u200f\u200e]/g, "")
+      .replace(/[،,;؛:.!؟?ـ\-–—\s]+/g, " ")
+      .trim();
+
+  const isStandaloneSalutationOrClosing = (plain = "") =>
+    /^(با\s*سلام(\s*و\s*عرض\s*ادب)?(\s*و\s*(تقدیم\s*)?احترام)?|سلام\s*علیکم|باسلام(\s*و\s*احترام)?|با\s*(تقدیم\s*|تجدید\s*)?احترام)$/.test(
+      plain,
+    );
+
+  const isStandaloneSubjectLine = (plain = "") =>
+    /^موضوع\s+.*$/.test(plain) && plain.length <= 180;
+
+  return html.replace(/<(p|div)\b[^>]*>[\s\S]*?<\/\1>/gi, (block) => {
+    const plain = normalizePlain(block);
+    if (!plain) return block;
+    if (stripSalutation && isStandaloneSalutationOrClosing(plain)) {
+      return "";
+    }
+    if (stripSubject && isStandaloneSubjectLine(plain)) {
+      return "";
+    }
+    return block;
+  });
+};
+
 const normalizeSecretariatLetterHtml = (rawHtml = "") => {
   let html = String(rawHtml || "");
   if (!html) return "";
@@ -2415,6 +2452,8 @@ export const generateSecretariatLetterPDF = async (
     const metadataOpacity = (companySettings?.metadataOpacity ?? 100) / 100;
     const metadataFontWeight = companySettings?.metadataFontWeight || "bold";
     const metadataColor = companySettings?.metadataColor || "#0f172a";
+    const metadataLineHeight = companySettings?.metadataLineHeight ?? 1.8;
+    const hideMetadataLabels = Boolean(companySettings?.hideMetadataLabels);
 
     const resolvedStamp = resolveSecretariatStampForLetter(letter, companySettings);
     const stampSize = resolvedStamp.size || 120;
@@ -2444,9 +2483,9 @@ export const generateSecretariatLetterPDF = async (
     const letterheadHtml = `
       ${bgImageHtml}
       <div class="lh-left-custom">
-        <div>شماره: <span style="direction: ltr; display: inline-block; unicode-bidi: embed;">${toPersianDigits(letter.letterNumber || "پیش‌نویس")}</span></div>
-        <div>تاریخ: <span style="direction: ltr; display: inline-block; unicode-bidi: embed;">${toPersianDigits(letter.date || "-")}</span></div>
-        <div>پیوست: ${hasAttach ? (letter.attachmentDescription ? toPersianDigits(letter.attachmentDescription) : "دارد") : "ندارد"}</div>
+        <div>${hideMetadataLabels ? "" : "شماره: "}<span style="direction: ltr; display: inline-block; unicode-bidi: embed;">${toPersianDigits(letter.letterNumber || "پیش‌نویس")}</span></div>
+        <div>${hideMetadataLabels ? "" : "تاریخ: "}<span style="direction: ltr; display: inline-block; unicode-bidi: embed;">${toPersianDigits(letter.date || "-")}</span></div>
+        <div>${hideMetadataLabels ? "" : "پیوست: "}${hasAttach ? (letter.attachmentDescription ? toPersianDigits(letter.attachmentDescription) : "دارد") : "ندارد"}</div>
       </div>
     `;
 
@@ -2521,7 +2560,10 @@ export const generateSecretariatLetterPDF = async (
     }
 
     // 100% National Internet / Offline safe: convert any /uploads/ image src (even with full domain) to disk base64
-    const rawContent = String(letter.content || "");
+    const rawContent = stripSecretariatSalutationAndSubject(String(letter.content || ""), {
+      stripSalutation: Boolean(letter.hideSalutationInLetter),
+      stripSubject: Boolean(letter.hideSubjectInLetter),
+    });
     const normalizedContent = normalizeSecretariatLetterHtml(rawContent).replace(
       /(<img\b[^>]*?\bsrc=["'])([^"']*\/uploads\/[^"']+)(["'])/gi,
       (_, p1, imgUrl, p3) => `${p1}${makeAbsolute(imgUrl)}${p3}`,
@@ -2536,8 +2578,11 @@ export const generateSecretariatLetterPDF = async (
       rawContent.includes("کمال") ||
       rawContent.includes("همکاری");
 
-    const effectiveSignOff =
-      typeof letter.signOffText === "string" ? letter.signOffText.trim() : "";
+    const effectiveSignOff = letter.hideSalutationInLetter
+      ? ""
+      : typeof letter.signOffText === "string"
+        ? letter.signOffText.trim()
+        : "";
 
     const hasAnySignersOrStamp =
       Boolean(signersHtml) ||
@@ -2610,7 +2655,7 @@ export const generateSecretariatLetterPDF = async (
           left: ${metadataLeft}mm !important;
           font-size: ${metadataFontSize}px !important;
           color: ${metadataColor} !important;
-          line-height: 1.8 !important;
+          line-height: ${metadataLineHeight} !important;
           z-index: 100 !important;
           opacity: ${metadataOpacity} !important;
           font-weight: ${metadataFontWeight} !important;
@@ -2999,7 +3044,7 @@ export const generateSecretariatLetterDoc = async (
 
           // Signers block
           if (letter.signers && letter.signers.length > 0) {
-            if (letter.signOffText && String(letter.signOffText).trim()) {
+            if (!letter.hideSalutationInLetter && letter.signOffText && String(letter.signOffText).trim()) {
               pList.push(createRtlP(String(letter.signOffText).trim(), true, 24, "left", 120));
             }
             for (const s of letter.signers) {
@@ -3151,11 +3196,16 @@ export const generateSecretariatLetterDoc = async (
             
             <div class="letter-content" dir="rtl" style="direction: rtl;">
                 ${letter.hideSalutationInLetter ? "" : `<p style="font-weight: bold; margin-bottom: 14px; text-align: right;">با سلام و احترام،</p>`}
-                ${normalizeSecretariatLetterHtml(letter.content || "")}
+                ${normalizeSecretariatLetterHtml(
+                  stripSecretariatSalutationAndSubject(letter.content || "", {
+                    stripSalutation: Boolean(letter.hideSalutationInLetter),
+                    stripSubject: Boolean(letter.hideSubjectInLetter),
+                  }),
+                )}
             </div>
             
             <div style="margin-top: 40px; text-align: left; width: 100%; direction: rtl;">
-                ${letter.signOffText && String(letter.signOffText).trim() ? `<div style="font-weight: bold; font-size: 11pt; margin-bottom: 8px;">${letter.signOffText}</div>` : ""}
+                ${!letter.hideSalutationInLetter && letter.signOffText && String(letter.signOffText).trim() ? `<div style="font-weight: bold; font-size: 11pt; margin-bottom: 8px;">${letter.signOffText}</div>` : ""}
                 ${
                   letter.signers && letter.signers.length > 0
                     ? `
