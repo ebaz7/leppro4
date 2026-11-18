@@ -8,6 +8,7 @@ import {
   MessageCircle, ExternalLink, ArrowRight, Building2, PhoneCall, Bot
 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 export const processBioImageUrl = (url: string | null | undefined, fallback: string): string => {
   if (!url) return fallback;
@@ -143,14 +144,7 @@ URL:${window.location.href}
 END:VCARD`;
 
     const blob = new Blob([vcard], { type: 'text/vcard;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `${config.slug || 'company'}_contact.vcf`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success('کارت مخاطب آماده ذخیره‌سازی در گوشی شد.');
+    void saveBlobAndOpenFile(blob, `${config.slug || 'company'}_contact.vcf`);
   };
 
   const handleShare = async () => {

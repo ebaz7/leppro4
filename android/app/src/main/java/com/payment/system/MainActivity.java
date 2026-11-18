@@ -116,17 +116,24 @@ public class MainActivity extends BridgeActivity {
                             android.widget.Toast.makeText(getApplicationContext(), "در حال ذخیره فایل در پوشه Downloads/Dlkam...", android.widget.Toast.LENGTH_SHORT).show();
                             return;
                         }
-                        if (url == null) {
+                        if (url == null || url.trim().isEmpty()) {
                             return;
                         }
-                        android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
-                        String fileName = guessedName;
-                        if (url.toLowerCase().contains(".apk") && !fileName.toLowerCase().endsWith(".apk")) {
+                        String targetHttpUrl = url.trim();
+                        if (!targetHttpUrl.startsWith("http://") && !targetHttpUrl.startsWith("https://")) {
+                            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                            String baseServer = SyncWorker.sanitizeServerUrl(prefs.getString("_cap_server_url", prefs.getString("server_url", "")));
+                            targetHttpUrl = baseServer.replaceAll("/+$", "") + (targetHttpUrl.startsWith("/") ? "" : "/") + targetHttpUrl;
+                        }
+                        String fileName = sanitizeFileName(guessedName);
+                        if (targetHttpUrl.toLowerCase().contains(".apk") && !fileName.toLowerCase().endsWith(".apk")) {
                             fileName = fileName + ".apk";
                         }
                         String resolvedMime = (fileName.toLowerCase().endsWith(".apk") || (mimetype != null && mimetype.contains("package-archive")))
                                 ? "application/vnd.android.package-archive"
-                                : mimetype;
+                                : resolveMimeType(fileName, mimetype);
+                        fileName = ensureExtensionForMime(fileName, resolvedMime);
+                        android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(targetHttpUrl));
                         if (resolvedMime != null && !resolvedMime.isEmpty()) {
                             request.setMimeType(resolvedMime);
                         }
@@ -134,7 +141,7 @@ public class MainActivity extends BridgeActivity {
                             request.addRequestHeader("User-Agent", userAgent);
                         }
                         try {
-                            String cookies = android.webkit.CookieManager.getInstance().getCookie(url);
+                            String cookies = android.webkit.CookieManager.getInstance().getCookie(targetHttpUrl);
                             if (cookies != null && !cookies.isEmpty()) {
                                 request.addRequestHeader("Cookie", cookies);
                             }
@@ -142,11 +149,24 @@ public class MainActivity extends BridgeActivity {
                         request.setTitle(fileName);
                         request.setDescription("در حال دانلود فایل...");
                         request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                        request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Dlkam/" + fileName);
+                        String destFolderLabel = "Downloads/Dlkam";
+                        try {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                                File publicDlkam = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Dlkam");
+                                if (!publicDlkam.exists()) {
+                                    publicDlkam.mkdirs();
+                                }
+                            }
+                            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Dlkam/" + fileName);
+                        } catch (Exception subDirErr) {
+                            Log.w(TAG, "Subfolder destination failed, using Downloads root", subDirErr);
+                            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                            destFolderLabel = "Downloads";
+                        }
                         android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
                         if (dm != null) {
                             dm.enqueue(request);
-                            android.widget.Toast.makeText(getApplicationContext(), "دانلود فایل در پوشه Downloads/Dlkam آغاز شد...", android.widget.Toast.LENGTH_LONG).show();
+                            android.widget.Toast.makeText(getApplicationContext(), "دانلود فایل در پوشه " + destFolderLabel + " آغاز شد...", android.widget.Toast.LENGTH_LONG).show();
                             return;
                         }
                     } catch (Exception dlErr) {

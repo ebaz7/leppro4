@@ -3,7 +3,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { resolveImageUrl, getAuthToken } from './apiService';
 import { FileOpener } from '@capacitor-community/file-opener';
 import { Share } from '@capacitor/share';
-import { isTauriDesktop, isElectronDesktop, isTauriDesktopOnly } from '../utils/platformDetection';
+import { isTauriDesktop, isElectronDesktop, isTauriDesktopOnly, hasPhoneGallery } from '../utils/platformDetection';
 import toast from 'react-hot-toast';
 
 declare global {
@@ -160,7 +160,8 @@ const fetchUrlAsBlob = async (rawUrl: string, onProgress?: (p: number) => void):
         const parts = fetchUrl.split(',');
         const mimeMatch = parts[0].match(/:(.*?);/);
         const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
-        const bstr = atob(parts[1] || '');
+        const cleanBase64 = (parts[1] || '').replace(/\s+/g, '');
+        const bstr = atob(cleanBase64);
         const u8arr = new Uint8Array(bstr.length);
         for (let i = 0; i < bstr.length; i++) {
             u8arr[i] = bstr.charCodeAt(i);
@@ -306,13 +307,13 @@ export const saveImageToGallery = async (
         setTimeout(() => {
             window.URL.revokeObjectURL(blobUrl);
             document.body.removeChild(a);
-        }, 800);
+        }, 3000);
         markFileAsSavedInRegistry(fileName || finalImageName, 'web');
-        toast.success('تصویر ذخیره شد');
+        toast.success(hasPhoneGallery() ? 'تصویر ذخیره شد' : 'تصویر با موفقیت دانلود شد ✓');
         return true;
     } catch (err) {
         console.error('saveImageToGallery error:', err);
-        toast.error('خطا در ذخیره تصویر در گالری');
+        toast.error(hasPhoneGallery() ? 'خطا در ذخیره تصویر در گالری' : 'خطا در دانلود تصویر');
         return false;
     }
 };
@@ -342,35 +343,47 @@ export const downloadAndOpenFile = async (
             if (allowCache && window.DlkamAndroid.hasFileInAppFolder(safeName)) {
                 if (onProgress) onProgress(100);
                 markFileAsSavedInRegistry(fileName, 'android_app_folder');
-                const opened = window.DlkamAndroid.openFileFromAppFolder(safeName, mimeType);
-                if (opened) return true;
+                try {
+                    const opened = window.DlkamAndroid.openFileFromAppFolder(safeName, mimeType);
+                    if (opened) return true;
+                } catch {}
             }
 
-            if (onProgress) onProgress(15);
-            const blob = await fetchUrlAsBlob(url, onProgress);
-            const base64data = await blobToBase64(blob);
-            let saved = false;
-            let actualSavedName = safeName;
-            let savedFolderLabel = 'Downloads/Dlkam';
-            if (typeof window.DlkamAndroid.saveFileToPublicDownloads === 'function') {
-                try {
-                    const parsed = JSON.parse(window.DlkamAndroid.saveFileToPublicDownloads(base64data, safeName, mimeType) || '{}');
-                    saved = Boolean(parsed.ok);
-                    if (parsed.fileName) actualSavedName = parsed.fileName;
-                    if (!parsed.publicSaved) savedFolderLabel = 'حافظه اختصاصی برنامه (DlkamFiles)';
-                } catch {
-                    saved = false;
+            try {
+                if (onProgress) onProgress(15);
+                const blob = await fetchUrlAsBlob(url, onProgress);
+                const base64data = await blobToBase64(blob);
+                let saved = false;
+                let actualSavedName = safeName;
+                let savedFolderLabel = 'Downloads/Dlkam';
+                if (typeof window.DlkamAndroid.saveFileToPublicDownloads === 'function') {
+                    try {
+                        const parsed = JSON.parse(window.DlkamAndroid.saveFileToPublicDownloads(base64data, safeName, mimeType) || '{}');
+                        saved = Boolean(parsed.ok);
+                        if (parsed.fileName) actualSavedName = parsed.fileName;
+                        if (!parsed.publicSaved) savedFolderLabel = 'حافظه اختصاصی برنامه (DlkamFiles)';
+                    } catch {
+                        saved = false;
+                    }
                 }
-            }
-            if (!saved) {
-                saved = window.DlkamAndroid.saveFileToAppFolder(base64data, safeName, mimeType);
-            }
-            if (saved) {
-                if (onProgress) onProgress(100);
-                markFileAsSavedInRegistry(fileName, savedFolderLabel);
-                toast.success(`فایل ${actualSavedName} در پوشه ${savedFolderLabel} ذخیره شد ✓`);
-                window.DlkamAndroid.openFileFromAppFolder(actualSavedName, mimeType);
-                return true;
+                if (!saved && typeof window.DlkamAndroid.saveFileToAppFolder === 'function') {
+                    try {
+                        saved = window.DlkamAndroid.saveFileToAppFolder(base64data, safeName, mimeType);
+                    } catch {
+                        saved = false;
+                    }
+                }
+                if (saved) {
+                    if (onProgress) onProgress(100);
+                    markFileAsSavedInRegistry(fileName, savedFolderLabel);
+                    toast.success(`فایل ${actualSavedName} در پوشه ${savedFolderLabel} ذخیره شد ✓`);
+                    try {
+                        window.DlkamAndroid.openFileFromAppFolder(actualSavedName, mimeType);
+                    } catch {}
+                    return true;
+                }
+            } catch (androidBridgeErr) {
+                console.warn('DlkamAndroid download fallback to Capacitor Filesystem:', androidBridgeErr);
             }
         }
 
@@ -476,44 +489,63 @@ export const downloadAndOpenFile = async (
         // 3. Windows Electron Desktop - Save directly to Windows Downloads\Dlkam folder
         if (isElectronDesktop()) {
             const electronBridge = (window as any).electronAPI || (window as any).electron;
-            try {
-                if (allowCache && electronBridge?.checkLocalFileExists && electronBridge?.openLocalFile) {
+            if (allowCache && electronBridge?.checkLocalFileExists && electronBridge?.openLocalFile) {
+                try {
                     const exists = await electronBridge.checkLocalFileExists(safeName);
                     if (exists) {
                         if (onProgress) onProgress(100);
                         markFileAsSavedInRegistry(fileName, 'electron_downloads');
-                        await electronBridge.openLocalFile(safeName);
+                        try {
+                            await electronBridge.openLocalFile(safeName);
+                        } catch (openErr: any) {
+                            if (String(openErr?.message || '').includes('LAUNCH_FAILED') && electronBridge?.openLocalFileDir) {
+                                await electronBridge.openLocalFileDir(safeName).catch(() => {});
+                            }
+                        }
                         return true;
                     }
-                }
+                } catch {}
+            }
 
-                const fetchUrl = resolveImageUrl(url);
-                if (electronBridge?.downloadAndSaveFile && (fetchUrl.startsWith('http://') || fetchUrl.startsWith('https://'))) {
-                    if (onProgress) onProgress(20);
-                    const unsubscribe = typeof electronBridge.onDownloadProgress === 'function'
-                        ? electronBridge.onDownloadProgress((p: any) => {
-                            if (p && typeof p.pct === 'number' && onProgress) {
-                                onProgress(p.pct);
-                            }
-                        })
-                        : null;
-                    try {
-                        const savedPath = await electronBridge.downloadAndSaveFile({
-                            url: fetchUrl,
-                            fileName: safeName,
-                            openAfter: true,
-                            authToken: getAuthToken() || ''
-                        });
+            const fetchUrl = resolveImageUrl(url);
+            if (electronBridge?.downloadAndSaveFile && (fetchUrl.startsWith('http://') || fetchUrl.startsWith('https://'))) {
+                if (onProgress) onProgress(20);
+                const unsubscribe = typeof electronBridge.onDownloadProgress === 'function'
+                    ? electronBridge.onDownloadProgress((p: any) => {
+                        if (p && typeof p.pct === 'number' && onProgress) {
+                            onProgress(p.pct);
+                        }
+                    })
+                    : null;
+                try {
+                    const savedPath = await electronBridge.downloadAndSaveFile({
+                        url: fetchUrl,
+                        fileName: safeName,
+                        openAfter: true,
+                        authToken: getAuthToken() || ''
+                    });
+                    if (onProgress) onProgress(100);
+                    markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
+                    toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
+                    return true;
+                } catch (streamErr: any) {
+                    if (String(streamErr?.message || '').includes('LAUNCH_FAILED')) {
                         if (onProgress) onProgress(100);
-                        markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
+                        markFileAsSavedInRegistry(fileName, 'electron_downloads');
+                        if (electronBridge?.openLocalFileDir) {
+                            await electronBridge.openLocalFileDir(safeName).catch(() => {});
+                        }
                         toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
                         return true;
-                    } finally {
-                        if (unsubscribe) unsubscribe();
                     }
+                    console.warn('Electron downloadAndSaveFile fallback to renderer blob:', streamErr);
+                } finally {
+                    if (unsubscribe) unsubscribe();
                 }
+            }
 
-                if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
+            if (electronBridge?.saveLocalFile || electronBridge?.saveAndOpenLocalFile) {
+                try {
                     if (onProgress) onProgress(20);
                     const blob = await fetchUrlAsBlob(url, onProgress);
                     const arrayBuffer = await blob.arrayBuffer();
@@ -525,9 +557,18 @@ export const downloadAndOpenFile = async (
                     markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
                     toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
                     return true;
+                } catch (saveErr: any) {
+                    if (String(saveErr?.message || '').includes('LAUNCH_FAILED')) {
+                        if (onProgress) onProgress(100);
+                        markFileAsSavedInRegistry(fileName, 'electron_downloads');
+                        if (electronBridge?.openLocalFileDir) {
+                            await electronBridge.openLocalFileDir(safeName).catch(() => {});
+                        }
+                        toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
+                        return true;
+                    }
+                    console.warn('Electron local file save fallback to web:', saveErr);
                 }
-            } catch (electronErr) {
-                console.warn('Electron local file save fallback to web:', electronErr);
             }
         }
 
@@ -563,24 +604,30 @@ export const downloadAndOpenFile = async (
             }
         }
 
-        // 5. Web Environment
+        // 5. Web Environment (fetch with Bearer auth first; fallback to direct anchor only on CORS failure)
         if (onProgress) onProgress(30);
         const fetchUrl = resolveImageUrl(url);
-        if (fetchUrl.startsWith('data:') || fetchUrl.startsWith('blob:')) {
+        try {
             const blob = await fetchUrlAsBlob(url, onProgress);
             await saveBlobAndOpenFile(blob, safeName);
             markFileAsSavedInRegistry(fileName, 'web');
             return true;
+        } catch (webFetchErr) {
+            if (fetchUrl.startsWith('data:') || fetchUrl.startsWith('blob:')) {
+                throw webFetchErr;
+            }
         }
 
         if (onProgress) onProgress(100);
         const a = document.createElement('a');
         a.href = fetchUrl;
         a.download = safeName;
-        a.target = '_blank';
+        a.rel = 'noopener';
         document.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
+        setTimeout(() => {
+            try { document.body.removeChild(a); } catch {}
+        }, 300);
         markFileAsSavedInRegistry(fileName, 'web');
         return true;
     } catch (err) {
@@ -599,7 +646,7 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
         try {
             const base64data = await blobToBase64(blob);
             const isImg = /^image\//.test(mimeType) || /\.(jpg|jpeg|png|webp|gif)$/i.test(safeName);
-            if (isImg) {
+            if (isImg && hasPhoneGallery()) {
                 const ok = window.DlkamAndroid.saveImageToGallery(base64data, safeName, mimeType);
                 if (ok) {
                     markFileAsSavedInRegistry(fileName, 'gallery');
@@ -626,7 +673,9 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
                 if (ok) {
                     markFileAsSavedInRegistry(fileName, savedFolderLabel);
                     toast.success(`فایل ${actualSavedName} در پوشه ${savedFolderLabel} ذخیره شد ✓`);
-                    window.DlkamAndroid.openFileFromAppFolder(actualSavedName, mimeType);
+                    try {
+                        window.DlkamAndroid.openFileFromAppFolder(actualSavedName, mimeType);
+                    } catch {}
                     return true;
                 }
             }
@@ -714,7 +763,15 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
                 markFileAsSavedInRegistry(fileName, savedPath || 'electron_downloads');
                 toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
                 return true;
-            } catch (electronSaveErr) {
+            } catch (electronSaveErr: any) {
+                if (String(electronSaveErr?.message || '').includes('LAUNCH_FAILED')) {
+                    markFileAsSavedInRegistry(fileName, 'electron_downloads');
+                    if (electronBridge?.openLocalFileDir) {
+                        await electronBridge.openLocalFileDir(safeName).catch(() => {});
+                    }
+                    toast.success(`فایل ${safeName} در پوشه Downloads\\Dlkam ذخیره شد ✓`);
+                    return true;
+                }
                 console.warn('Electron blob save error, falling back to browser download:', electronSaveErr);
             }
         }
@@ -749,9 +806,9 @@ export const saveBlobAndOpenFile = async (blob: Blob, fileName: string): Promise
         a.click();
         setTimeout(() => {
             window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        }, 1000);
-    }, 100);
+            try { document.body.removeChild(a); } catch {}
+        }, 5000);
+    }, 80);
     markFileAsSavedInRegistry(fileName, 'web');
     toast.success(`فایل ${safeName} با موفقیت دانلود شد ✓`);
     return true;

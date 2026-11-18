@@ -9,6 +9,7 @@ import { apiCall } from '../services/apiService';
 import { motion } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { HARDCODED_TABLES } from './sayanTablesData';
+import { saveWorkbookAndOpen } from '../services/fileService';
 
 // Table Display Names and helper functions
 const TABLE_DICTIONARY: Record<string, string> = {
@@ -355,7 +356,7 @@ const SayanTablesConsole: React.FC = () => {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sayan_Data");
-    XLSX.writeFile(wb, `Sayan_${activeTable}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    void saveWorkbookAndOpen(XLSX, wb, `Sayan_${activeTable}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const saveAllSayanDataToServer = async () => {

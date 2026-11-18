@@ -4,7 +4,7 @@ import { SalesContact, BirthdayGreetingTemplate } from '../types';
 import { apiCall } from '../services/apiService';
 import { getSettings, saveSettings } from '../services/storageService';
 import * as XLSX from 'xlsx';
-import { saveBlobAndOpenFile } from '../services/fileService';
+import { saveBlobAndOpenFile, saveWorkbookAndOpen } from '../services/fileService';
 import { searchSayanPersons, SayanPersonResult } from '../services/sayanExitService';
 import { GoogleContactsImportModal } from './GoogleContactsImportModal';
 
@@ -188,11 +188,7 @@ export default function SalesCRMModule() {
         const rows = contacts.map(c => [c.name, c.mobile, c.telegramId || '', c.baleId || '', c.birthday || '']);
         const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
         const blob = new Blob(["\uFEFF", csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.setAttribute("href", url);
-        link.setAttribute("download", "contacts.csv");
-        link.click();
+        void saveBlobAndOpenFile(blob, 'contacts.csv');
     };
 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -686,7 +682,7 @@ export default function SalesCRMModule() {
                                     const ws = XLSX.utils.json_to_sheet(sampleData);
                                     const wb = XLSX.utils.book_new();
                                     XLSX.utils.book_append_sheet(wb, ws, "Contacts");
-                                    XLSX.writeFile(wb, "Sample_Contacts.xlsx");
+                                    void saveWorkbookAndOpen(XLSX, wb, "Sample_Contacts.xlsx");
                                 }} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-gray-100 dark:bg-gray-800/40 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-xl font-bold hover:bg-gray-200 border text-xs sm:text-sm"><Download size={18}/> نمونه اکسل</button>
                                 <button onClick={exportContacts} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-gray-100 px-4 py-2 rounded-xl font-bold hover:bg-gray-200 border text-xs sm:text-sm"><Download size={18}/> اکسپورت</button>
                                 <button onClick={handleAddManualContact} className="w-full md:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-blue-700 shadow-lg shadow-blue-100 text-xs sm:text-sm"><Plus size={18}/> افزودن دستی</button>

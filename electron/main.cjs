@@ -185,9 +185,14 @@ function createWindow() {
       if (
         lowerUrl.includes('/api/downloads/') ||
         lowerUrl.includes('/downloads/') ||
+        lowerUrl.includes('/uploads/') ||
+        lowerUrl.includes('/api/secretariat/') ||
+        lowerUrl.includes('/api/tools/') ||
+        lowerUrl.includes('/api/ccti/') ||
         lowerUrl.includes('/api/industrial-erp/download-backup') ||
         lowerUrl.includes('/api/backups/download') ||
-        /\.(exe|msi|apk|zip|sql|gz|xlsx|xls|pdf|docx|doc|csv|json)(\?|$)/i.test(lowerUrl)
+        /[?&]download=/i.test(lowerUrl) ||
+        /\.(exe|msi|apk|zip|sql|gz|xlsx|xls|pdf|docx|doc|csv|json|ccti)(\?|$)/i.test(lowerUrl)
       ) {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.downloadURL(url);
@@ -798,8 +803,13 @@ ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = t
       }
       if (isInstaller) purgeOldInstallers(path.basename(altPath));
       if (openAfter !== false) {
-        try { await openPathWithFallback(altPath); } catch (launchErr) {
-          throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        try {
+          await openPathWithFallback(altPath);
+        } catch (launchErr) {
+          if (isInstaller) {
+            throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+          }
+          try { shell.showItemInFolder(altPath); } catch (_) {}
         }
       }
       return altPath;
@@ -817,7 +827,10 @@ ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = t
       try {
         await openPathWithFallback(filePath);
       } catch (launchErr) {
-        throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        if (isInstaller) {
+          throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        }
+        try { shell.showItemInFolder(filePath); } catch (_) {}
       }
     }
     return filePath;
@@ -828,7 +841,7 @@ ipcMain.handle('save-local-file', async (event, { fileName, bytes, openAfter = t
 });
 
 // 3b. Save binary bytes to Downloads\Dlkam (or Downloads for installers) and automatically execute/open it
-ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) => {
+ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes, openAfter = true }) => {
   try {
     const safeName = sanitizeDownloadFileName(fileName);
     const isInstaller = /^(dlkam-desktop|dlkam-electron|sayan-desktop).*\.(exe|msi)$/i.test(safeName);
@@ -856,10 +869,15 @@ ipcMain.handle('save-and-open-local-file', async (event, { fileName, bytes }) =>
       purgeOldInstallers(path.basename(filePath));
     }
 
-    try {
-      await openPathWithFallback(filePath);
-    } catch (launchErr) {
-      throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+    if (openAfter !== false) {
+      try {
+        await openPathWithFallback(filePath);
+      } catch (launchErr) {
+        if (isInstaller) {
+          throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        }
+        try { shell.showItemInFolder(filePath); } catch (_) {}
+      }
     }
     return filePath;
   } catch (err) {
@@ -904,8 +922,11 @@ ipcMain.handle('download-and-save-file', async (event, { url, fileName, openAfte
       try {
         await openPathWithFallback(filePath);
       } catch (launchErr) {
-        // File IS downloaded & verified — distinguish launch block from download failure
-        throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        if (isInstaller) {
+          // File IS downloaded & verified — distinguish installer launch block from download failure
+          throw new Error(`LAUNCH_FAILED: ${launchErr?.message || launchErr}`);
+        }
+        try { shell.showItemInFolder(filePath); } catch (_) {}
       }
     }
     return filePath;

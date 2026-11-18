@@ -110,6 +110,7 @@ import {
 } from "../services/notificationService";
 import { isTauriDesktop, isElectronDesktop, getDesktopRuntime } from "../utils/platformDetection";
 import { safeLocalStorage } from "../utils/safeStorage";
+import { downloadAndOpenFile } from "../services/fileService";
 import { getUsers, getCurrentUser } from "../services/authService";
 import { generateUUID } from "../constants";
 import PrintTemplateDesigner from "./PrintTemplateDesigner";
@@ -9010,22 +9011,22 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 self-end md:self-center">
-                    <a
-                      href="/lepan-logo.png"
-                      download="lepan-desktop-icon.png"
+                    <button
+                      type="button"
+                      onClick={() => void downloadAndOpenFile("/lepan-logo.png", "lepan-desktop-icon.png")}
                       className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold transition-all"
                     >
                       <Download size={13} />
                       دانلود تصویر آرم (.png)
-                    </a>
-                    <a
-                      href="/lepan-logo.svg"
-                      download="lepan-logo.svg"
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadAndOpenFile("/lepan-logo.svg", "lepan-logo.svg")}
                       className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/60 dark:text-indigo-300 rounded-xl text-xs font-bold transition-all"
                     >
                       <ExternalLink size={13} />
                       وکتور برداری (.svg)
-                    </a>
+                    </button>
                   </div>
                 </div>
               </div>

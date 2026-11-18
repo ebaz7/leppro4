@@ -11,6 +11,7 @@ import { searchSayanPersons } from '../services/sayanExitService';
 import html2canvas from 'html2canvas';
 import { FileViewerModal } from './FileViewerModal';
 import { findDriverByName, saveDriverToMemory } from '../services/driverMemoryService';
+import { downloadAndOpenFile } from '../services/fileService';
 
 interface EditExitPermitModalProps {
   permit: ExitPermit;
@@ -805,17 +806,17 @@ const EditExitPermitModal: React.FC<EditExitPermitModalProps> = ({ permit, onClo
                         </div>
                       </div>
                       <div className="flex items-center gap-1 mr-1 shrink-0">
-                        <a 
-                          href={att.data} 
-                          download={att.fileName} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void downloadAndOpenFile(att.data, att.fileName);
+                          }}
                           className="text-gray-500 hover:text-emerald-700 p-1 bg-gray-50 hover:bg-emerald-50 rounded-lg transition-colors"
                           title="دانلود فایل"
                         >
                           <Download size={13} />
-                        </a>
+                        </button>
                         <button 
                           type="button" 
                           onClick={(e) => { e.stopPropagation(); removeAttachment(idx); }} 

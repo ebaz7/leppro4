@@ -193,7 +193,7 @@ if (typeof window !== "undefined" && ReactQuill) {
 
 import { motion, AnimatePresence } from "motion/react";
 import { executeCrossPlatformPrint } from "../utils/mobilePrintService";
-import { saveBlobAndOpenFile } from "../services/fileService";
+import { downloadAndOpenFile, saveBlobAndOpenFile } from "../services/fileService";
 import { clampZoom, getTouchDistance } from "../utils/touchZoomPan";
 import { FileViewerModal } from "./FileViewerModal";
 import {
@@ -6467,15 +6467,20 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                           {editingLetterId && (
                             <>
                               <hr className="my-1 border-slate-100 dark:border-slate-700" />
-                              <a
-                                href={`/api/secretariat/letters/${editingLetterId}/pdf`}
-                                download={`Letter_${editingLetterId}.pdf`}
-                                className="w-full text-right px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between text-rose-600 font-bold"
-                                onClick={() => setActiveMenu(null)}
+                              <button
+                                type="button"
+                                className="w-full text-right px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between text-rose-600 font-bold cursor-pointer"
+                                onClick={() => {
+                                  setActiveMenu(null);
+                                  void downloadAndOpenFile(
+                                    `/api/secretariat/letters/${editingLetterId}/pdf`,
+                                    `Letter_${editingLetterId}.pdf`
+                                  );
+                                }}
                               >
                                 <span>دانلود خروجی PDF</span>
                                 <FileText size={12} className="text-rose-500" />
-                              </a>
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -6492,18 +6497,23 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                 <span>ارسال فایل PDF به گفتگو</span>
                                 <MessageSquare size={12} className="text-emerald-500" />
                               </button>
-                              <a
-                                href={`/api/secretariat/letters/${editingLetterId}/docx`}
-                                download={`Letter_${editingLetterId}.docx`}
-                                className="w-full text-right px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between text-indigo-600 font-bold"
-                                onClick={() => setActiveMenu(null)}
+                              <button
+                                type="button"
+                                className="w-full text-right px-4 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-between text-indigo-600 font-bold cursor-pointer"
+                                onClick={() => {
+                                  setActiveMenu(null);
+                                  void downloadAndOpenFile(
+                                    `/api/secretariat/letters/${editingLetterId}/docx`,
+                                    `Letter_${editingLetterId}.docx`
+                                  );
+                                }}
                               >
                                 <span>دانلود خروجی Word</span>
                                 <FileText
                                   size={12}
                                   className="text-indigo-500"
                                 />
-                              </a>
+                              </button>
                             </>
                           )}
 

@@ -41,7 +41,7 @@ import { getRolePermissions } from '../services/authService';
 import { AiPurchaseAdvisorModal } from './AiPurchaseAdvisorModal';
 import { FileViewerModal } from './FileViewerModal';
 import { LS_KEYS, getLocalData, resolveImageUrl } from '../services/apiService';
-import { downloadAndOpenFile, saveImageToGallery } from '../services/fileService';
+import { downloadAndOpenFile, saveImageToGallery, saveWorkbookAndOpen } from '../services/fileService';
 import { useCachedAsset } from '../hooks/useCachedAsset';
 
 export function fixMojibake(str: string): string {
@@ -6941,7 +6941,7 @@ const KardexTab = ({ parts, selectedPart, setSelectedPart, kardexEntries, loadKa
     };
 
     // Excel Export for Single Kardex
-    const exportKardexToExcel = () => {
+    const exportKardexToExcel = async () => {
         if (!selectedPart) return;
         try {
             const excelData = kardexEntries.map((k: any) => ({
@@ -6958,14 +6958,14 @@ const KardexTab = ({ parts, selectedPart, setSelectedPart, kardexEntries, loadKa
             const ws = XLSX.utils.json_to_sheet(excelData);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'کاردکس');
-            XLSX.writeFile(wb, `Kardex_${selectedPart.name.replace(/\s+/g, '_')}.xlsx`);
+            await saveWorkbookAndOpen(XLSX, wb, `Kardex_${selectedPart.name.replace(/\s+/g, '_')}.xlsx`);
         } catch (e) {
             alert('خطا در خروجی اکسل');
         }
     };
 
     // Excel Export for All Parts Inventory List
-    const exportInventoryToExcel = () => {
+    const exportInventoryToExcel = async () => {
         try {
             const excelData = parts.map((p: any) => ({
                 'شناسه قطعه': p.id,
@@ -6985,7 +6985,7 @@ const KardexTab = ({ parts, selectedPart, setSelectedPart, kardexEntries, loadKa
             const ws = XLSX.utils.json_to_sheet(excelData);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'موجودی انبار قطعات');
-            XLSX.writeFile(wb, `Inventory_Report_${getShamsiString().replace(/\//g, '-')}.xlsx`);
+            await saveWorkbookAndOpen(XLSX, wb, `Inventory_Report_${getShamsiString().replace(/\//g, '-')}.xlsx`);
         } catch (e) {
             alert('خطا در خروجی اکسل کل قطعات');
         }

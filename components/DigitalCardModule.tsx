@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { exportReportHtmlSmart } from '../utils/pdfGenerator';
+import { downloadAndOpenFile, saveImageToGallery } from '../services/fileService';
+import { hasPhoneGallery } from '../utils/platformDetection';
 
 interface DigitalCardModuleProps {
   currentUser: User | null;
@@ -379,15 +381,14 @@ export const DigitalCardModule: React.FC<DigitalCardModuleProps> = ({ currentUse
     toast.success('بلوک حذف شد.');
   };
 
-  const handleDownloadQR = () => {
+  const handleDownloadQR = async () => {
     if (!qrDataUrl) return;
-    const link = document.createElement('a');
-    link.href = qrDataUrl;
-    link.download = `QR_Code_${config?.slug || 'lepanbaft'}.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success('تصویر QR کد دانلود شد.');
+    const fileName = `QR_Code_${config?.slug || 'lepanbaft'}.png`;
+    if (hasPhoneGallery()) {
+      await saveImageToGallery(qrDataUrl, fileName);
+    } else {
+      await downloadAndOpenFile(qrDataUrl, fileName);
+    }
   };
 
   const handlePrintCard = () => {

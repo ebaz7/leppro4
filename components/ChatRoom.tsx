@@ -23,7 +23,7 @@ import { sendNotification, clearAllActiveNotifications } from '../services/notif
 import { playTaskAlarmSound } from '../services/soundService';
 import { downloadAndOpenFile, checkFileExists, saveImageToGallery, isFileMarkedSavedSync } from '../services/fileService';
 import { resolveImageUrl, apiCall, getServerTime } from '../services/apiService';
-import { isTauriDesktop } from '../utils/platformDetection';
+import { isTauriDesktop, hasPhoneGallery } from '../utils/platformDetection';
 
 interface ChatRoomProps { 
     currentUser: User | null; 
@@ -746,11 +746,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         const uniqueLocalName = `${msgId}_${safeFileName}`;
         const isImageFile = /\.(jpg|jpeg|png|gif|webp)$/i.test(safeFileName) || /^data:image\//i.test(url);
 
-        const ok = isImageFile
+        const ok = (isImageFile && hasPhoneGallery())
             ? await saveImageToGallery(url, safeFileName, (p) => {
                 setFileProgress(prev => ({ ...prev, [msgId]: p }));
             })
-            : await downloadAndOpenFile(url, uniqueLocalName, (p) => {
+            : await downloadAndOpenFile(url, isImageFile ? safeFileName : uniqueLocalName, (p) => {
                 setFileProgress(prev => ({ ...prev, [msgId]: p }));
             });
 
@@ -2913,7 +2913,11 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                                                                 ? 'bg-emerald-600/90 text-white'
                                                                 : 'bg-black/75 hover:bg-black/90 text-white'
                                                         }`}
-                                                        title={downloadedFiles[msg.id] ? 'ذخیره شده در گالری' : 'ذخیره در گالری'}
+                                                        title={
+                                                            downloadedFiles[msg.id]
+                                                                ? (hasPhoneGallery() ? 'ذخیره شده در گالری' : 'دانلود شده در سیستم')
+                                                                : (hasPhoneGallery() ? 'ذخیره در گالری' : 'دانلود تصویر')
+                                                        }
                                                     >
                                                         {isDownloading[msg.id] ? (
                                                             <>
@@ -2923,12 +2927,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                                                         ) : downloadedFiles[msg.id] ? (
                                                             <>
                                                                 <Check size={12} />
-                                                                <span>در گالری ذخیره شد</span>
+                                                                <span>{hasPhoneGallery() ? 'در گالری ذخیره شد' : 'دانلود شد'}</span>
                                                             </>
                                                         ) : (
                                                             <>
                                                                 <Download size={12} />
-                                                                <span>ذخیره در گالری</span>
+                                                                <span>{hasPhoneGallery() ? 'ذخیره در گالری' : 'دانلود'}</span>
                                                             </>
                                                         )}
                                                     </button>
@@ -3857,7 +3861,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                                             <div id="chat-file-menu" className="hidden absolute bottom-12 right-0 glass-panel shadow-2xl rounded-2xl border border-zinc-200/80 dark:border-zinc-800/80 p-1.5 flex flex-col gap-1 min-w-[170px] animate-scale-in z-50 backdrop-blur-xl bg-white/95 dark:bg-zinc-900/95">
                                                 <button onClick={() => { galleryInputRef.current?.click(); document.getElementById('chat-file-menu')?.classList.add('hidden'); }} className="flex items-center gap-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 p-2 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-200 transition-colors">
                                                     <ImageIcon size={16} className="text-blue-500"/> 
-                                                    <span>گالری (عکس / فیلم)</span>
+                                                    <span>{hasPhoneGallery() ? 'گالری (عکس / فیلم)' : 'تصویر و ویدیو'}</span>
                                                 </button>
                                                 <button onClick={() => { pdfInputRef.current?.click(); document.getElementById('chat-file-menu')?.classList.add('hidden'); }} className="flex items-center gap-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 p-2 rounded-xl text-xs font-bold text-zinc-700 dark:text-zinc-200 transition-colors">
                                                     <FileText size={16} className="text-rose-500"/> 

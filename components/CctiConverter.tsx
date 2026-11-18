@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 
 import { User } from '../types';
 import { openSendToChat } from '../services/chatShareService';
-import { saveBlobAndOpenFile, saveWorkbookAndOpen } from '../services/fileService';
+import { downloadAndOpenFile, saveBlobAndOpenFile, saveWorkbookAndOpen } from '../services/fileService';
 
 interface CctiArchiveDetail {
     id: string;
@@ -1139,13 +1139,13 @@ ${xmlTxLines.join('\\n')}
                                 </div>
 
                                 <div className="flex flex-wrap items-center gap-3 pt-2">
-                                    <a 
-                                        href={mergedPdfResult.url} 
-                                        download={mergedPdfResult.fileName}
-                                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-sm"
+                                    <button 
+                                        type="button"
+                                        onClick={() => void downloadAndOpenFile(mergedPdfResult.fileData || mergedPdfResult.url, mergedPdfResult.fileName)}
+                                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-sm cursor-pointer"
                                     >
                                         <Download size={16} /> دانلود فایل PDF
-                                    </a>
+                                    </button>
                                     <button 
                                         onClick={() => openSendToChat({
                                             attachment: { fileName: mergedPdfResult.fileName, url: mergedPdfResult.url },

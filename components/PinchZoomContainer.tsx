@@ -174,7 +174,7 @@ export const PinchZoomContainer: React.FC<PinchZoomContainerProps> = ({
         style={{
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorY: 'auto',
-          touchAction: 'pan-y pinch-zoom',
+          touchAction: isZoomedIn ? 'pan-x pan-y pinch-zoom' : 'pan-y pinch-zoom',
         }}
       >
         <div

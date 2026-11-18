@@ -12,6 +12,7 @@ import html2canvas from 'html2canvas';
 import SayanSalesRemittanceDoc from './SayanSalesRemittanceDoc';
 import { FileViewerModal } from './FileViewerModal';
 import { shareElementToChat } from '../services/chatShareService';
+import { downloadAndOpenFile } from '../services/fileService';
 
 interface Props {
   permit: ExitPermit;
@@ -635,16 +636,17 @@ export default function PrintExitPermit({ permit, onClose, onApprove, onReject, 
                                         </div>
                                         <div className="w-full flex items-center justify-between gap-1 pt-1 border-t border-gray-100">
                                             <span className="text-[10px] font-mono text-gray-600 truncate flex-1" dir="ltr" title={att.fileName}>{att.fileName}</span>
-                                            <a 
-                                                href={att.data} 
-                                                download={att.fileName || `Attachment_${idx + 1}`} 
-                                                target="_blank" 
-                                                rel="noopener noreferrer"
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    void downloadAndOpenFile(att.data, att.fileName || `Attachment_${idx + 1}`);
+                                                }}
                                                 className="p-1.5 bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors shrink-0 no-print"
                                                 title="دانلود فایل"
                                             >
                                                 <FileDown size={12} />
-                                            </a>
+                                            </button>
                                         </div>
                                     </div>
                                 );

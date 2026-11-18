@@ -11,6 +11,7 @@ import html2canvas from 'html2canvas';
 import { searchSayanPersons, SayanPersonResult } from '../services/sayanExitService';
 import { FileViewerModal } from './FileViewerModal';
 import { findDriverByName, saveDriverToMemory } from '../services/driverMemoryService';
+import { downloadAndOpenFile } from '../services/fileService';
 
 const CreateExitPermit: React.FC<{ onSuccess: () => void, currentUser: User }> = ({ onSuccess, currentUser }) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -592,17 +593,17 @@ const CreateExitPermit: React.FC<{ onSuccess: () => void, currentUser: User }> =
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-1 mr-1 shrink-0">
-                                            <a 
-                                                href={att.data} 
-                                                download={att.fileName} 
-                                                target="_blank" 
-                                                rel="noreferrer"
-                                                onClick={(e) => e.stopPropagation()}
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    void downloadAndOpenFile(att.data, att.fileName);
+                                                }}
                                                 className="text-gray-500 hover:text-emerald-700 p-1.5 bg-gray-50 hover:bg-emerald-50 rounded-lg transition-colors"
                                                 title="دانلود فایل"
                                             >
                                                 <Download size={14} />
-                                            </a>
+                                            </button>
                                             <button 
                                                 type="button" 
                                                 onClick={(e) => { e.stopPropagation(); removeAttachment(idx); }} 

@@ -131,6 +131,28 @@ export const isWebApp = (): boolean => {
 };
 
 /**
+ * True ONLY on mobile/phone devices (Android APK or Mobile Web browser).
+ * Strictly false on Windows Desktop apps (Electron/Tauri) and Desktop Web browsers.
+ */
+export const isTouchMobileDevice = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  if (isWindowsDesktopApp()) return false;
+  return Boolean(
+    isAndroidApp() ||
+    isMobileApp() ||
+    (window as any).DlkamAndroid
+  );
+};
+
+/**
+ * True ONLY on phone devices that have a system photo gallery (Android APK / Mobile Web).
+ * Desktop/Windows must show "دانلود" instead of "ذخیره در گالری".
+ */
+export const hasPhoneGallery = (): boolean => {
+  return isTouchMobileDevice();
+};
+
+/**
  * Get current platform key
  */
 export const getPlatform = (): AppPlatform => {

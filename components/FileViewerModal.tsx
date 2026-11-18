@@ -1,15 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Download, ZoomIn, ZoomOut, RotateCw, Printer, FileText, AlertCircle, Maximize2, Minimize2, MessageSquare, Share2, DownloadCloud, Move } from 'lucide-react';
 import { downloadAndOpenFile, saveImageToGallery } from '../services/fileService';
-import { getServerHost } from '../services/apiService';
+import { getAuthToken, getServerHost } from '../services/apiService';
 import { openSendToChat } from '../services/chatShareService';
 import { printHtmlInPage, printPdfOrImageInPage, PdfOrientation } from '../utils/pdfGenerator';
-import { isAndroidApp } from '../utils/platformDetection';
+import { isAndroidApp, hasPhoneGallery, isTouchMobileDevice } from '../utils/platformDetection';
 import {
   clampZoom,
-  clampPanOffsets,
-  computePinchZoomPan,
   getTouchDistance,
   getTouchMidpoint,
 } from '../utils/touchZoomPan';
@@ -65,7 +63,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   fileType = 'auto',
 }) => {
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -82,36 +79,16 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
   const [isRenderingPdfPages, setIsRenderingPdfPages] = useState<boolean>(false);
   const [useIframePdfFallback, setUseIframePdfFallback] = useState<boolean>(false);
 
+  // Measured container & content base dimensions for exact scrollable sizer math
+  const [baseSize, setBaseSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
 
-  // Refs for gesture tracking without React re-render lag
-  const zoomRef = useRef(1);
-  const panRef = useRef({ x: 0, y: 0 });
-  zoomRef.current = zoom;
-  panRef.current = pan;
-
-  const gestureRef = useRef<{
-    mode: 'none' | 'pan' | 'pinch';
-    startX: number;
-    startY: number;
-    initialPanX: number;
-    initialPanY: number;
-    initialScale: number;
-    initialDistance: number;
-    initialMidpoint: { x: number; y: number };
-    isMouseDragging: boolean;
-  }>({
-    mode: 'none',
-    startX: 0,
-    startY: 0,
-    initialPanX: 0,
-    initialPanY: 0,
-    initialScale: 1,
-    initialDistance: 0,
-    initialMidpoint: { x: 0, y: 0 },
-    isMouseDragging: false,
-  });
+  const isMobileTouch = isTouchMobileDevice();
+  const showPhoneGallery = hasPhoneGallery();
 
   const resolvedUrl = resolveImageUrl(fileUrl);
 
@@ -132,55 +109,140 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     return 'image';
   }, [fileUrl, fileName, fileType]);
 
-  const resetViewTransform = useCallback(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-    setRotation(0);
-  }, []);
+  const isCanvasViewActive = detectedType === 'image' || (detectedType === 'pdf' && !useIframePdfFallback);
 
-  const getBounds = useCallback(() => {
-    const vp = viewportRef.current;
-    const ct = contentRef.current;
-    return {
-      viewportWidth: vp?.clientWidth || window.innerWidth,
-      viewportHeight: vp?.clientHeight || window.innerHeight * 0.82,
-      contentWidth: ct?.offsetWidth || vp?.clientWidth || window.innerWidth,
-      contentHeight: ct?.offsetHeight || vp?.clientHeight || window.innerHeight * 0.82,
-    };
+  const isRotated90 = rotation % 180 === 90;
+  const rawBaseW = baseSize.width || viewportSize.width || 320;
+  const rawBaseH = baseSize.height || viewportSize.height || 320;
+  const unscaledW = isRotated90 ? rawBaseH : rawBaseW;
+  const unscaledH = isRotated90 ? rawBaseW : rawBaseH;
+  const sizerW = Math.max(viewportSize.width || 0, Math.ceil(unscaledW * zoom));
+  const sizerH = Math.max(viewportSize.height || 0, Math.ceil(unscaledH * zoom));
+
+  // Refs for gesture handlers without React re-render lag
+  const zoomRef = useRef(1);
+  const unscaledRef = useRef({ w: unscaledW, h: unscaledH });
+  const sizerRef = useRef({ w: sizerW, h: sizerH });
+  zoomRef.current = zoom;
+  unscaledRef.current = { w: unscaledW, h: unscaledH };
+  sizerRef.current = { w: sizerW, h: sizerH };
+
+  const gestureRef = useRef<{
+    mode: 'none' | 'pan' | 'pinch';
+    startX: number;
+    startY: number;
+    startScrollLeft: number;
+    startScrollTop: number;
+    initialScale: number;
+    initialDistance: number;
+    initialMidpoint: { x: number; y: number };
+    initialSizerW: number;
+    initialSizerH: number;
+    isMouseDragging: boolean;
+  }>({
+    mode: 'none',
+    startX: 0,
+    startY: 0,
+    startScrollLeft: 0,
+    startScrollTop: 0,
+    initialScale: 1,
+    initialDistance: 0,
+    initialMidpoint: { x: 0, y: 0 },
+    initialSizerW: 0,
+    initialSizerH: 0,
+    isMouseDragging: false,
+  });
+
+  const resetViewTransform = useCallback(() => {
+    pendingScrollRef.current = { left: 0, top: 0 };
+    setZoom(1);
+    setRotation(0);
+    if (viewportRef.current) {
+      viewportRef.current.scrollLeft = 0;
+      viewportRef.current.scrollTop = 0;
+    }
   }, []);
 
   const applyZoomLevel = useCallback(
     (nextZoomRaw: number, focalPoint?: { x: number; y: number }) => {
-      const nextZoom = clampZoom(nextZoomRaw);
-      if (nextZoom <= 1.01) {
-        const bounds = getBounds();
-        const clamped = clampPanOffsets(panRef.current.x, panRef.current.y, nextZoom, bounds);
-        setZoom(nextZoom);
-        setPan({ x: clamped.panX, y: clamped.panY });
-        return;
-      }
+      const nextZoom = clampZoom(nextZoomRaw, 1, 8);
       const prevZoom = zoomRef.current || 1;
-      const bounds = getBounds();
-      let nextPanX = panRef.current.x * (nextZoom / prevZoom);
-      let nextPanY = panRef.current.y * (nextZoom / prevZoom);
+      const vp = viewportRef.current;
 
-      if (focalPoint && viewportRef.current) {
-        const rect = viewportRef.current.getBoundingClientRect();
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        const fx = focalPoint.x - cx;
-        const fy = focalPoint.y - cy;
-        const ratio = nextZoom / prevZoom;
-        nextPanX = fx - (fx - panRef.current.x) * ratio;
-        nextPanY = fy - (fy - panRef.current.y) * ratio;
+      if (vp) {
+        const vpW = vp.clientWidth || 320;
+        const vpH = vp.clientHeight || 320;
+        const { w: uW, h: uH } = unscaledRef.current;
+        const prevSizerW = Math.max(vpW, Math.ceil(uW * prevZoom));
+        const prevSizerH = Math.max(vpH, Math.ceil(uH * prevZoom));
+        const nextSizerW = Math.max(vpW, Math.ceil(uW * nextZoom));
+        const nextSizerH = Math.max(vpH, Math.ceil(uH * nextZoom));
+
+        if (nextZoom <= 1.01) {
+          // Keep current vertical reading page position on multi-page PDFs when returning to 1x, reset horizontal
+          const centerOffsetRatioY = prevSizerH > 0 ? (vp.scrollTop + vpH / 2) / prevSizerH : 0;
+          const targetTop = Math.max(0, Math.min(nextSizerH - vpH, centerOffsetRatioY * nextSizerH - vpH / 2));
+          pendingScrollRef.current = { left: 0, top: uH > vpH ? targetTop : 0 };
+        } else {
+          const rect = vp.getBoundingClientRect();
+          const localX = focalPoint ? focalPoint.x - rect.left : vpW / 2;
+          const localY = focalPoint ? focalPoint.y - rect.top : vpH / 2;
+          const offX = (vp.scrollLeft + localX - prevSizerW / 2) / prevZoom;
+          const offY = (vp.scrollTop + localY - prevSizerH / 2) / prevZoom;
+          const rawLeft = nextSizerW / 2 + offX * nextZoom - localX;
+          const rawTop = nextSizerH / 2 + offY * nextZoom - localY;
+          pendingScrollRef.current = {
+            left: Math.max(0, Math.min(Math.max(0, nextSizerW - vpW), rawLeft)),
+            top: Math.max(0, Math.min(Math.max(0, nextSizerH - vpH), rawTop)),
+          };
+        }
       }
 
-      const clamped = clampPanOffsets(nextPanX, nextPanY, nextZoom, bounds);
       setZoom(nextZoom);
-      setPan({ x: clamped.panX, y: clamped.panY });
     },
-    [getBounds]
+    []
   );
+
+  // Apply computed scroll coordinates immediately after sizer expands/contracts
+  useLayoutEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp || !pendingScrollRef.current) return;
+    const { left, top } = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    vp.scrollLeft = Math.max(0, left);
+    vp.scrollTop = Math.max(0, top);
+  }, [zoom, rotation, sizerW, sizerH]);
+
+  // Measure viewport & unscaled content bounds via ResizeObserver
+  useEffect(() => {
+    if (!isOpen) return;
+    const vp = viewportRef.current;
+    const ct = contentRef.current;
+
+    const updateSizes = () => {
+      if (vp) {
+        setViewportSize((prev) =>
+          prev.width === vp.clientWidth && prev.height === vp.clientHeight
+            ? prev
+            : { width: vp.clientWidth, height: vp.clientHeight }
+        );
+      }
+      if (ct) {
+        setBaseSize((prev) =>
+          prev.width === ct.offsetWidth && prev.height === ct.offsetHeight
+            ? prev
+            : { width: ct.offsetWidth, height: ct.offsetHeight }
+        );
+      }
+    };
+
+    updateSizes();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(updateSizes);
+    if (vp) ro.observe(vp);
+    if (ct) ro.observe(ct);
+    return () => ro.disconnect();
+  }, [isOpen, previewUrl, pdfPageImages.length, useIframePdfFallback, isFullscreen]);
 
   useEffect(() => {
     if (!isOpen || !fileUrl) {
@@ -188,6 +250,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       setPdfPageImages([]);
       setPdfPageCount(0);
       setUseIframePdfFallback(false);
+      setBaseSize({ width: 0, height: 0 });
       return;
     }
 
@@ -196,6 +259,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     setPdfPageImages([]);
     setPdfPageCount(0);
     setUseIframePdfFallback(false);
+    setBaseSize({ width: 0, height: 0 });
 
     let objectUrlToRevoke: string | null = null;
     let isCancelled = false;
@@ -219,7 +283,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         setPdfPageCount(totalPages);
         const renderedPages: string[] = [];
 
-        // Render up to 25 pages at crisp high-DPI for 2-finger pinch-to-zoom & 4-way touch pan
+        // Render up to 25 pages at crisp high-DPI for pinch-to-zoom & desktop/mobile scrolling
         const maxPages = Math.min(totalPages, 25);
         for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
           if (isCancelled) return;
@@ -266,7 +330,8 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           const arr = resolvedUrl.split(',');
           const mimeMatch = arr[0].match(/:(.*?);/);
           const mime = mimeMatch ? mimeMatch[1] : detectedType === 'pdf' ? 'application/pdf' : 'image/png';
-          const bstr = atob(arr[1]);
+          const cleanB64 = (arr[1] || '').replace(/\s+/g, '');
+          const bstr = atob(cleanB64);
           let n = bstr.length;
           const u8arr = new Uint8Array(n);
           while (n--) {
@@ -282,10 +347,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           }
         } else if (detectedType === 'pdf') {
           try {
-            const authToken =
-              typeof localStorage !== 'undefined'
-                ? localStorage.getItem('token') || sessionStorage.getItem('token')
-                : null;
+            const authToken = getAuthToken();
             const fetchHeaders: Record<string, string> = {};
             if (authToken && !resolvedUrl.startsWith('blob:')) {
               fetchHeaders.Authorization = `Bearer ${authToken}`;
@@ -351,27 +413,13 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     };
   }, [isOpen, onClose]);
 
-  // Align multi-page PDF stacks so Page 1 starts cleanly near the top at 1x zoom
+  // Native touch listeners (Mobile Web & Android) & Ctrl+Wheel zoom (Desktop)
+  // - When zoom <= 1.01: 1-finger touch is NOT intercepted so multi-page PDFs scroll vertically natively!
+  // - When zoom > 1.01: 1-finger touch pans freely in all 4 directions; 2-finger pinch zooms smoothly!
+  // - On Desktop: plain mouse wheel ALWAYS scrolls naturally; Ctrl/Cmd + Wheel zooms around cursor!
   useEffect(() => {
-    if (!isOpen || pdfPageImages.length <= 1 || useIframePdfFallback) return;
-    const raf = requestAnimationFrame(() => {
-      const vp = viewportRef.current;
-      const ct = contentRef.current;
-      if (!vp || !ct) return;
-      if (zoomRef.current <= 1.01 && panRef.current.x === 0 && panRef.current.y === 0) {
-        const overflowY = Math.max(0, (ct.offsetHeight - vp.clientHeight) / 2);
-        if (overflowY > 0) {
-          setPan({ x: 0, y: overflowY });
-        }
-      }
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [isOpen, pdfPageImages.length, useIframePdfFallback]);
-
-  // Native non-passive touch listeners for strictly 2-finger pinch-to-zoom & 4-way touch pan
-  useEffect(() => {
-    const el = viewportRef.current;
-    if (!el || !isOpen) return;
+    const vp = viewportRef.current;
+    if (!vp || !isOpen || !isCanvasViewActive) return;
 
     const handleTouchStart = (e: TouchEvent) => {
       e.stopPropagation();
@@ -383,18 +431,22 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         gestureRef.current.initialDistance = getTouchDistance(p1, p2);
         gestureRef.current.initialMidpoint = getTouchMidpoint(p1, p2);
         gestureRef.current.initialScale = zoomRef.current;
-        gestureRef.current.initialPanX = panRef.current.x;
-        gestureRef.current.initialPanY = panRef.current.y;
+        gestureRef.current.startScrollLeft = vp.scrollLeft;
+        gestureRef.current.startScrollTop = vp.scrollTop;
+        gestureRef.current.initialSizerW = sizerRef.current.w;
+        gestureRef.current.initialSizerH = sizerRef.current.h;
         setIsTouchingGesture(true);
-      } else if (e.touches.length === 1) {
+      } else if (e.touches.length === 1 && zoomRef.current > 1.01) {
+        // Only hijack 1-finger drag when ALREADY zoomed in; at 1x let native vertical scroll handle PDFs!
         const touch = e.touches[0];
-        // Strictly 1-finger 4-directional pan/scroll ONLY (never zoom on 1 finger tap/double-tap)
         gestureRef.current.mode = 'pan';
         gestureRef.current.startX = touch.clientX;
         gestureRef.current.startY = touch.clientY;
-        gestureRef.current.initialPanX = panRef.current.x;
-        gestureRef.current.initialPanY = panRef.current.y;
+        gestureRef.current.startScrollLeft = vp.scrollLeft;
+        gestureRef.current.startScrollTop = vp.scrollTop;
         setIsTouchingGesture(true);
+      } else {
+        gestureRef.current.mode = 'none';
       }
     };
 
@@ -404,54 +456,58 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         e.preventDefault();
         const p1 = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         const p2 = { x: e.touches[1].clientX, y: e.touches[1].clientY };
+        const currDist = getTouchDistance(p1, p2);
+        const currMid = getTouchMidpoint(p1, p2);
 
         if (gestureRef.current.mode !== 'pinch') {
           gestureRef.current.mode = 'pinch';
-          gestureRef.current.initialDistance = getTouchDistance(p1, p2);
-          gestureRef.current.initialMidpoint = getTouchMidpoint(p1, p2);
+          gestureRef.current.initialDistance = currDist;
+          gestureRef.current.initialMidpoint = currMid;
           gestureRef.current.initialScale = zoomRef.current;
-          gestureRef.current.initialPanX = panRef.current.x;
-          gestureRef.current.initialPanY = panRef.current.y;
+          gestureRef.current.startScrollLeft = vp.scrollLeft;
+          gestureRef.current.startScrollTop = vp.scrollTop;
+          gestureRef.current.initialSizerW = sizerRef.current.w;
+          gestureRef.current.initialSizerH = sizerRef.current.h;
         }
 
-        const rect = el.getBoundingClientRect();
-        const viewportCenter = {
-          x: rect.left + rect.width / 2,
-          y: rect.top + rect.height / 2,
+        const initDist = gestureRef.current.initialDistance;
+        if (initDist <= 1 || currDist <= 1) return;
+
+        const initScale = gestureRef.current.initialScale || 1;
+        const nextScale = clampZoom(initScale * (currDist / initDist), 1, 8);
+        const rect = vp.getBoundingClientRect();
+        const vpW = vp.clientWidth || 320;
+        const vpH = vp.clientHeight || 320;
+        const { w: uW, h: uH } = unscaledRef.current;
+
+        const initSizerW = gestureRef.current.initialSizerW || Math.max(vpW, Math.ceil(uW * initScale));
+        const initSizerH = gestureRef.current.initialSizerH || Math.max(vpH, Math.ceil(uH * initScale));
+        const nextSizerW = Math.max(vpW, Math.ceil(uW * nextScale));
+        const nextSizerH = Math.max(vpH, Math.ceil(uH * nextScale));
+
+        const initLocalX = gestureRef.current.initialMidpoint.x - rect.left;
+        const initLocalY = gestureRef.current.initialMidpoint.y - rect.top;
+        const currLocalX = currMid.x - rect.left;
+        const currLocalY = currMid.y - rect.top;
+
+        const offX = (gestureRef.current.startScrollLeft + initLocalX - initSizerW / 2) / initScale;
+        const offY = (gestureRef.current.startScrollTop + initLocalY - initSizerH / 2) / initScale;
+
+        const rawLeft = nextSizerW / 2 + offX * nextScale - currLocalX;
+        const rawTop = nextSizerH / 2 + offY * nextScale - currLocalY;
+
+        pendingScrollRef.current = {
+          left: Math.max(0, Math.min(Math.max(0, nextSizerW - vpW), rawLeft)),
+          top: Math.max(0, Math.min(Math.max(0, nextSizerH - vpH), rawTop)),
         };
-
-        const next = computePinchZoomPan({
-          initialScale: gestureRef.current.initialScale,
-          initialPanX: gestureRef.current.initialPanX,
-          initialPanY: gestureRef.current.initialPanY,
-          initialDistance: gestureRef.current.initialDistance,
-          currentDistance: getTouchDistance(p1, p2),
-          initialMidpoint: gestureRef.current.initialMidpoint,
-          currentMidpoint: getTouchMidpoint(p1, p2),
-          viewportCenter,
-          bounds: getBounds(),
-        });
-
-        setZoom(next.scale);
-        setPan({ x: next.panX, y: next.panY });
-      } else if (e.touches.length === 1 && gestureRef.current.mode === 'pan') {
+        setZoom(nextScale);
+      } else if (e.touches.length === 1 && gestureRef.current.mode === 'pan' && zoomRef.current > 1.01) {
+        e.preventDefault();
         const touch = e.touches[0];
         const dx = touch.clientX - gestureRef.current.startX;
         const dy = touch.clientY - gestureRef.current.startY;
-        const bounds = getBounds();
-        const rawPanX = gestureRef.current.initialPanX + dx;
-        const rawPanY = gestureRef.current.initialPanY + dy;
-        const clamped = clampPanOffsets(rawPanX, rawPanY, zoomRef.current, bounds);
-
-        if (
-          zoomRef.current > 1.01 ||
-          pdfPageImages.length > 1 ||
-          bounds.contentWidth > bounds.viewportWidth ||
-          bounds.contentHeight > bounds.viewportHeight
-        ) {
-          e.preventDefault();
-          setPan({ x: clamped.panX, y: clamped.panY });
-        }
+        vp.scrollLeft = gestureRef.current.startScrollLeft - dx;
+        vp.scrollTop = gestureRef.current.startScrollTop - dy;
       }
     };
 
@@ -460,69 +516,62 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       if (e.touches.length === 0) {
         gestureRef.current.mode = 'none';
         setIsTouchingGesture(false);
-        if (zoomRef.current < 1) {
-          const bounds = getBounds();
-          const clamped = clampPanOffsets(panRef.current.x, panRef.current.y, 1, bounds);
-          setZoom(1);
-          setPan({ x: clamped.panX, y: clamped.panY });
-        }
-      } else if (e.touches.length === 1) {
-        // Transition seamlessly from 2-finger pinch back to 1-finger 4-way pan without jumping
+      } else if (e.touches.length === 1 && zoomRef.current > 1.01) {
         const touch = e.touches[0];
         gestureRef.current.mode = 'pan';
         gestureRef.current.startX = touch.clientX;
         gestureRef.current.startY = touch.clientY;
-        gestureRef.current.initialPanX = panRef.current.x;
-        gestureRef.current.initialPanY = panRef.current.y;
+        gestureRef.current.startScrollLeft = vp.scrollLeft;
+        gestureRef.current.startScrollTop = vp.scrollTop;
+      } else {
+        gestureRef.current.mode = 'none';
       }
     };
 
     const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey || zoomRef.current > 1.01) {
+      // On Windows/Desktop: plain mouse wheel ALWAYS scrolls PDF/content vertically; only Ctrl/Cmd+Wheel zooms
+      if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const delta = e.deltaY < 0 ? 0.25 : -0.25;
         applyZoomLevel(zoomRef.current + delta, { x: e.clientX, y: e.clientY });
       }
     };
 
-    el.addEventListener('touchstart', handleTouchStart, { passive: false });
-    el.addEventListener('touchmove', handleTouchMove, { passive: false });
-    el.addEventListener('touchend', handleTouchEnd);
-    el.addEventListener('touchcancel', handleTouchEnd);
-    el.addEventListener('wheel', handleWheel, { passive: false });
+    vp.addEventListener('touchstart', handleTouchStart, { passive: false });
+    vp.addEventListener('touchmove', handleTouchMove, { passive: false });
+    vp.addEventListener('touchend', handleTouchEnd);
+    vp.addEventListener('touchcancel', handleTouchEnd);
+    vp.addEventListener('wheel', handleWheel, { passive: false });
 
     return () => {
-      el.removeEventListener('touchstart', handleTouchStart);
-      el.removeEventListener('touchmove', handleTouchMove);
-      el.removeEventListener('touchend', handleTouchEnd);
-      el.removeEventListener('touchcancel', handleTouchEnd);
-      el.removeEventListener('wheel', handleWheel);
+      vp.removeEventListener('touchstart', handleTouchStart);
+      vp.removeEventListener('touchmove', handleTouchMove);
+      vp.removeEventListener('touchend', handleTouchEnd);
+      vp.removeEventListener('touchcancel', handleTouchEnd);
+      vp.removeEventListener('wheel', handleWheel);
     };
-  }, [isOpen, detectedType, pdfPageImages.length, applyZoomLevel, getBounds]);
+  }, [isOpen, isCanvasViewActive, applyZoomLevel]);
 
-  // Desktop mouse drag panning when zoomed in
+  // Desktop mouse drag panning ONLY when zoomed in (zoom > 1.01)
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (zoomRef.current <= 1.01 && pdfPageImages.length <= 1) return;
+    const vp = viewportRef.current;
+    if (!vp || e.button !== 0 || zoomRef.current <= 1.01) return;
     e.preventDefault();
     gestureRef.current.isMouseDragging = true;
     gestureRef.current.startX = e.clientX;
     gestureRef.current.startY = e.clientY;
-    gestureRef.current.initialPanX = panRef.current.x;
-    gestureRef.current.initialPanY = panRef.current.y;
+    gestureRef.current.startScrollLeft = vp.scrollLeft;
+    gestureRef.current.startScrollTop = vp.scrollTop;
     setIsTouchingGesture(true);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!gestureRef.current.isMouseDragging) return;
+    const vp = viewportRef.current;
+    if (!vp || !gestureRef.current.isMouseDragging) return;
     const dx = e.clientX - gestureRef.current.startX;
     const dy = e.clientY - gestureRef.current.startY;
-    const clamped = clampPanOffsets(
-      gestureRef.current.initialPanX + dx,
-      gestureRef.current.initialPanY + dy,
-      Math.max(zoomRef.current, pdfPageImages.length > 1 ? 1.5 : 1),
-      getBounds()
-    );
-    setPan({ x: clamped.panX, y: clamped.panY });
+    vp.scrollLeft = gestureRef.current.startScrollLeft - dx;
+    vp.scrollTop = gestureRef.current.startScrollTop - dy;
   };
 
   const handleMouseUp = () => {
@@ -701,7 +750,26 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
     void printPdfOrImageInPage(previewUrl || resolvedUrl, 'pdf', fileName);
   };
 
-  const isCanvasViewActive = detectedType === 'image' || (detectedType === 'pdf' && !useIframePdfFallback);
+  const subtitleText = (() => {
+    if (isMobileTouch) {
+      if (detectedType === 'pdf') {
+        const countPart = pdfPageCount > 0 ? `سند PDF (${pdfPageCount.toLocaleString('fa-IR')} صفحه)` : 'سند PDF';
+        return zoom > 1.01
+          ? `${countPart} • حرکت در ۴ جهت فعال`
+          : `${countPart} • اسکرول صفحات و زوم با دو انگشت`;
+      }
+      return zoom > 1.01 ? 'تصویر • حرکت در ۴ جهت فعال' : 'تصویر • زوم با دو انگشت و حرکت در ۴ جهت';
+    }
+    if (detectedType === 'pdf') {
+      const countPart = pdfPageCount > 0 ? `سند PDF (${pdfPageCount.toLocaleString('fa-IR')} صفحه)` : 'سند PDF';
+      return zoom > 1.01
+        ? `${countPart} • اسکرول با موس و درگ در ۴ جهت`
+        : `${countPart} • اسکرول صفحات با چرخ موس`;
+    }
+    return zoom > 1.01
+      ? 'تصویر • جابجایی با موس در ۴ جهت'
+      : 'تصویر • برای جابجایی از دکمه بزرگنمایی استفاده کنید';
+  })();
 
   const modalContent = (
     <div
@@ -710,7 +778,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
       onClick={onClose}
       dir="rtl"
     >
-      {/* Top Action Bar - Compact, responsive, single-line friendly on Android */}
+      {/* Top Action Bar */}
       <div
         className="w-full px-2.5 sm:px-5 py-2.5 bg-slate-900/95 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0"
         onClick={(e) => e.stopPropagation()}
@@ -724,11 +792,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
               {fileName}
             </h3>
             <p className="text-[10px] text-gray-400 truncate">
-              {detectedType === 'pdf'
-                ? pdfPageCount > 0
-                  ? `سند PDF (${pdfPageCount.toLocaleString('fa-IR')} صفحه) • زوم با دو انگشت`
-                  : 'سند PDF • زوم با دو انگشت'
-                : 'تصویر • زوم با دو انگشت و حرکت در ۴ جهت'}
+              {subtitleText}
             </p>
           </div>
         </div>
@@ -738,28 +802,28 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             <div className="flex items-center gap-0.5 bg-white/10 p-1 rounded-xl border border-white/10">
               <button
                 onClick={() => applyZoomLevel(zoom + 0.35)}
-                className="p-1.5 text-white hover:bg-white/20 rounded-lg transition"
+                className="p-1.5 text-white hover:bg-white/20 rounded-lg transition cursor-pointer"
                 title="بزرگنمایی"
               >
                 <ZoomIn size={16} />
               </button>
               <button
                 onClick={resetViewTransform}
-                className="text-[10px] text-white font-mono px-1.5 py-0.5 hover:bg-white/20 rounded transition min-w-[38px] text-center"
+                className="text-[10px] text-white font-mono px-1.5 py-0.5 hover:bg-white/20 rounded transition min-w-[38px] text-center cursor-pointer"
                 title="بازنشانی زوم و مرکز"
               >
                 {Math.round(zoom * 100)}%
               </button>
               <button
                 onClick={() => applyZoomLevel(zoom - 0.35)}
-                className="p-1.5 text-white hover:bg-white/20 rounded-lg transition"
+                className="p-1.5 text-white hover:bg-white/20 rounded-lg transition cursor-pointer"
                 title="کوچکنمایی"
               >
                 <ZoomOut size={16} />
               </button>
               <button
                 onClick={() => setRotation((r) => (r + 90) % 360)}
-                className="p-1.5 text-white hover:bg-white/20 rounded-lg transition"
+                className="p-1.5 text-white hover:bg-white/20 rounded-lg transition cursor-pointer"
                 title="چرخش ۹۰ درجه"
               >
                 <RotateCw size={16} />
@@ -770,7 +834,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
           {detectedType === 'pdf' && (
             <button
               onClick={() => setIsFullscreen(!isFullscreen)}
-              className="hidden sm:flex p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition border border-white/10"
+              className="hidden sm:flex p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition border border-white/10 cursor-pointer"
               title={isFullscreen ? 'خروج از تمام صفحه' : 'تمام صفحه'}
             >
               {isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
@@ -779,7 +843,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
 
           <button
             onClick={handlePrint}
-            className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition border border-white/10"
+            className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition border border-white/10 cursor-pointer"
             title="چاپ"
           >
             <Printer size={17} />
@@ -787,7 +851,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
 
           <button
             onClick={handleSendToChat}
-            className="flex items-center gap-1 px-2.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs transition shadow-lg whitespace-nowrap"
+            className="flex items-center gap-1 px-2.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs transition shadow-lg whitespace-nowrap cursor-pointer"
             title="ارسال مستقیم به گفتگو"
           >
             <MessageSquare size={15} />
@@ -796,17 +860,17 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
 
           <button
             onClick={handleShareNative}
-            className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition border border-white/10"
+            className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition border border-white/10 cursor-pointer"
             title="اشتراک‌گذاری"
           >
             <Share2 size={16} />
           </button>
 
-          {detectedType === 'image' ? (
+          {detectedType === 'image' && showPhoneGallery ? (
             <button
               onClick={handleSaveToGallery}
               disabled={isSavingGallery}
-              className="flex items-center gap-1 px-2.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs transition shadow-lg disabled:opacity-50 whitespace-nowrap"
+              className="flex items-center gap-1 px-2.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs transition shadow-lg disabled:opacity-50 whitespace-nowrap cursor-pointer"
               title="ذخیره مستقیم تصویر در گالری گوشی"
             >
               <DownloadCloud size={16} />
@@ -816,16 +880,17 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
             <button
               onClick={handleDownload}
               disabled={isDownloading}
-              className="flex items-center gap-1 px-2.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs transition shadow-lg disabled:opacity-50 whitespace-nowrap"
+              className="flex items-center gap-1 px-2.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs transition shadow-lg disabled:opacity-50 whitespace-nowrap cursor-pointer"
+              title={detectedType === 'image' ? 'دانلود تصویر' : 'دانلود فایل PDF'}
             >
               <Download size={16} />
-              <span>{isDownloading ? '...' : 'دانلود PDF'}</span>
+              <span>{isDownloading ? '...' : detectedType === 'image' ? 'دانلود تصویر' : 'دانلود PDF'}</span>
             </button>
           )}
 
           <button
             onClick={onClose}
-            className="p-2 bg-red-500/20 hover:bg-red-500 text-red-300 hover:text-white rounded-xl transition border border-red-500/30"
+            className="p-2 bg-red-500/20 hover:bg-red-500 text-red-300 hover:text-white rounded-xl transition border border-red-500/30 cursor-pointer"
             title="بستن"
           >
             <X size={18} />
@@ -833,32 +898,180 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
         </div>
       </div>
 
-      {/* Main Interactive Touch Viewport */}
-      <div
-        ref={viewportRef}
-        className="flex-1 w-full h-full relative overflow-hidden flex items-center justify-center"
-        style={{
-          touchAction: isCanvasViewActive ? 'none' : 'auto',
-          cursor: zoom > 1.01 ? (isTouchingGesture ? 'grabbing' : 'grab') : 'default',
-        }}
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-      >
-        {/* Floating Touch Zoom & 4-Way Pan Control Bar for Android & Web */}
-        {isCanvasViewActive && !isLoadingPreview && !isRenderingPdfPages && !loadError && (
+      {/* Main Scrollable & Zoomable Viewport Container */}
+      <div className="relative flex-1 w-full h-full overflow-hidden">
+        <div
+          ref={viewportRef}
+          className="w-full h-full overflow-auto custom-scrollbar"
+          dir="ltr"
+          style={{
+            touchAction: isCanvasViewActive
+              ? zoom > 1.01
+                ? 'none'
+                : 'pan-y'
+              : 'auto',
+            cursor: zoom > 1.01 ? (isTouchingGesture ? 'grabbing' : 'grab') : 'default',
+            WebkitOverflowScrolling: 'touch',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+        >
+          {isLoadingPreview || isRenderingPdfPages ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-white" dir="rtl">
+              <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-sm font-bold">
+                {detectedType === 'pdf' ? 'در حال آماده‌سازی صفحات PDF...' : 'در حال بارگذاری پیش‌نمایش فایل...'}
+              </p>
+            </div>
+          ) : loadError ? (
+            <div className="w-full h-full flex items-center justify-center p-4" dir="rtl">
+              <div className="bg-slate-900 border border-white/10 rounded-2xl p-8 max-w-md text-center text-white space-y-4">
+                <AlertCircle size={48} className="text-amber-400 mx-auto" />
+                <h4 className="font-bold text-lg">امکان نمایش مستقیم فایل وجود ندارد</h4>
+                <p className="text-xs text-gray-300 leading-relaxed">
+                  ممکن است فرمت فایل توسط مرورگر پشتیبانی نشود. می‌توانید فایل را دانلود و مشاهده نمایید.
+                </p>
+                <button
+                  onClick={handleDownload}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-sm transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Download size={18} />
+                  دانلود و باز کردن فایل
+                </button>
+              </div>
+            </div>
+          ) : detectedType === 'image' ? (
+            <div
+              style={{
+                width: `${sizerW}px`,
+                height: `${sizerH}px`,
+                position: 'relative',
+                margin: '0 auto',
+              }}
+            >
+              <div
+                ref={contentRef}
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  transform: `translate(-50%, -50%) scale(${zoom}) rotate(${rotation}deg)`,
+                  transformOrigin: 'center center',
+                  transition: isTouchingGesture ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
+                  willChange: 'transform',
+                }}
+                className="flex items-center justify-center p-2 sm:p-4"
+              >
+                <img
+                  src={previewUrl || resolvedUrl}
+                  alt={fileName}
+                  onLoad={() => {
+                    if (contentRef.current) {
+                      setBaseSize({
+                        width: contentRef.current.offsetWidth,
+                        height: contentRef.current.offsetHeight,
+                      });
+                    }
+                  }}
+                  onError={() => setLoadError(true)}
+                  draggable={false}
+                  className="max-w-[94vw] max-h-[82vh] object-contain rounded-lg shadow-2xl select-none pointer-events-none"
+                />
+              </div>
+            </div>
+          ) : pdfPageImages.length > 0 && !useIframePdfFallback ? (
+            <div
+              style={{
+                width: `${sizerW}px`,
+                height: `${sizerH}px`,
+                position: 'relative',
+                margin: '0 auto',
+              }}
+            >
+              <div
+                ref={contentRef}
+                dir="rtl"
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  transform: `translate(-50%, -50%) scale(${zoom}) rotate(${rotation}deg)`,
+                  transformOrigin: 'center center',
+                  transition: isTouchingGesture ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
+                  willChange: 'transform',
+                }}
+                className="flex flex-col items-center gap-4 p-2 sm:p-4 max-w-[95vw]"
+              >
+                {pdfPageImages.map((pageSrc, idx) => (
+                  <div key={idx} className="relative bg-white rounded-lg shadow-2xl overflow-hidden shrink-0">
+                    <img
+                      src={pageSrc}
+                      alt={`${fileName} - صفحه ${idx + 1}`}
+                      onLoad={() => {
+                        if (contentRef.current) {
+                          setBaseSize({
+                            width: contentRef.current.offsetWidth,
+                            height: contentRef.current.offsetHeight,
+                          });
+                        }
+                      }}
+                      draggable={false}
+                      className="max-w-[92vw] sm:max-w-[80vw] w-auto h-auto object-contain select-none pointer-events-none block"
+                    />
+                    {pdfPageImages.length > 1 && (
+                      <span className="absolute bottom-2 left-2 bg-slate-900/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                        صفحه {(idx + 1).toLocaleString('fa-IR')} از {pdfPageCount.toLocaleString('fa-IR')}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="w-full h-full flex items-center justify-center p-2" dir="rtl">
+              <div
+                className={`bg-white rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex flex-col transition-all ${
+                  isFullscreen ? 'w-full h-full rounded-none' : 'w-[96vw] max-w-5xl h-[82vh]'
+                }`}
+              >
+                <iframe
+                  src={`${previewUrl || resolvedUrl}#toolbar=1&navpanes=1`}
+                  title={fileName}
+                  className="w-full flex-1 border-0"
+                  onError={() => setLoadError(true)}
+                />
+                <div className="bg-slate-900 text-gray-300 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 border-t border-white/10">
+                  <span>
+                    {isMobileTouch
+                      ? 'اگر فایل PDF در گوشی شما باز نشد، دکمه روبرو را بزنید:'
+                      : 'پیش‌نمایش مرورگر • برای ذخیره در سیستم دکمه روبرو را بزنید:'}
+                  </span>
+                  <button
+                    onClick={handleDownload}
+                    className="text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Download size={14} />
+                    {isMobileTouch ? 'باز کردن با برنامه PDF گوشی / دانلود' : 'دانلود فایل PDF'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Floating Touch Zoom & 4-Way Pan Control Bar ONLY on Mobile Web & Android */}
+        {isMobileTouch && isCanvasViewActive && !isLoadingPreview && !isRenderingPdfPages && !loadError && (
           <div
             className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md text-white px-3 py-1.5 rounded-full border border-white/15 shadow-2xl text-xs font-bold whitespace-nowrap"
             onClick={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
+            dir="rtl"
           >
             <Move size={14} className={zoom > 1.05 ? 'text-emerald-400' : 'text-blue-400'} />
-            <span className="text-[11px] text-gray-200 hidden sm:inline">
-              {zoom > 1.05 ? 'حرکت در ۴ جهت فعال' : 'زوم فقط با دو انگشت • حرکت در ۴ جهت'}
-            </span>
-            <div className="flex items-center gap-1 mr-1">
+            <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={resetViewTransform}
@@ -895,99 +1108,6 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({
                   مرکز ({Math.round(zoom * 100)}%)
                 </button>
               )}
-            </div>
-          </div>
-        )}
-
-        {isLoadingPreview || isRenderingPdfPages ? (
-          <div className="flex flex-col items-center gap-3 text-white">
-            <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm font-bold">
-              {detectedType === 'pdf' ? 'در حال آماده‌سازی صفحات PDF با قابلیت زوم لمسی...' : 'در حال بارگذاری پیش‌نمایش فایل...'}
-            </p>
-          </div>
-        ) : loadError ? (
-          <div className="bg-slate-900 border border-white/10 rounded-2xl p-8 max-w-md text-center text-white space-y-4 mx-4">
-            <AlertCircle size={48} className="text-amber-400 mx-auto" />
-            <h4 className="font-bold text-lg">امکان نمایش مستقیم فایل وجود ندارد</h4>
-            <p className="text-xs text-gray-300 leading-relaxed">
-              ممکن است فرمت فایل توسط مرورگر پشتیبانی نشود. می‌توانید فایل را دانلود و مشاهده نمایید.
-            </p>
-            <button
-              onClick={handleDownload}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-sm transition flex items-center justify-center gap-2"
-            >
-              <Download size={18} />
-              دانلود و باز کردن فایل
-            </button>
-          </div>
-        ) : detectedType === 'image' ? (
-          <div
-            ref={contentRef}
-            style={{
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom}) rotate(${rotation}deg)`,
-              transformOrigin: 'center center',
-              transition: isTouchingGesture ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
-              willChange: 'transform',
-            }}
-            className="flex items-center justify-center p-2 sm:p-4"
-          >
-            <img
-              src={previewUrl || resolvedUrl}
-              alt={fileName}
-              onError={() => setLoadError(true)}
-              draggable={false}
-              className="max-w-[94vw] max-h-[82vh] object-contain rounded-lg shadow-2xl select-none pointer-events-none"
-            />
-          </div>
-        ) : pdfPageImages.length > 0 && !useIframePdfFallback ? (
-          <div
-            ref={contentRef}
-            style={{
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom}) rotate(${rotation}deg)`,
-              transformOrigin: 'center center',
-              transition: isTouchingGesture ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
-              willChange: 'transform',
-            }}
-            className="flex flex-col items-center gap-4 p-2 sm:p-4 max-w-[95vw]"
-          >
-            {pdfPageImages.map((pageSrc, idx) => (
-              <div key={idx} className="relative bg-white rounded-lg shadow-2xl overflow-hidden">
-                <img
-                  src={pageSrc}
-                  alt={`${fileName} - صفحه ${idx + 1}`}
-                  draggable={false}
-                  className="max-w-[92vw] sm:max-w-[80vw] max-h-[80vh] w-auto h-auto object-contain select-none pointer-events-none block"
-                />
-                {pdfPageImages.length > 1 && (
-                  <span className="absolute bottom-2 left-2 bg-slate-900/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
-                    صفحه {(idx + 1).toLocaleString('fa-IR')} از {pdfPageCount.toLocaleString('fa-IR')}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div
-            className={`bg-white rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex flex-col transition-all ${
-              isFullscreen ? 'w-full h-full rounded-none' : 'w-[96vw] max-w-5xl h-[82vh]'
-            }`}
-          >
-            <iframe
-              src={`${previewUrl || resolvedUrl}#toolbar=1&navpanes=1`}
-              title={fileName}
-              className="w-full flex-1 border-0"
-              onError={() => setLoadError(true)}
-            />
-            <div className="bg-slate-900 text-gray-300 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2 border-t border-white/10">
-              <span>اگر فایل PDF در گوشی شما باز نشد، دکمه روبرو را بزنید:</span>
-              <button
-                onClick={handleDownload}
-                className="text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1"
-              >
-                <Download size={14} />
-                باز کردن با برنامه PDF گوشی / دانلود
-              </button>
             </div>
           </div>
         )}

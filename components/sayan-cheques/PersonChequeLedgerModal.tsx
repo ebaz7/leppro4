@@ -11,6 +11,7 @@ import * as jalaali from 'jalaali-js';
 import * as XLSX from 'xlsx';
 import { openSendToChat } from '../../services/chatShareService';
 import { getServerHost, getAuthToken } from '../../services/apiService';
+import { saveWorkbookAndOpen } from '../../services/fileService';
 
 export interface SayanPersonCheque {
     id: string;
@@ -596,7 +597,7 @@ export const PersonChequeLedgerModal: React.FC<PersonChequeLedgerModalProps> = (
 
         const catTag = categoryName ? `_${categoryName.replace(/\s+/g, '_')}` : '';
         const fileName = `Cheques${catTag}_${selectedCode || 'All'}_${dateToShamsi(new Date()).replace(/\//g, '-')}.xlsx`;
-        XLSX.writeFile(wb, fileName);
+        void saveWorkbookAndOpen(XLSX, wb, fileName);
     };
 
     // Export to Excel (Ras Analysis Sheet)
@@ -642,7 +643,7 @@ export const PersonChequeLedgerModal: React.FC<PersonChequeLedgerModalProps> = (
         XLSX.utils.book_append_sheet(wb, ws, 'آنالیز راس‌گیری چک‌ها');
 
         const fileName = `Ras_Analysis_${selectedCode || 'All'}_${rasResult.rasDateShamsi.replace(/\//g, '-')}.xlsx`;
-        XLSX.writeFile(wb, fileName);
+        void saveWorkbookAndOpen(XLSX, wb, fileName);
     };
 
     // Share to Chat

@@ -12,6 +12,7 @@ import { shareElementToChat, openSendToChat } from '../../services/chatShareServ
 import { FileViewerModal } from '../FileViewerModal';
 import { MobileAttachmentUploader } from './MobileAttachmentUploader';
 import { getEffectiveApiUrl, getAuthToken, resolveImageUrl } from '../../services/apiService';
+import { downloadAndOpenFile } from '../../services/fileService';
 
 interface Props {
     receipt: any;
@@ -705,17 +706,15 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                                     <span>مشاهده</span>
                                                 </button>
                                                 {fileSrc && (
-                                                    <a
-                                                        href={fileSrc}
-                                                        download={att.fileName || `cheque-receipt-${receipt.id}.pdf`}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 dark:bg-slate-700 dark:hover:bg-slate-600 border border-slate-200 dark:border-slate-600 text-[11px] font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1 transition-colors"
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void downloadAndOpenFile(fileSrc, att.fileName || `cheque-receipt-${receipt.id}.pdf`)}
+                                                        className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 dark:bg-slate-700 dark:hover:bg-slate-600 border border-slate-200 dark:border-slate-600 text-[11px] font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1 cursor-pointer transition-colors"
                                                         title="دانلود مستقیم فایل"
                                                     >
                                                         <Download className="w-3.5 h-3.5" />
                                                         <span>دانلود</span>
-                                                    </a>
+                                                    </button>
                                                 )}
                                                 {(isFinancialOrAdmin || canEditReceipt) && (
                                                     <button

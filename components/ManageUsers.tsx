@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { generateUUID } from '../constants';
 import { apiCall } from '../services/apiService';
+import { saveBlobAndOpenFile } from '../services/fileService';
 
 const ManageUsers: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -269,15 +270,8 @@ const ManageUsers: React.FC = () => {
     try { 
       const backupData = await apiCall<any>('/backup'); 
       const jsonString = JSON.stringify(backupData, null, 2); 
-      const blob = new Blob([jsonString], { type: 'application/json' }); 
-      const url = URL.createObjectURL(blob); 
-      const a = document.createElement('a'); 
-      a.href = url; 
-      a.download = `backup_payment_system_${new Date().toISOString().split('T')[0]}.json`; 
-      document.body.appendChild(a); 
-      a.click(); 
-      document.body.removeChild(a); 
-      URL.revokeObjectURL(url); 
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      await saveBlobAndOpenFile(blob, `backup_payment_system_${new Date().toISOString().split('T')[0]}.json`); 
     } catch (e) { 
       alert('خطا در دریافت فایل پشتیبان'); 
     } 

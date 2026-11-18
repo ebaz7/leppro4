@@ -17,6 +17,7 @@ import {
 import { FileViewerModal } from '../FileViewerModal';
 import { getDisplayFileName } from '../../utils/fileNameUtils';
 import { getEffectiveApiUrl, getAuthToken, resolveImageUrl } from '../../services/apiService';
+import { downloadAndOpenFile } from '../../services/fileService';
 
 export interface ReceiptAttachment {
     id?: string;
@@ -679,14 +680,7 @@ export const MobileAttachmentUploader: React.FC<MobileAttachmentUploaderProps> =
                                     {src && (
                                         <button
                                             type="button"
-                                            onClick={() => {
-                                                const link = document.createElement('a');
-                                                link.href = src;
-                                                link.download = att.fileName;
-                                                document.body.appendChild(link);
-                                                link.click();
-                                                document.body.removeChild(link);
-                                            }}
+                                            onClick={() => void downloadAndOpenFile(src, att.fileName)}
                                             className="p-2 rounded-xl text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors cursor-pointer"
                                             title="دانلود فایل"
                                         >
