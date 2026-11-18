@@ -646,7 +646,23 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     if (merged.length > 1 && merged.some(c => c.id !== 'comp_arian')) {
       merged = merged.filter(c => c.id !== 'comp_arian');
     }
-    return merged;
+    return merged.filter(c => c.isAccountingEnabled !== false);
+  };
+
+  const buildDisabledCompanySets = (sysSettingsObj: any) => {
+    const disabledIds = new Set<string>();
+    const disabledNames = new Set<string>();
+    const rawComps = Array.isArray(sysSettingsObj?.companies) ? sysSettingsObj.companies : [];
+    rawComps.forEach((c: any) => {
+      if (c && c.isAccountingEnabled === false) {
+        if (c.id) disabledIds.add(String(c.id).trim());
+        if (c.name) {
+          disabledNames.add(String(c.name).trim());
+          disabledIds.add(makeStableCompanyId(String(c.name).trim()));
+        }
+      }
+    });
+    return { disabledIds, disabledNames };
   };
 
   const fetchCompaniesList = async () => {
@@ -655,7 +671,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       const effectiveSettings = settings || {};
       const localComps = extractSettingsCompanies(effectiveSettings);
       if (localComps.length > 0) {
-        setCompanies(prev => prev.length === 0 ? localComps.map((sc: any) => ({
+        const mappedLocal: ErpCompanySummary[] = localComps.map((sc: any) => ({
           id: sc.id || makeStableCompanyId(sc.name),
           name: sc.name,
           logo: sc.logo || undefined,
@@ -668,7 +684,10 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           fiscalYears: ['1405', '1404'],
           allowedUserIds: sc.erpAllowedUserIds || [],
           stats: undefined
-        })) : prev);
+        }));
+        setCompanies(prev => (prev.length === 0 ? mappedLocal : prev.filter(p => mappedLocal.some(m => m.id === p.id || m.name.trim() === p.name.trim()))));
+      } else if (Array.isArray(effectiveSettings?.companies) && effectiveSettings.companies.length > 0) {
+        setCompanies([]);
       }
 
       // 2. Fetch fresh settings & ERP companies asynchronously
@@ -677,17 +696,25 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         getSettings().catch(() => null)
       ]);
 
-      const erpList: ErpCompanySummary[] = Array.isArray(erpRes)
+      const latestSettings = freshSettings || settings || {};
+      const { disabledIds, disabledNames } = buildDisabledCompanySets(latestSettings);
+
+      const rawErpList: ErpCompanySummary[] = Array.isArray(erpRes)
         ? erpRes
         : Array.isArray(erpRes?.companies)
         ? erpRes.companies
         : [];
+      const erpList = rawErpList.filter(
+        ec => !disabledIds.has(String(ec.id || '').trim()) && !disabledNames.has(String(ec.name || '').trim())
+      );
 
-      const latestSettings = freshSettings || settings || {};
       const settingsComps = extractSettingsCompanies(latestSettings);
+      const hasAuthoritativeSettings = Boolean(freshSettings || (Array.isArray(latestSettings?.companies) && latestSettings.companies.length > 0));
+
+      let nextCompanies: ErpCompanySummary[] | null = null;
 
       if (settingsComps.length > 0) {
-        const syncedList: ErpCompanySummary[] = settingsComps.map((sc: any) => {
+        nextCompanies = settingsComps.map((sc: any) => {
           const matchedErp = erpList.find(
             ec => ec.id === sc.id || ec.name === sc.name || ec.name?.trim() === sc.name?.trim()
           );
@@ -706,34 +733,35 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             stats: matchedErp?.stats
           };
         });
-        setCompanies(syncedList);
+      } else if (erpList.length > 0) {
+        nextCompanies = erpList;
+      } else if (hasAuthoritativeSettings || erpRes !== null) {
+        nextCompanies = [];
+      }
 
-        // Reconcile cached selectedCompany with authoritative central server ID if name matches
+      if (nextCompanies !== null) {
+        setCompanies(nextCompanies);
+
+        // Reconcile cached selectedCompany with enabled companies & central server ID
         const curSel = selectedCompanyRef.current;
         if (curSel) {
-          const reconciled = syncedList.find(
+          const isExplicitlyDisabled =
+            disabledIds.has(String(curSel.id || '').trim()) ||
+            disabledNames.has(String(curSel.name || '').trim());
+          const reconciled = nextCompanies.find(
             c => c.id === curSel.id || c.name.trim() === curSel.name.trim()
           );
-          if (reconciled && reconciled.id !== curSel.id) {
+          if (isExplicitlyDisabled || ((hasAuthoritativeSettings || erpRes !== null) && !reconciled)) {
+            setSelectedCompany(null);
+            try {
+              localStorage.removeItem('delcom_erp_selected_company');
+            } catch {}
+          } else if (reconciled && reconciled.id !== curSel.id) {
             setSelectedCompany(reconciled);
             try {
               localStorage.setItem('delcom_erp_selected_company', JSON.stringify(reconciled));
               localStorage.setItem('delcom_erp_last_selected_company_id', reconciled.id);
               localStorage.setItem('delcom_erp_last_selected_company_name', reconciled.name);
-            } catch {}
-          }
-        }
-      } else if (erpList.length > 0) {
-        setCompanies(erpList);
-        const curSel = selectedCompanyRef.current;
-        if (curSel) {
-          const reconciled = erpList.find(
-            c => c.id === curSel.id || c.name.trim() === curSel.name.trim()
-          );
-          if (reconciled && reconciled.id !== curSel.id) {
-            setSelectedCompany(reconciled);
-            try {
-              localStorage.setItem('delcom_erp_selected_company', JSON.stringify(reconciled));
             } catch {}
           }
         }
@@ -1184,7 +1212,12 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     });
 
     return (
-      <div className="max-w-6xl mx-auto py-8 px-4 space-y-8 animate-fade-in" dir="rtl">
+      <div
+        className="flex-1 min-h-0 h-full w-full overflow-y-auto overflow-x-hidden overscroll-y-contain custom-scrollbar touch-pan-y"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+        dir="rtl"
+      >
+        <div className="max-w-6xl mx-auto pt-6 pb-32 md:pb-36 px-4 space-y-8 animate-fade-in">
         {toastMsg && (
           <div
             className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-xl font-bold text-xs flex items-center gap-2 ${
@@ -1234,7 +1267,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
         {visibleCompanies.length === 0 ? (
           <div className="bg-white dark:bg-slate-900 text-center p-10 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-500 font-bold">
-            هیچ شرکتی در بخش تنظیمات سیستم تعریف نشده است. لطفاً ابتدا شرکت‌ها را در بخش «تنظیمات عمومی سیستم» تعریف نمایید.
+            هیچ شرکتی با حسابداری فعال یافت نشد. لطفاً در بخش «تنظیمات سیستم» شرکت را تعریف کرده یا گزینه «فعال در حسابداری و تولید» را روشن نمایید.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1398,6 +1431,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             </div>
           </div>
         )}
+        </div>
       </div>
     );
   }

@@ -136,7 +136,11 @@
 }
 
 .public-bio-scroll-view {
+  height: 100% !important;
+  height: -webkit-fill-available !important;
   height: 100dvh !important;
+  max-height: 100% !important;
+  max-height: -webkit-fill-available !important;
   max-height: 100dvh !important;
   overflow-y: auto !important;
   -webkit-overflow-scrolling: touch !important;
@@ -848,7 +852,11 @@ body {
 
 #root {
   height: 100%;
+  min-height: 100%;
+  height: -webkit-fill-available;
   height: 100dvh;
+  max-height: 100%;
+  max-height: -webkit-fill-available;
   max-height: 100dvh;
   width: 100%;
   max-width: 100%;
@@ -3093,13 +3101,21 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
 
 .google-docs-paper .ql-editor img {
   cursor: pointer;
-  transition: outline 0.15s ease-in-out;
-  border-radius: 6px;
+  outline: none !important;
   margin: 12px auto;
 }
 
-.google-docs-paper .ql-editor img:hover {
-  outline: 2px dashed #9333ea;
+.secretariat-a4-paper img,
+#print-content-section img,
+#letter-view-paper-section img,
+.ql-editor img {
+  outline: none !important;
+}
+
+@media print {
+  .img-interactive-overlay {
+    display: none !important;
+  }
 }
 
 .google-docs-paper .ql-editor table {
@@ -3335,7 +3351,7 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
   padding: 16px 20px;
   direction: rtl;
   text-align: right;
-  white-space: pre-wrap !important;
+  white-space: pre-wrap;
   font-family: 'Vazirmatn', 'Sahel', 'Samim', Tahoma, sans-serif;
 }
 
@@ -3343,7 +3359,7 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
 .ql-editor div,
 .ql-editor li,
 .ql-editor span {
-  white-space: pre-wrap !important;
+  white-space: inherit;
 }
 
 .ql-editor p {
@@ -3364,6 +3380,23 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
   overflow: visible !important;
   font-size: 14px;
   line-height: 1.9;
+  font-family: inherit;
+}
+
+#print-content-section .ql-editor,
+#letter-view-paper-section .ql-editor {
+  white-space: normal !important;
+}
+
+#print-content-section .ql-editor .ql-align-justify,
+#print-content-section .ql-editor p[style*="text-align: justify"],
+#print-content-section .ql-editor div[style*="text-align: justify"],
+#print-content-section .ql-editor li[style*="text-align: justify"],
+#letter-view-paper-section .ql-editor .ql-align-justify,
+#letter-view-paper-section .ql-editor p[style*="text-align: justify"],
+#letter-view-paper-section .ql-editor div[style*="text-align: justify"],
+#letter-view-paper-section .ql-editor li[style*="text-align: justify"] {
+  white-space: normal !important;
 }
 
 /* Explicit Quill Alignment & Full Justification Rules */
@@ -3374,6 +3407,8 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
   text-align: justify !important;
   text-justify: inter-word !important;
   text-align-last: right !important;
+  word-spacing: normal !important;
+  letter-spacing: 0 !important;
 }
 
 .ql-editor .ql-align-center,

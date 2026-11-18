@@ -91,9 +91,13 @@ export const PinchZoomContainer: React.FC<PinchZoomContainerProps> = ({
     };
 
     updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(el);
-    return () => observer.disconnect();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateHeight);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', updateHeight);
+    return () => window.removeEventListener('resize', updateHeight);
   }, [children, activeZoomMode]);
 
   useEffect(() => {

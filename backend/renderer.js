@@ -2278,6 +2278,109 @@ export const generateMeetingMinutesPDF = async (meeting) => {
   }
 };
 
+const resolveSecretariatStampForLetter = (letter, companySettings) => {
+  const stamps = Array.isArray(companySettings?.stamps) ? companySettings.stamps : [];
+  const selectedIds = Array.isArray(letter?.selectedStampIds) ? letter.selectedStampIds : [];
+  let matchedStamp = null;
+  if (selectedIds.length > 0 && stamps.length > 0) {
+    matchedStamp = stamps.find((st) => selectedIds.includes(st.id)) || null;
+  }
+  if (!matchedStamp && stamps.length > 0) {
+    matchedStamp = stamps.find((st) => st.isDefault) || stamps[0];
+  }
+  return {
+    url: matchedStamp?.url || matchedStamp?.imageUrl || companySettings?.companyStampUrl || "",
+    size: matchedStamp?.width || companySettings?.companyStampSize || 120,
+    opacity: matchedStamp?.opacity ?? companySettings?.companyStampOpacity ?? 70,
+  };
+};
+
+const normalizeSecretariatLetterHtml = (rawHtml = "") => {
+  let html = String(rawHtml || "");
+  if (!html) return "";
+
+  // 1. Strip any accidental editor outline or purple dashed border from <img> tags
+  html = html.replace(/<img\b([^>]*)>/gi, (full, attrs) => {
+    const cleanedAttrs = attrs.replace(/style=(["'])([\s\S]*?)\1/gi, (_m, q, styleStr) => {
+      const cleanedStyle = styleStr
+        .replace(/outline[^;]*;?/gi, "")
+        .replace(/border[^;]*dashed[^;]*(?:#9333ea|rgb\(\s*147\s*,\s*51\s*,\s*234\s*\)|purple)[^;]*;?/gi, "")
+        .trim();
+      return cleanedStyle ? `style=${q}${cleanedStyle}${q}` : "";
+    });
+    return `<img${cleanedAttrs}>`;
+  });
+
+  // 2. Map Quill alignment classes to inline styles (essential for html-to-docx & consistent PDF rendering)
+  //    and normalize inter-word &nbsp; inside justified paragraphs so word-spacing stays uniform
+  const alignMap = {
+    "ql-align-justify": "justify",
+    "ql-align-center": "center",
+    "ql-align-left": "left",
+    "ql-align-right": "right",
+  };
+
+  html = html.replace(
+    /<(p|div|li|h[1-6])\b([^>]*)>([\s\S]*?)<\/\1>/gi,
+    (full, tag, rawAttrs, innerHtml) => {
+      const classMatch = rawAttrs.match(/class=(["'])([\s\S]*?)\1/i);
+      const styleMatch = rawAttrs.match(/style=(["'])([\s\S]*?)\1/i);
+      const classVal = classMatch ? classMatch[2] : "";
+      const styleVal = styleMatch ? styleMatch[2] : "";
+
+      let detectedAlign = "";
+      for (const [cls, alignName] of Object.entries(alignMap)) {
+        if (new RegExp(`\\b${cls}\\b`, "i").test(classVal)) {
+          detectedAlign = alignName;
+          break;
+        }
+      }
+      if (!detectedAlign) {
+        const inlineAlign = styleVal.match(/text-align\s*:\s*(justify|center|left|right)/i);
+        if (inlineAlign) detectedAlign = inlineAlign[1].toLowerCase();
+      }
+
+      let nextAttrs = rawAttrs;
+      if (detectedAlign && !/text-align\s*:/i.test(styleVal)) {
+        const extraStyle =
+          detectedAlign === "justify"
+            ? "text-align: justify; text-justify: inter-word; text-align-last: right;"
+            : `text-align: ${detectedAlign};`;
+        if (styleMatch) {
+          const mergedStyle = `${styleVal.trim().replace(/;?$/, ";")} ${extraStyle}`.trim();
+          nextAttrs = rawAttrs.replace(/style=(["'])([\s\S]*?)\1/i, `style="${mergedStyle}"`);
+        } else {
+          nextAttrs = `${rawAttrs} style="${extraStyle}"`;
+        }
+      }
+
+      let nextInner = innerHtml;
+      if (detectedAlign === "justify") {
+        // Normalize non-breaking spaces in text nodes into standard spaces so browser/Word justification stretches gaps evenly
+        nextInner = nextInner.replace(/>([^<]+)</g, (_m, txt) => {
+          const cleaned = txt
+            .replace(/[\u00a0]/g, " ")
+            .replace(/&nbsp;/gi, " ")
+            .replace(/ {2,}/g, " ");
+          return `>${cleaned}<`;
+        });
+        // Also normalize text nodes at start/end of innerHtml (before first '<' or after last '>')
+        nextInner = nextInner
+          .replace(/^([^<]+)/, (txt) =>
+            txt.replace(/[\u00a0]/g, " ").replace(/&nbsp;/gi, " ").replace(/^ +/, "").replace(/ {2,}/g, " "),
+          )
+          .replace(/([^>]+)$/, (txt) =>
+            txt.replace(/[\u00a0]/g, " ").replace(/&nbsp;/gi, " ").replace(/ {2,}/g, " "),
+          );
+      }
+
+      return `<${tag}${nextAttrs}>${nextInner}</${tag}>`;
+    },
+  );
+
+  return html;
+};
+
 export const generateSecretariatLetterPDF = async (
   letter,
   companyName,
@@ -2313,8 +2416,9 @@ export const generateSecretariatLetterPDF = async (
     const metadataFontWeight = companySettings?.metadataFontWeight || "bold";
     const metadataColor = companySettings?.metadataColor || "#0f172a";
 
-    const stampSize = companySettings?.companyStampSize || 120;
-    const stampOpacity = (companySettings?.companyStampOpacity || 70) / 100;
+    const resolvedStamp = resolveSecretariatStampForLetter(letter, companySettings);
+    const stampSize = resolvedStamp.size || 120;
+    const stampOpacity = (resolvedStamp.opacity ?? 70) / 100;
 
     const effectivePdfLetterheadUrl =
       companySettings?.pdfLetterheadUrl || companySettings?.letterheadUrl;
@@ -2356,8 +2460,8 @@ export const generateSecretariatLetterPDF = async (
       sigStyle = "text-align: center; margin-left: auto; margin-right: 0;";
 
     const stampHtml =
-      letter.addCompanyStamp && companySettings?.companyStampUrl
-        ? `<img src="${makeAbsolute(companySettings.companyStampUrl)}" class="company-stamp" />`
+      letter.addCompanyStamp && resolvedStamp.url
+        ? `<img src="${makeAbsolute(resolvedStamp.url)}" class="company-stamp" />`
         : "";
 
     let signersHtml = "";
@@ -2418,7 +2522,7 @@ export const generateSecretariatLetterPDF = async (
 
     // 100% National Internet / Offline safe: convert any /uploads/ image src (even with full domain) to disk base64
     const rawContent = String(letter.content || "");
-    const normalizedContent = rawContent.replace(
+    const normalizedContent = normalizeSecretariatLetterHtml(rawContent).replace(
       /(<img\b[^>]*?\bsrc=["'])([^"']*\/uploads\/[^"']+)(["'])/gi,
       (_, p1, imgUrl, p3) => `${p1}${makeAbsolute(imgUrl)}${p3}`,
     );
@@ -2529,7 +2633,7 @@ export const generateSecretariatLetterPDF = async (
           font-size: 14px;
           line-height: 1.9;
           text-align: right;
-          white-space: pre-wrap !important;
+          white-space: normal !important;
           color: #0f172a;
           direction: rtl;
           overflow: visible !important;
@@ -2539,7 +2643,14 @@ export const generateSecretariatLetterPDF = async (
         .letter-body div,
         .letter-body li,
         .letter-body span {
-          white-space: pre-wrap !important;
+          white-space: inherit;
+        }
+
+        .letter-body img,
+        .company-stamp,
+        .stamp-container img,
+        .signatures img {
+          outline: none !important;
         }
 
         .letter-body p {
@@ -2550,29 +2661,36 @@ export const generateSecretariatLetterPDF = async (
 
         .letter-body .ql-align-justify,
         .letter-body p[style*="text-align: justify"],
-        .letter-body div[style*="text-align: justify"] {
+        .letter-body div[style*="text-align: justify"],
+        .letter-body li[style*="text-align: justify"] {
+          white-space: normal !important;
           text-align: justify !important;
           text-justify: inter-word !important;
           text-align-last: right !important;
+          word-spacing: normal !important;
+          letter-spacing: 0 !important;
         }
 
         .letter-body .ql-align-center,
         .letter-body p[style*="text-align: center"],
-        .letter-body div[style*="text-align: center"] {
+        .letter-body div[style*="text-align: center"],
+        .letter-body li[style*="text-align: center"] {
           text-align: center !important;
           text-align-last: center !important;
         }
 
         .letter-body .ql-align-left,
         .letter-body p[style*="text-align: left"],
-        .letter-body div[style*="text-align: left"] {
+        .letter-body div[style*="text-align: left"],
+        .letter-body li[style*="text-align: left"] {
           text-align: left !important;
           text-align-last: left !important;
         }
 
         .letter-body .ql-align-right,
         .letter-body p[style*="text-align: right"],
-        .letter-body div[style*="text-align: right"] {
+        .letter-body div[style*="text-align: right"],
+        .letter-body li[style*="text-align: right"] {
           text-align: right !important;
           text-align-last: right !important;
         }
@@ -2772,7 +2890,10 @@ export const generateSecretariatLetterDoc = async (
         const cleanContent = (letter.content || "")
           .replace(/<br\s*\/?>/gi, "\n")
           .replace(/<\/p>/gi, "\n\n")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/[\u00a0]/g, " ")
           .replace(/<[^>]+>/g, "")
+          .replace(/ {2,}/g, " ")
           .trim();
 
         // Check if there are content-level tags in the template
@@ -3028,9 +3149,9 @@ export const generateSecretariatLetterDoc = async (
                 ` : ""}
             </table>
             
-            <div class="letter-content" style="text-align: right;">
-                ${letter.hideSalutationInLetter ? "" : `<p style="font-weight: bold; margin-bottom: 14px;">با سلام و احترام،</p>`}
-                ${letter.content}
+            <div class="letter-content" dir="rtl" style="direction: rtl;">
+                ${letter.hideSalutationInLetter ? "" : `<p style="font-weight: bold; margin-bottom: 14px; text-align: right;">با سلام و احترام،</p>`}
+                ${normalizeSecretariatLetterHtml(letter.content || "")}
             </div>
             
             <div style="margin-top: 40px; text-align: left; width: 100%; direction: rtl;">
@@ -3050,7 +3171,7 @@ export const generateSecretariatLetterDoc = async (
                         ) {
                           const idx = letter.approvedBy.indexOf(s.userId);
                           if (idx !== -1) {
-                            sigImg = `<br/><img src="${makeAbsolute(letter.signatureImageUrls[idx])}" class="signature-image" style="height: 60px; object-fit: contain; margin-top: 5px;" />`;
+                            sigImg = `<br/><img src="${makeAbsolute(letter.signatureImageUrls[idx])}" class="signature-image" style="height: 60px; object-fit: contain; margin-top: 5px; outline: none; border: none;" />`;
                           }
                         }
                         return `<td class="signature-box" style="width: ${100 / letter.signers.length}%; text-align: center;"><b>${s.name}</b><br/><span style="color: #666; font-size: 9pt;">${s.title}</span>${sigImg}</td>`;
@@ -3062,15 +3183,16 @@ export const generateSecretariatLetterDoc = async (
                     : `<div style="font-weight: bold; font-size: 11pt; color: #0f172a;">${companyName || companySettings?.companyName || "شرکت تولیدی لپان بافت"}</div>`
                 }
                 
-                ${
-                  letter.addCompanyStamp && companySettings?.companyStampUrl
+                ${(() => {
+                  const docStamp = resolveSecretariatStampForLetter(letter, companySettings);
+                  return letter.addCompanyStamp && docStamp.url
                     ? `
                     <div style="text-align: center; margin-top: 15px;">
-                        <img src="${makeAbsolute(companySettings.companyStampUrl)}" style="max-height: 110px; object-fit: contain;" />
+                        <img src="${makeAbsolute(docStamp.url)}" style="max-height: ${Math.min(130, docStamp.size || 110)}px; object-fit: contain; outline: none; border: none;" />
                     </div>
                 `
-                    : ""
-                }
+                    : "";
+                })()}
             </div>
             
             ${

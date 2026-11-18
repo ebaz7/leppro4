@@ -2124,6 +2124,7 @@ const Settings: React.FC<SettingsProps> = ({
       companyNames: updatedCompanies.map((c) => c.name),
     };
     setSettings(newSettings);
+    if (onUpdateSettings) onUpdateSettings(newSettings);
     try {
       await saveSettings(newSettings);
     } catch (err) {
@@ -2184,11 +2185,33 @@ const Settings: React.FC<SettingsProps> = ({
         companyNames: updated.map((c) => c.name),
       };
       setSettings(newSettings);
+      if (onUpdateSettings) onUpdateSettings(newSettings);
       try {
         await saveSettings(newSettings);
       } catch (err) {
         console.error("Remove company settings error:", err);
       }
+    }
+  };
+  const handleToggleCompanyAccounting = async (id: string) => {
+    const updated = (settings.companies || []).map((c) =>
+      c.id === id ? { ...c, isAccountingEnabled: c.isAccountingEnabled === false ? true : false } : c,
+    );
+    const toggled = updated.find((c) => c.id === id);
+    if (editingCompanyId === id && toggled) {
+      setNewCompanyIsAccountingEnabled(toggled.isAccountingEnabled !== false);
+    }
+    const newSettings = {
+      ...settings,
+      companies: updated,
+      companyNames: updated.map((c) => c.name),
+    };
+    setSettings(newSettings);
+    if (onUpdateSettings) onUpdateSettings(newSettings);
+    try {
+      await saveSettings(newSettings);
+    } catch (err) {
+      console.error("Toggle company accounting settings error:", err);
     }
   };
   const addOrUpdateCompanyBank = () => {
@@ -4243,9 +4266,14 @@ const Settings: React.FC<SettingsProps> = ({
                                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${c.showInWarehouse !== false ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"}`}>
                                   {c.showInWarehouse !== false ? "انبار ✓" : "مخفی از انبار"}
                                 </span>
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${c.isAccountingEnabled !== false ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300" : "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300"}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleCompanyAccounting(c.id)}
+                                  title="کلیک برای فعال/غیرفعال‌سازی این شرکت در حسابداری و تولید"
+                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold transition-colors cursor-pointer ${c.isAccountingEnabled !== false ? "bg-indigo-100 text-indigo-800 hover:bg-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300" : "bg-rose-100 text-rose-800 hover:bg-rose-200 dark:bg-rose-950/40 dark:text-rose-300"}`}
+                                >
                                   {c.isAccountingEnabled !== false ? "حسابداری فعال" : "حسابداری غیرفعال"}
-                                </span>
+                                </button>
                               </div>
                             </div>
                             <div className="flex gap-1">

@@ -4,8 +4,6 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary'; // Import ErrorBoundary
 import './index.css'; 
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { installSafeStorageGlobalPolyfill } from './utils/safeStorage';
 import { installGlobalApiFetchInterceptor } from './services/apiService';
 
@@ -13,10 +11,6 @@ import { installGlobalApiFetchInterceptor } from './services/apiService';
 installSafeStorageGlobalPolyfill();
 // Ensure relative API calls resolve to real server domain on Tauri Desktop and Capacitor Android
 installGlobalApiFetchInterceptor();
-
-// Expose libraries globally
-(window as any).html2canvas = html2canvas;
-(window as any).jspdf = { jsPDF };
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -31,3 +25,15 @@ root.render(
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+(window as any).__APP_MOUNTED__ = true;
+
+// Lazy-hydrate legacy PDF/canvas globals after initial paint to minimize boot memory on older iPhones
+setTimeout(() => {
+  import('html2canvas').then((m) => {
+    (window as any).html2canvas = m.default || m;
+  }).catch(() => {});
+  import('jspdf').then((m) => {
+    (window as any).jspdf = { jsPDF: m.jsPDF };
+  }).catch(() => {});
+}, 600);

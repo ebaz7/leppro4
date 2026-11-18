@@ -197,11 +197,11 @@ let isFetchInterceptorInstalled = false;
 
 export const installGlobalApiFetchInterceptor = () => {
     if (isFetchInterceptorInstalled || typeof window === 'undefined') return;
-    isFetchInterceptorInstalled = true;
 
-    const originalFetch = window.fetch.bind(window);
+    const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+    if (!nativeFetch) return;
 
-    window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
+    const wrappedFetch = async function (input: RequestInfo | URL, init?: RequestInit) {
         let urlString = typeof input === 'string' ? input : (input instanceof URL ? input.href : (input as Request).url);
 
         const isApiCall = urlString.startsWith('/api/') || urlString === '/api' || urlString.startsWith('api/');
@@ -230,28 +230,52 @@ export const installGlobalApiFetchInterceptor = () => {
             };
 
             if (typeof input === 'string' || input instanceof URL) {
-                return originalFetch(effectiveUrl, updatedInit);
+                return nativeFetch(effectiveUrl, updatedInit);
             } else {
-                return originalFetch(new Request(effectiveUrl, input), updatedInit);
+                return nativeFetch(new Request(effectiveUrl, input), updatedInit);
             }
         } else if (isUploadCall) {
             const effectiveUrl = resolveImageUrl(urlString);
             if (typeof input === 'string' || input instanceof URL) {
-                return originalFetch(effectiveUrl, init);
+                return nativeFetch(effectiveUrl, init);
             } else {
-                return originalFetch(new Request(effectiveUrl, input), init);
+                return nativeFetch(new Request(effectiveUrl, input), init);
             }
         }
 
-        return originalFetch(input, init);
+        return nativeFetch(input, init);
     };
+
+    try {
+        const ownDesc = Object.getOwnPropertyDescriptor(window, 'fetch');
+        if (ownDesc && ownDesc.writable) {
+            window.fetch = wrappedFetch;
+            isFetchInterceptorInstalled = true;
+            return;
+        }
+        if (!ownDesc || ownDesc.configurable) {
+            Object.defineProperty(window, 'fetch', {
+                value: wrappedFetch,
+                configurable: true,
+                writable: true,
+                enumerable: ownDesc ? ownDesc.enumerable !== false : true,
+            });
+            isFetchInterceptorInstalled = true;
+            return;
+        }
+        if (ownDesc.set) {
+            window.fetch = wrappedFetch;
+            isFetchInterceptorInstalled = true;
+            return;
+        }
+        // Fallback: Host froze window.fetch non-configurable & getter-only (e.g. sandboxed iframe); apiCall still resolves URLs safely.
+        console.warn('[apiService] Global window.fetch is read-only in this environment; using apiCall resolver.');
+    } catch (e) {
+        console.warn('[apiService] Skipping global fetch override in restricted host:', e);
+    }
 };
 
-try {
-    installGlobalApiFetchInterceptor();
-} catch (e) {
-    console.error('Failed to auto-install global fetch interceptor:', e);
-}
+installGlobalApiFetchInterceptor();
 
 const isNativeApp = Capacitor.isNativePlatform();
 

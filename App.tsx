@@ -1,47 +1,48 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
-import CreateOrder from './components/CreateOrder';
-import ManageOrders from './components/ManageOrders';
 import Login from './components/Login';
-import ManageUsers from './components/ManageUsers';
-import Settings from './components/Settings';
-import ChatRoom from './components/ChatRoom';
-import TradeModule from './components/TradeModule';
-import CreateExitPermit from './components/CreateExitPermit'; 
-import ManageExitPermits from './components/ManageExitPermits'; 
-import WarehouseModule from './components/WarehouseModule';
-import SecurityModule from './components/SecurityModule'; 
-import MeetingModule from './components/MeetingModule';
-import PurchaseModule from './components/PurchaseModule';
 import PrintVoucher from './components/PrintVoucher';
-import NotificationController from './components/NotificationController'; 
-import SalesCRMModule from './components/SalesCRMModule';
-import ProductsModule from './components/ProductsModule';
-import { Tickets } from './components/Tickets';
-import KnowledgeBaseModule from './components/KnowledgeBaseModule';
-import { CustomerBalanceModule } from './components/CustomerBalanceModule';
-import CctiConverter from './components/CctiConverter';
-import SayanReports from './components/SayanReports';
-import SayanRegistrationsModule from './components/SayanRegistrationsModule';
-import SecretariatModule from './components/SecretariatModule';
-import { ChequeReceiptModule } from './components/ChequeReceiptModule';
+import NotificationController from './components/NotificationController';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ThemeSelectorModal, AppThemeMode } from './components/ThemeSelectorModal';
 import { NetworkRoleSettingsModal } from './components/NetworkRoleSettingsModal';
-import { AiExecutiveCopilot } from './components/AiExecutiveCopilot';
-import { AiDocumentScannerModal } from './components/AiDocumentScannerModal';
 import { SendToChatModal } from './components/SendToChatModal';
 import { WorkstationDock } from './components/WorkstationDock';
 import { SplitViewSelectorModal } from './components/SplitViewSelectorModal';
 import { WorkstationFloatingWindow } from './components/WorkstationFloatingWindow';
 import { SplitViewDragOverlay } from './components/SplitViewDragOverlay';
 import { FloatingCalculator } from './components/FloatingCalculator';
-import { DigitalCardModule } from './components/DigitalCardModule';
-import { IndustrialAccountingErpModule } from './components/IndustrialAccountingErpModule';
-import { PublicBioPage } from './components/PublicBioPage';
-import { PublicCustomerSurveyPage } from './components/PublicCustomerSurveyPage';
+
+const CreateOrder = lazy(() => import('./components/CreateOrder'));
+const ManageOrders = lazy(() => import('./components/ManageOrders'));
+const ManageUsers = lazy(() => import('./components/ManageUsers'));
+const Settings = lazy(() => import('./components/Settings'));
+const ChatRoom = lazy(() => import('./components/ChatRoom'));
+const TradeModule = lazy(() => import('./components/TradeModule'));
+const CreateExitPermit = lazy(() => import('./components/CreateExitPermit'));
+const ManageExitPermits = lazy(() => import('./components/ManageExitPermits'));
+const WarehouseModule = lazy(() => import('./components/WarehouseModule'));
+const SecurityModule = lazy(() => import('./components/SecurityModule'));
+const MeetingModule = lazy(() => import('./components/MeetingModule'));
+const PurchaseModule = lazy(() => import('./components/PurchaseModule'));
+const SalesCRMModule = lazy(() => import('./components/SalesCRMModule'));
+const ProductsModule = lazy(() => import('./components/ProductsModule'));
+const Tickets = lazy(() => import('./components/Tickets').then(m => ({ default: m.Tickets })));
+const KnowledgeBaseModule = lazy(() => import('./components/KnowledgeBaseModule'));
+const CustomerBalanceModule = lazy(() => import('./components/CustomerBalanceModule').then(m => ({ default: m.CustomerBalanceModule })));
+const CctiConverter = lazy(() => import('./components/CctiConverter'));
+const SayanReports = lazy(() => import('./components/SayanReports'));
+const SayanRegistrationsModule = lazy(() => import('./components/SayanRegistrationsModule'));
+const SecretariatModule = lazy(() => import('./components/SecretariatModule'));
+const ChequeReceiptModule = lazy(() => import('./components/ChequeReceiptModule').then(m => ({ default: m.ChequeReceiptModule })));
+const AiExecutiveCopilot = lazy(() => import('./components/AiExecutiveCopilot').then(m => ({ default: m.AiExecutiveCopilot })));
+const AiDocumentScannerModal = lazy(() => import('./components/AiDocumentScannerModal').then(m => ({ default: m.AiDocumentScannerModal })));
+const DigitalCardModule = lazy(() => import('./components/DigitalCardModule').then(m => ({ default: m.DigitalCardModule })));
+const IndustrialAccountingErpModule = lazy(() => import('./components/IndustrialAccountingErpModule').then(m => ({ default: m.IndustrialAccountingErpModule })));
+const PublicBioPage = lazy(() => import('./components/PublicBioPage').then(m => ({ default: m.PublicBioPage })));
+const PublicCustomerSurveyPage = lazy(() => import('./components/PublicCustomerSurveyPage').then(m => ({ default: m.PublicCustomerSurveyPage })));
 import { AppNavItem, getAppNavItems, getSidebarLabel } from './utils/navigationItems';
 import { getOrders, getSettings, getMessages, saveSettings, getSystemAnnouncements, getGroups, getTaskGroups, getTasks, getBioLinkConfig } from './services/storageService'; 
 import { getCurrentUser, getUsers, getRolePermissions, logout as authLogout, setLogoutReason, touchWebActivity, WEB_LAST_ACTIVITY_KEY, WEB_IDLE_LIMIT_MS } from './services/authService';
@@ -2497,13 +2498,17 @@ function App() {
         </AnimatePresence>
         {isPublicBioView ? (
             <div className="fixed inset-0 z-[99999999] w-full h-full overflow-y-auto overscroll-y-contain bg-slate-50 dark:bg-slate-950" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
-              <PublicBioPage 
-                  config={publicBioConfig || FALLBACK_BIO_CONFIG}
-              />
+              <Suspense fallback={<div className="min-h-full flex items-center justify-center p-8 text-slate-500 gap-2"><Loader2 size={20} className="animate-spin text-blue-600" /><span className="text-xs font-bold">در حال بارگذاری صفحه...</span></div>}>
+                <PublicBioPage 
+                    config={publicBioConfig || FALLBACK_BIO_CONFIG}
+                />
+              </Suspense>
             </div>
         ) : isPublicSurveyView ? (
             <div className="fixed inset-0 z-[99999999] w-full h-full overflow-y-auto overscroll-y-contain bg-slate-950 text-white" style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
-              <PublicCustomerSurveyPage />
+              <Suspense fallback={<div className="min-h-full flex items-center justify-center p-8 text-slate-300 gap-2"><Loader2 size={20} className="animate-spin text-blue-400" /><span className="text-xs font-bold">در حال بارگذاری نظرسنجی...</span></div>}>
+                <PublicCustomerSurveyPage />
+              </Suspense>
             </div>
         ) : !currentUser ? (
             <Login onLogin={handleLogin} />
@@ -2581,7 +2586,7 @@ function App() {
                 )}
 
                 {!secondaryTab ? (
-                  <>
+                  <Suspense fallback={<div className="flex-1 flex items-center justify-center p-10 text-slate-500 gap-2"><Loader2 size={20} className="animate-spin text-blue-600" /><span className="text-xs font-bold">در حال بارگذاری بخش...</span></div>}>
                     <div className={activeTab === 'dashboard' ? 'block h-full page-transition' : 'hidden'}>
                         <Dashboard 
                             orders={orders} 
@@ -2644,7 +2649,7 @@ function App() {
                             onActiveChannelChange={setActiveChatChannel}
                         />
                     </div>
-                  </>
+                  </Suspense>
                 ) : (
                   /* Dual Split-View Container */
                   <div className="flex-1 flex flex-col min-h-0 h-full overflow-hidden">
@@ -2693,7 +2698,9 @@ function App() {
                           : 'overflow-y-auto overflow-x-hidden overscroll-contain custom-scrollbar pb-24'
                       }`}
                     >
-                      {renderModuleContent(mobileActiveSplitPane === 'primary' ? activeTab : secondaryTab, mobileActiveSplitPane === 'secondary')}
+                      <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-500 gap-2"><Loader2 size={18} className="animate-spin text-blue-600" /><span className="text-xs font-bold">در حال بارگذاری...</span></div>}>
+                        {renderModuleContent(mobileActiveSplitPane === 'primary' ? activeTab : secondaryTab, mobileActiveSplitPane === 'secondary')}
+                      </Suspense>
                     </div>
 
                     {/* Desktop View: Side-by-Side Split Panes */}
@@ -2747,7 +2754,9 @@ function App() {
                               : 'overflow-y-auto overflow-x-hidden overscroll-contain custom-scrollbar p-2 pb-24'
                           }`}
                         >
-                          {renderModuleContent(activeTab)}
+                          <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-500 gap-2"><Loader2 size={18} className="animate-spin text-blue-600" /><span className="text-xs font-bold">در حال بارگذاری...</span></div>}>
+                            {renderModuleContent(activeTab)}
+                          </Suspense>
                         </div>
                       </div>
 
@@ -2803,7 +2812,9 @@ function App() {
                               : 'overflow-y-auto overflow-x-hidden overscroll-contain custom-scrollbar p-2 pb-24'
                           }`}
                         >
-                          {renderModuleContent(secondaryTab, true)}
+                          <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-500 gap-2"><Loader2 size={18} className="animate-spin text-purple-600" /><span className="text-xs font-bold">در حال بارگذاری...</span></div>}>
+                            {renderModuleContent(secondaryTab, true)}
+                          </Suspense>
                         </div>
                       </div>
                     </div>
@@ -2901,7 +2912,9 @@ function App() {
                 }}
                 onClose={handleCloseFloating}
               >
-                {renderModuleContent(floatingTab, true)}
+                <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-500 gap-2"><Loader2 size={18} className="animate-spin text-blue-600" /><span className="text-xs font-bold">در حال بارگذاری...</span></div>}>
+                  {renderModuleContent(floatingTab, true)}
+                </Suspense>
               </WorkstationFloatingWindow>
             )}
 
@@ -2916,17 +2929,19 @@ function App() {
             {/* AI Voice Assistant & Executive Copilot Widget */}
             {currentUser && (
                 <>
-                    <AiExecutiveCopilot
-                        currentUser={currentUser}
-                        activeTab={activeTab}
-                        onOpenScanner={() => setShowAiScannerModal(true)}
-                        onOpenWarehouseAdvisor={() => setActiveTab('sayan')}
-                        onOpenSalesAdvisor={() => setActiveTab('sayan')}
-                    />
-                    <AiDocumentScannerModal
-                        isOpen={showAiScannerModal}
-                        onClose={() => setShowAiScannerModal(false)}
-                    />
+                    <Suspense fallback={null}>
+                        <AiExecutiveCopilot
+                            currentUser={currentUser}
+                            activeTab={activeTab}
+                            onOpenScanner={() => setShowAiScannerModal(true)}
+                            onOpenWarehouseAdvisor={() => setActiveTab('sayan')}
+                            onOpenSalesAdvisor={() => setActiveTab('sayan')}
+                        />
+                        <AiDocumentScannerModal
+                            isOpen={showAiScannerModal}
+                            onClose={() => setShowAiScannerModal(false)}
+                        />
+                    </Suspense>
                     <SendToChatModal
                         isOpen={globalSendToChat.isOpen}
                         onClose={() => setGlobalSendToChat(prev => ({ ...prev, isOpen: false }))}

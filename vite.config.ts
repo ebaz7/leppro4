@@ -53,6 +53,12 @@ export default defineConfig({
   base: './', // Relative path for universal support across Web, CDN, Android, and Desktop (Tauri)
   optimizeDeps: {
     entries: ['index.html'],
+    esbuildOptions: {
+      target: 'safari12',
+    },
+  },
+  esbuild: {
+    target: 'safari12',
   },
   server: {
     host: '0.0.0.0',
@@ -63,7 +69,7 @@ export default defineConfig({
     },
   },
   build: {
-    target: 'es2020',
+    target: 'safari12',
     outDir: 'dist',
     emptyOutDir: true,
     chunkSizeWarningLimit: 5000,

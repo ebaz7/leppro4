@@ -720,6 +720,42 @@ export const getCompanyLegacyAliasIds = (companyId, companyName) => {
   return Array.from(aliases);
 };
 
+const isTransientPgConnectionError = (error) => {
+  const msg = String(error?.message || error || '').toLowerCase();
+  const code = String(error?.code || '').toUpperCase();
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ENOTFOUND' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'ENETUNREACH' ||
+    code === '57P01' ||
+    msg.includes('timeout') ||
+    msg.includes('connection terminated') ||
+    msg.includes('connect econnrefused') ||
+    msg.includes('connection ended unexpectedly')
+  );
+};
+
+const markErpPgFailure = (contextLabel, error) => {
+  const msg = error?.message || String(error || 'خطای اتصال PostgreSQL');
+  globalThis._erpPgSchemaReady = false;
+  globalThis._erpPgLastFailedAt = Date.now();
+  globalThis._erpPgHealth = {
+    ...(globalThis._erpPgHealth || {}),
+    configured: true,
+    connected: false,
+    schemaReady: false,
+    lastError: msg,
+    lastCheckedAt: Date.now(),
+  };
+  if (isTransientPgConnectionError(error)) {
+    console.warn(`[ERP PostgreSQL] ${contextLabel} (falling back to JSON storage):`, msg);
+  } else {
+    console.error(`[ERP PostgreSQL] ${contextLabel}:`, msg);
+  }
+};
+
 // Lazy pg.Pool creation strictly using Object Method
 export const getErpPgPool = () => {
   if (!isPostgresConfigured()) return null;
@@ -742,10 +778,12 @@ export const getErpPgPool = () => {
       ...(process.env.SQL_PORT ? { port: Number(process.env.SQL_PORT) } : {}),
       max: 15,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 6000,
+      connectionTimeoutMillis: 5000,
+      query_timeout: 8000,
+      statement_timeout: 8000,
     });
     globalThis._erpPostgresPool.on('error', (err) => {
-      console.error('[ERP PostgreSQL] Unexpected error on idle pool client:', err.message);
+      markErpPgFailure('Unexpected error on idle pool client', err);
     });
   }
   return globalThis._erpPostgresPool;
@@ -777,10 +815,12 @@ export const getErpPgAdminPool = () => {
       ...(process.env.SQL_PORT ? { port: Number(process.env.SQL_PORT) } : {}),
       max: 4,
       idleTimeoutMillis: 20000,
-      connectionTimeoutMillis: 6000,
+      connectionTimeoutMillis: 5000,
+      query_timeout: 8000,
+      statement_timeout: 8000,
     });
     globalThis._erpPostgresAdminPool.on('error', (err) => {
-      console.error('[ERP PostgreSQL Admin] Unexpected error on idle pool client:', err.message);
+      markErpPgFailure('Unexpected error on idle admin pool client', err);
     });
   }
   return globalThis._erpPostgresAdminPool;
@@ -811,11 +851,11 @@ export async function ensureErpPostgresSchemaReady(forceRetry = false) {
     return true;
   }
 
-  // Avoid hammering an offline local PostgreSQL instance more than once every 8 seconds unless forced
+  // Avoid hammering an offline/unreachable PostgreSQL instance more than once every 15 seconds unless forced
   if (
     !forceRetry &&
     globalThis._erpPgLastFailedAt &&
-    Date.now() - globalThis._erpPgLastFailedAt < 8000
+    Date.now() - globalThis._erpPgLastFailedAt < 15000
   ) {
     return false;
   }
@@ -850,16 +890,7 @@ export async function ensureErpPostgresSchemaReady(forceRetry = false) {
       };
       return true;
     } catch (err) {
-      globalThis._erpPgSchemaReady = false;
-      globalThis._erpPgLastFailedAt = Date.now();
-      globalThis._erpPgHealth = {
-        configured: true,
-        connected: false,
-        schemaReady: false,
-        lastError: err?.message || 'خطا در اتصال یا آماده‌سازی جداول PostgreSQL',
-        lastCheckedAt: Date.now(),
-      };
-      console.warn('[ERP PostgreSQL] Schema/connection check warning:', err?.message);
+      markErpPgFailure('Schema/connection check warning', err);
       return false;
     } finally {
       globalThis._erpPgSchemaInitInFlight = null;
@@ -2402,15 +2433,7 @@ export async function getCompanyErpStateFromPg(
       return state;
     });
   } catch (error) {
-    console.error(`[ERP PostgreSQL] Failed loading state for company ${companyId}:`, error.message);
-    globalThis._erpPgSchemaReady = false;
-    globalThis._erpPgHealth = {
-      ...(globalThis._erpPgHealth || {}),
-      configured: true,
-      connected: false,
-      lastError: error.message,
-      lastCheckedAt: Date.now(),
-    };
+    markErpPgFailure(`Failed loading state for company ${companyId}`, error);
     return null;
   }
 }
@@ -2500,15 +2523,7 @@ export async function saveCompanyErpStateToPg(
       };
     });
   } catch (error) {
-    console.error(`[ERP PostgreSQL] Failed saving state for company ${companyId}:`, error.message);
-    globalThis._erpPgSchemaReady = false;
-    globalThis._erpPgHealth = {
-      ...(globalThis._erpPgHealth || {}),
-      configured: true,
-      connected: false,
-      lastError: error.message,
-      lastCheckedAt: Date.now(),
-    };
+    markErpPgFailure(`Failed saving state for company ${companyId}`, error);
     return null;
   }
 }
@@ -2565,7 +2580,7 @@ export async function mutateCompanyErpTransactionally(
       return { aborted: false, ...mutationResult, state: committed };
     });
   } catch (error) {
-    console.error(`[ERP PostgreSQL] Transactional mutation failed for ${companyId}:`, error.message);
+    markErpPgFailure(`Transactional mutation failed for ${companyId}`, error);
     return null;
   }
 }
@@ -2589,7 +2604,7 @@ export async function resetCompanyErpStateInPg(companyId, companyName, freshStat
       return await readCompanyStateInsideTx(tx, companyId);
     });
   } catch (error) {
-    console.error(`[ERP PostgreSQL] Reset failed for ${companyId}:`, error.message);
+    markErpPgFailure(`Reset failed for ${companyId}`, error);
     return null;
   }
 }
@@ -2658,7 +2673,7 @@ export async function getAllCompanyStatsFromPg() {
     }
     return statsByCompany;
   } catch (error) {
-    console.error('[ERP PostgreSQL] Failed loading stats:', error.message);
+    markErpPgFailure('Failed loading stats', error);
     return null;
   }
 }

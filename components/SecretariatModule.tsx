@@ -1187,16 +1187,82 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
   };
 
   // Image manipulation in editor
-  // Helper: preserve consecutive and leading spaces inside HTML text nodes so Quill never collapses manual spacing
+  // Helper: strip any accidental editor outlines from <img> tags & preserve spaces cleanly without breaking justification
+  const sanitizeLetterHtmlImages = (html: string): string => {
+    if (!html || typeof html !== "string") return "";
+    return html.replace(/<img\b([^>]*)>/gi, (_full, attrs: string) => {
+      const cleanedAttrs = attrs.replace(/style=(["'])([\s\S]*?)\1/gi, (_m, q, styleStr: string) => {
+        const cleanedStyle = styleStr
+          .replace(/outline[^;]*;?/gi, "")
+          .replace(/border[^;]*dashed[^;]*(?:#9333ea|rgb\(\s*147\s*,\s*51\s*,\s*234\s*\)|purple)[^;]*;?/gi, "")
+          .trim();
+        return cleanedStyle ? `style=${q}${cleanedStyle}${q}` : "";
+      });
+      return `<img${cleanedAttrs}>`;
+    });
+  };
+
   const preserveLetterHtmlSpaces = (html: string): string => {
     if (!html || typeof html !== "string") return "";
-    return html.replace(/>([^<]+)</g, (fullMatch, textContent: string) => {
-      if (!textContent) return fullMatch;
-      const preserved = textContent
-        .replace(/^ +/gm, (m) => "\u00a0".repeat(m.length))
-        .replace(/ {2,}/g, (m) => "\u00a0".repeat(m.length));
-      return `>${preserved}<`;
-    });
+    const cleanImgHtml = sanitizeLetterHtmlImages(html);
+    return cleanImgHtml.replace(
+      /(<(?:p|div|li|h[1-6])\b[^>]*>)([\s\S]*?)(<\/(?:p|div|li|h[1-6])>)/gi,
+      (full, openTag: string, inner: string, closeTag: string) => {
+        const isJustified =
+          /ql-align-justify/i.test(openTag) ||
+          /text-align\s*:\s*justify/i.test(openTag);
+        if (isJustified) {
+          // Inside justified blocks, inter-word non-breaking spaces break uniform stretching — keep only normal single spaces
+          const cleaned = inner
+            .replace(/>([^<]+)</g, (_m, txt: string) => {
+              const norm = txt.replace(/[\u00a0]/g, " ").replace(/&nbsp;/gi, " ").replace(/ {2,}/g, " ");
+              return `>${norm}<`;
+            })
+            .replace(/^([^<]+)/, (txt: string) =>
+              txt.replace(/[\u00a0]/g, " ").replace(/&nbsp;/gi, " ").replace(/^ +/, "").replace(/ {2,}/g, " "),
+            )
+            .replace(/([^>]+)$/, (txt: string) =>
+              txt.replace(/[\u00a0]/g, " ").replace(/&nbsp;/gi, " ").replace(/ {2,}/g, " "),
+            );
+          return `${openTag}${cleaned}${closeTag}`;
+        }
+        const preserved = inner.replace(/>([^<]+)</g, (fullMatch, textContent: string) => {
+          if (!textContent) return fullMatch;
+          const out = textContent
+            .replace(/^ +/gm, (m) => "\u00a0".repeat(m.length))
+            .replace(/ {2,}/g, (m) => "\u00a0 ".repeat(Math.floor(m.length / 2)) + (m.length % 2 ? " " : ""));
+          return `>${out}<`;
+        });
+        return `${openTag}${preserved}${closeTag}`;
+      },
+    );
+  };
+
+  const prepareLetterHtmlForRender = (html: string): string => {
+    if (!html || typeof html !== "string") return "";
+    return preserveLetterHtmlSpaces(html).replace(/<p>\s*<\/p>/gi, "<p><br /></p>");
+  };
+
+  const getResolvedStampForLetter = (
+    letter?: Partial<SecretariatLetter> | null,
+    settings?: SecretariatCompanySettings | null,
+  ): { url: string; size: number; opacity: number } => {
+    const normStamps = getNormalizedStamps(settings);
+    const ids = Array.isArray(letter?.selectedStampIds)
+      ? letter.selectedStampIds
+      : (letter as any)?.selectedStampId
+        ? [(letter as any).selectedStampId]
+        : [];
+    let matched = ids.length > 0 ? normStamps.find((st) => ids.includes(st.id)) : undefined;
+    if (!matched && normStamps.length > 0) {
+      matched = normStamps.find((st) => st.isDefault) || normStamps[0];
+    }
+    const rawUrl = matched?.url || matched?.imageUrl || settings?.companyStampUrl || "";
+    return {
+      url: rawUrl ? resolveImageUrl(rawUrl) : "",
+      size: matched?.width || settings?.companyStampSize || 120,
+      opacity: matched?.opacity ?? settings?.companyStampOpacity ?? 75,
+    };
   };
 
   // Synchronize editor content with form state
@@ -2263,6 +2329,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           date: source.date || "",
           letterNumber: letterNum,
           signers: source.signers || [],
+          signOffText: typeof source.signOffText === "string" ? source.signOffText.trim() : "",
           paperSize: source.paperSize || "A4",
           orientation: source.orientation || "portrait",
           companyId: (source as any).companyId || selectedCompany?.id || "",
@@ -2271,6 +2338,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           attachmentDescription: attachDesc,
           attachments: source.attachments || [],
           addCompanyStamp: source.addCompanyStamp || false,
+          selectedStampIds: source.selectedStampIds || ((source as any).selectedStampId ? [(source as any).selectedStampId] : []),
           hideSalutationInLetter: source.hideSalutationInLetter ?? true,
           hideSubjectInLetter: source.hideSubjectInLetter ?? true,
         }),
@@ -2325,6 +2393,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           attachmentDescription: source.attachmentDescription || "",
           attachments: source.attachments || [],
           addCompanyStamp: source.addCompanyStamp || false,
+          selectedStampIds: source.selectedStampIds || ((source as any).selectedStampId ? [(source as any).selectedStampId] : []),
           hideSalutationInLetter: true,
           hideSubjectInLetter: true,
         }),
@@ -2358,44 +2427,80 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         return;
       }
 
-      // For "justify" (تنظیم / هم‌ترازی دوطرفه خطوط):
-      // 1. If user selected a specific text range, justify those lines and join accidental single-Enter line splits
-      if (range && range.length > 0) {
-        quill.formatLine(range.index, range.length, "align", "justify", "user");
-      }
+      const normalizeParagraphTextNodes = (el: HTMLElement) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        const textNodes: Text[] = [];
+        let n = walker.nextNode();
+        while (n) {
+          textNodes.push(n as Text);
+          n = walker.nextNode();
+        }
+        textNodes.forEach((tn, idx) => {
+          let val = (tn.nodeValue || "").replace(/\u00a0/g, " ").replace(/ {2,}/g, " ");
+          if (idx === 0) val = val.replace(/^ +/, "");
+          // Clean spacing around Persian punctuation without affecting numbers/decimals/URLs
+          val = val
+            .replace(/ +([،؛؟!.])/g, "$1")
+            .replace(/([.،؛؟!])([\u0600-\u06FF])/g, "$1 $2");
+          tn.nodeValue = val;
+        });
+      };
 
-      // 2. Also inspect the DOM paragraphs inside .ql-editor so if the user pressed Enter mid-sentence
-      // or clicked "تنظیم" without highlighting text first, body paragraphs are justified and joined cleanly
-      const root = quill.root as HTMLElement;
-      const paragraphs = Array.from(root.querySelectorAll("p"));
       const isShortHeaderOrSignOff = (txt: string) => {
         const clean = txt.replace(/\u00a0/g, " ").trim();
         if (!clean) return true;
-        if (clean.length <= 35 && (
-          clean.startsWith("بسمه") ||
-          clean.startsWith("باسمه") ||
-          clean.startsWith("با سلام") ||
-          clean.startsWith("سلام علیکم") ||
-          clean.startsWith("با تشکر") ||
-          clean.startsWith("با احترام") ||
-          clean.startsWith("با تجدید احترام") ||
-          clean.startsWith("ارادتمند") ||
-          clean.startsWith("سپاسگزارم") ||
-          clean.startsWith("شرکت ") ||
-          clean.startsWith("مدیریت ") ||
-          clean.startsWith("ریاست ") ||
-          clean.startsWith("جناب ") ||
-          clean.startsWith("سرکار ") ||
-          clean.startsWith("موضوع:") ||
-          clean.startsWith("به:") ||
-          clean.startsWith("از:")
-        )) {
+        if (
+          clean.length <= 40 &&
+          (clean.startsWith("بسمه") ||
+            clean.startsWith("باسمه") ||
+            clean.startsWith("با سلام") ||
+            clean.startsWith("سلام علیکم") ||
+            clean.startsWith("با تشکر") ||
+            clean.startsWith("با احترام") ||
+            clean.startsWith("با تجدید احترام") ||
+            clean.startsWith("ارادتمند") ||
+            clean.startsWith("سپاسگزارم") ||
+            clean.startsWith("شرکت ") ||
+            clean.startsWith("مدیریت ") ||
+            clean.startsWith("ریاست ") ||
+            clean.startsWith("جناب ") ||
+            clean.startsWith("سرکار ") ||
+            clean.startsWith("موضوع:") ||
+            clean.startsWith("به:") ||
+            clean.startsWith("از:"))
+        ) {
           return true;
         }
         return false;
       };
 
-      // Merge consecutive body <p> elements that were split manually by pressing Enter mid-sentence
+      const root = quill.root as HTMLElement;
+
+      // If user explicitly selected a range, format those lines via Quill and clean spacing on selected blocks
+      if (range && range.length > 0) {
+        quill.formatLine(range.index, range.length, "align", "justify", "user");
+        const [startLine] = quill.getLine(range.index);
+        const [endLine] = quill.getLine(range.index + range.length);
+        const allBlocks = Array.from(root.querySelectorAll("p, div, li")) as HTMLElement[];
+        let inside = false;
+        allBlocks.forEach((blk) => {
+          if (startLine?.domNode === blk) inside = true;
+          if (inside && !blk.querySelector("img, table")) {
+            normalizeParagraphTextNodes(blk);
+            blk.style.textAlign = "justify";
+            (blk.style as any).textJustify = "inter-word";
+            blk.style.textAlignLast = "right";
+            blk.classList.remove("ql-align-center", "ql-align-left", "ql-align-right");
+            blk.classList.add("ql-align-justify");
+          }
+          if (endLine?.domNode === blk) inside = false;
+        });
+        syncEditorContent();
+        return;
+      }
+
+      // Otherwise justify body paragraphs across the letter cleanly & join accidental single-Enter line splits
+      const paragraphs = Array.from(root.querySelectorAll("p")) as HTMLElement[];
       for (let i = 0; i < paragraphs.length - 1; i++) {
         const curr = paragraphs[i];
         const next = paragraphs[i + 1];
@@ -2407,7 +2512,6 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         if (!currText || !nextText) continue;
         if (isShortHeaderOrSignOff(currText) || isShortHeaderOrSignOff(nextText)) continue;
 
-        // If current paragraph doesn't end with sentence punctuation (or is a body line) and next is also body continuation
         const endsWithSentenceStop = /[.!؟?:؛]$/.test(currText);
         if (!endsWithSentenceStop && currText.length >= 25) {
           curr.innerHTML = `${curr.innerHTML.replace(/<br\s*\/?>\s*$/i, "").trim()} ${next.innerHTML.trim()}`;
@@ -2417,14 +2521,19 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
         }
       }
 
-      // Apply full justification to body paragraphs
-      Array.from(root.querySelectorAll("p")).forEach((p) => {
+      const activeLineNode = range ? quill.getLine(range.index)?.[0]?.domNode : null;
+
+      (Array.from(root.querySelectorAll("p, li")) as HTMLElement[]).forEach((p) => {
         if (p.querySelector("img, table")) return;
         const txt = (p.textContent || "").replace(/\u00a0/g, " ").trim();
         if (!txt) return;
-        if (!isShortHeaderOrSignOff(txt) && txt.length > 35) {
+        const shouldJustify =
+          p === activeLineNode || (!isShortHeaderOrSignOff(txt) && txt.length > 35);
+        if (shouldJustify) {
+          normalizeParagraphTextNodes(p);
           p.style.textAlign = "justify";
           (p.style as any).textJustify = "inter-word";
+          p.style.textAlignLast = "right";
           p.classList.remove("ql-align-center", "ql-align-left", "ql-align-right");
           p.classList.add("ql-align-justify");
         }
@@ -4193,12 +4302,15 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
           content: '۴۸ عظیم' !important;
         }
 
-        /* Force editor content alignment and typography defaults */
+        /* Force editor content direction & defaults without overriding explicit justify/font rules */
         .ql-editor {
-          font-family: 'Vazirmatn', sans-serif !important;
-          text-align: right !important;
+          font-family: inherit;
+          text-align: right;
           direction: rtl !important;
           line-height: 1.8 !important;
+        }
+        .ql-editor img {
+          outline: none !important;
         }
 
         /* Robust printing fix */
@@ -4733,6 +4845,1135 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
             )}
           </div>
         )}
+
+      {/* D. SECRETARIAT SETTINGS & CALIBRATION VIEW */}
+      {activeTab === "settings" && isSuperUser && (
+        <form
+          onSubmit={handleSaveSettings}
+          className="space-y-5 pb-24 animate-fade-in"
+          dir="rtl"
+        >
+          {/* Settings Header & Sub-tabs */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2.5 bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300 rounded-xl border border-purple-100 dark:border-purple-800/50">
+                  <Settings2 size={20} />
+                </span>
+                <div>
+                  <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
+                    تنظیمات، دسترسی‌ها و سربرگ دبیرخانه — {selectedCompany.name}
+                  </h2>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    مدیریت دسترسی کاربران، الگوی شماره‌گذاری، سربرگ تصویر/PDF/Word، مهر سازمانی و کالیبراسیون چاپ A4
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 min-h-[40px] shrink-0"
+              >
+                <Save size={15} /> ذخیره تنظیمات دبیرخانه
+              </button>
+            </div>
+
+            {/* Sub-Tabs Bar */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+              {[
+                { id: "permissions" as const, label: "دسترسی کاربران", icon: <Shield size={14} /> },
+                { id: "numbering" as const, label: "شماره‌گذاری و متن پایانی", icon: <Hash size={14} /> },
+                { id: "letterhead" as const, label: "سربرگ و کالیبراسیون A4", icon: <Layout size={14} /> },
+                { id: "stamp" as const, label: "مهرهای سازمانی", icon: <Stamp size={14} /> },
+                { id: "word" as const, label: "سربرگ Word و قالب پیش‌فرض", icon: <FileText size={14} /> },
+              ].map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => setSettingsSubTab(st.id)}
+                  className={`flex items-center gap-1.5 text-xs font-bold px-3.5 py-2.5 rounded-xl border transition-all whitespace-nowrap min-h-[40px] shrink-0 ${
+                    settingsSubTab === st.id
+                      ? "bg-purple-600 text-white border-purple-600 shadow-xs"
+                      : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  {st.icon}
+                  <span>{st.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Sub-tab 1: Permissions */}
+          {settingsSubTab === "permissions" && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-black text-slate-800 dark:text-white flex items-center gap-1.5">
+                    <Users size={16} className="text-purple-600" />
+                    تعیین سطح دسترسی کاربران دبیرخانه
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    مدیران کل (Admin / CEO) به صورت پیش‌فرض به تمامی بخش‌ها دسترسی دارند.
+                  </p>
+                </div>
+                <div className="relative w-full sm:w-72">
+                  <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                    placeholder="جستجوی نام یا نام کاربری..."
+                    className="w-full pr-9 pl-3 py-2 text-xs border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  {
+                    key: "headquartersAccessTokens" as const,
+                    title: "دسترسی دبیرخانه دفتر مرکزی",
+                    badgeBg: "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800",
+                    checkedBg: "bg-purple-50/80 border-purple-200 text-purple-900 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-200",
+                  },
+                  {
+                    key: "factoryAccessTokens" as const,
+                    title: "دسترسی دبیرخانه کارخانه",
+                    badgeBg: "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800",
+                    checkedBg: "bg-indigo-50/80 border-indigo-200 text-indigo-900 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-200",
+                  },
+                  {
+                    key: "editAccessTokens" as const,
+                    title: "مجوز ویرایش نامه‌ها",
+                    badgeBg: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800",
+                    checkedBg: "bg-amber-50/80 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-200",
+                  },
+                  {
+                    key: "deleteAccessTokens" as const,
+                    title: "مجوز حذف نامه‌ها",
+                    badgeBg: "bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800",
+                    checkedBg: "bg-rose-50/80 border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-200",
+                  },
+                ].map((group) => {
+                  const selectedIds = companySettingsForm[group.key] || [];
+                  const filteredUsers = users.filter((u) => {
+                    if (!userSearchQuery.trim()) return true;
+                    const q = userSearchQuery.trim().toLowerCase();
+                    return (
+                      (u.fullName || "").toLowerCase().includes(q) ||
+                      (u.username || "").toLowerCase().includes(q)
+                    );
+                  });
+
+                  return (
+                    <div
+                      key={group.key}
+                      className="bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl p-3.5 space-y-3"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5">
+                          <Lock size={14} className="text-purple-600" />
+                          {group.title}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${group.badgeBg}`}>
+                            {toPersianDigits(selectedIds.length)} کاربر
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCompanySettingsForm((prev) => ({
+                                ...prev,
+                                [group.key]: users.map((u) => u.id),
+                              }))
+                            }
+                            className="text-[10px] font-bold text-slate-600 dark:text-slate-300 hover:text-purple-600 px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border dark:border-slate-700"
+                          >
+                            همه
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCompanySettingsForm((prev) => ({
+                                ...prev,
+                                [group.key]: [],
+                              }))
+                            }
+                            className="text-[10px] font-bold text-slate-500 hover:text-rose-600 px-1.5 py-0.5 rounded bg-white dark:bg-slate-800 border dark:border-slate-700"
+                          >
+                            پاک
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="max-h-56 overflow-y-auto space-y-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2 custom-scrollbar">
+                        {filteredUsers.map((u) => {
+                          const isChecked = selectedIds.includes(u.id);
+                          return (
+                            <label
+                              key={u.id}
+                              className={`flex items-center gap-2.5 text-xs p-2 rounded-lg border cursor-pointer transition-colors ${
+                                isChecked
+                                  ? `${group.checkedBg} font-bold`
+                                  : "bg-transparent border-transparent hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  const next = isChecked
+                                    ? selectedIds.filter((id) => id !== u.id)
+                                    : [...selectedIds, u.id];
+                                  setCompanySettingsForm((prev) => ({
+                                    ...prev,
+                                    [group.key]: next,
+                                  }));
+                                }}
+                                className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 cursor-pointer"
+                              />
+                              <span className="flex-1 truncate">{u.fullName || u.username}</span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {getRoleTitleInPersian(u.role)}
+                              </span>
+                            </label>
+                          );
+                        })}
+                        {filteredUsers.length === 0 && (
+                          <div className="text-center py-6 text-xs text-slate-400">
+                            کاربری یافت نشد
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-tab 2: Auto Numbering & Default Sign-off */}
+          {settingsSubTab === "numbering" && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b dark:border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-black text-slate-800 dark:text-white flex items-center gap-1.5">
+                    <Hash size={16} className="text-purple-600" />
+                    تنظیمات شماره‌گذاری خودکار نامه‌ها
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    ساختار شماره اندیکاتور نامه‌های صادره، وارده و داخلی را برای این شرکت مشخص کنید.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-2 rounded-xl border dark:border-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={companySettingsForm.autoNumberingEnabled ?? true}
+                    onChange={(e) =>
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        autoNumberingEnabled: e.target.checked,
+                      }))
+                    }
+                    className="w-4 h-4 rounded text-purple-600"
+                  />
+                  <span>فعال‌سازی شماره‌گذاری خودکار</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                    پیشوند دفتر مرکزی
+                  </label>
+                  <input
+                    type="text"
+                    value={companySettingsForm.numberingPrefixHeadquarters || ""}
+                    onChange={(e) =>
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        numberingPrefixHeadquarters: e.target.value,
+                      }))
+                    }
+                    placeholder="HQ"
+                    className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-mono dir-ltr"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                    پیشوند کارخانه
+                  </label>
+                  <input
+                    type="text"
+                    value={companySettingsForm.numberingPrefixFactory || ""}
+                    onChange={(e) =>
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        numberingPrefixFactory: e.target.value,
+                      }))
+                    }
+                    placeholder="FC"
+                    className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-mono dir-ltr"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                    شماره شروع شمارنده
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={companySettingsForm.numberingStartCounter ?? 1}
+                    onChange={(e) =>
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        numberingStartCounter: Math.max(1, Number(e.target.value) || 1),
+                      }))
+                    }
+                    className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-mono dir-ltr"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                    تعداد ارقام شمارنده (صفر پرکننده)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={companySettingsForm.numberingPadLength ?? 4}
+                    onChange={(e) =>
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        numberingPadLength: Math.max(1, Math.min(8, Number(e.target.value) || 4)),
+                      }))
+                    }
+                    className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-mono dir-ltr"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block">
+                    الگوی فرمت شماره نامه
+                  </label>
+                  <input
+                    type="text"
+                    value={companySettingsForm.numberingFormat || "{PREFIX}-{YEAR}/{NUM}"}
+                    onChange={(e) =>
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        numberingFormat: e.target.value,
+                      }))
+                    }
+                    className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-mono dir-ltr"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {["{PREFIX}", "{YEAR}", "{NUM}", "{SECTION}", "{COMPANY_CODE}"].map((tok) => (
+                      <button
+                        key={tok}
+                        type="button"
+                        onClick={() =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            numberingFormat: `${prev.numberingFormat || ""}${tok}`,
+                          }))
+                        }
+                        className="text-[10px] font-mono font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-purple-700 dark:text-purple-300 hover:bg-purple-100 border dark:border-slate-700"
+                      >
+                        + {tok}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/50 rounded-2xl p-4 flex flex-col justify-center space-y-1.5">
+                  <span className="text-[11px] font-bold text-purple-700 dark:text-purple-300">
+                    پیش‌نمایش شماره نامه بعدی در این بخش ({activeSection === "headquarters" ? "دفتر مرکزی" : "کارخانه"}):
+                  </span>
+                  <div className="text-lg font-black font-mono text-slate-900 dark:text-white dir-ltr text-right">
+                    {getNextLetterNumber(selectedCompany, activeSection, companySettingsForm)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t dark:border-slate-800 pt-4 space-y-2">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
+                  عبارت پایانی پیش‌فرض نامه‌ها (مثلاً: با احترام / با تشکر)
+                </label>
+                <div className="flex flex-wrap gap-1.5 mb-1.5">
+                  {["با احترام", "با تشکر", "با احترام و آرزوی توفیق", "با تشکر و تجدید احترام", ""].map((preset) => (
+                    <button
+                      key={preset || "empty"}
+                      type="button"
+                      onClick={() =>
+                        setCompanySettingsForm((prev) => ({
+                          ...prev,
+                          defaultSignOffText: preset,
+                        }))
+                      }
+                      className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-purple-100 text-slate-700 dark:text-slate-200 font-bold"
+                    >
+                      {preset || "بدون عبارت خودکار"}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={companySettingsForm.defaultSignOffText || ""}
+                  onChange={(e) =>
+                    setCompanySettingsForm((prev) => ({
+                      ...prev,
+                      defaultSignOffText: e.target.value,
+                    }))
+                  }
+                  placeholder="عبارت پیش‌فرض پای نامه..."
+                  className="w-full sm:max-w-md border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-bold"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Sub-tab 3: Letterhead, Margins & A4 Calibration */}
+          {settingsSubTab === "letterhead" && (
+            <div className="space-y-5">
+              {/* Uploads Row */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Image Letterhead */}
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
+                  <h3 className="text-sm font-black text-slate-800 dark:text-white border-b dark:border-slate-800 pb-2">
+                    سربرگ تصویری (PNG / JPG برای ویرایشگر و چاپ مرورگر)
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    تصویر کامل A4 سربرگ شرکت را بارگذاری کنید تا در ویرایشگر و پیش‌نمایش چاپ نمایش داده شود.
+                  </p>
+                  <input
+                    type="file"
+                    ref={letterheadInputRef}
+                    onChange={handleLetterheadUpload}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => letterheadInputRef.current?.click()}
+                    disabled={uploadingLetterhead}
+                    className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors min-h-[40px]"
+                  >
+                    {uploadingLetterhead ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                    <span>{uploadingLetterhead ? "در حال آپلود تصویر..." : "بارگذاری تصویر سربرگ"}</span>
+                  </button>
+                  {companySettingsForm.letterheadUrl &&
+                    !companySettingsForm.letterheadUrl.toLowerCase().endsWith(".pdf") && (
+                      <div className="relative border dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50 dark:bg-slate-800">
+                        <img
+                          src={resolveImageUrl(companySettingsForm.letterheadUrl)}
+                          alt="سربرگ شرکت"
+                          className="w-full max-h-48 object-contain"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const next = { ...companySettingsForm, letterheadUrl: "" };
+                            setCompanySettingsForm(next);
+                            const updated = await saveSecretariatSettings(next);
+                            setSecSettings(updated);
+                          }}
+                          className="absolute top-2 left-2 bg-rose-600 hover:bg-rose-700 text-white p-1.5 rounded-full shadow"
+                          title="حذف تصویر سربرگ"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    )}
+                </div>
+
+                {/* Vector PDF Letterhead */}
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
+                  <h3 className="text-sm font-black text-slate-800 dark:text-white border-b dark:border-slate-800 pb-2">
+                    سربرگ برداری PDF (کیفیت چاپ ۳۰۰ DPI)
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    برای خروجی PDF برداری بدون افت کیفیت، فایل PDF تک‌صفحه A4 سربرگ را آپلود کنید.
+                  </p>
+                  <input
+                    type="file"
+                    ref={pdfLetterheadInputRef}
+                    onChange={handlePdfLetterheadUpload}
+                    accept="application/pdf"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => pdfLetterheadInputRef.current?.click()}
+                    disabled={uploadingPdfLetterhead}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors min-h-[40px]"
+                  >
+                    {uploadingPdfLetterhead ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                    <span>{uploadingPdfLetterhead ? "در حال آپلود PDF..." : "بارگذاری فایل PDF سربرگ"}</span>
+                  </button>
+                  {companySettingsForm.pdfLetterheadUrl && (
+                    <div className="relative border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl p-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-indigo-800 dark:text-indigo-200 truncate">
+                        <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                        <span className="truncate">فایل سربرگ برداری PDF متصل است</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const next = { ...companySettingsForm, pdfLetterheadUrl: "" };
+                          setCompanySettingsForm(next);
+                          const updated = await saveSecretariatSettings(next);
+                          setSecSettings(updated);
+                        }}
+                        className="bg-rose-600 hover:bg-rose-700 text-white p-1.5 rounded-lg shrink-0"
+                        title="حذف سربرگ PDF"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Margins + Metadata Calibration + Live A4 Simulator */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-5">
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5 border-b dark:border-slate-800 pb-2">
+                      <Ruler size={15} className="text-purple-600" />
+                      حاشیه‌های متن روی برگه A4 (میلی‌متر)
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {[
+                        { key: "marginTop" as const, label: "بالا (mm)", def: 40 },
+                        { key: "marginBottom" as const, label: "پایین (mm)", def: 25 },
+                        { key: "marginRight" as const, label: "راست (mm)", def: 20 },
+                        { key: "marginLeft" as const, label: "چپ (mm)", def: 20 },
+                      ].map((m) => (
+                        <div key={m.key} className="space-y-1">
+                          <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 block">
+                            {m.label}
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={150}
+                            value={companySettingsForm[m.key] ?? m.def}
+                            onChange={(e) =>
+                              setCompanySettingsForm((prev) => ({
+                                ...prev,
+                                [m.key]: Number(e.target.value),
+                              }))
+                            }
+                            className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono dir-ltr"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 border-t dark:border-slate-800 pt-4">
+                    <h4 className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5 border-b dark:border-slate-800 pb-2">
+                      <Type size={15} className="text-purple-600" />
+                      مختصات و فونت اطلاعات سربرگ (شماره / تاریخ / پیوست)
+                    </h4>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <div className="flex justify-between text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                          <span>فاصله از بالا</span>
+                          <span className="text-purple-600 font-mono">{companySettingsForm.metadataTop ?? 25} mm</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={200}
+                          value={companySettingsForm.metadataTop ?? 25}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              metadataTop: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-purple-600"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                          <span>فاصله از چپ</span>
+                          <span className="text-purple-600 font-mono">{companySettingsForm.metadataLeft ?? 20} mm</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={190}
+                          value={companySettingsForm.metadataLeft ?? 20}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              metadataLeft: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-purple-600"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-500">سایز قلم (px)</label>
+                        <input
+                          type="number"
+                          min={7}
+                          max={24}
+                          value={companySettingsForm.metadataFontSize ?? 11}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              metadataFontSize: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono dir-ltr"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-500">ضخامت قلم</label>
+                        <select
+                          value={companySettingsForm.metadataFontWeight || "bold"}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              metadataFontWeight: e.target.value as any,
+                            }))
+                          }
+                          className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-2 text-xs font-bold"
+                        >
+                          <option value="normal">معمولی (Normal)</option>
+                          <option value="bold">ضخیم (Bold)</option>
+                          <option value="bolder">خیلی ضخیم</option>
+                          <option value="black">کاملاً ضخیم</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-500">رنگ متن</label>
+                        <input
+                          type="color"
+                          value={companySettingsForm.metadataColor || "#0f172a"}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              metadataColor: e.target.value,
+                            }))
+                          }
+                          className="w-full h-[34px] border dark:border-slate-700 rounded-xl p-1 bg-white dark:bg-slate-800 cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-500">فونت پیش‌فرض نامه‌ها</label>
+                        <select
+                          value={companySettingsForm.letterheadFontFamily || "Vazirmatn"}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              letterheadFontFamily: e.target.value,
+                            }))
+                          }
+                          className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-bold"
+                        >
+                          <option value="Vazirmatn">Vazirmatn (وزیرمتن - استاندارد)</option>
+                          <option value="Sahel">Sahel (ساحل)</option>
+                          <option value="Samim">Samim (صمیم)</option>
+                          <option value="Tanha">Tanha (تنها)</option>
+                          <option value="Shabnam">Shabnam (شبنم)</option>
+                          <option value="B Nazanin">B Nazanin (بی‌نازنین)</option>
+                          <option value="B Titr">B Titr (بی‌تیتر)</option>
+                          <option value="B Yekan">B Yekan (بی‌یکان)</option>
+                          <option value="Noto Naskh Arabic">Noto Naskh Arabic</option>
+                          <option value="Noto Sans Arabic">Noto Sans Arabic</option>
+                          <option value="Tahoma">Tahoma</option>
+                          <option value="Arial">Arial</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[11px] font-bold text-slate-500">
+                          <span>شفافیت مشخصات سربرگ</span>
+                          <span className="font-mono text-purple-600">{companySettingsForm.metadataOpacity ?? 100}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={10}
+                          max={100}
+                          step={5}
+                          value={companySettingsForm.metadataOpacity ?? 100}
+                          onChange={(e) =>
+                            setCompanySettingsForm((prev) => ({
+                              ...prev,
+                              metadataOpacity: Number(e.target.value),
+                            }))
+                          }
+                          className="w-full accent-purple-600 mt-2"
+                        />
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 pt-2 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={companySettingsForm.hideAutoFooter || false}
+                        onChange={(e) =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            hideAutoFooter: e.target.checked,
+                          }))
+                        }
+                        className="w-4 h-4 rounded text-purple-600"
+                      />
+                      <span>عدم نمایش پاورقی نشانی/تلفن خودکار (برای سربرگ‌های دارای فوتر چاپی)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Live A4 Calibration Simulator */}
+                <div className="bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col items-center justify-center space-y-2.5 select-none">
+                  <div className="w-full flex items-center justify-between text-[11px] font-bold text-slate-500">
+                    <span>پیش‌نمایش زنده برگه A4</span>
+                    <span className="text-[10px] text-purple-600 bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 rounded">
+                      برای جانمایی شماره/تاریخ روی صفحه کلیک کنید
+                    </span>
+                  </div>
+
+                  <div
+                    className="relative bg-white shadow-md border border-slate-300 w-full max-w-[290px] cursor-crosshair rounded overflow-hidden"
+                    style={{ aspectRatio: "210 / 297" }}
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const mmX = Math.round(((e.clientX - rect.left) / rect.width) * 210);
+                      const mmY = Math.round(((e.clientY - rect.top) / rect.height) * 297);
+                      setCompanySettingsForm((prev) => ({
+                        ...prev,
+                        metadataLeft: Math.max(0, Math.min(190, mmX)),
+                        metadataTop: Math.max(0, Math.min(270, mmY)),
+                      }));
+                    }}
+                  >
+                    {getEffectiveLetterheadDisplayUrl(companySettingsForm) && (
+                      <img
+                        src={getEffectiveLetterheadDisplayUrl(companySettingsForm)}
+                        alt="پیش‌نمایش سربرگ"
+                        className="absolute inset-0 w-full h-full object-fill pointer-events-none z-0"
+                      />
+                    )}
+                    {/* Content Margins Guide */}
+                    <div
+                      className="absolute border border-dashed border-sky-400/70 pointer-events-none z-10"
+                      style={{
+                        top: `${((companySettingsForm.marginTop ?? 40) / 297) * 100}%`,
+                        bottom: `${((companySettingsForm.marginBottom ?? 25) / 297) * 100}%`,
+                        right: `${((companySettingsForm.marginRight ?? 20) / 210) * 100}%`,
+                        left: `${((companySettingsForm.marginLeft ?? 20) / 210) * 100}%`,
+                      }}
+                    />
+                    {/* Metadata Box */}
+                    <div
+                      className="absolute border border-dashed border-rose-500 bg-white/85 px-1 py-0.5 rounded pointer-events-none z-20 text-right whitespace-nowrap"
+                      style={{
+                        top: `${((companySettingsForm.metadataTop ?? 25) / 297) * 100}%`,
+                        left: `${((companySettingsForm.metadataLeft ?? 20) / 210) * 100}%`,
+                        fontSize: `${Math.max(6, (companySettingsForm.metadataFontSize ?? 11) * 0.55)}px`,
+                        color: companySettingsForm.metadataColor || "#0f172a",
+                        fontWeight: companySettingsForm.metadataFontWeight || "bold",
+                        opacity: (companySettingsForm.metadataOpacity ?? 100) / 100,
+                        fontFamily: companySettingsForm.letterheadFontFamily || "Vazirmatn",
+                        lineHeight: "1.3",
+                      }}
+                    >
+                      <div>شماره: ۱۴۰۵/۰۰۱</div>
+                      <div>تاریخ: ۱۴۰۵/۰۱/۱۰</div>
+                      <div>پیوست: ندارد</div>
+                    </div>
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-400">
+                    چپ: {companySettingsForm.metadataLeft ?? 20}mm | بالا: {companySettingsForm.metadataTop ?? 25}mm
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-tab 4: Stamps & Seal Calibration */}
+          {settingsSubTab === "stamp" && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Primary Stamp */}
+                <div className="space-y-3 border dark:border-slate-800 rounded-2xl p-4 bg-slate-50/50 dark:bg-slate-800/30">
+                  <h4 className="text-xs font-black text-slate-800 dark:text-white">
+                    مهر رسمی پیش‌فرض شرکت
+                  </h4>
+                  <input
+                    type="file"
+                    ref={stampInputRef}
+                    onChange={handleStampUpload}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => stampInputRef.current?.click()}
+                    disabled={uploadingStamp}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 min-h-[40px]"
+                  >
+                    {uploadingStamp ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                    <span>{uploadingStamp ? "در حال آپلود..." : "بارگذاری تصویر مهر رسمی"}</span>
+                  </button>
+                  {companySettingsForm.companyStampUrl && (
+                    <div className="relative border dark:border-slate-700 rounded-xl p-3 bg-white dark:bg-slate-900 flex items-center justify-center h-36">
+                      <img
+                        src={resolveImageUrl(companySettingsForm.companyStampUrl)}
+                        alt="مهر رسمی شرکت"
+                        className="max-h-full object-contain mix-blend-multiply"
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const next = { ...companySettingsForm, companyStampUrl: "" };
+                          setCompanySettingsForm(next);
+                          const updated = await saveSecretariatSettings(next);
+                          setSecSettings(updated);
+                        }}
+                        className="absolute top-2 left-2 bg-rose-600 hover:bg-rose-700 text-white p-1.5 rounded-full"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stamp Size, Opacity & Position */}
+                <div className="space-y-3 border dark:border-slate-800 rounded-2xl p-4 bg-slate-50/50 dark:bg-slate-800/30">
+                  <h4 className="text-xs font-black text-slate-800 dark:text-white">
+                    کالیبراسیون اندازه و شفافیت مهر در چاپ
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500">اندازه (px)</label>
+                      <input
+                        type="number"
+                        min={50}
+                        max={260}
+                        value={companySettingsForm.companyStampSize ?? 120}
+                        onChange={(e) =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            companyStampSize: Number(e.target.value),
+                          }))
+                        }
+                        className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono dir-ltr"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500">شفافیت (%)</label>
+                      <input
+                        type="number"
+                        min={10}
+                        max={100}
+                        value={companySettingsForm.companyStampOpacity ?? 75}
+                        onChange={(e) =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            companyStampOpacity: Number(e.target.value),
+                          }))
+                        }
+                        className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-2 text-xs font-mono dir-ltr"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-500">موقعیت پیش‌فرض</label>
+                      <select
+                        value={companySettingsForm.companyStampPosition || "bottom_left"}
+                        onChange={(e) =>
+                          setCompanySettingsForm((prev) => ({
+                            ...prev,
+                            companyStampPosition: e.target.value as any,
+                          }))
+                        }
+                        className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-2.5 py-2 text-xs font-bold"
+                      >
+                        <option value="bottom_left">پایین چپ</option>
+                        <option value="bottom_center">پایین وسط</option>
+                        <option value="bottom_right">پایین راست</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Multi-stamp Manager */}
+              <div className="border-t dark:border-slate-800 pt-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-black text-slate-800 dark:text-white flex items-center gap-1.5">
+                      <Award size={15} className="text-purple-600" />
+                      بانک مهرهای متعدد شرکت (امکان انتخاب مهر هنگام صدور نامه)
+                    </h4>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newStampName}
+                      onChange={(e) => setNewStampName(e.target.value)}
+                      placeholder="نام مهر جدید..."
+                      className="border dark:border-slate-700 dark:bg-slate-800 rounded-xl px-3 py-2 text-xs font-bold w-40 sm:w-48"
+                    />
+                    <input
+                      type="file"
+                      ref={newStampInputRef}
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file || !selectedCompany) return;
+                        setUploadingStamp(true);
+                        const reader = new FileReader();
+                        reader.onload = async (ev) => {
+                          try {
+                            const res = await uploadFile(file.name, ev.target?.result as string);
+                            const existing = getNormalizedStamps(companySettingsForm);
+                            const newItem: CompanyStampItem = {
+                              id: generateUUID(),
+                              name: newStampName.trim() || "مهر جدید",
+                              url: res.url,
+                              isDefault: existing.length === 0,
+                              opacity: companySettingsForm.companyStampOpacity ?? 75,
+                              width: companySettingsForm.companyStampSize ?? 120,
+                            };
+                            const nextStamps = [...existing, newItem];
+                            const nextForm: SecretariatCompanySettings = {
+                              ...companySettingsForm,
+                              companyId: selectedCompany.id,
+                              stamps: nextStamps,
+                              companyStampUrl: companySettingsForm.companyStampUrl || res.url,
+                            };
+                            setCompanySettingsForm(nextForm);
+                            const updated = await saveSecretariatSettings(nextForm);
+                            setSecSettings(updated);
+                            setNewStampName("مهر جدید");
+                          } catch {
+                            alert("خطا در آپلود مهر جدید");
+                          } finally {
+                            setUploadingStamp(false);
+                            e.target.value = "";
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => newStampInputRef.current?.click()}
+                      className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 whitespace-nowrap min-h-[38px]"
+                    >
+                      <Plus size={14} /> افزودن مهر
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {getNormalizedStamps(companySettingsForm).map((st) => {
+                    const stUrl = st.url || st.imageUrl || "";
+                    const stTitle = st.name || st.title || "مهر";
+                    const isEditing = editingStampId === st.id;
+                    return (
+                      <div
+                        key={st.id}
+                        className={`border rounded-xl p-3 flex items-center gap-3 ${
+                          st.isDefault
+                            ? "border-purple-400 bg-purple-50/50 dark:bg-purple-950/30"
+                            : "border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40"
+                        }`}
+                      >
+                        {stUrl && (
+                          <img
+                            src={resolveImageUrl(stUrl)}
+                            alt={stTitle}
+                            className="w-12 h-12 object-contain bg-white rounded-lg p-1 border shrink-0"
+                          />
+                        )}
+                        <div className="flex-1 min-w-0 space-y-1">
+                          {isEditing ? (
+                            <input
+                              type="text"
+                              autoFocus
+                              defaultValue={stTitle}
+                              onBlur={(ev) => {
+                                const val = ev.target.value.trim() || stTitle;
+                                setCompanySettingsForm((prev) => ({
+                                  ...prev,
+                                  stamps: getNormalizedStamps(prev).map((item) =>
+                                    item.id === st.id ? { ...item, name: val } : item,
+                                  ),
+                                }));
+                                setEditingStampId(null);
+                              }}
+                              onKeyDown={(ev) => {
+                                if (ev.key === "Enter") (ev.target as HTMLInputElement).blur();
+                              }}
+                              className="w-full border rounded px-2 py-1 text-xs font-bold"
+                            />
+                          ) : (
+                            <div className="text-xs font-black text-slate-800 dark:text-white truncate">
+                              {stTitle}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCompanySettingsForm((prev) => ({
+                                  ...prev,
+                                  companyStampUrl: stUrl,
+                                  stamps: getNormalizedStamps(prev).map((item) => ({
+                                    ...item,
+                                    isDefault: item.id === st.id,
+                                  })),
+                                }));
+                              }}
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                st.isDefault
+                                  ? "bg-purple-600 text-white"
+                                  : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border dark:border-slate-700"
+                              }`}
+                            >
+                              {st.isDefault ? "پیش‌فرض" : "انتخاب به‌عنوان پیش‌فرض"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingStampId(st.id)}
+                              className="text-slate-400 hover:text-purple-600 p-1"
+                              title="تغییر نام"
+                            >
+                              <Edit3 size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const remaining = getNormalizedStamps(companySettingsForm).filter(
+                                  (item) => item.id !== st.id,
+                                );
+                                setCompanySettingsForm((prev) => ({
+                                  ...prev,
+                                  stamps: remaining,
+                                  companyStampUrl: remaining[0]?.url || remaining[0]?.imageUrl || "",
+                                }));
+                              }}
+                              className="text-slate-400 hover:text-rose-600 p-1"
+                              title="حذف"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-tab 5: Word Letterhead & Default Minutes Template */}
+          {settingsSubTab === "word" && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs space-y-5">
+              <div className="space-y-3">
+                <h3 className="text-sm font-black text-slate-800 dark:text-white border-b dark:border-slate-800 pb-2">
+                  سربرگ اختصاصی Microsoft Word (.docx)
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  در صورت آپلود فایل قالب ورد (.docx)، هنگام دریافت خروجی Word متن نامه داخل سربرگ رسمی شما درج می‌شود.
+                </p>
+                <input
+                  type="file"
+                  ref={wordLetterheadInputRef}
+                  onChange={handleWordLetterheadUpload}
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => wordLetterheadInputRef.current?.click()}
+                    disabled={uploadingWordLetterhead}
+                    className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center gap-2 min-h-[40px]"
+                  >
+                    {uploadingWordLetterhead ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                    <span>{uploadingWordLetterhead ? "در حال آپلود..." : "بارگذاری فایل سربرگ Word (.docx)"}</span>
+                  </button>
+
+                  {companySettingsForm.wordLetterheadUrl && (
+                    <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 px-3 py-2 rounded-xl text-xs font-bold text-blue-800 dark:text-blue-200">
+                      <CheckCircle size={15} className="text-emerald-600" />
+                      <span>قالب Word ثبت شده است</span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const next = { ...companySettingsForm, wordLetterheadUrl: "" };
+                          setCompanySettingsForm(next);
+                          const updated = await saveSecretariatSettings(next);
+                          setSecSettings(updated);
+                        }}
+                        className="text-rose-600 hover:text-rose-700 p-1"
+                        title="حذف قالب ورد"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="border-t dark:border-slate-800 pt-4 space-y-2">
+                <label className="text-xs font-black text-slate-800 dark:text-white block">
+                  متن شروع / قالب پیش‌فرض نامه‌ها و صورتجلسات جدید
+                </label>
+                <textarea
+                  rows={5}
+                  value={companySettingsForm.meetingMinutesTemplate || ""}
+                  onChange={(e) =>
+                    setCompanySettingsForm((prev) => ({
+                      ...prev,
+                      meetingMinutesTemplate: e.target.value,
+                    }))
+                  }
+                  placeholder="مثال: با سلام و احترام، ..."
+                  className="w-full border dark:border-slate-700 dark:bg-slate-800 rounded-xl p-3 text-xs leading-relaxed"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Save Action */}
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-6 py-3 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 min-h-[44px]"
+            >
+              <Save size={16} /> ذخیره و اعمال نهایی تنظیمات دبیرخانه
+            </button>
+          </div>
+        </form>
+      )}
 
                     {/* Template Edit / Create Modal */}
           {typeof document !== "undefined" && createPortal(
@@ -9071,31 +10312,36 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                               <div
                                 className="ql-editor text-slate-900 leading-loose font-medium text-[14px]"
                                 dangerouslySetInnerHTML={{
-                                  __html: preserveLetterHtmlSpaces(
+                                  __html: prepareLetterHtmlForRender(
                                     selectedLetterForView.content || "",
                                   ),
                                 }}
                               />
 
                               {/* Optional Sign-off / Signers / Company Stamp (only if not already inside content) */}
-                              {((selectedLetterForView.signers &&
-                                selectedLetterForView.signers.length > 0) ||
-                                (selectedLetterForView.approvedBy &&
-                                  selectedLetterForView.approvedBy.length > 0) ||
-                                (selectedLetterForView.addCompanyStamp &&
-                                  viewCompanySettings.companyStampUrl)) && (
-                                <div className="pt-4 mt-4 space-y-3 break-inside-avoid">
-                                  <div className="flex flex-wrap items-end justify-between gap-4">
-                                    {selectedLetterForView.addCompanyStamp &&
-                                      viewCompanySettings.companyStampUrl && (
-                                        <div className="flex flex-col items-center">
-                                          <img
-                                            src={viewCompanySettings.companyStampUrl}
-                                            alt="مهر شرکت"
-                                            className="h-20 w-auto object-contain mix-blend-multiply opacity-90"
-                                          />
-                                        </div>
-                                      )}
+                              {(() => {
+                                const resolvedViewStamp = getResolvedStampForLetter(
+                                  selectedLetterForView,
+                                  viewCompanySettings,
+                                );
+                                return ((selectedLetterForView.signers &&
+                                  selectedLetterForView.signers.length > 0) ||
+                                  (selectedLetterForView.approvedBy &&
+                                    selectedLetterForView.approvedBy.length > 0) ||
+                                  (selectedLetterForView.addCompanyStamp &&
+                                    resolvedViewStamp.url)) && (
+                                  <div className="pt-4 mt-4 space-y-3 break-inside-avoid">
+                                    <div className="flex flex-wrap items-end justify-between gap-4">
+                                      {selectedLetterForView.addCompanyStamp &&
+                                        resolvedViewStamp.url && (
+                                          <div className="flex flex-col items-center">
+                                            <img
+                                              src={resolvedViewStamp.url}
+                                              alt="مهر شرکت"
+                                              className="h-20 w-auto object-contain mix-blend-multiply opacity-90 outline-none border-0"
+                                            />
+                                          </div>
+                                        )}
 
                                     <div className="flex flex-wrap gap-3 justify-end ml-auto">
                                       {selectedLetterForView.approvedBy &&
@@ -9116,7 +10362,7 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                                   {sigUrl && (
                                                     <img
                                                       src={sigUrl}
-                                                      className="h-12 mx-auto object-contain mix-blend-multiply"
+                                                      className="h-12 mx-auto object-contain mix-blend-multiply outline-none border-0"
                                                     />
                                                   )}
                                                   <span className="text-[11px] font-bold text-gray-800 block">
@@ -9148,7 +10394,8 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                                     </div>
                                   </div>
                                 </div>
-                              )}
+                                  );
+                                })()}
                             </div>
                           </div>
                         </div>
@@ -9704,89 +10951,89 @@ const SecretariatModule: React.FC<SecretariatModuleProps> = ({
                         <div
                           className="ql-editor leading-loose font-medium text-slate-900 text-[14px]"
                           dangerouslySetInnerHTML={{
-                            __html: preserveLetterHtmlSpaces(
+                            __html: prepareLetterHtmlForRender(
                               isPrintMode.content || "",
                             ),
                           }}
                         />
 
                         {/* Signatures & Stamp block (only when signers/approvedBy/addCompanyStamp are used) */}
-                        {((isPrintMode.signers &&
-                          isPrintMode.signers.length > 0) ||
-                          (isPrintMode.approvedBy &&
-                            isPrintMode.approvedBy.length > 0) ||
-                          (isPrintMode.addCompanyStamp &&
-                            printSettings.companyStampUrl)) && (
-                          <div
-                            className={`mt-8 w-64 text-center space-y-2 break-inside-avoid ${
-                              isPrintMode.signaturePosition === "bottom_left"
-                                ? "mr-auto ml-0"
-                                : isPrintMode.signaturePosition ===
-                                    "bottom_center"
-                                  ? "mx-auto"
-                                  : "ml-auto mr-0"
-                            }`}
-                          >
-                            {isPrintMode.signers &&
-                              isPrintMode.signers.length > 0 && (
-                                <div className="flex gap-4 justify-center flex-wrap mt-2">
-                                  {isPrintMode.signers.map((signer, idx) => (
-                                    <div
-                                      key={idx}
-                                      className="flex flex-col items-center"
-                                    >
-                                      <div className="font-bold text-sm">
-                                        {signer.name}
+                        {(() => {
+                          const resolvedPrintStamp = getResolvedStampForLetter(
+                            isPrintMode,
+                            printSettings,
+                          );
+                          return ((isPrintMode.signers &&
+                            isPrintMode.signers.length > 0) ||
+                            (isPrintMode.approvedBy &&
+                              isPrintMode.approvedBy.length > 0) ||
+                            (isPrintMode.addCompanyStamp &&
+                              resolvedPrintStamp.url)) && (
+                            <div
+                              className={`mt-8 w-64 text-center space-y-2 break-inside-avoid ${
+                                isPrintMode.signaturePosition === "bottom_left"
+                                  ? "mr-auto ml-0"
+                                  : isPrintMode.signaturePosition ===
+                                      "bottom_center"
+                                    ? "mx-auto"
+                                    : "ml-auto mr-0"
+                              }`}
+                            >
+                              {isPrintMode.signers &&
+                                isPrintMode.signers.length > 0 && (
+                                  <div className="flex gap-4 justify-center flex-wrap mt-2">
+                                    {isPrintMode.signers.map((signer, idx) => (
+                                      <div
+                                        key={idx}
+                                        className="flex flex-col items-center"
+                                      >
+                                        <div className="font-bold text-sm">
+                                          {signer.name}
+                                        </div>
+                                        <div className="text-xs text-gray-600 font-bold">
+                                          {signer.title}
+                                        </div>
                                       </div>
-                                      <div className="text-xs text-gray-600 font-bold">
-                                        {signer.title}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                            <div className="relative mt-2 flex justify-center items-center">
-                              {isPrintMode.approvedBy &&
-                                isPrintMode.approvedBy.length > 0 && (
-                                  <div className="flex justify-center gap-2 relative z-10 w-full flex-wrap">
-                                    {isPrintMode.approvedBy.map(
-                                      (userId, idx) => {
-                                        const sigUrl =
-                                          isPrintMode.signatureImageUrls?.[idx];
-                                        return sigUrl ? (
-                                          <img
-                                            key={idx}
-                                            src={sigUrl}
-                                            className="h-16 object-contain mix-blend-multiply"
-                                          />
-                                        ) : null;
-                                      },
-                                    )}
+                                    ))}
                                   </div>
                                 )}
-                              {isPrintMode.addCompanyStamp &&
-                                printSettings.companyStampUrl && (
-                                  <img
-                                    src={printSettings.companyStampUrl}
-                                    alt="مهر شرکت"
-                                    className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 object-contain mix-blend-multiply z-0"
-                                    style={{
-                                      height: printSettings.companyStampSize
-                                        ? `${printSettings.companyStampSize}px`
-                                        : "120px",
-                                      width: printSettings.companyStampSize
-                                        ? `${printSettings.companyStampSize}px`
-                                        : "120px",
-                                      opacity: printSettings.companyStampOpacity
-                                        ? printSettings.companyStampOpacity / 100
-                                        : 0.7,
-                                    }}
-                                  />
-                                )}
+
+                              <div className="relative mt-2 flex justify-center items-center">
+                                {isPrintMode.approvedBy &&
+                                  isPrintMode.approvedBy.length > 0 && (
+                                    <div className="flex justify-center gap-2 relative z-10 w-full flex-wrap">
+                                      {isPrintMode.approvedBy.map(
+                                        (userId, idx) => {
+                                          const sigUrl =
+                                            isPrintMode.signatureImageUrls?.[idx];
+                                          return sigUrl ? (
+                                            <img
+                                              key={idx}
+                                              src={resolveImageUrl(sigUrl)}
+                                              className="h-16 object-contain mix-blend-multiply outline-none border-0"
+                                            />
+                                          ) : null;
+                                        },
+                                      )}
+                                    </div>
+                                  )}
+                                {isPrintMode.addCompanyStamp &&
+                                  resolvedPrintStamp.url && (
+                                    <img
+                                      src={resolvedPrintStamp.url}
+                                      alt="مهر شرکت"
+                                      className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 object-contain mix-blend-multiply z-0 outline-none border-0"
+                                      style={{
+                                        height: `${resolvedPrintStamp.size}px`,
+                                        width: `${resolvedPrintStamp.size}px`,
+                                        opacity: resolvedPrintStamp.opacity / 100,
+                                      }}
+                                    />
+                                  )}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
 
                       {/* Footer bar containing metadata of address/phone */}

@@ -9500,8 +9500,7 @@ app.get('/api/industrial-erp/companies', async (req, res) => {
             : null;
         const defaultFyLabel = activeFyObj?.label || '1405';
 
-        const filteredCompanies = companies.filter(comp => comp.isAccountingEnabled !== false);
-        const targetList = filteredCompanies.length > 0 ? filteredCompanies : companies.slice(0, 1);
+        const targetList = companies.filter(comp => comp.isAccountingEnabled !== false);
 
         let pgStatsMap = null;
         if (erpPg.isPostgresConfigured()) {
@@ -13272,6 +13271,7 @@ app.post('/api/secretariat/quick-docx', async (req, res) => {
             date = '',
             letterNumber = '',
             signers = [],
+            signOffText = '',
             paperSize = 'A4',
             orientation = 'portrait',
             companyId = '',
@@ -13281,6 +13281,7 @@ app.post('/api/secretariat/quick-docx', async (req, res) => {
             hasAttachment = false,
             attachmentDescription = '',
             addCompanyStamp = false,
+            selectedStampIds = [],
             hideSalutationInLetter = false,
             hideSubjectInLetter = false,
         } = req.body;
@@ -13298,6 +13299,7 @@ app.post('/api/secretariat/quick-docx', async (req, res) => {
             date,
             letterNumber,
             signers,
+            signOffText: typeof signOffText === 'string' ? signOffText.trim() : '',
             paperSize,
             orientation,
             companyId: company?.id || companyId,
@@ -13306,6 +13308,7 @@ app.post('/api/secretariat/quick-docx', async (req, res) => {
             hasAttachment,
             attachmentDescription,
             addCompanyStamp,
+            selectedStampIds: Array.isArray(selectedStampIds) ? selectedStampIds : [],
             hideSalutationInLetter,
             hideSubjectInLetter,
         };
@@ -13354,6 +13357,7 @@ app.post('/api/secretariat/quick-pdf', async (req, res) => {
             hasAttachment = false,
             attachmentDescription = '',
             addCompanyStamp = false,
+            selectedStampIds = [],
             hideSalutationInLetter = true,
             hideSubjectInLetter = true,
         } = req.body;
@@ -13383,6 +13387,7 @@ app.post('/api/secretariat/quick-pdf', async (req, res) => {
             hasAttachment,
             attachmentDescription,
             addCompanyStamp,
+            selectedStampIds: Array.isArray(selectedStampIds) ? selectedStampIds : [],
             hideSalutationInLetter,
             hideSubjectInLetter,
         };
