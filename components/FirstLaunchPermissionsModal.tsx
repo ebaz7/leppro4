@@ -239,110 +239,113 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-md animate-fade-in"
       dir="rtl"
       role="dialog"
       aria-modal="true"
     >
-      <div className="relative w-full max-w-md rounded-3xl bg-white dark:bg-zinc-900 border border-blue-200/70 dark:border-blue-900/60 shadow-2xl overflow-hidden p-5 sm:p-6">
-        {/* Top Accent Banner */}
-        <div className="flex items-center gap-3.5 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/25 shrink-0">
-            <BellRing size={24} className="animate-bounce" />
+      <div className="relative w-full max-w-md max-h-[92dvh] flex flex-col rounded-2xl sm:rounded-3xl bg-white dark:bg-zinc-900 border border-blue-200/70 dark:border-blue-900/60 shadow-2xl overflow-hidden">
+        {/* Top Accent Banner (Sticky, never clipped) */}
+        <div className="flex-none flex items-center gap-2.5 sm:gap-3.5 px-3.5 py-3 sm:px-6 sm:pt-5 sm:pb-4 border-b border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/25 shrink-0">
+            <BellRing size={20} className="sm:w-6 sm:h-6 animate-bounce" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] font-extrabold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60">
+              <span className="text-[10px] sm:text-[11px] font-extrabold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate">
                 راه‌اندازی اولیه {platformLabel}
               </span>
             </div>
-            <h2 className="text-base sm:text-lg font-black text-zinc-900 dark:text-zinc-100 mt-1">
+            <h2 className="text-sm sm:text-lg font-black text-zinc-900 dark:text-zinc-100 mt-0.5 sm:mt-1 leading-snug">
               فعال‌سازی دسترسی‌های ضروری برنامه
             </h2>
           </div>
         </div>
 
-        <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed mt-3.5 font-medium">
-          برای اینکه پیام‌های گفتگوی سازمانی، کارتابل وظایف و هشدارها بدون تأخیر و حتی هنگام بسته بودن صفحه در{' '}
-          <strong className="text-blue-700 dark:text-blue-400 font-extrabold">
-            {isAndroid ? 'نوار وضعیت بالای گوشی اندروید' : 'مرکز اعلان ویندوز (Notification Center)'}
-          </strong>{' '}
-          نمایش داده شوند، لطفاً دسترسی‌های زیر را تأیید نمایید:
-        </p>
+        {/* Scrollable Middle Body (Fits 4-inch PDA screens cleanly) */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-3.5 py-3 sm:px-6 sm:py-4 space-y-2.5 sm:space-y-3 custom-scrollbar">
+          <p className="text-[11px] sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed font-medium">
+            برای اینکه پیام‌های گفتگوی سازمانی، کارتابل وظایف و هشدارها بدون تأخیر و حتی هنگام بسته بودن صفحه در{' '}
+            <strong className="text-blue-700 dark:text-blue-400 font-extrabold">
+              {isAndroid ? 'نوار وضعیت بالای گوشی اندروید' : 'مرکز اعلان ویندوز (Notification Center)'}
+            </strong>{' '}
+            نمایش داده شوند، لطفاً دسترسی‌های زیر را تأیید نمایید:
+          </p>
 
-        {/* Permission Items List */}
-        <div className="mt-4 space-y-2.5">
-          <div className="flex items-start gap-3 p-3 rounded-2xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
-            <div className="p-2 rounded-xl bg-blue-600 text-white shrink-0 mt-0.5">
-              <BellRing size={16} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
-                  دریافت اعلان‌های آنی و صدای هشدار
-                </h4>
-                {stepStatus.notifications === 'granted' && (
-                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                )}
+          {/* Permission Items List */}
+          <div className="space-y-2">
+            <div className="flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
+              <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-blue-600 text-white shrink-0 mt-0.5">
+                <BellRing size={15} />
               </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
-                نمایش نوتیفیکیشن پیام‌های خصوصی، گروه‌ها و دستورات پرداخت با آرم اختصاصی دلکام
-              </p>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
+                    دریافت اعلان‌های آنی و صدای هشدار
+                  </h4>
+                  {stepStatus.notifications === 'granted' && (
+                    <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                  )}
+                </div>
+                <p className="text-[10px] sm:text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
+                  نمایش نوتیفیکیشن پیام‌های خصوصی، گروه‌ها و دستورات پرداخت با آرم اختصاصی دلکام
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-start gap-3 p-3 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/25 border border-indigo-100 dark:border-indigo-900/40">
-            <div className="p-2 rounded-xl bg-indigo-600 text-white shrink-0 mt-0.5">
-              <Cpu size={16} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
-                  فعالیت در پس‌زمینه و عدم خواب برنامه
-                </h4>
-                {stepStatus.background === 'granted' && (
-                  <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                )}
+            <div className="flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/25 border border-indigo-100 dark:border-indigo-900/40">
+              <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-indigo-600 text-white shrink-0 mt-0.5">
+                <Cpu size={15} />
               </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
-                حفظ اتصال زنده و دریافت پیام‌ها در پس‌زمینه بدون خروج خودکار از حساب کاربری
-              </p>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
+                    فعالیت در پس‌زمینه و عدم خواب برنامه
+                  </h4>
+                  {stepStatus.background === 'granted' && (
+                    <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                  )}
+                </div>
+                <p className="text-[10px] sm:text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
+                  حفظ اتصال زنده و دریافت پیام‌ها در پس‌زمینه بدون خروج خودکار از حساب کاربری
+                </p>
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-start gap-3 p-3 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/25 border border-emerald-100 dark:border-emerald-900/40">
-            <div className="p-2 rounded-xl bg-emerald-600 text-white shrink-0 mt-0.5">
-              <FolderCheck size={16} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
-                  ذخیره فایل‌ها و به‌روزرسانی درون‌برنامه‌ای
-                </h4>
-                <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+            <div className="flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/25 border border-emerald-100 dark:border-emerald-900/40">
+              <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-emerald-600 text-white shrink-0 mt-0.5">
+                <FolderCheck size={15} />
               </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
-                دسترسی به پوشه اختصاصی برنامه جهت باز کردن پیوست‌ها و نصب آسان نسخه‌های جدید
-              </p>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
+                    ذخیره فایل‌ها و به‌روزرسانی درون‌برنامه‌ای
+                  </h4>
+                  <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                </div>
+                <p className="text-[10px] sm:text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
+                  دسترسی به پوشه اختصاصی برنامه جهت باز کردن پیوست‌ها و نصب آسان نسخه‌های جدید
+                </p>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="mt-5 flex flex-col gap-2">
+        {/* Sticky Footer Action Button (Always Visible on Small PDA Screens) */}
+        <div className="flex-none px-3.5 py-3 sm:px-6 sm:py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900/95 flex flex-col gap-1.5">
           <button
             type="button"
             onClick={handleGrantAllPermissions}
             disabled={isGranting}
-            className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs sm:text-sm shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-70"
+            className="w-full py-2.5 sm:py-3 px-4 rounded-xl sm:rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs sm:text-sm shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-70"
           >
-            <ShieldCheck size={18} />
+            <ShieldCheck size={17} />
             <span>
               {isGranting
                 ? 'در حال فعال‌سازی دسترسی‌ها...'
                 : 'تأیید و فعال‌سازی دسترسی‌ها'}
             </span>
-            <Sparkles size={15} />
+            <Sparkles size={14} />
           </button>
         </div>
       </div>

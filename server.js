@@ -6837,14 +6837,33 @@ app.get('/api/sayan/customers/search', async (req, res) => {
 app.post('/api/sayan/barcode/lookup', async (req, res) => {
     try {
         const { barcode, warehouseCode, fiscalYear } = req.body || {};
+        if (!barcode || !String(barcode).trim()) {
+            return res.status(400).json({ success: false, message: 'بارکد وارد نشده است.' });
+        }
         const result = await sayanRemittanceService.lookupBarcodeInSayan(barcode, { warehouseCode, fiscalYear });
         res.json({ success: true, ...result });
     } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 502;
+        res.status(status).json({ success: false, message: err.message || 'خطا در استعلام بارکد از سایان' });
     }
 });
 
-// Create & Register Sales Remittance in Sayan (OpCode 23)
+// Batch barcode scanner lookup (fast sync for offline-scanned carton queues)
+app.post('/api/sayan/barcode/lookup-batch', async (req, res) => {
+    try {
+        const { barcodes, warehouseCode, fiscalYear } = req.body || {};
+        if (!Array.isArray(barcodes) || barcodes.length === 0) {
+            return res.status(400).json({ success: false, message: 'لیست بارکدها برای همگام‌سازی خالی است.' });
+        }
+        const result = await sayanRemittanceService.lookupBarcodesBatchInSayan(barcodes, { warehouseCode, fiscalYear });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 502;
+        res.status(status).json({ success: false, message: err.message || 'خطا در همگام‌سازی دسته‌ای بارکدها با سایان' });
+    }
+});
+
+// Create & Register Sales Remittance in Sayan (OpCode 23 / 25)
 app.post('/api/sayan/sales-remittances/create', async (req, res) => {
     try {
         const data = req.body || {};
@@ -6853,7 +6872,13 @@ app.post('/api/sayan/sales-remittances/create', async (req, res) => {
         res.json(result);
     } catch (err) {
         console.error("Register Sayan Sales Remittance Error:", err);
-        res.status(500).json({ success: false, message: err.message, error: err.message });
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({
+            success: false,
+            message: err.message || 'خطا در ثبت حواله در پایگاه داده سایان',
+            error: err.message,
+            detail: err.sayanError || undefined
+        });
     }
 });
 
@@ -9303,14 +9328,9 @@ function hydrateCompanyErpState(target, companyName = 'شرکت تولیدی ل�
     if (!Array.isArray(target.fixedAssets)) target.fixedAssets = def.fixedAssets;
     if (!Array.isArray(target.vouchers)) target.vouchers = def.vouchers;
     if (!target.cutoverConfig) target.cutoverConfig = def.cutoverConfig;
-    if (!Array.isArray(target.chartOfAccounts)) {
-        target.chartOfAccounts = def.chartOfAccounts;
-    } else {
-        for (const acc of def.chartOfAccounts) {
-            if (!target.chartOfAccounts.some(a => a.code === acc.code)) {
-                target.chartOfAccounts.push(acc);
-            }
-        }
+    const isCoaCustomized = Boolean(target.cutoverConfig?.chartOfAccountsCustomized || target.cutoverConfig?.accountingSettings?.chartOfAccountsCustomized);
+    if (!Array.isArray(target.chartOfAccounts) || (target.chartOfAccounts.length === 0 && !isCoaCustomized)) {
+        target.chartOfAccounts = def.chartOfAccounts.map(a => ({ ...a }));
     }
 
     // Sync company banks defined in Settings into ERP bankAccounts

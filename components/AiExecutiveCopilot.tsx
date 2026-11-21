@@ -57,6 +57,8 @@ export const AiExecutiveCopilot: React.FC<AiExecutiveCopilotProps> = ({
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isBottomBarVisible, setIsBottomBarVisible] = useState(true);
+    const [isMobileChromeHidden, setIsMobileChromeHidden] = useState(false);
+    const [isSoftKeyboardOpen, setIsSoftKeyboardOpen] = useState(false);
     const [messages, setMessages] = useState<Message[]>([
         {
             id: '1',
@@ -84,16 +86,47 @@ export const AiExecutiveCopilot: React.FC<AiExecutiveCopilotProps> = ({
         const handleVisibilityChange = (e: any) => {
             setIsBottomBarVisible(!!e.detail);
         };
+        const handleHideChrome = (e: any) => {
+            setIsMobileChromeHidden(Boolean(e?.detail));
+        };
         const handleAiToggle = (e: any) => {
             const enabled = typeof e.detail === 'boolean' ? e.detail : safeLocalStorage.getItem('app_ai_copilot_enabled') !== 'false';
             setIsAiEnabled(enabled);
             if (!enabled) setIsOpen(false);
         };
+        const isEditable = (el: EventTarget | null) => {
+            if (!el || !(el instanceof HTMLElement)) return false;
+            if (el.tagName === 'TEXTAREA') return true;
+            if (el.tagName === 'INPUT') {
+                const inp = el as HTMLInputElement;
+                if (inp.inputMode === 'none') return false;
+                return !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'file', 'color'].includes((inp.type || 'text').toLowerCase());
+            }
+            return Boolean(el.isContentEditable);
+        };
+        const handleFocusIn = (e: FocusEvent) => {
+            if (window.innerWidth < 768 && isEditable(e.target)) {
+                setIsSoftKeyboardOpen(true);
+            }
+        };
+        const handleFocusOut = () => {
+            setTimeout(() => {
+                if (!isEditable(document.activeElement)) {
+                    setIsSoftKeyboardOpen(false);
+                }
+            }, 120);
+        };
         window.addEventListener('BOTTOM_NAV_VISIBLE', handleVisibilityChange);
+        window.addEventListener('APP_HIDE_MOBILE_CHROME', handleHideChrome);
         window.addEventListener('APP_AI_COPILOT_CHANGED', handleAiToggle);
+        document.addEventListener('focusin', handleFocusIn);
+        document.addEventListener('focusout', handleFocusOut);
         return () => {
             window.removeEventListener('BOTTOM_NAV_VISIBLE', handleVisibilityChange);
+            window.removeEventListener('APP_HIDE_MOBILE_CHROME', handleHideChrome);
             window.removeEventListener('APP_AI_COPILOT_CHANGED', handleAiToggle);
+            document.removeEventListener('focusin', handleFocusIn);
+            document.removeEventListener('focusout', handleFocusOut);
         };
     }, []);
 
@@ -392,6 +425,11 @@ export const AiExecutiveCopilot: React.FC<AiExecutiveCopilotProps> = ({
     };
 
     if (!isAiEnabled) {
+        return null;
+    }
+
+    // Hide floating pill when PDA scanner mode or mobile soft keyboard is active (unless panel is explicitly open)
+    if (!isOpen && (isMobileChromeHidden || isSoftKeyboardOpen)) {
         return null;
     }
 

@@ -844,7 +844,75 @@ const Layout: React.FC<LayoutProps> = ({
     };
   }, [navItems, currentUser.mobileNavOrder, settings?.mobileNavOrder]);
 
-  const isBottomBarVisible = !showMobileMenu && !isModalOpen && (activeTab === 'dashboard' || !hasBackAction) && activeTab !== 'chat';
+  const [isMobileChromeHidden, setIsMobileChromeHidden] = useState(false);
+  const [isSoftKeyboardOpen, setIsSoftKeyboardOpen] = useState(false);
+
+  useEffect(() => {
+    const handleHideChrome = (e: any) => {
+      setIsMobileChromeHidden(Boolean(e?.detail));
+    };
+    window.addEventListener('APP_HIDE_MOBILE_CHROME', handleHideChrome);
+
+    const isEditableTarget = (el: EventTarget | null) => {
+      if (!el || !(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === 'TEXTAREA') return true;
+      if (tag === 'INPUT') {
+        const inp = el as HTMLInputElement;
+        const type = (inp.type || 'text').toLowerCase();
+        // Hardware scanner inputs with inputMode="none" don't open soft keyboard
+        if (inp.inputMode === 'none') return false;
+        return !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'file', 'color'].includes(type);
+      }
+      return Boolean(el.isContentEditable);
+    };
+
+    const handleFocusIn = (e: FocusEvent) => {
+      if (window.innerWidth < 768 && isEditableTarget(e.target)) {
+        setIsSoftKeyboardOpen(true);
+      }
+    };
+    const handleFocusOut = () => {
+      setTimeout(() => {
+        if (!isEditableTarget(document.activeElement)) {
+          setIsSoftKeyboardOpen(false);
+        }
+      }, 120);
+    };
+
+    const initialHeight = window.innerHeight;
+    const handleViewportResize = () => {
+      if (window.innerWidth >= 768) {
+        setIsSoftKeyboardOpen(false);
+        return;
+      }
+      const vv = window.visualViewport;
+      if (vv && initialHeight - vv.height > 130) {
+        setIsSoftKeyboardOpen(true);
+      } else if (!isEditableTarget(document.activeElement)) {
+        setIsSoftKeyboardOpen(false);
+      }
+    };
+
+    document.addEventListener('focusin', handleFocusIn);
+    document.addEventListener('focusout', handleFocusOut);
+    window.visualViewport?.addEventListener('resize', handleViewportResize);
+
+    return () => {
+      window.removeEventListener('APP_HIDE_MOBILE_CHROME', handleHideChrome);
+      document.removeEventListener('focusin', handleFocusIn);
+      document.removeEventListener('focusout', handleFocusOut);
+      window.visualViewport?.removeEventListener('resize', handleViewportResize);
+    };
+  }, []);
+
+  const isBottomBarVisible =
+    !showMobileMenu &&
+    !isModalOpen &&
+    !isMobileChromeHidden &&
+    !isSoftKeyboardOpen &&
+    (activeTab === 'dashboard' || !hasBackAction) &&
+    activeTab !== 'chat';
 
   const getItemCategory = (id: string): 'finance' | 'warehouse' | 'sales' | 'admin' => {
     if (['create', 'manage', 'ccti', 'cheque-receipts', 'balances'].includes(id)) return 'finance';

@@ -38,12 +38,65 @@ import {
   Camera,
   Zap,
   ZapOff,
-  Smartphone
+  Smartphone,
+  Wifi,
+  WifiOff,
+  UploadCloud,
+  Keyboard,
+  Undo2,
+  ChevronUp,
+  Eye,
+  SlidersHorizontal
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import * as jalaali from 'jalaali-js';
 import { apiCall } from '../services/apiService';
 import { openSendToChat } from '../services/chatShareService';
+
+const DRAFT_STORAGE_KEY = 'sayan_remittance_draft_v1';
+const META_CACHE_STORAGE_KEY = 'sayan_remittance_meta_cache_v1';
+
+const parseLocalLepanBarcode = (rawBarcode: string) => {
+  const clean = String(rawBarcode || '').trim();
+  const parts = clean.split('-');
+  let weight = 0;
+  let cartonSeq = 1;
+  if (parts.length >= 4) {
+    const parsedW = parseFloat(parts[parts.length - 1]);
+    if (!isNaN(parsedW) && parsedW > 0 && parsedW < 200) {
+      weight = Number(parsedW.toFixed(2));
+    }
+    const secPart = parseInt(parts[parts.length - 2], 10);
+    if (!isNaN(secPart) && secPart > 0) {
+      cartonSeq = secPart;
+    }
+  }
+  const netWeight = weight > 0 ? weight : 14.5;
+  const grossWeight = Number((netWeight + 4.35).toFixed(2));
+  return {
+    netWeight,
+    grossWeight,
+    cartonSeq
+  };
+};
+
+const isLikelyNetworkError = (err: any): boolean => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('network') ||
+    msg.includes('abort') ||
+    msg.includes('timeout') ||
+    msg.includes('load failed') ||
+    msg.includes('err_internet') ||
+    msg.includes('err_connection') ||
+    msg.includes('offline') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504')
+  );
+};
 
 interface WarehouseItem {
   id: string;
@@ -115,6 +168,8 @@ export interface RemittanceItemRow {
   rawGrade: string;
   rawTwist: string;
   note: string;
+  offlinePendingSync?: boolean;
+  resolvedFromSayan?: boolean;
 }
 
 export interface ArchiveRecord {
@@ -249,7 +304,23 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const [isContinuousScan, setIsContinuousScan] = useState<boolean>(true);
   const [isSoundEnabled, setIsSoundEnabled] = useState<boolean>(true);
   const [isResolvingBarcode, setIsResolvingBarcode] = useState<boolean>(false);
-  const [lastScanResult, setLastScanResult] = useState<{ text: string; success: boolean; item?: any } | null>(null);
+  const [lastScanResult, setLastScanResult] = useState<{ text: string; success: boolean; offline?: boolean; item?: any } | null>(null);
+  // Hardware Gun Mode (suppresses Android soft keyboard so red SCAN button scans 100+ boxes effortlessly)
+  const [isHardwareGunMode, setIsHardwareGunMode] = useState<boolean>(() => {
+    try {
+      return typeof window !== 'undefined' && window.innerWidth < 768;
+    } catch {
+      return false;
+    }
+  });
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
+  const [cartonSearchQuery, setCartonSearchQuery] = useState<string>('');
+  const [confirmClearList, setConfirmClearList] = useState<boolean>(false);
+
+  // Offline Connectivity & Batch Sync State
+  const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator !== 'undefined' ? navigator.onLine !== false : true));
+  const [isSyncingOffline, setIsSyncingOffline] = useState<boolean>(false);
+  const [draftRestoredNotice, setDraftRestoredNotice] = useState<boolean>(false);
 
   // Items List
   const [items, setItems] = useState<RemittanceItemRow[]>([]);
@@ -274,8 +345,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const recentCameraScansRef = useRef<Map<string, number>>(new Map());
   const isResolvingBarcodeRef = useRef<boolean>(false);
 
-  // Submission & Dialogs
+  // Submission, Review Sheet & Dialogs
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState<boolean>(false);
+  const [showReviewFullList, setShowReviewFullList] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successResult, setSuccessResult] = useState<any | null>(null);
   const [printModalRecord, setPrintModalRecord] = useState<any | null>(null);
@@ -287,10 +360,109 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const draftHydratedRef = useRef<boolean>(false);
 
-  // Close customer dropdown when clicking outside
+  // Suppress floating bottom-nav and AI pill on mobile/PDA while issuing remittances so nothing covers fields
+  useEffect(() => {
+    const syncChrome = () => {
+      const shouldHide = activeSubTab === 'issuer' && typeof window !== 'undefined' && window.innerWidth < 768;
+      window.dispatchEvent(new CustomEvent('APP_HIDE_MOBILE_CHROME', { detail: shouldHide }));
+    };
+    syncChrome();
+    window.addEventListener('resize', syncChrome);
+    return () => {
+      window.removeEventListener('resize', syncChrome);
+      window.dispatchEvent(new CustomEvent('APP_HIDE_MOBILE_CHROME', { detail: false }));
+    };
+  }, [activeSubTab]);
+
+  // Online / Offline Connectivity Listeners
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Hydrate Saved Draft & Cached Metadata from localStorage on first mount (survives offline/sleep/reload)
+  useEffect(() => {
+    try {
+      const rawMeta = localStorage.getItem(META_CACHE_STORAGE_KEY);
+      if (rawMeta) {
+        const meta = JSON.parse(rawMeta);
+        if (Array.isArray(meta.warehouses) && meta.warehouses.length > 0) setWarehouses(meta.warehouses);
+        if (Array.isArray(meta.fiscalYears) && meta.fiscalYears.length > 0) setFiscalYears(meta.fiscalYears);
+        if (Array.isArray(meta.customers) && meta.customers.length > 0) {
+          setAllCustomersList(meta.customers);
+          setCustomersList(meta.customers);
+        }
+        if (Array.isArray(meta.goods) && meta.goods.length > 0) {
+          setGoodsList(meta.goods);
+          setActiveItemCode(meta.goods[0].code);
+          setActiveItemName(meta.goods[0].name);
+        }
+      }
+    } catch {}
+
+    try {
+      const rawDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (rawDraft) {
+        const draft = JSON.parse(rawDraft);
+        if (draft && typeof draft === 'object') {
+          if (draft.operationType === '23' || draft.operationType === '25') setOperationType(draft.operationType);
+          if (draft.selectedWarehouse) setSelectedWarehouse(draft.selectedWarehouse);
+          if (draft.selectedDestinationWarehouse) setSelectedDestinationWarehouse(draft.selectedDestinationWarehouse);
+          if (draft.selectedFiscalYear) setSelectedFiscalYear(draft.selectedFiscalYear);
+          if (draft.selectedCustomer) setSelectedCustomer(draft.selectedCustomer);
+          if (draft.remittanceDate) setRemittanceDate(draft.remittanceDate);
+          if (typeof draft.subCode === 'string') setSubCode(draft.subCode);
+          if (typeof draft.headerNotes === 'string') setHeaderNotes(draft.headerNotes);
+          if (Array.isArray(draft.items) && draft.items.length > 0) {
+            setItems(draft.items);
+            itemsRef.current = draft.items;
+            setDraftRestoredNotice(true);
+            if (typeof window !== 'undefined' && window.innerWidth < 768) {
+              setIsHeaderCollapsed(true);
+            }
+          }
+        }
+      }
+    } catch {}
+
+    draftHydratedRef.current = true;
+  }, []);
+
+  // Auto-save Draft to localStorage so scanning 100+ cartons is 100% crash/offline-safe
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        const draftPayload = {
+          operationType,
+          selectedWarehouse,
+          selectedDestinationWarehouse,
+          selectedFiscalYear,
+          selectedCustomer,
+          remittanceDate,
+          subCode,
+          headerNotes,
+          items,
+          updatedAt: Date.now()
+        };
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draftPayload));
+      } catch {}
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [operationType, selectedWarehouse, selectedDestinationWarehouse, selectedFiscalYear, selectedCustomer, remittanceDate, subCode, headerNotes, items]);
+
+  // Close customer dropdown when clicking outside (desktop inline dropdown)
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
+      if (typeof window !== 'undefined' && window.innerWidth < 640) return;
       if (customerDropdownRef.current && !customerDropdownRef.current.contains(event.target as Node)) {
         setIsCustomerDropdownOpen(false);
       }
@@ -299,66 +471,106 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // 1. Initial Data Fetch: Warehouses, Fiscal Years, Automatic Customer Extraction
-  useEffect(() => {
-    const fetchMetadata = async () => {
-      try {
-        setIsLoadingCustomers(true);
-        const [whRes, fyRes, custRes] = await Promise.all([
-          apiCall<{ success: boolean; warehouses: WarehouseItem[] }>('/sayan/warehouses', 'GET'),
-          apiCall<{ success: boolean; fiscalYears: FiscalYearItem[] }>('/sayan/fiscal-years', 'GET'),
-          apiCall<{ success: boolean; customers: CustomerItem[]; count?: number }>('/sayan/customers', 'GET')
-        ]);
+  // 1. Initial Data Fetch: Warehouses, Fiscal Years, Automatic Customer Extraction (with offline cache fallback)
+  const fetchMetadata = async () => {
+    try {
+      setIsLoadingCustomers(true);
+      const [whRes, fyRes, custRes] = await Promise.all([
+        apiCall<{ success: boolean; warehouses: WarehouseItem[] }>('/sayan/warehouses', 'GET', undefined, 0),
+        apiCall<{ success: boolean; fiscalYears: FiscalYearItem[] }>('/sayan/fiscal-years', 'GET', undefined, 0),
+        apiCall<{ success: boolean; customers: CustomerItem[]; count?: number }>('/sayan/customers', 'GET', undefined, 0)
+      ]);
 
-        if (whRes?.success && Array.isArray(whRes.warehouses)) {
-          setWarehouses(whRes.warehouses);
+      let nextWarehouses = warehouses;
+      let nextFiscalYears = fiscalYears;
+      let nextCustomers = allCustomersList;
+
+      if (whRes?.success && Array.isArray(whRes.warehouses) && whRes.warehouses.length > 0) {
+        nextWarehouses = whRes.warehouses;
+        setWarehouses(whRes.warehouses);
+        if (!selectedWarehouse) {
           const tehran = whRes.warehouses.find(w => w.code === '15');
           if (tehran) setSelectedWarehouse('15');
-          else if (whRes.warehouses.length > 0) setSelectedWarehouse(whRes.warehouses[0].code);
-
+          else setSelectedWarehouse(whRes.warehouses[0].code);
+        }
+        if (!selectedDestinationWarehouse) {
           const factory = whRes.warehouses.find(w => w.code === '11');
           if (factory) setSelectedDestinationWarehouse('11');
           else if (whRes.warehouses.length > 1) setSelectedDestinationWarehouse(whRes.warehouses[1].code);
         }
-
-        if (fyRes?.success && Array.isArray(fyRes.fiscalYears) && fyRes.fiscalYears.length > 0) {
-          setFiscalYears(fyRes.fiscalYears);
-          const defYear = fyRes.fiscalYears.find(y => y.isDefault);
-          if (defYear) setSelectedFiscalYear(defYear.code);
-          else setSelectedFiscalYear(fyRes.fiscalYears[0].code);
-        } else {
-          // Default to current year 1405 (Code 4)
-          setSelectedFiscalYear('4');
-        }
-
-        if (custRes?.success && Array.isArray(custRes.customers)) {
-          setAllCustomersList(custRes.customers);
-          setCustomersList(custRes.customers);
-          if (!selectedCustomer && custRes.customers.length > 0) {
-            // Pick default if available
-            const tehranOffice = custRes.customers.find(c => c.personCode === '2471' || c.name.includes('تهران'));
-            if (tehranOffice) setSelectedCustomer(tehranOffice);
-            else setSelectedCustomer(custRes.customers[0]);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load warehouses/fiscal years/customers:', err);
-      } finally {
-        setIsLoadingCustomers(false);
       }
-    };
 
+      if (fyRes?.success && Array.isArray(fyRes.fiscalYears) && fyRes.fiscalYears.length > 0) {
+        nextFiscalYears = fyRes.fiscalYears;
+        setFiscalYears(fyRes.fiscalYears);
+        if (!selectedFiscalYear) {
+          const defYear = fyRes.fiscalYears.find(y => y.isDefault);
+          setSelectedFiscalYear(defYear ? defYear.code : fyRes.fiscalYears[0].code);
+        }
+      }
+
+      if (custRes?.success && Array.isArray(custRes.customers) && custRes.customers.length > 0) {
+        nextCustomers = custRes.customers;
+        setAllCustomersList(custRes.customers);
+        setCustomersList(custRes.customers);
+        setSelectedCustomer(prev => {
+          if (prev) return prev;
+          const tehranOffice = custRes.customers.find(c => c.personCode === '2471' || c.name.includes('تهران'));
+          return tehranOffice || custRes.customers[0];
+        });
+      }
+
+      // Persist metadata cache for offline PDA operation
+      try {
+        const existingMeta = JSON.parse(localStorage.getItem(META_CACHE_STORAGE_KEY) || '{}');
+        localStorage.setItem(META_CACHE_STORAGE_KEY, JSON.stringify({
+          ...existingMeta,
+          warehouses: nextWarehouses,
+          fiscalYears: nextFiscalYears,
+          customers: nextCustomers,
+          cachedAt: Date.now()
+        }));
+      } catch {}
+    } catch (err) {
+      console.warn('Metadata fetch failed (using offline cache/defaults):', err);
+      // Ensure default warehouses exist even if first launch is completely offline
+      setWarehouses(prev => prev.length > 0 ? prev : [
+        { id: '1', code: '11', name: 'انبار کارخانه', isActive: true },
+        { id: '2', code: '12', name: 'انبار تولید', isActive: true },
+        { id: '3', code: '13', name: 'انبار ضایعات', isActive: true },
+        { id: '10004', code: '14', name: 'انبار ملزومات و قطعات', isActive: true },
+        { id: '10006', code: '15', name: 'انبار تهران', isActive: true },
+        { id: '10007', code: '16', name: 'انبار تک', isActive: true },
+        { id: '10008', code: '17', name: 'انبار تلاش', isActive: true }
+      ]);
+    } finally {
+      setIsLoadingCustomers(false);
+    }
+  };
+
+  useEffect(() => {
     fetchMetadata();
   }, []);
 
+  // Re-fetch metadata when internet returns if lists were empty
+  useEffect(() => {
+    if (isOnline && allCustomersList.length === 0) {
+      fetchMetadata();
+    }
+  }, [isOnline]);
+
   // 2. Fetch Common Goods on start
   useEffect(() => {
-    apiCall<{ success: boolean; items: GoodsItem[] }>('/sayan/goods/search?q=کش', 'GET')
+    apiCall<{ success: boolean; items: GoodsItem[] }>('/sayan/goods/search?q=کش', 'GET', undefined, 0)
       .then(res => {
         if (res?.success && Array.isArray(res.items) && res.items.length > 0) {
           setGoodsList(res.items);
           setActiveItemCode(res.items[0].code);
           setActiveItemName(res.items[0].name);
+          try {
+            const existingMeta = JSON.parse(localStorage.getItem(META_CACHE_STORAGE_KEY) || '{}');
+            localStorage.setItem(META_CACHE_STORAGE_KEY, JSON.stringify({ ...existingMeta, goods: res.items }));
+          } catch {}
         }
       })
       .catch(() => {});
@@ -480,7 +692,57 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     }
   }, [activeSubTab, selectedStatWarehouse, selectedFiscalYear]);
 
-  // 4. Unified Barcode Processing (Supports Physical Gun + Mobile Camera Scanner)
+  // 4. Unified Barcode Processing (Physical PDA Gun + Camera Scanner + Instant Offline Mode)
+  const addOfflineParsedCarton = (raw: string, normalizedKey: string, fromCamera: boolean) => {
+    if (itemsRef.current.some(it => it.barcode.toLowerCase() === normalizedKey)) {
+      return;
+    }
+    const parsed = parseLocalLepanBarcode(raw);
+    const newItem: RemittanceItemRow = {
+      id: `row-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      barcode: raw,
+      batch: raw,
+      itemCode: activeItemCode || '0402010105',
+      itemName: activeItemName || 'کالای اسکن آفلاین (در انتظار همگام‌سازی)',
+      netWeight: parsed.netWeight,
+      grossWeight: parsed.grossWeight,
+      cartonCount: 1,
+      bobbinCount: 56,
+      grade: 'A',
+      twistDirection: 'Z',
+      rawGrade: '00011002',
+      rawTwist: '00021001',
+      note: `سری ساخت: ${raw} | همبافت:  | تعداد بوبین: 56 | تعداد کارتن: 1 | گرید: 00011002 | جهت تاب: 00021001 | وزن ناخالص: ${parsed.grossWeight}`,
+      offlinePendingSync: true,
+      resolvedFromSayan: false
+    };
+
+    setItems(prev => {
+      const next = [newItem, ...prev];
+      itemsRef.current = next;
+      return next;
+    });
+
+    if (typeof window !== 'undefined' && window.innerWidth < 768 && !isHeaderCollapsed && selectedCustomer) {
+      setIsHeaderCollapsed(true);
+    }
+
+    if (isSoundEnabled) playBeepSound('success');
+    try { navigator.vibrate?.([40, 30, 40]); } catch {}
+
+    if (fromCamera) {
+      setCameraScanFlash(true);
+      setTimeout(() => setCameraScanFlash(false), 320);
+    }
+
+    setLastScanResult({
+      text: `📡 ذخیره آفلاین: کارتن ${raw} (${parsed.netWeight} kg) — پس از اتصال اینترنت همگام‌سازی می‌شود.`,
+      success: true,
+      offline: true,
+      item: newItem
+    });
+  };
+
   const processBarcodeValue = async (rawInput: string, fromCamera = false) => {
     const raw = (rawInput || '').trim();
     if (!raw) return;
@@ -511,16 +773,29 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       return;
     }
 
+    // Instant Offline Fast-Path: zero wait when device is offline!
+    if (!isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      addOfflineParsedCarton(raw, normalizedKey, fromCamera);
+      if (!fromCamera) {
+        setScannedBarcode('');
+        if (isContinuousScan && !isCameraScannerOpen) {
+          setTimeout(() => barcodeInputRef.current?.focus(), 30);
+        }
+      }
+      return;
+    }
+
     if (isResolvingBarcodeRef.current) return;
     isResolvingBarcodeRef.current = true;
     setIsResolvingBarcode(true);
 
     try {
+      // retries: 0 so weak warehouse WiFi doesn't freeze for 15 seconds — immediately falls back to offline queue!
       const res = await apiCall<any>('/sayan/barcode/lookup', 'POST', {
         barcode: raw,
         warehouseCode: selectedWarehouse,
         fiscalYear: selectedFiscalYear
-      });
+      }, 0);
 
       if (res && res.success) {
         // Double-check duplicate after async resolution
@@ -547,7 +822,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
           twistDirection: res.twistDirection || 'Z',
           rawGrade: res.rawGrade || '00011002',
           rawTwist: res.rawTwist || '00021001',
-          note: res.note || `سری ساخت: ${raw} | همبافت:  | تعداد بوبین: 56 | تعداد کارتن: 1 | گرید: 00011002 | جهت تاب: 00021001 | وزن ناخالص: ${grossWeight}`
+          note: res.note || `سری ساخت: ${raw} | همبافت:  | تعداد بوبین: 56 | تعداد کارتن: 1 | گرید: 00011002 | جهت تاب: 00021001 | وزن ناخالص: ${grossWeight}`,
+          offlinePendingSync: false,
+          resolvedFromSayan: Boolean(res.found)
         };
 
         setItems(prev => {
@@ -555,6 +832,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
           itemsRef.current = next;
           return next;
         });
+
+        if (typeof window !== 'undefined' && window.innerWidth < 768 && !isHeaderCollapsed && selectedCustomer) {
+          setIsHeaderCollapsed(true);
+        }
 
         if (isSoundEnabled) playBeepSound('success');
         try { navigator.vibrate?.(70); } catch {}
@@ -565,28 +846,98 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         }
 
         setLastScanResult({
-          text: `✅ کارتن ${raw} با وزن خالص ${netWeight} کیلوگرم اضافه شد.`,
+          text: `✅ کارتن ${raw} • ${netWeight} kg اضافه شد.`,
           success: true,
           item: newItem
         });
       } else {
-        throw new Error('خطا در تحلیل بارکد');
+        throw new Error(res?.message || 'خطا در تحلیل بارکد');
       }
     } catch (err: any) {
-      if (isSoundEnabled) playBeepSound('error');
-      setLastScanResult({
-        text: `❌ خطا در استعلام بارکد: ${err.message || 'نامشخص'}`,
-        success: false
-      });
+      // Seamless automatic fallback to offline queue on any network/gateway interruption!
+      if (isLikelyNetworkError(err)) {
+        addOfflineParsedCarton(raw, normalizedKey, fromCamera);
+      } else {
+        if (isSoundEnabled) playBeepSound('error');
+        setLastScanResult({
+          text: `❌ خطا در استعلام بارکد: ${err.message || 'نامشخص'}`,
+          success: false
+        });
+      }
     } finally {
       isResolvingBarcodeRef.current = false;
       setIsResolvingBarcode(false);
       if (!fromCamera) {
         setScannedBarcode('');
         if (isContinuousScan && !isCameraScannerOpen) {
-          setTimeout(() => barcodeInputRef.current?.focus(), 50);
+          setTimeout(() => barcodeInputRef.current?.focus(), 40);
         }
       }
+    }
+  };
+
+  // Batch-sync all offline-scanned barcodes against Sayan in a single fast request
+  const syncOfflineBarcodesWithSayan = async (): Promise<RemittanceItemRow[] | null> => {
+    const pendingItems = itemsRef.current.filter(it => it.offlinePendingSync);
+    if (pendingItems.length === 0) return itemsRef.current;
+
+    if (!isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      setErrorMsg('دستگاه هنوز به اینترنت متصل نیست. لطفاً پس از اتصال اینترنت مجدداً همگام‌سازی کنید.');
+      return null;
+    }
+
+    setIsSyncingOffline(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiCall<any>('/sayan/barcode/lookup-batch', 'POST', {
+        barcodes: pendingItems.map(it => it.barcode),
+        warehouseCode: selectedWarehouse,
+        fiscalYear: selectedFiscalYear
+      }, 1);
+
+      if (res && res.success && res.results) {
+        const resultMap = res.results as Record<string, any>;
+        const updatedItems = itemsRef.current.map(it => {
+          if (!it.offlinePendingSync) return it;
+          const match = resultMap[it.barcode.toLowerCase()];
+          if (!match) {
+            return { ...it, offlinePendingSync: false };
+          }
+          const netW = match.netWeight > 0 ? match.netWeight : it.netWeight;
+          const grossW = match.grossWeight > 0 ? match.grossWeight : Number((netW + 4.35).toFixed(2));
+          return {
+            ...it,
+            batch: match.batch || it.batch,
+            itemCode: match.itemCode || it.itemCode,
+            itemName: match.itemName || it.itemName,
+            netWeight: netW,
+            grossWeight: grossW,
+            cartonCount: match.cartonCount || it.cartonCount,
+            bobbinCount: match.bobbinCount || it.bobbinCount,
+            grade: match.grade || it.grade,
+            twistDirection: match.twistDirection || it.twistDirection,
+            rawGrade: match.rawGrade || it.rawGrade,
+            rawTwist: match.rawTwist || it.rawTwist,
+            note: match.note || it.note,
+            offlinePendingSync: false,
+            resolvedFromSayan: Boolean(match.found)
+          };
+        });
+
+        setItems(updatedItems);
+        itemsRef.current = updatedItems;
+        setLastScanResult({
+          text: `✅ همگام‌سازی انجام شد: ${pendingItems.length.toLocaleString('fa-IR')} کارتن آفلاین با اطلاعات سایان به‌روزرسانی شد (${Number(res.resolvedCount || 0).toLocaleString('fa-IR')} مورد تطبیق دقیق).`,
+          success: true
+        });
+        return updatedItems;
+      }
+      throw new Error(res?.message || 'خطا در همگام‌سازی با سایان');
+    } catch (err: any) {
+      setErrorMsg(`خطا در همگام‌سازی کارتن‌های آفلاین: ${err?.message || 'عدم دسترسی به سرور سایان'}`);
+      return null;
+    } finally {
+      setIsSyncingOffline(false);
     }
   };
 
@@ -840,7 +1191,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     };
   }, []);
 
-  // 5. KPIs
+  // 5. KPIs & Grouped Product Summary for Pre-Submit Review
   const totalNetWeight = useMemo(() => {
     return Number(items.reduce((s, it) => s + (Number(it.netWeight) || 0), 0).toFixed(2));
   }, [items]);
@@ -857,11 +1208,61 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     return items.reduce((s, it) => s + (Number(it.bobbinCount) || 56), 0);
   }, [items]);
 
-  // 6. Submit Remittance directly to Sayan
-  const handleRegisterInSayan = async () => {
+  const offlinePendingCount = useMemo(() => {
+    return items.filter(it => it.offlinePendingSync).length;
+  }, [items]);
+
+  const groupedProductSummary = useMemo(() => {
+    const map = new Map<string, {
+      key: string;
+      itemCode: string;
+      itemName: string;
+      grade: string;
+      cartons: number;
+      bobbins: number;
+      netWeight: number;
+      grossWeight: number;
+    }>();
+    for (const it of items) {
+      const key = `${it.itemCode || 'UNKNOWN'}|${it.grade || 'A'}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.cartons += Number(it.cartonCount) || 1;
+        existing.bobbins += Number(it.bobbinCount) || 56;
+        existing.netWeight = Number((existing.netWeight + (Number(it.netWeight) || 0)).toFixed(2));
+        existing.grossWeight = Number((existing.grossWeight + (Number(it.grossWeight) || 0)).toFixed(2));
+      } else {
+        map.set(key, {
+          key,
+          itemCode: it.itemCode || '-',
+          itemName: it.itemName || 'کالا',
+          grade: it.grade || 'A',
+          cartons: Number(it.cartonCount) || 1,
+          bobbins: Number(it.bobbinCount) || 56,
+          netWeight: Number((Number(it.netWeight) || 0).toFixed(2)),
+          grossWeight: Number((Number(it.grossWeight) || 0).toFixed(2))
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [items]);
+
+  const filteredCartonItems = useMemo(() => {
+    const q = cartonSearchQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(it =>
+      it.barcode.toLowerCase().includes(q) ||
+      (it.itemName && it.itemName.toLowerCase().includes(q)) ||
+      (it.itemCode && it.itemCode.toLowerCase().includes(q))
+    );
+  }, [items, cartonSearchQuery]);
+
+  // 6a. Open Neat Pre-Submit Review Sheet (replaces window.confirm)
+  const handleRegisterInSayan = () => {
     setErrorMsg(null);
     if (!selectedCustomer) {
-      setErrorMsg('لطفاً ابتدا خریدار / طرف‌حساب را انتخاب نمایید.');
+      setErrorMsg(operationType === '25' ? 'لطفاً ابتدا انبار مقصد را انتخاب نمایید.' : 'لطفاً ابتدا خریدار / طرف‌حساب را انتخاب نمایید.');
+      setIsHeaderCollapsed(false);
       if (isCameraScannerOpen) {
         setIsCameraCustomerPickerOpen(true);
       }
@@ -871,17 +1272,48 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       setErrorMsg('حداقل یک کارتن یا قلم کالا برای صدور حواله باید اسکن شود.');
       return;
     }
-
-    const opTitle = operationType === '25' ? 'حواله بین انبار' : 'حواله فروش';
-    const confirmText = `آیا از صدور قطعی ${opTitle} در سایان برای «${selectedCustomer.name}» با ${items.length} کارتن (مجموع وزن خالص: ${totalNetWeight.toLocaleString('fa-IR')} کیلوگرم) اطمینان دارید؟`;
-    if (!window.confirm(confirmText)) return;
-
     if (isCameraScannerOpen) {
       stopCameraScanner();
+    }
+    setShowReviewFullList(false);
+    setIsReviewModalOpen(true);
+  };
+
+  // 6b. Confirmed Final Submit to Sayan ERP (auto-syncs offline items first if needed)
+  const handleConfirmRegisterInSayan = async () => {
+    setErrorMsg(null);
+    if (!selectedCustomer) {
+      setErrorMsg('لطفاً ابتدا خریدار / طرف‌حساب را انتخاب نمایید.');
+      return;
+    }
+    if (itemsRef.current.length === 0) {
+      setErrorMsg('لیست کارتن‌ها خالی است.');
+      return;
+    }
+    if (!isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      setErrorMsg('دستگاه در حالت آفلاین است. کارتن‌ها به‌طور امن ذخیره شده‌اند؛ به محض اتصال اینترنت ثبت نهایی را بزنید.');
+      return;
     }
 
     setIsSubmitting(true);
     try {
+      // Auto-sync any offline-scanned cartons first so real Sayan item codes & weights are registered
+      let itemsToSubmit = itemsRef.current;
+      if (itemsToSubmit.some(it => it.offlinePendingSync)) {
+        const synced = await syncOfflineBarcodesWithSayan();
+        if (!synced) {
+          setIsSubmitting(false);
+          return;
+        }
+        itemsToSubmit = synced;
+      }
+
+      const finalNet = Number(itemsToSubmit.reduce((s, it) => s + (Number(it.netWeight) || 0), 0).toFixed(2));
+      const finalGross = Number(itemsToSubmit.reduce((s, it) => s + (Number(it.grossWeight) || 0), 0).toFixed(2));
+      const finalCartons = itemsToSubmit.reduce((s, it) => s + (Number(it.cartonCount) || 1), 0);
+      const finalBobbins = itemsToSubmit.reduce((s, it) => s + (Number(it.bobbinCount) || 56), 0);
+      const opTitle = operationType === '25' ? 'حواله بین انبار' : 'حواله فروش';
+
       const payload = {
         fiscalYear: selectedFiscalYear,
         opCode: operationType,
@@ -891,10 +1323,11 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         remittanceDate,
         subCode,
         notes: headerNotes,
-        items
+        items: itemsToSubmit,
+        currentUser: currentUser ? { fullName: currentUser.fullName, username: currentUser.username } : undefined
       };
 
-      const res = await apiCall<any>('/sayan/sales-remittances/create', 'POST', payload);
+      const res = await apiCall<any>('/sayan/sales-remittances/create', 'POST', payload, 0);
 
       if (res && res.success) {
         const resultData = {
@@ -903,23 +1336,28 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
           opName: opTitle,
           customerName: selectedCustomer.name,
           warehouseName: warehouses.find(w => w.code === selectedWarehouse)?.name || `انبار ${selectedWarehouse}`,
-          totalNetWeight,
-          totalCartons,
-          totalBobbins,
+          totalNetWeight: finalNet,
+          totalGrossWeight: finalGross,
+          totalCartons: finalCartons,
+          totalBobbins: finalBobbins,
           remittanceDate,
-          items: [...items]
+          shamsiDate: remittanceDate,
+          items: [...itemsToSubmit]
         };
+        setIsReviewModalOpen(false);
         setSuccessResult(resultData);
+        setDraftRestoredNotice(false);
+        try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch {}
         if (onSuccessRegistered) {
           onSuccessRegistered(res.docNo, resultData);
         }
         loadArchive();
       } else {
-        throw new Error(res?.message || 'خطا در ثبت حواله در پایگاه داده سایان');
+        throw new Error(res?.message || res?.error || 'خطا در ثبت حواله در پایگاه داده سایان');
       }
     } catch (err: any) {
       console.error('Registration error:', err);
-      setErrorMsg(err.message || 'خطای شبکه در ارتباط با سرور سایان');
+      setErrorMsg(err?.message || 'خطای شبکه در ارتباط با سرور سایان');
     } finally {
       setIsSubmitting(false);
     }
@@ -928,11 +1366,17 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   // Reset for next remittance
   const handleStartNextRemittance = () => {
     setSuccessResult(null);
+    setIsReviewModalOpen(false);
     setItems([]);
+    itemsRef.current = [];
     setLastScanResult(null);
     setHeaderNotes('');
     setSubCode('');
     setErrorMsg(null);
+    setDraftRestoredNotice(false);
+    setConfirmClearList(false);
+    setCartonSearchQuery('');
+    try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch {}
     if (isContinuousScan) {
       setTimeout(() => barcodeInputRef.current?.focus(), 100);
     }
@@ -966,8 +1410,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
   return (
     <div className="flex flex-col min-h-full bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 select-text" dir="rtl">
-      {/* Top Banner Navigation: Compact on mobile, rich on desktop */}
-      <div className="flex-none p-2.5 sm:p-4 border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
+      {/* Top Banner Navigation: Ultra-compact on Android PDA/mobile, rich on desktop */}
+      <div className="flex-none px-2.5 py-2 sm:p-4 border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs">
         {/* Desktop View */}
         <div className="hidden sm:flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -975,17 +1419,24 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
               <Barcode size={22} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm md:text-base font-black tracking-tight text-slate-900 dark:text-white">
-                  سامانه صدور حواله فروش و خروج انبار (لایو سایان ERP)
+                  سامانه صدور حواله فروش و خروج انبار (سایان ERP)
                 </h2>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 text-[10px] font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-                  <span>اتصال زنده</span>
-                </span>
+                {isOnline ? (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 text-[10px] font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+                    <Wifi size={11} />
+                    <span>اتصال زنده</span>
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 text-[10px] font-black border border-amber-300 dark:border-amber-700 flex items-center gap-1">
+                    <WifiOff size={11} />
+                    <span>حالت آفلاین (ذخیره محلی)</span>
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
-                صدور فوق‌سریع حواله فروش با بارکدخوان فیزیکی و ثبت اتوماتیک در دیتابیس سایان بدون فریز یا کندی
+                اسکن فوق‌سریع با بارکدخوان فیزیکی، دوربین گوشی و پشتیبانی از اسکن آفلاین تا ۶۰۰ کارتن
               </p>
             </div>
           </div>
@@ -995,35 +1446,35 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
               <button
                 onClick={() => setActiveSubTab('issuer')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'issuer' 
-                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs' 
+                  activeSubTab === 'issuer'
+                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                     : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
                 }`}
               >
                 <Package size={14} />
-                <span>صدور حواله با بارکدخوان</span>
+                <span>صدور حواله</span>
               </button>
               <button
                 onClick={() => setActiveSubTab('archive')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'archive' 
-                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs' 
+                  activeSubTab === 'archive'
+                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                     : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
                 }`}
               >
                 <History size={14} />
-                <span>بایگانی حواله‌ها ({archiveList.length})</span>
+                <span>بایگانی ({archiveList.length})</span>
               </button>
               <button
                 onClick={() => setActiveSubTab('warehouses')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'warehouses' 
-                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs' 
+                  activeSubTab === 'warehouses'
+                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                     : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
                 }`}
               >
                 <Building2 size={14} />
-                <span>انبارها و آمار زنده سایان</span>
+                <span>انبارها و آمار</span>
               </button>
             </div>
 
@@ -1039,34 +1490,47 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
           </div>
         </div>
 
-        {/* Mobile View: Sleek, compact and native feeling */}
-        <div className="sm:hidden space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-xs">
-                <Barcode size={15} />
+        {/* Mobile / Rugged PDA View: Compact single-row title + crisp segmented tabs */}
+        <div className="sm:hidden space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shrink-0">
+                <Barcode size={14} />
               </div>
-              <span className="text-xs font-black text-slate-900 dark:text-white">
-                حواله سایان ERP
+              <span className="text-xs font-black text-slate-900 dark:text-white truncate">
+                حواله سایان
               </span>
-              <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 text-[9px] font-bold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                <span>زنده</span>
-              </span>
+              {isOnline ? (
+                <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 text-[9px] font-bold flex items-center gap-1 shrink-0">
+                  <Wifi size={10} />
+                  <span>آنلاین</span>
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 text-[9px] font-black flex items-center gap-1 shrink-0">
+                  <WifiOff size={10} />
+                  <span>آفلاین</span>
+                </span>
+              )}
+              {offlinePendingCount > 0 && (
+                <span className="px-1.5 py-0.5 rounded-md bg-amber-500 text-slate-950 text-[9px] font-black shrink-0">
+                  {offlinePendingCount.toLocaleString('fa-IR')} در صف
+                </span>
+              )}
             </div>
             {onClose && (
               <button
                 onClick={onClose}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+                className="p-1 text-slate-500 hover:text-slate-800 dark:text-zinc-400 rounded-lg shrink-0"
+                title="بستن"
               >
                 <X size={16} />
               </button>
             )}
           </div>
 
-          {/* Segmented 3-part tab strip on mobile */}
-          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-zinc-800">
+          <div className="grid grid-cols-3 gap-1 p-0.5 rounded-xl bg-slate-100 dark:bg-zinc-800">
             <button
+              type="button"
               onClick={() => setActiveSubTab('issuer')}
               className={`py-1.5 px-1 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition-all ${
                 activeSubTab === 'issuer'
@@ -1074,10 +1538,11 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                   : 'text-slate-600 dark:text-zinc-400'
               }`}
             >
-              <Package size={13} />
+              <Package size={12} />
               <span>صدور حواله</span>
             </button>
             <button
+              type="button"
               onClick={() => setActiveSubTab('archive')}
               className={`py-1.5 px-1 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition-all ${
                 activeSubTab === 'archive'
@@ -1085,10 +1550,11 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                   : 'text-slate-600 dark:text-zinc-400'
               }`}
             >
-              <History size={13} />
+              <History size={12} />
               <span>بایگانی ({archiveList.length})</span>
             </button>
             <button
+              type="button"
               onClick={() => setActiveSubTab('warehouses')}
               className={`py-1.5 px-1 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition-all ${
                 activeSubTab === 'warehouses'
@@ -1096,7 +1562,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                   : 'text-slate-600 dark:text-zinc-400'
               }`}
             >
-              <Building2 size={13} />
+              <Building2 size={12} />
               <span>انبارها</span>
             </button>
           </div>
@@ -1105,525 +1571,758 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
       {/* Main Workspace */}
       {activeSubTab === 'issuer' ? (
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-          {/* Header Controls: Warehouse, Fiscal Year, Customer, Date */}
-          <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs space-y-4">
-            
-            {/* Top Bar of Card: Operation Type Selector & Description */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-zinc-800 text-xs">
-              <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-zinc-300">
-                <Layers size={16} className={operationType === '25' ? "text-purple-600" : "text-blue-600"} />
-                <span>نوع و مشخصات سند انبار (مطابق منوی عملیات سایان ERP)</span>
-              </div>
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5 space-y-2.5 sm:space-y-4 pb-24 sm:pb-6 custom-scrollbar">
 
-              {/* Operation Type Switcher: 23 (فروش) / 25 (بین انبار) */}
-              <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700">
-                <button
-                  type="button"
-                  onClick={() => setOperationType('23')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all ${
-                    operationType === '23'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
-                  }`}
-                >
-                  <Package size={14} />
-                  <span>حواله فروش (کد ۲۳)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOperationType('25');
-                    if (!selectedCustomer) {
-                      setSelectedCustomer({
-                        personCode: '2471',
-                        name: 'دفتر تهران-لپان بافت',
-                        tafsiliCode: '112471',
-                        levelCode: '11'
-                      });
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all ${
-                    operationType === '25'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
-                  }`}
-                >
-                  <ArrowRight size={14} />
-                  <span>حواله بین انبار (کد ۲۵)</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-              {/* 1. Warehouse Selector */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-zinc-400 mb-1">
-                  {operationType === '25' ? 'انبار مبدا (فرستنده) *' : 'انبار مبدا (تحویل کالا) *'}
-                </label>
-                <div className="relative">
-                  <select
-                    value={selectedWarehouse}
-                    onChange={(e) => setSelectedWarehouse(e.target.value)}
-                    className="w-full h-10 px-3 pr-9 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-blue-500 transition-all cursor-pointer"
-                  >
-                    {warehouses.map((w) => (
-                      <option key={w.code} value={w.code}>
-                        کد {w.code} - {w.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Warehouse className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
-                </div>
-              </div>
-
-              {/* 2. Fiscal Year Selector */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-zinc-400 mb-1">
-                  سال مالی سایان *
-                </label>
-                <select
-                  value={selectedFiscalYear}
-                  onChange={(e) => setSelectedFiscalYear(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-blue-500 transition-all cursor-pointer font-mono"
-                >
-                  {fiscalYears.map((fy) => (
-                    <option key={fy.code} value={fy.code}>
-                      {fy.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 3. Customer / Destination Store Selection */}
-              <div className="relative" ref={customerDropdownRef}>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs font-bold text-slate-600 dark:text-zinc-400">
-                    {operationType === '25' ? 'انبار مقصد (تحویل‌گیرنده) *' : 'مشتری / خریدار (انتخاب از سایان) *'}
-                  </label>
-                  {operationType === '23' && allCustomersList.length > 0 && (
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
-                      {allCustomersList.length} مشتری آماده
-                    </span>
+            {/* Offline / Sync Queue Banner */}
+            {(!isOnline || offlinePendingCount > 0) && (
+              <div className={`p-2.5 sm:p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs ${
+                !isOnline
+                  ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+                  : 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200'
+              }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  {!isOnline ? (
+                    <WifiOff size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                  ) : (
+                    <UploadCloud size={16} className="text-blue-600 dark:text-blue-400 shrink-0" />
                   )}
+                  <div className="min-w-0">
+                    <p className="font-black text-[11px] sm:text-xs leading-snug">
+                      {!isOnline
+                        ? `حالت اسکن آفلاین فعال است (${offlinePendingCount.toLocaleString('fa-IR')} کارتن در حافظه دستگاه ذخیره شده)`
+                        : `${offlinePendingCount.toLocaleString('fa-IR')} کارتن به‌صورت آفلاین اسکن شده و آماده استعلام از سایان است`}
+                    </p>
+                    <p className="text-[10px] opacity-80 mt-0.5">
+                      {!isOnline
+                        ? 'به اسکن کارتن‌ها ادامه دهید؛ پس از اتصال اینترنت همگام‌سازی و ثبت نهایی انجام می‌شود.'
+                        : 'برای دریافت نام و وزن دقیق از سایان روی همگام‌سازی کلیک کنید.'}
+                    </p>
+                  </div>
+                </div>
+                {isOnline && offlinePendingCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={syncOfflineBarcodesWithSayan}
+                    disabled={isSyncingOffline}
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-[11px] flex items-center gap-1.5 shrink-0 active:scale-95 disabled:opacity-50"
+                  >
+                    {isSyncingOffline ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                    <span>همگام‌سازی با سایان</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Restored Draft Notice */}
+            {draftRestoredNotice && items.length > 0 && (
+              <div className="px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/60 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold flex items-center justify-between gap-2">
+                <span>پیش‌نویس ذخیره شده ({items.length.toLocaleString('fa-IR')} کارتن) به‌طور خودکار بازیابی شد.</span>
+                <button
+                  type="button"
+                  onClick={() => setDraftRestoredNotice(false)}
+                  className="p-0.5 hover:bg-emerald-200/50 rounded"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+
+            {/* Compact Active Context Bar when Header is Collapsed (Maximizes 4-inch PDA screen for scanning!) */}
+            {isHeaderCollapsed ? (
+              <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black shrink-0 ${
+                      operationType === '25'
+                        ? 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300'
+                        : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                    }`}>
+                      {operationType === '25' ? 'بین انبار ۲۵' : 'حواله فروش'}
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400 truncate">
+                      {warehouses.find(w => w.code === selectedWarehouse)?.name || `انبار ${selectedWarehouse}`}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">({remittanceDate})</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-xs font-black text-slate-900 dark:text-white truncate">
+                    <User size={12} className="text-blue-600 shrink-0" />
+                    <span className="truncate">
+                      {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.personCode})` : 'مشتری انتخاب نشده!'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsHeaderCollapsed(false)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 text-slate-700 dark:text-zinc-200 text-[11px] font-black flex items-center gap-1 shrink-0"
+                >
+                  <SlidersHorizontal size={12} />
+                  <span>تغییر</span>
+                </button>
+              </div>
+            ) : (
+              /* Header Controls Card: Warehouse, Fiscal Year, Customer, Date */
+              <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs space-y-3">
+                {/* Top Row: Operation Type Switcher & Collapse Toggle */}
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-zinc-800">
+                  <div className="grid grid-cols-2 gap-1 p-0.5 bg-slate-100 dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 flex-1 sm:flex-none">
+                    <button
+                      type="button"
+                      onClick={() => setOperationType('23')}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
+                        operationType === '23'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                      }`}
+                    >
+                      <Package size={13} />
+                      <span>حواله فروش</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOperationType('25');
+                        if (!selectedCustomer) {
+                          setSelectedCustomer({
+                            personCode: '2471',
+                            name: 'دفتر تهران-لپان بافت',
+                            tafsiliCode: '112471',
+                            levelCode: '11'
+                          });
+                        }
+                      }}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
+                        operationType === '25'
+                          ? 'bg-purple-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                      }`}
+                    >
+                      <ArrowRight size={13} />
+                      <span>بین انبار (۲۵)</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsHeaderCollapsed(true);
+                      setTimeout(() => barcodeInputRef.current?.focus(), 60);
+                    }}
+                    className="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 text-[11px] font-bold flex items-center gap-1 shrink-0 hover:bg-slate-200"
+                    title="بستن سربرگ برای فضای بیشتر اسکن"
+                  >
+                    <ChevronUp size={14} />
+                    <span className="hidden xs:inline sm:inline">جمع‌کردن</span>
+                  </button>
                 </div>
 
-                {operationType === '25' ? (
-                  /* Destination Warehouse selector for inter-warehouse transfers */
-                  <div className="relative">
-                    <select
-                      value={selectedDestinationWarehouse}
-                      onChange={(e) => {
-                        const code = e.target.value;
-                        setSelectedDestinationWarehouse(code);
-                        const targetWh = warehouses.find(w => w.code === code);
-                        setSelectedCustomer({
-                          personCode: code === '15' ? '2471' : code,
-                          name: targetWh ? targetWh.name : `انبار کد ${code}`,
-                          tafsiliCode: code,
-                          levelCode: '11'
-                        });
-                      }}
-                      className="w-full h-10 px-3 pr-9 rounded-xl border border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/30 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-purple-500 transition-all cursor-pointer"
-                    >
-                      {warehouses
-                        .filter(w => w.code !== selectedWarehouse)
-                        .map((w) => (
+                {/* Primary Fields Grid (Compact 2-col on mobile where sensible, 4-col on desktop) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  {/* 1. Origin Warehouse + Fiscal Year paired nicely */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 dark:text-zinc-400 mb-1">
+                      {operationType === '25' ? 'انبار مبدا (فرستنده) *' : 'انبار مبدا *'}
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={selectedWarehouse}
+                        onChange={(e) => setSelectedWarehouse(e.target.value)}
+                        className="w-full h-9 sm:h-10 px-2.5 pr-8 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-blue-500 cursor-pointer"
+                      >
+                        {warehouses.map((w) => (
                           <option key={w.code} value={w.code}>
                             کد {w.code} - {w.name}
                           </option>
                         ))}
-                    </select>
-                    <Building2 className="w-4 h-4 text-purple-600 absolute right-3 top-3 pointer-events-none" />
-                  </div>
-                ) : (
-                  /* Live Customer Search & Select Combobox */
-                  <div className="relative">
-                    <div 
-                      onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
-                      className="w-full h-10 px-3 pr-9 pl-8 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus-within:border-blue-500 transition-all cursor-pointer flex items-center justify-between"
-                    >
-                      <span className={selectedCustomer ? "text-slate-900 dark:text-white font-bold truncate" : "text-slate-400"}>
-                        {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.personCode})` : 'انتخاب مشتری از پایگاه سایان...'}
-                      </span>
-                      <ChevronDown size={15} className={`text-slate-400 transition-transform ${isCustomerDropdownOpen ? 'rotate-180' : ''}`} />
+                      </select>
+                      <Warehouse className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-2.5 sm:top-3 pointer-events-none" />
                     </div>
-                    <User className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
-                    
-                    {selectedCustomer && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedCustomer(null);
-                          setCustomerSearch('');
-                          setIsCustomerDropdownOpen(true);
-                        }}
-                        className="absolute left-7 top-2.5 p-0.5 rounded-full hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-400"
-                        title="پاک کردن انتخاب"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
+                  </div>
 
-                    {/* Rich Searchable Dropdown */}
-                    {isCustomerDropdownOpen && (
-                      <div className="absolute z-50 top-full mt-1 w-full max-h-72 bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-zinc-700 p-2 flex flex-col gap-2">
-                        {/* Search Input inside dropdown */}
-                        <div className="relative">
-                          <input
-                            type="text"
-                            autoFocus
-                            value={customerSearch}
-                            onChange={(e) => setCustomerSearch(e.target.value)}
-                            placeholder="جستجوی نام یا کد تفصیلی مشتری..."
-                            className="w-full h-8 px-2.5 pr-8 rounded-lg bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 text-xs text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                          <Search size={13} className="text-slate-400 absolute right-2.5 top-2.5" />
-                          {isSearchingCustomer && (
-                            <Loader2 size={13} className="text-blue-500 animate-spin absolute left-2.5 top-2.5" />
-                          )}
-                        </div>
+                  {/* 2. Customer / Destination Store Selection */}
+                  <div className="relative sm:col-span-1 lg:col-span-1" ref={customerDropdownRef}>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-zinc-400">
+                        {operationType === '25' ? 'انبار مقصد *' : 'مشتری / خریدار *'}
+                      </label>
+                      {operationType === '23' && allCustomersList.length > 0 && (
+                        <span className="text-[9px] text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded">
+                          {allCustomersList.length.toLocaleString('fa-IR')} مشتری
+                        </span>
+                      )}
+                    </div>
 
-                        {/* Customer Items List */}
-                        <div className="flex-1 overflow-y-auto max-h-52 divide-y divide-slate-100 dark:divide-zinc-700/60 custom-scrollbar">
-                          {customersList.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-slate-400">
-                              {isSearchingCustomer ? 'در حال جستجو در سایان...' : 'مشتری با این مشخصات یافت نشد.'}
+                    {operationType === '25' ? (
+                      <div className="relative">
+                        <select
+                          value={selectedDestinationWarehouse}
+                          onChange={(e) => {
+                            const code = e.target.value;
+                            setSelectedDestinationWarehouse(code);
+                            const targetWh = warehouses.find(w => w.code === code);
+                            setSelectedCustomer({
+                              personCode: code === '15' ? '2471' : code,
+                              name: targetWh ? targetWh.name : `انبار کد ${code}`,
+                              tafsiliCode: code,
+                              levelCode: '11'
+                            });
+                          }}
+                          className="w-full h-9 sm:h-10 px-2.5 pr-8 rounded-xl border border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/30 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-purple-500 cursor-pointer"
+                        >
+                          {warehouses
+                            .filter(w => w.code !== selectedWarehouse)
+                            .map((w) => (
+                              <option key={w.code} value={w.code}>
+                                کد {w.code} - {w.name}
+                              </option>
+                            ))}
+                        </select>
+                        <Building2 className="w-3.5 h-3.5 text-purple-600 absolute right-2.5 top-2.5 sm:top-3 pointer-events-none" />
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
+                          className={`w-full h-9 sm:h-10 px-2.5 pr-8 pl-7 rounded-xl border text-xs font-bold outline-none transition-all cursor-pointer flex items-center justify-between text-right ${
+                            selectedCustomer
+                              ? 'border-blue-300 dark:border-blue-800 bg-blue-50/40 dark:bg-blue-950/20 text-slate-900 dark:text-white'
+                              : 'border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-950/20 text-slate-500'
+                          }`}
+                        >
+                          <span className="truncate">
+                            {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.personCode})` : 'انتخاب مشتری از سایان...'}
+                          </span>
+                          <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform ${isCustomerDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        <User className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-2.5 sm:top-3 pointer-events-none" />
+
+                        {selectedCustomer && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedCustomer(null);
+                              setCustomerSearch('');
+                              setIsCustomerDropdownOpen(true);
+                            }}
+                            className="absolute left-6 top-2 p-0.5 rounded-full hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-400"
+                            title="تغییر مشتری"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+
+                        {/* Desktop Inline Searchable Dropdown */}
+                        {isCustomerDropdownOpen && (
+                          <div className="hidden sm:flex absolute z-50 top-full mt-1 w-full min-w-[260px] max-h-72 bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-zinc-700 p-2 flex-col gap-2">
+                            <div className="relative">
+                              <input
+                                type="text"
+                                autoFocus
+                                value={customerSearch}
+                                onChange={(e) => setCustomerSearch(e.target.value)}
+                                placeholder="جستجوی نام یا کد تفصیلی..."
+                                className="w-full h-8 px-2.5 pr-8 rounded-lg bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 text-xs text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-blue-500"
+                              />
+                              <Search size={13} className="text-slate-400 absolute right-2.5 top-2.5" />
+                              {isSearchingCustomer && (
+                                <Loader2 size={13} className="text-blue-500 animate-spin absolute left-2.5 top-2.5" />
+                              )}
                             </div>
-                          ) : (
-                            customersList.map((c) => {
-                              const isSelected = selectedCustomer?.personCode === c.personCode;
-                              return (
-                                <button
-                                  key={c.personCode}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedCustomer(c);
-                                    setIsCustomerDropdownOpen(false);
-                                    setCustomerSearch('');
-                                  }}
-                                  className={`w-full p-2 text-right rounded-lg flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                                    isSelected 
-                                      ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-black'
-                                      : 'hover:bg-slate-100 dark:hover:bg-zinc-700/60 text-slate-800 dark:text-zinc-200'
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2 truncate">
-                                    <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-600 dark:text-zinc-300 flex items-center justify-center text-[10px] shrink-0 font-bold">
-                                      {c.name.slice(0, 1)}
-                                    </div>
-                                    <span className="truncate">{c.name}</span>
-                                  </div>
-                                  <span className="font-mono text-[11px] text-slate-500 dark:text-zinc-400 bg-slate-100 dark:bg-zinc-900 px-1.5 py-0.5 rounded shrink-0">
-                                    کد {c.personCode}
-                                  </span>
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
+
+                            <div className="flex-1 overflow-y-auto max-h-52 divide-y divide-slate-100 dark:divide-zinc-700/60 custom-scrollbar">
+                              {customersList.length === 0 ? (
+                                <div className="p-4 text-center text-xs text-slate-400">
+                                  {isSearchingCustomer ? 'در حال جستجو در سایان...' : 'مشتری با این مشخصات یافت نشد.'}
+                                </div>
+                              ) : (
+                                customersList.map((c) => {
+                                  const isSelected = selectedCustomer?.personCode === c.personCode;
+                                  return (
+                                    <button
+                                      key={c.personCode}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedCustomer(c);
+                                        setIsCustomerDropdownOpen(false);
+                                        setCustomerSearch('');
+                                        setErrorMsg(null);
+                                      }}
+                                      className={`w-full p-2 text-right rounded-lg flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                                        isSelected
+                                          ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-black'
+                                          : 'hover:bg-slate-100 dark:hover:bg-zinc-700/60 text-slate-800 dark:text-zinc-200'
+                                      }`}
+                                    >
+                                      <span className="truncate">{c.name}</span>
+                                      <span className="font-mono text-[10px] text-slate-500 dark:text-zinc-400 bg-slate-100 dark:bg-zinc-900 px-1.5 py-0.5 rounded shrink-0">
+                                        {c.personCode}
+                                      </span>
+                                    </button>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
-              </div>
 
-              {/* 4. Remittance Date */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-zinc-400 mb-1">
-                  تاریخ صدور حواله
-                </label>
-                <div className="relative">
+                  {/* 3. Fiscal Year + Date side-by-side on mobile PDA! */}
+                  <div className="grid grid-cols-2 gap-2 sm:contents">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-zinc-400 mb-1">
+                        سال مالی *
+                      </label>
+                      <select
+                        value={selectedFiscalYear}
+                        onChange={(e) => setSelectedFiscalYear(e.target.value)}
+                        className="w-full h-9 sm:h-10 px-2 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-blue-500 cursor-pointer font-mono"
+                      >
+                        {fiscalYears.map((fy) => (
+                          <option key={fy.code} value={fy.code}>
+                            {fy.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 dark:text-zinc-400 mb-1">
+                        تاریخ حواله
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={remittanceDate}
+                          onChange={(e) => setRemittanceDate(e.target.value)}
+                          placeholder="1405/01/01"
+                          className="w-full h-9 sm:h-10 px-2 pr-7 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white font-mono outline-none focus:border-blue-500 text-left dir-ltr"
+                        />
+                        <Calendar className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-2.5 sm:top-3 pointer-events-none" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Optional SubCode & Notes (Compact row) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-0.5">
                   <input
                     type="text"
-                    value={remittanceDate}
-                    onChange={(e) => setRemittanceDate(e.target.value)}
-                    placeholder="1404/07/13"
-                    className="w-full h-10 px-3 pr-9 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs font-bold text-slate-900 dark:text-white font-mono outline-none focus:border-blue-500 transition-all text-left dir-ltr"
+                    value={subCode}
+                    onChange={(e) => setSubCode(e.target.value)}
+                    placeholder="کد فرعی / شماره بارنامه (اختیاری)"
+                    className="w-full h-8 sm:h-9 px-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500 font-mono"
                   />
-                  <Calendar className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
-                </div>
-              </div>
-            </div>
-
-            {/* SubCode & Notes */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-              <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-zinc-400 mb-1">
-                  کد فرعی حواله (اختیاری)
-                </label>
-                <input
-                  type="text"
-                  value={subCode}
-                  onChange={(e) => setSubCode(e.target.value)}
-                  placeholder="مثال: ۹۹۸ یا بارنامه"
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500 font-mono"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-500 dark:text-zinc-400 mb-1">
-                  توضیحات و یادداشت سربرگ حواله
-                </label>
-                <input
-                  type="text"
-                  value={headerNotes}
-                  onChange={(e) => setHeaderNotes(e.target.value)}
-                  placeholder="توضیحات راننده، آدرس باربری یا شرایط تحویل..."
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Barcode Scanner Station */}
-          <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white shadow-xl space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-blue-500/20 text-blue-300 border border-blue-400/30">
-                  <Barcode size={20} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-white">ایستگاه اسکن بارکد کارتن‌ها (بارکدخوان فیزیکی و دوربین گوشی)</h3>
-                  <p className="text-[11px] text-blue-200">
-                    کارتن‌ها را با بارکدخوان یا دوربین گوشی (وب موبایل و اندروید با فلش خودکار) به صورت متوالی اسکن کنید.
-                  </p>
-                </div>
-              </div>
-
-              {/* Toggles & Mobile Camera Launch Button */}
-              <div className="flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={startCameraScanner}
-                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-orange-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-lg shadow-amber-500/30 transition-all active:scale-95 cursor-pointer"
-                >
-                  <Camera size={16} className="stroke-[2.5]" />
-                  <span>اسکن سریع با دوربین گوشی (فلش خودکار)</span>
-                  <Zap size={14} className="fill-slate-950" />
-                </button>
-
-                <label className="flex items-center gap-1.5 text-xs text-blue-200 cursor-pointer select-none">
                   <input
-                    type="checkbox"
-                    checked={isContinuousScan}
-                    onChange={(e) => setIsContinuousScan(e.target.checked)}
-                    className="w-4 h-4 rounded text-blue-600 focus:ring-0 cursor-pointer"
+                    type="text"
+                    value={headerNotes}
+                    onChange={(e) => setHeaderNotes(e.target.value)}
+                    placeholder="توضیحات راننده، باربری یا یادداشت حواله (اختیاری)..."
+                    className="sm:col-span-2 w-full h-8 sm:h-9 px-2.5 rounded-xl border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500"
                   />
-                  <span>اسکن متوالی خودکار</span>
-                </label>
-
-                <button
-                  type="button"
-                  onClick={() => setIsSoundEnabled(!isSoundEnabled)}
-                  className={`p-1.5 rounded-lg border text-xs flex items-center gap-1 transition-colors ${
-                    isSoundEnabled 
-                      ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' 
-                      : 'bg-white/10 border-white/20 text-slate-400'
-                  }`}
-                  title="صدای تایید اسکن"
-                >
-                  {isSoundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
-                  <span>{isSoundEnabled ? 'صدا فعال' : 'بی‌صدا'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Scanner Input Bar */}
-            <form onSubmit={handleBarcodeSubmit} className="flex flex-wrap sm:flex-nowrap gap-2">
-              <div className="relative flex-1 min-w-[200px]">
-                <input
-                  ref={barcodeInputRef}
-                  type="text"
-                  value={scannedBarcode}
-                  onChange={(e) => setScannedBarcode(e.target.value)}
-                  placeholder="اسکن بارکد یا تایپ بچ (مثال: PO-F-6986-5-14.35)..."
-                  disabled={isResolvingBarcode}
-                  className="w-full h-12 pr-11 pl-4 rounded-xl bg-white/10 border-2 border-blue-400/40 focus:border-blue-300 text-white placeholder-blue-300/60 font-mono text-sm sm:text-base font-bold outline-none transition-all dir-ltr text-left"
-                />
-                <Barcode className="w-5 h-5 text-blue-300 absolute right-3.5 top-3.5 pointer-events-none" />
-              </div>
-              <button
-                type="submit"
-                disabled={isResolvingBarcode || !scannedBarcode.trim()}
-                className="px-5 h-12 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-emerald-500/30 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
-              >
-                {isResolvingBarcode ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
-                <span>ثبت ردیف</span>
-              </button>
-              <button
-                type="button"
-                onClick={startCameraScanner}
-                className="sm:hidden w-full h-11 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md shadow-amber-500/25 active:scale-95"
-              >
-                <Camera size={17} />
-                <span>باز کردن دوربین بارکدخوان گوشی با فلش خودکار</span>
-              </button>
-            </form>
-
-            {/* Live Scan Notification */}
-            {lastScanResult && (
-              <div className={`p-2.5 rounded-xl text-xs font-bold border transition-all ${
-                lastScanResult.success 
-                  ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-200' 
-                  : 'bg-rose-950/60 border-rose-500/50 text-rose-200'
-              }`}>
-                {lastScanResult.text}
+                </div>
               </div>
             )}
-          </div>
 
-          {/* Items Table */}
-          <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-zinc-800">
-              <div className="flex items-center gap-2">
-                <Boxes size={18} className="text-blue-600" />
-                <h3 className="text-sm font-black text-slate-900 dark:text-white">
-                  اقلام و کارتن‌های اسکن‌شده در این حواله ({items.length} کارتن)
-                </h3>
+            {/* High-Speed Barcode Scanner Station (Ergonomic for Rugged PDA + Phone + Desktop) */}
+            <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-gradient-to-br from-slate-900 via-blue-950 to-indigo-950 text-white shadow-lg space-y-2.5 sm:space-y-3">
+              {/* Compact Controls Strip */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="p-1.5 rounded-lg bg-blue-500/20 text-blue-300 border border-blue-400/30 shrink-0">
+                    <Barcode size={17} />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-black text-white truncate">
+                      اسکن بارکد کارتن‌ها
+                    </h3>
+                    <p className="hidden sm:block text-[11px] text-blue-200/80">
+                      دکمه فیزیکی SCAN بارکدخوان یا دوربین گوشی را بزنید — اسکن آفلاین و آنلاین خودکار
+                    </p>
+                  </div>
+                </div>
+
+                {/* Mode Toggles: Hardware Gun vs Keyboard, Sound, Camera */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isHardwareGunMode;
+                      setIsHardwareGunMode(next);
+                      setTimeout(() => barcodeInputRef.current?.focus(), 40);
+                    }}
+                    className={`px-2 py-1.5 rounded-lg border text-[10px] sm:text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                      isHardwareGunMode
+                        ? 'bg-cyan-500/25 border-cyan-400/50 text-cyan-200'
+                        : 'bg-white/10 border-white/20 text-slate-200'
+                    }`}
+                    title="در حالت بارکدخوان، کیبورد لمسی بالا نمی‌آید تا با دکمه فیزیکی SCAN سریع اسکن کنید"
+                  >
+                    {isHardwareGunMode ? <Barcode size={13} /> : <Keyboard size={13} />}
+                    <span>{isHardwareGunMode ? 'حالت بارکدخوان' : 'تایپ دستی'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsSoundEnabled(!isSoundEnabled)}
+                    className={`p-1.5 rounded-lg border text-xs flex items-center gap-1 transition-colors cursor-pointer ${
+                      isSoundEnabled
+                        ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300'
+                        : 'bg-white/10 border-white/20 text-slate-400'
+                    }`}
+                    title="صدای بوق اسکن"
+                  >
+                    {isSoundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={startCameraScanner}
+                    className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-[11px] sm:text-xs flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                  >
+                    <Camera size={14} />
+                    <span>دوربین</span>
+                  </button>
+                </div>
               </div>
 
-              {items.length > 0 && (
+              {/* Scanner Input Bar */}
+              <form onSubmit={handleBarcodeSubmit} className="flex items-center gap-1.5 sm:gap-2">
+                <div className="relative flex-1 min-w-0">
+                  <input
+                    ref={barcodeInputRef}
+                    type="text"
+                    inputMode={isHardwareGunMode ? 'none' : 'text'}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    value={scannedBarcode}
+                    onChange={(e) => setScannedBarcode(e.target.value)}
+                    placeholder={isHardwareGunMode ? 'آماده اسکن با دکمه SCAN...' : 'تایپ دستی بارکد (PO-F-...)'}
+                    disabled={isResolvingBarcode}
+                    className="w-full h-11 sm:h-12 pr-9 pl-3 rounded-xl bg-white/10 border-2 border-blue-400/50 focus:border-cyan-300 text-white placeholder-blue-200/60 font-mono text-sm sm:text-base font-bold outline-none transition-all dir-ltr text-left"
+                  />
+                  <Barcode className="w-4 h-4 text-cyan-300 absolute right-3 top-3.5 pointer-events-none" />
+                </div>
                 <button
-                  type="button"
-                  onClick={() => {
-                    if (window.confirm('آیا از پاک کردن تمامی ردیف‌های اسکن‌شده اطمینان دارید؟')) {
-                      setItems([]);
-                      setLastScanResult(null);
-                    }
-                  }}
-                  className="px-2.5 py-1 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg font-bold transition-colors"
+                  type="submit"
+                  disabled={isResolvingBarcode || !scannedBarcode.trim()}
+                  className="px-3.5 sm:px-5 h-11 sm:h-12 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-md active:scale-95 disabled:opacity-45 shrink-0 cursor-pointer"
                 >
-                  پاکسازی کل لیست
+                  {isResolvingBarcode ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}
+                  <span>ثبت</span>
                 </button>
+              </form>
+
+              {/* Compact Live KPI Strip right inside Scanner Deck */}
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5 pt-0.5">
+                <div className="px-2.5 py-1.5 rounded-xl bg-white/10 border border-white/10 text-center">
+                  <span className="text-[10px] text-blue-200 block">کارتن</span>
+                  <span className="text-sm sm:text-lg font-black font-mono text-white">
+                    {totalCartons.toLocaleString('fa-IR')}
+                  </span>
+                </div>
+                <div className="px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/25 text-center">
+                  <span className="text-[10px] text-emerald-200 block">وزن خالص</span>
+                  <span className="text-sm sm:text-lg font-black font-mono text-emerald-300">
+                    {totalNetWeight.toLocaleString('fa-IR')} <span className="text-[10px] font-normal">kg</span>
+                  </span>
+                </div>
+                <div className="px-2.5 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-400/25 text-center">
+                  <span className="text-[10px] text-indigo-200 block">وزن ناخالص</span>
+                  <span className="text-sm sm:text-lg font-black font-mono text-indigo-200">
+                    {totalGrossWeight.toLocaleString('fa-IR')} <span className="text-[10px] font-normal">kg</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Live Scan Feedback Strip */}
+              {lastScanResult && (
+                <div className={`px-2.5 py-2 rounded-xl text-[11px] sm:text-xs font-bold border flex items-center justify-between gap-2 ${
+                  !lastScanResult.success
+                    ? 'bg-rose-950/75 border-rose-500/60 text-rose-200'
+                    : lastScanResult.offline
+                    ? 'bg-amber-950/75 border-amber-500/60 text-amber-200'
+                    : 'bg-emerald-950/75 border-emerald-500/60 text-emerald-200'
+                }`}>
+                  <span className="truncate">{lastScanResult.text}</span>
+                  {items.length > 0 && lastScanResult.success && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const removed = items[0];
+                        setItems(prev => prev.slice(1));
+                        setLastScanResult({
+                          text: `↩️ کارتن ${removed.barcode} از لیست حذف شد.`,
+                          success: false
+                        });
+                      }}
+                      className="px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/20 text-[10px] font-black flex items-center gap-1 shrink-0"
+                      title="لغو آخرین اسکن"
+                    >
+                      <Undo2 size={11} />
+                      <span>لغو</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
-            {items.length === 0 ? (
-              <div className="py-16 text-center text-slate-400 dark:text-zinc-500 border border-dashed rounded-2xl border-slate-200 dark:border-zinc-800 space-y-2">
-                <Barcode className="w-12 h-12 mx-auto text-slate-300 dark:text-zinc-700" />
-                <p className="text-sm font-bold">هنوز هیچ کارتنی اسکن نشده است.</p>
-                <p className="text-xs text-slate-400">
-                  بارکدخوان خود را روی برچسب کارتن قرار داده و شلیک کنید تا وزن و اطلاعات به‌صورت اتوماتیک ثبت شود.
-                </p>
+            {/* Error Alert */}
+            {errorMsg && (
+              <div className="p-2.5 sm:p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-bold flex items-start gap-2">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span className="flex-1 leading-relaxed">{errorMsg}</span>
+                <button type="button" onClick={() => setErrorMsg(null)} className="p-0.5 text-rose-500">
+                  <X size={14} />
+                </button>
               </div>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-700">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-black border-b border-slate-200 dark:border-zinc-700">
-                    <tr>
-                      <th className="py-2.5 px-3 text-center w-12">#</th>
-                      <th className="py-2.5 px-3 font-mono">بارکد / سری ساخت</th>
-                      <th className="py-2.5 px-3">کد و شرح کالا</th>
-                      <th className="py-2.5 px-3 text-left">وزن خالص (kg)</th>
-                      <th className="py-2.5 px-3 text-left">وزن ناخالص (kg)</th>
-                      <th className="py-2.5 px-3 text-center">کارتن</th>
-                      <th className="py-2.5 px-3 text-center">بوبین</th>
-                      <th className="py-2.5 px-3 text-center">گرید / تاب</th>
-                      <th className="py-2.5 px-3">مشخصات تکمیلی</th>
-                      <th className="py-2.5 px-3 text-center w-12">حذف</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
-                    {items.map((row, idx) => (
-                      <tr key={row.id} className="hover:bg-blue-50/40 dark:hover:bg-zinc-800/40 transition-colors">
-                        <td className="py-2.5 px-3 text-center font-mono text-slate-400">{idx + 1}</td>
-                        <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white dir-ltr text-right">
-                          {row.barcode}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <span className="font-bold text-slate-900 dark:text-white block">{row.itemName}</span>
-                          <span className="font-mono text-[10px] text-slate-400 block">{row.itemCode}</span>
-                        </td>
-                        <td className="py-2.5 px-3 text-left font-mono font-black text-blue-600 dark:text-blue-400 text-sm">
-                          {row.netWeight.toLocaleString('fa-IR')}
-                        </td>
-                        <td className="py-2.5 px-3 text-left font-mono font-medium text-slate-600 dark:text-zinc-400">
-                          {row.grossWeight.toLocaleString('fa-IR')}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono font-bold">{row.cartonCount}</td>
-                        <td className="py-2.5 px-3 text-center font-mono text-slate-600 dark:text-zinc-400">{row.bobbinCount}</td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 font-mono font-bold text-[10px]">
-                            {row.grade} / {row.twistDirection}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-500 text-[11px] truncate max-w-[200px]" title={row.note}>
-                          {row.note}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
+            )}
+
+            {/* Scanned Cartons List (Mobile/PDA Compact Cards + Desktop Full Table) */}
+            <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-zinc-800">
+                <div className="flex items-center gap-1.5">
+                  <Boxes size={16} className="text-blue-600 shrink-0" />
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
+                    کارتن‌های اسکن‌شده ({items.length.toLocaleString('fa-IR')})
+                  </h3>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {items.length > 5 && (
+                    <div className="relative w-32 sm:w-44">
+                      <input
+                        type="text"
+                        value={cartonSearchQuery}
+                        onChange={(e) => setCartonSearchQuery(e.target.value)}
+                        placeholder="جستجوی بارکد..."
+                        className="w-full h-7 px-2 pr-6 rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 text-[11px] outline-none"
+                      />
+                      <Search size={11} className="text-slate-400 absolute right-2 top-2" />
+                    </div>
+                  )}
+
+                  {items.length > 0 && (
+                    confirmClearList ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setItems([]);
+                            itemsRef.current = [];
+                            setLastScanResult(null);
+                            setConfirmClearList(false);
+                            setCartonSearchQuery('');
+                          }}
+                          className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[10px] font-black"
+                        >
+                          تایید پاکسازی
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmClearList(false)}
+                          className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-[10px] font-bold"
+                        >
+                          انصراف
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearList(true)}
+                        className="px-2 py-1 text-[11px] text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg font-bold transition-colors"
+                      >
+                        پاکسازی
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+
+              {items.length === 0 ? (
+                <div className="py-8 sm:py-12 text-center text-slate-400 dark:text-zinc-500 border border-dashed rounded-xl border-slate-200 dark:border-zinc-800 space-y-1.5 px-3">
+                  <Barcode className="w-9 h-9 sm:w-11 sm:h-11 mx-auto text-slate-300 dark:text-zinc-700" />
+                  <p className="text-xs sm:text-sm font-bold text-slate-600 dark:text-zinc-300">
+                    آماده اسکن کارتن اول
+                  </p>
+                  <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                    دکمه فیزیکی SCAN بارکدخوان را روی برچسب کارتن فشار دهید (در نبود اینترنت هم اسکن‌ها ذخیره می‌شوند).
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Mobile / PDA Compact Cards (Zero Horizontal Scroll!) */}
+                  <div className="md:hidden divide-y divide-slate-100 dark:divide-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-800 overflow-hidden max-h-[42vh] overflow-y-auto custom-scrollbar">
+                    {filteredCartonItems.map((row, idx) => (
+                      <div
+                        key={row.id}
+                        className="p-2.5 bg-white dark:bg-zinc-900 flex items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono font-bold text-slate-400 shrink-0">
+                              #{items.length - idx}
+                            </span>
+                            <span className="font-mono font-black text-xs text-slate-900 dark:text-white dir-ltr truncate">
+                              {row.barcode}
+                            </span>
+                            {row.offlinePendingSync && (
+                              <span className="px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[9px] font-black shrink-0">
+                                آفلاین
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-zinc-400">
+                            <span className="truncate font-bold text-slate-700 dark:text-zinc-300">{row.itemName}</span>
+                            <span className="shrink-0 px-1 rounded bg-slate-100 dark:bg-zinc-800 font-mono">
+                              {row.grade}/{row.twistDirection}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className="text-left">
+                            <span className="block font-mono font-black text-xs text-blue-600 dark:text-blue-400">
+                              {row.netWeight.toLocaleString('fa-IR')} kg
+                            </span>
+                            <span className="block font-mono text-[9px] text-slate-400">
+                              ناخالص {row.grossWeight.toLocaleString('fa-IR')}
+                            </span>
+                          </div>
                           <button
                             type="button"
                             onClick={() => setItems(prev => prev.filter(it => it.id !== row.id))}
-                            className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                            className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-500 active:scale-95"
                             title="حذف ردیف"
                           >
-                            <Trash2 size={15} />
+                            <Trash2 size={14} />
                           </button>
-                        </td>
-                      </tr>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                  </div>
 
-            {/* KPI Summary Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-              <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
-                <span className="text-[11px] font-bold text-blue-600 dark:text-blue-300 block">مجموع وزن خالص</span>
-                <span className="text-lg sm:text-2xl font-black font-mono text-blue-900 dark:text-blue-100 mt-1 block">
-                  {totalNetWeight.toLocaleString('fa-IR')} <span className="text-xs font-normal">کیلوگرم</span>
-                </span>
-              </div>
+                  {/* Desktop Enterprise Table */}
+                  <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-700 max-h-[420px] overflow-y-auto custom-scrollbar">
+                    <table className="w-full text-right text-xs">
+                      <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-black border-b border-slate-200 dark:border-zinc-700">
+                        <tr>
+                          <th className="py-2.5 px-3 text-center w-12">#</th>
+                          <th className="py-2.5 px-3 font-mono">بارکد / سری ساخت</th>
+                          <th className="py-2.5 px-3">کد و شرح کالا</th>
+                          <th className="py-2.5 px-3 text-left">وزن خالص (kg)</th>
+                          <th className="py-2.5 px-3 text-left">وزن ناخالص (kg)</th>
+                          <th className="py-2.5 px-3 text-center">کارتن</th>
+                          <th className="py-2.5 px-3 text-center">بوبین</th>
+                          <th className="py-2.5 px-3 text-center">گرید / تاب</th>
+                          <th className="py-2.5 px-3 text-center">وضعیت</th>
+                          <th className="py-2.5 px-3 text-center w-12">حذف</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
+                        {filteredCartonItems.map((row, idx) => (
+                          <tr key={row.id} className="hover:bg-blue-50/40 dark:hover:bg-zinc-800/40 transition-colors">
+                            <td className="py-2 px-3 text-center font-mono text-slate-400">{items.length - idx}</td>
+                            <td className="py-2 px-3 font-mono font-bold text-slate-900 dark:text-white dir-ltr text-right">
+                              {row.barcode}
+                            </td>
+                            <td className="py-2 px-3">
+                              <span className="font-bold text-slate-900 dark:text-white block">{row.itemName}</span>
+                              <span className="font-mono text-[10px] text-slate-400 block">{row.itemCode}</span>
+                            </td>
+                            <td className="py-2 px-3 text-left font-mono font-black text-blue-600 dark:text-blue-400 text-sm">
+                              {row.netWeight.toLocaleString('fa-IR')}
+                            </td>
+                            <td className="py-2 px-3 text-left font-mono font-medium text-slate-600 dark:text-zinc-400">
+                              {row.grossWeight.toLocaleString('fa-IR')}
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono font-bold">{row.cartonCount}</td>
+                            <td className="py-2 px-3 text-center font-mono text-slate-600 dark:text-zinc-400">{row.bobbinCount}</td>
+                            <td className="py-2 px-3 text-center">
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 font-mono font-bold text-[10px]">
+                                {row.grade} / {row.twistDirection}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              {row.offlinePendingSync ? (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-black">
+                                  صف آفلاین
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                                  آماده ثبت
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => setItems(prev => prev.filter(it => it.id !== row.id))}
+                                className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                title="حذف ردیف"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
 
-              <div className="p-3.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50">
-                <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-300 block">مجموع وزن ناخالص</span>
-                <span className="text-lg sm:text-2xl font-black font-mono text-indigo-900 dark:text-indigo-100 mt-1 block">
-                  {totalGrossWeight.toLocaleString('fa-IR')} <span className="text-xs font-normal">کیلوگرم</span>
-                </span>
-              </div>
+              {/* Desktop Bottom Summary & Review/Submit Button */}
+              <div className="hidden sm:flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                <div className="flex items-center gap-4 text-xs text-slate-600 dark:text-zinc-400">
+                  <span>کل کارتن: <strong className="font-mono text-slate-900 dark:text-white">{totalCartons.toLocaleString('fa-IR')}</strong></span>
+                  <span>وزن خالص: <strong className="font-mono text-blue-600 dark:text-blue-400">{totalNetWeight.toLocaleString('fa-IR')} kg</strong></span>
+                  <span>وزن ناخالص: <strong className="font-mono text-indigo-600 dark:text-indigo-400">{totalGrossWeight.toLocaleString('fa-IR')} kg</strong></span>
+                  <span>بوبین: <strong className="font-mono text-slate-900 dark:text-white">{totalBobbins.toLocaleString('fa-IR')}</strong></span>
+                </div>
 
-              <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/50">
-                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-300 block">تعداد کارتن‌ها</span>
-                <span className="text-lg sm:text-2xl font-black font-mono text-emerald-900 dark:text-emerald-100 mt-1 block">
-                  {totalCartons.toLocaleString('fa-IR')} <span className="text-xs font-normal">بسته</span>
-                </span>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700">
-                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400 block">تعداد بوبین‌ها</span>
-                <span className="text-lg sm:text-2xl font-black font-mono text-slate-900 dark:text-white mt-1 block">
-                  {totalBobbins.toLocaleString('fa-IR')} <span className="text-xs font-normal">عدد</span>
-                </span>
+                <button
+                  type="button"
+                  onClick={handleRegisterInSayan}
+                  disabled={isSubmitting || items.length === 0}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-sm flex items-center gap-2 shadow-lg shadow-blue-600/25 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                >
+                  <Eye size={17} />
+                  <span>پیش‌نمایش و ثبت نهایی در سایان ({items.length.toLocaleString('fa-IR')} کارتن)</span>
+                </button>
               </div>
             </div>
+          </div>
 
-            {/* Error Message */}
-            {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
-                <AlertCircle size={16} className="shrink-0" />
-                <span>{errorMsg}</span>
+          {/* Sticky Mobile / PDA Bottom Action Bar (Zero Overlap, Always Reachable!) */}
+          <div className="sm:hidden flex-none px-2.5 py-2 bg-white dark:bg-zinc-900 border-t border-slate-200 dark:border-zinc-800 shadow-[0_-4px_16px_rgba(0,0,0,0.06)] flex items-center justify-between gap-2 z-20">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs font-black text-slate-900 dark:text-white">
+                <span className="font-mono text-blue-600 dark:text-blue-400">{totalCartons.toLocaleString('fa-IR')}</span>
+                <span>کارتن</span>
+                <span className="text-slate-300 dark:text-zinc-700">|</span>
+                <span className="font-mono text-emerald-600 dark:text-emerald-400">{totalNetWeight.toLocaleString('fa-IR')} kg</span>
               </div>
-            )}
-
-            {/* Final Action Button */}
-            <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs text-slate-500">
-                با کلیک روی دکمه زیر، سند خروج و حواله فروش بلافاصله در پایگاه‌داده سایان ثبت و شماره سند صادر خواهد شد.
+              <span className="text-[10px] text-slate-500 dark:text-zinc-400 block truncate">
+                {selectedCustomer ? selectedCustomer.name : 'لطفاً مشتری را انتخاب کنید'}
               </span>
-
-              <button
-                type="button"
-                onClick={handleRegisterInSayan}
-                disabled={isSubmitting || items.length === 0}
-                className="px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-sm flex items-center gap-2 shadow-lg shadow-blue-600/30 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
-              >
-                {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
-                <span>{isSubmitting ? 'در حال صدور و ثبت در سایان...' : 'صدور و ثبت قطعی حواله فروش در سایان'}</span>
-              </button>
             </div>
+
+            <button
+              type="button"
+              onClick={handleRegisterInSayan}
+              disabled={isSubmitting || items.length === 0}
+              className="px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 disabled:opacity-45 shrink-0"
+            >
+              <Eye size={15} />
+              <span>بررسی و ثبت نهایی</span>
+            </button>
           </div>
         </div>
       ) : activeSubTab === 'archive' ? (
@@ -2446,24 +3145,308 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         document.body
       )}
 
-      {/* Success Modal */}
+      {/* Full-Screen Mobile / PDA Customer Picker Sheet (Zero keyboard clipping) */}
+      {isCustomerDropdownOpen && operationType === '23' && typeof document !== 'undefined' && createPortal(
+        <div className="sm:hidden fixed inset-0 z-[999999990] bg-white dark:bg-zinc-950 flex flex-col" dir="rtl">
+          <div className="flex-none px-3 py-2.5 border-b border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <User size={16} className="text-blue-600" />
+              <span className="text-xs font-black text-slate-900 dark:text-white">
+                انتخاب مشتری / خریدار سایان
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCustomerDropdownOpen(false)}
+              className="p-1.5 rounded-lg bg-slate-200/70 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="flex-none p-2.5 border-b border-slate-100 dark:border-zinc-800">
+            <div className="relative">
+              <input
+                type="text"
+                autoFocus
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                placeholder="نام مشتری یا کد تفصیلی را تایپ کنید..."
+                className="w-full h-10 px-3 pr-9 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-blue-500"
+              />
+              <Search size={15} className="text-slate-400 absolute right-3 top-2.5" />
+              {isSearchingCustomer && (
+                <Loader2 size={15} className="text-blue-500 animate-spin absolute left-3 top-2.5" />
+              )}
+            </div>
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100 dark:divide-zinc-800 px-2 py-1">
+            {customersList.length === 0 ? (
+              <div className="py-12 text-center text-xs text-slate-400">
+                {isSearchingCustomer ? 'در حال جستجو در سایان...' : 'مشتری با این مشخصات یافت نشد.'}
+              </div>
+            ) : (
+              customersList.map((c) => {
+                const isSelected = selectedCustomer?.personCode === c.personCode;
+                return (
+                  <button
+                    key={c.personCode}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCustomer(c);
+                      setIsCustomerDropdownOpen(false);
+                      setCustomerSearch('');
+                      setErrorMsg(null);
+                    }}
+                    className={`w-full py-3 px-2.5 text-right flex items-center justify-between gap-2 text-xs rounded-xl my-0.5 ${
+                      isSelected
+                        ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-black'
+                        : 'text-slate-800 dark:text-zinc-200 active:bg-slate-100 dark:active:bg-zinc-800'
+                    }`}
+                  >
+                    <span className="truncate font-bold">{c.name}</span>
+                    <span className="font-mono text-[11px] px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 shrink-0">
+                      کد {c.personCode}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Neat Pre-Submit Final Review & Confirmation Sheet (Replaces window.confirm) */}
+      {isReviewModalOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[999999995] flex items-end sm:items-center justify-center sm:p-4 bg-slate-950/75 backdrop-blur-xs select-text" dir="rtl">
+          <div className="bg-white dark:bg-zinc-900 border-t sm:border border-slate-200 dark:border-zinc-800 rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-2xl max-h-[94dvh] flex flex-col overflow-hidden">
+            {/* Sticky Header */}
+            <div className="flex-none px-4 py-3 border-b border-slate-200 dark:border-zinc-800 bg-slate-50/90 dark:bg-zinc-900 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                  <Eye size={17} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate">
+                    پیش‌نمایش و تایید نهایی {operationType === '25' ? 'حواله بین انبار' : 'حواله فروش'}
+                  </h3>
+                  <p className="text-[10px] text-slate-500 dark:text-zinc-400 truncate">
+                    قبل از ثبت قطعی در سایان، لیست کالا، تعداد کارتن و وزن کل را بررسی کنید
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsReviewModalOpen(false)}
+                disabled={isSubmitting}
+                className="p-1.5 rounded-xl text-slate-500 hover:bg-slate-200/70 dark:hover:bg-zinc-800"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-3.5 sm:p-5 space-y-3.5 custom-scrollbar">
+              {/* Header Metadata Summary */}
+              <div className="grid grid-cols-2 gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/70 border border-slate-200/80 dark:border-zinc-700/60 text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-400 block">خریدار / مقصد:</span>
+                  <span className="font-black text-slate-900 dark:text-white truncate block">
+                    {selectedCustomer?.name || '-'} ({selectedCustomer?.personCode || '-'})
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">انبار مبدا:</span>
+                  <span className="font-black text-slate-900 dark:text-white truncate block">
+                    {warehouses.find(w => w.code === selectedWarehouse)?.name || `کد ${selectedWarehouse}`}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">تاریخ و سال مالی:</span>
+                  <span className="font-mono font-bold text-slate-700 dark:text-zinc-300">
+                    {remittanceDate} • کد سال {selectedFiscalYear}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block">نوع عملیات:</span>
+                  <span className="font-black text-blue-600 dark:text-blue-400">
+                    {operationType === '25' ? 'حواله بین انبار (۲۵)' : 'حواله فروش (سایان)'}
+                  </span>
+                </div>
+              </div>
+
+              {/* 4 Bold Total KPIs */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 text-center">
+                  <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 block">تعداد کل کارتن</span>
+                  <span className="text-lg sm:text-xl font-black font-mono text-emerald-900 dark:text-emerald-100">
+                    {totalCartons.toLocaleString('fa-IR')}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 text-center">
+                  <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 block">جمع وزن خالص</span>
+                  <span className="text-lg sm:text-xl font-black font-mono text-blue-900 dark:text-blue-100">
+                    {totalNetWeight.toLocaleString('fa-IR')} <span className="text-[10px] font-normal">kg</span>
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 text-center">
+                  <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 block">جمع وزن ناخالص</span>
+                  <span className="text-lg sm:text-xl font-black font-mono text-indigo-900 dark:text-indigo-100">
+                    {totalGrossWeight.toLocaleString('fa-IR')} <span className="text-[10px] font-normal">kg</span>
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-center">
+                  <span className="text-[10px] font-bold text-slate-600 dark:text-zinc-400 block">تعداد بوبین</span>
+                  <span className="text-lg sm:text-xl font-black font-mono text-slate-900 dark:text-white">
+                    {totalBobbins.toLocaleString('fa-IR')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Offline Warning or Auto-Sync Notice inside Review Modal */}
+              {!isOnline ? (
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs font-bold flex items-center gap-2">
+                  <WifiOff size={16} className="shrink-0" />
+                  <span>اینترنت دستگاه قطع است. لیست کارتن‌ها به‌طور امن ذخیره شده؛ پس از اتصال اینترنت ثبت نهایی را بزنید.</span>
+                </div>
+              ) : offlinePendingCount > 0 ? (
+                <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-[11px] font-bold flex items-center justify-between gap-2">
+                  <span>{offlinePendingCount.toLocaleString('fa-IR')} کارتن آفلاین قبل از ثبت، به‌طور خودکار با سایان همگام‌سازی و وزن‌گیری می‌شوند.</span>
+                  <button
+                    type="button"
+                    onClick={syncOfflineBarcodesWithSayan}
+                    disabled={isSyncingOffline}
+                    className="px-2.5 py-1 rounded-lg bg-blue-600 text-white text-[10px] font-black shrink-0"
+                  >
+                    {isSyncingOffline ? '...' : 'استعلام الان'}
+                  </button>
+                </div>
+              ) : null}
+
+              {/* Grouped Product Summary */}
+              <div className="space-y-1.5">
+                <h4 className="text-xs font-black text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
+                  <Layers size={14} className="text-blue-600" />
+                  <span>خلاصه تفکیکی به ازای هر کالا ({groupedProductSummary.length.toLocaleString('fa-IR')} نوع کالا)</span>
+                </h4>
+                <div className="rounded-xl border border-slate-200 dark:border-zinc-800 divide-y divide-slate-100 dark:divide-zinc-800 overflow-hidden">
+                  {groupedProductSummary.map((grp) => (
+                    <div key={grp.key} className="p-2.5 bg-white dark:bg-zinc-900 flex items-center justify-between gap-2 text-xs">
+                      <div className="min-w-0">
+                        <span className="font-black text-slate-900 dark:text-white block truncate">{grp.itemName}</span>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          کد {grp.itemCode} • گرید {grp.grade}
+                        </span>
+                      </div>
+                      <div className="text-left shrink-0">
+                        <span className="font-mono font-black text-blue-600 dark:text-blue-400 block">
+                          {grp.cartons.toLocaleString('fa-IR')} کارتن • {grp.netWeight.toLocaleString('fa-IR')} kg
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-400 block">
+                          ناخالص {grp.grossWeight.toLocaleString('fa-IR')} kg
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Expandable Full Carton List */}
+              <div className="space-y-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowReviewFullList(!showReviewFullList)}
+                  className="w-full py-2 px-3 rounded-xl bg-slate-100 dark:bg-zinc-800 text-xs font-black text-slate-700 dark:text-zinc-200 flex items-center justify-between"
+                >
+                  <span>مشاهده ریز لیست تمامی کارتن‌ها ({items.length.toLocaleString('fa-IR')} ردیف)</span>
+                  <ChevronDown size={15} className={`transition-transform ${showReviewFullList ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showReviewFullList && (
+                  <div className="max-h-52 overflow-y-auto rounded-xl border border-slate-200 dark:border-zinc-800 divide-y divide-slate-100 dark:divide-zinc-800 custom-scrollbar">
+                    {items.map((it, idx) => (
+                      <div key={it.id} className="px-2.5 py-1.5 flex items-center justify-between gap-2 text-[11px]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-mono text-slate-400">{items.length - idx}.</span>
+                          <span className="font-mono font-bold text-slate-800 dark:text-zinc-200 dir-ltr truncate">{it.barcode}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-mono font-black text-blue-600 dark:text-blue-400">{it.netWeight} kg</span>
+                          <button
+                            type="button"
+                            onClick={() => setItems(prev => prev.filter(r => r.id !== it.id))}
+                            className="p-1 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded"
+                            title="حذف"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Error Message inside Modal */}
+              {errorMsg && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-bold flex items-start gap-2">
+                  <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{errorMsg}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Sticky Footer Actions */}
+            <div className="flex-none px-4 py-3 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsReviewModalOpen(false)}
+                disabled={isSubmitting}
+                className="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 font-bold text-xs shrink-0"
+              >
+                بازگشت
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRegisterInSayan}
+                disabled={isSubmitting || !isOnline || items.length === 0}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 active:scale-95 disabled:opacity-45 cursor-pointer"
+              >
+                {isSubmitting ? <Loader2 size={17} className="animate-spin" /> : <CheckCircle2 size={17} />}
+                <span>
+                  {isSubmitting
+                    ? 'در حال ثبت در سایان...'
+                    : offlinePendingCount > 0
+                    ? `همگام‌سازی و ثبت قطعی (${totalCartons.toLocaleString('fa-IR')} کارتن)`
+                    : `تایید و ثبت قطعی در سایان (${totalCartons.toLocaleString('fa-IR')} کارتن)`}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Success Modal (Scroll-safe on small 4-inch PDA screens) */}
       {successResult && createPortal(
-        <div className="fixed inset-0 z-[999999999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200 select-text" dir="rtl">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-2xl max-w-lg w-full p-6 text-center space-y-4 animate-in zoom-in-95 duration-150">
-            <div className="w-16 h-16 rounded-3xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center shadow-lg shadow-emerald-500/20">
-              <CheckCircle2 size={32} />
+        <div className="fixed inset-0 z-[999999999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200 select-text" dir="rtl">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 text-center space-y-3.5 animate-in zoom-in-95 duration-150">
+            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl sm:rounded-3xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center shadow-lg shadow-emerald-500/20">
+              <CheckCircle2 size={30} />
             </div>
 
             <div>
-              <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                حواله فروش با موفقیت در سایان ثبت شد!
+              <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                {successResult.opName || 'حواله فروش'} با موفقیت در سایان ثبت شد!
               </h3>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
-                سند انبار و حواله فروش با شماره رسمی زیر به پایگاه داده سایان تزریق گردید.
+                سند انبار با شماره رسمی زیر در پایگاه داده سایان ذخیره گردید.
               </p>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-800 border border-slate-100 dark:border-zinc-700/60 space-y-2 text-right">
+            <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-800 border border-slate-100 dark:border-zinc-700/60 space-y-2 text-right">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-500">شماره حواله سایان:</span>
                 <span className="font-mono font-black text-base text-blue-600 dark:text-blue-400">
@@ -2477,33 +3460,33 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 </span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-500">خریدار:</span>
-                <span className="font-bold text-slate-900 dark:text-white">{successResult.customerName}</span>
+                <span className="text-slate-500">خریدار / مقصد:</span>
+                <span className="font-bold text-slate-900 dark:text-white truncate max-w-[65%]">{successResult.customerName}</span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-500">مجموع وزن خالص:</span>
+                <span className="text-slate-500">تعداد کارتن / وزن خالص:</span>
                 <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
-                  {successResult.totalNetWeight?.toLocaleString('fa-IR')} کیلوگرم
+                  {Number(successResult.totalCartons || successResult.itemsCount || 0).toLocaleString('fa-IR')} کارتن • {Number(successResult.totalNetWeight || 0).toLocaleString('fa-IR')} kg
                 </span>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 pt-2">
+            <div className="grid grid-cols-2 gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setPrintModalRecord(successResult)}
-                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                className="px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
               >
-                <Printer size={16} />
-                <span>چاپ سند رسمی</span>
+                <Printer size={15} />
+                <span>چاپ سند</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleShareToChat(successResult)}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition-all active:scale-95"
+                className="px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 transition-all active:scale-95"
               >
-                <Send size={16} />
+                <Send size={15} />
                 <span>ارسال به گفتگو</span>
               </button>
             </div>
@@ -2511,7 +3494,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             <button
               type="button"
               onClick={handleStartNextRemittance}
-              className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs transition-colors cursor-pointer"
+              className="w-full py-2.5 sm:py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs transition-colors cursor-pointer"
             >
               ثبت و صدور حواله بعدی
             </button>

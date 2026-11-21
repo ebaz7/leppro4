@@ -404,44 +404,7 @@ export const lookupBarcodeInSayan = async (barcode, options = {}) => {
             };
         }
 
-        // If not found in previous rows, parse barcode structure if standard Lepan format:
-        // Format: PO-F-[LOT]-[CARTON]-[WEIGHT] (e.g. PO-F-6135-7-19.49)
-        const parts = rawBarcode.split('-');
-        let weight = 0;
-        let cartonSeq = 1;
-        let lot = rawBarcode;
-
-        if (parts.length >= 4) {
-            const lastPart = parts[parts.length - 1];
-            const parsedW = parseFloat(lastPart);
-            if (!isNaN(parsedW) && parsedW > 0 && parsedW < 200) {
-                weight = parsedW;
-            }
-            const secPart = parseInt(parts[parts.length - 2], 10);
-            if (!isNaN(secPart) && secPart > 0) {
-                cartonSeq = secPart;
-            }
-            lot = parts.slice(0, parts.length - 2).join('-');
-        }
-
-        return {
-            found: false,
-            barcode: rawBarcode,
-            batch: rawBarcode,
-            lot,
-            cartonSeq,
-            itemCode: '',
-            itemName: '',
-            netWeight: weight,
-            grossWeight: weight > 0 ? Number((weight + 4.35).toFixed(2)) : 0,
-            cartonCount: 1,
-            bobbinCount: 56,
-            grade: 'A',
-            twistDirection: 'Z',
-            rawGrade: '00011002',
-            rawTwist: '00021001',
-            note: `سری ساخت: ${rawBarcode} | همبافت:  | تعداد بوبین: 56 | تعداد کارتن: 1 | گرید: 00011002 | جهت تاب: 00021001 | وزن ناخالص: ${weight > 0 ? (weight + 4.35).toFixed(2) : 0}`
-        };
+        return parseLocalBarcodeStructure(rawBarcode);
     } catch (err) {
         console.error('lookupBarcodeInSayan error:', err.message);
         throw err;
@@ -449,8 +412,284 @@ export const lookupBarcodeInSayan = async (barcode, options = {}) => {
 };
 
 /**
+ * Helper: Parse Lepan carton barcode format locally (e.g., PO-F-6135-7-19.49)
+ */
+export const parseLocalBarcodeStructure = (rawBarcode) => {
+    const clean = String(rawBarcode || '').trim();
+    const parts = clean.split('-');
+    let weight = 0;
+    let cartonSeq = 1;
+    let lot = clean;
+
+    if (parts.length >= 4) {
+        const lastPart = parts[parts.length - 1];
+        const parsedW = parseFloat(lastPart);
+        if (!isNaN(parsedW) && parsedW > 0 && parsedW < 200) {
+            weight = Number(parsedW.toFixed(2));
+        }
+        const secPart = parseInt(parts[parts.length - 2], 10);
+        if (!isNaN(secPart) && secPart > 0) {
+            cartonSeq = secPart;
+        }
+        lot = parts.slice(0, parts.length - 2).join('-');
+    }
+
+    const grossWeight = weight > 0 ? Number((weight + 4.35).toFixed(2)) : 0;
+    return {
+        found: false,
+        barcode: clean,
+        batch: clean,
+        lot,
+        cartonSeq,
+        itemCode: '',
+        itemName: '',
+        netWeight: weight,
+        grossWeight,
+        cartonCount: 1,
+        bobbinCount: 56,
+        grade: 'A',
+        twistDirection: 'Z',
+        rawGrade: '00011002',
+        rawTwist: '00021001',
+        note: `سری ساخت: ${clean} | همبافت:  | تعداد بوبین: 56 | تعداد کارتن: 1 | گرید: 00011002 | جهت تاب: 00021001 | وزن ناخالص: ${grossWeight}`
+    };
+};
+
+/**
+ * 5b. Batch Lookup Multiple Barcodes in Sayan (for fast offline queue sync)
+ * Resolves up to 500 barcodes in chunked SQL IN queries instead of N HTTP calls
+ */
+export const lookupBarcodesBatchInSayan = async (barcodes = [], options = {}) => {
+    if (!Array.isArray(barcodes) || barcodes.length === 0) {
+        return { results: {}, resolvedCount: 0, totalCount: 0 };
+    }
+
+    const uniqueClean = Array.from(
+        new Set(
+            barcodes
+                .map((b) => String(b || '').trim())
+                .filter((b) => b.length > 0 && b.length <= 120)
+        )
+    ).slice(0, 500);
+
+    const results = {};
+    let resolvedCount = 0;
+
+    // Chunk into groups of 80 to keep SQL queries compact & fast
+    const CHUNK_SIZE = 80;
+    for (let i = 0; i < uniqueClean.length; i += CHUNK_SIZE) {
+        const chunk = uniqueClean.slice(i, i + CHUNK_SIZE);
+        const inClause = chunk.map((b) => `N'${b.replace(/'/g, "''")}'`).join(',');
+
+        const sql = `
+            SELECT
+                RTRIM(LTRIM(t11.Field_005)) as ItemCode,
+                t11.Field_006 as NetQty,
+                RTRIM(LTRIM(t11.Field_028)) as BatchOrBarcode,
+                RTRIM(LTRIM(t11.Field_011)) as AltBarcode,
+                t11.Field_031 as Note,
+                CAST(t11.Field_001 as bigint) as RowId,
+                COALESCE(
+                    NULLIF(RTRIM(LTRIM(s04.Field_003)), ''),
+                    NULLIF(RTRIM(LTRIM(t22.Field_004)), ''),
+                    RTRIM(LTRIM(t11.Field_005))
+                ) as ItemName
+            FROM STR_TBL_011 t11 WITH (NOLOCK)
+            LEFT JOIN STR_TBL_004 s04 WITH (NOLOCK) ON RTRIM(LTRIM(s04.Field_004)) = RTRIM(LTRIM(t11.Field_005))
+            LEFT JOIN IND_TBL_022 t22 WITH (NOLOCK) ON RTRIM(LTRIM(t22.Field_005)) = RTRIM(LTRIM(t11.Field_005))
+            WHERE t11.Field_028 IN (${inClause})
+               OR t11.Field_011 IN (${inClause})
+            ORDER BY CAST(t11.Field_001 as bigint) DESC
+        `;
+
+        const rows = await executeSayanQuery(sql, 45000);
+        for (const found of (rows || [])) {
+            const keyPrimary = String(found.BatchOrBarcode || '').trim().toLowerCase();
+            const keyAlt = String(found.AltBarcode || '').trim().toLowerCase();
+            const matchedOriginal = chunk.find(
+                (b) => b.toLowerCase() === keyPrimary || b.toLowerCase() === keyAlt
+            );
+            if (!matchedOriginal) continue;
+            const normKey = matchedOriginal.toLowerCase();
+            if (results[normKey]?.found) continue; // Keep most recent row
+
+            const parsedNote = parseDetailNote(found.Note);
+            const netQty = Number(found.NetQty) || parsedNote.netWeight || 0;
+            results[normKey] = {
+                found: true,
+                barcode: matchedOriginal,
+                batch: found.BatchOrBarcode || matchedOriginal,
+                itemCode: found.ItemCode || '',
+                itemName: found.ItemName || '',
+                netWeight: netQty,
+                grossWeight: parsedNote.grossWeight || (netQty > 0 ? Number((netQty + 4.35).toFixed(2)) : 0),
+                cartonCount: parsedNote.cartonCount || 1,
+                bobbinCount: parsedNote.bobbinCount || 56,
+                grade: parsedNote.grade || 'A',
+                twistDirection: parsedNote.twistDirection || 'Z',
+                rawGrade: parsedNote.rawGrade || '00011002',
+                rawTwist: parsedNote.rawTwist || '00021001',
+                note: found.Note || ''
+            };
+            resolvedCount++;
+        }
+    }
+
+    // Fill any unmatched barcodes with local parsed structure
+    for (const bc of uniqueClean) {
+        const normKey = bc.toLowerCase();
+        if (!results[normKey]) {
+            results[normKey] = parseLocalBarcodeStructure(bc);
+        }
+    }
+
+    return {
+        results,
+        resolvedCount,
+        totalCount: uniqueClean.length
+    };
+};
+
+// Cache live Sayan STR_TBL_010 / STR_TBL_011 schema & template metadata (10 min TTL)
+const remittanceTemplateCache = new Map();
+const TEMPLATE_CACHE_TTL = 10 * 60 * 1000;
+
+const sanitizeSqlString = (val, maxLen = 500) => {
+    return String(val ?? '')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+        .replace(/'/g, "''")
+        .trim()
+        .slice(0, maxLen);
+};
+
+/**
+ * Inspect live Sayan schema & one existing real sales remittance to guarantee
+ * 100% column/type compatibility (avoids 500 crashes from NULLs, FK GUIDs, or column mismatches)
+ */
+const resolveSayanRemittanceTemplate = async (fiscalYear, requestedOpCode) => {
+    const cacheKey = `${fiscalYear}:${requestedOpCode}`;
+    const cached = remittanceTemplateCache.get(cacheKey);
+    if (cached && (Date.now() - cached.ts < TEMPLATE_CACHE_TTL)) {
+        return cached.data;
+    }
+
+    const fallback = {
+        opCode: requestedOpCode === '25' ? '25' : '23',
+        subSys: 1,
+        ownerGuid: '0cd6777f-b6d7-4e42-9bec-e6400b85d409',
+        lineField36: requestedOpCode === '25' ? '25' : '12',
+        lineField37: '172806',
+        t10Cols: new Set([
+            'Field_004', 'Field_005', 'Field_006', 'Field_007', 'Field_008', 'Field_009', 'Field_010', 'Field_011',
+            'Field_015', 'Field_016', 'Field_017', 'Field_018', 'Field_019', 'Field_020', 'Field_021',
+            'Field_024', 'Field_025', 'Field_026', 'Field_029', 'Field_036', 'Field_037'
+        ]),
+        t11Cols: new Map([
+            ['Field_003', 'bigint'], ['Field_004', 'bigint'], ['Field_005', 'nvarchar'], ['Field_006', 'float'],
+            ['Field_007', 'float'], ['Field_008', 'bigint'], ['Field_009', 'float'], ['Field_010', 'nvarchar'],
+            ['Field_011', 'nvarchar'], ['Field_012', 'int'], ['Field_013', 'nvarchar'], ['Field_018', 'bigint'],
+            ['Field_020', 'float'], ['Field_024', 'int'], ['Field_025', 'int'], ['Field_028', 'nvarchar'],
+            ['Field_031', 'nvarchar'], ['Field_034', 'int'], ['Field_035', 'int'], ['Field_036', 'nvarchar'], ['Field_037', 'nvarchar']
+        ]),
+        useLineField14ForWarehouse: false,
+        useLineField28ForBarcode: true,
+        useLineField11ForBarcode: false
+    };
+
+    try {
+        const opCandidates = requestedOpCode === '25' ? "N'25', N'68'" : "N'23', N'22'";
+        const [schemaRows, sampleHeaderRows] = await Promise.all([
+            executeSayanQuery(`
+                SELECT TABLE_NAME as TableName, COLUMN_NAME as ColumnName, DATA_TYPE as DataType, IS_NULLABLE as IsNullable
+                FROM INFORMATION_SCHEMA.COLUMNS WITH (NOLOCK)
+                WHERE TABLE_NAME IN ('STR_TBL_010', 'STR_TBL_011')
+            `, 15000).catch(() => []),
+            executeSayanQuery(`
+                SELECT TOP 1
+                    RTRIM(LTRIM(CAST(t10.Field_009 AS NVARCHAR(50)))) as OpCode,
+                    t10.Field_018 as SubSys,
+                    RTRIM(LTRIM(CAST(t10.Field_020 AS NVARCHAR(100)))) as OwnerGuid,
+                    t10.Field_004 as SampleFy,
+                    t10.Field_005 as SampleDocNo
+                FROM STR_TBL_010 t10 WITH (NOLOCK)
+                WHERE RTRIM(LTRIM(CAST(t10.Field_009 AS NVARCHAR(50)))) IN (${opCandidates})
+                  AND t10.Field_020 IS NOT NULL
+                ORDER BY t10.Field_001 DESC
+            `, 15000).catch(() => [])
+        ]);
+
+        const template = {
+            ...fallback,
+            t10Cols: new Set(fallback.t10Cols),
+            t11Cols: new Map(fallback.t11Cols)
+        };
+
+        if (Array.isArray(schemaRows) && schemaRows.length > 0) {
+            template.t10Cols = new Set();
+            template.t11Cols = new Map();
+            for (const row of schemaRows) {
+                const tbl = String(row.TableName || '').toUpperCase();
+                const col = String(row.ColumnName || '').trim();
+                const dtype = String(row.DataType || '').toLowerCase();
+                if (tbl === 'STR_TBL_010') template.t10Cols.add(col);
+                if (tbl === 'STR_TBL_011') template.t11Cols.set(col, dtype);
+            }
+
+            // Check Field_014 compatibility in STR_TBL_011 (only use if it exists and is string/int)
+            const f14Type = template.t11Cols.get('Field_014');
+            if (f14Type && (f14Type.includes('char') || f14Type.includes('int') || f14Type.includes('numeric'))) {
+                template.useLineField14ForWarehouse = true;
+            }
+            template.useLineField28ForBarcode = template.t11Cols.has('Field_028');
+            template.useLineField11ForBarcode = template.t11Cols.has('Field_011');
+        }
+
+        const hdr = Array.isArray(sampleHeaderRows) && sampleHeaderRows[0] ? sampleHeaderRows[0] : null;
+        if (hdr) {
+            if (hdr.OpCode) template.opCode = String(hdr.OpCode).trim();
+            if (hdr.SubSys !== undefined && hdr.SubSys !== null && !isNaN(Number(hdr.SubSys))) {
+                template.subSys = Number(hdr.SubSys);
+            }
+            if (hdr.OwnerGuid && String(hdr.OwnerGuid).trim().length >= 8) {
+                template.ownerGuid = String(hdr.OwnerGuid).trim();
+            }
+
+            // Sample one real STR_TBL_011 row from this exact document to mirror Field_036, Field_037, Field_014
+            if (hdr.SampleFy && hdr.SampleDocNo) {
+                const sampleLineRows = await executeSayanQuery(`
+                    SELECT TOP 1
+                        RTRIM(LTRIM(CAST(Field_036 AS NVARCHAR(50)))) as F36,
+                        RTRIM(LTRIM(CAST(Field_037 AS NVARCHAR(50)))) as F37,
+                        RTRIM(LTRIM(CAST(Field_014 AS NVARCHAR(50)))) as F14,
+                        RTRIM(LTRIM(CAST(Field_028 AS NVARCHAR(100)))) as F28
+                    FROM STR_TBL_011 WITH (NOLOCK)
+                    WHERE Field_003 = ${Number(hdr.SampleFy)} AND Field_004 = ${Number(hdr.SampleDocNo)} AND Field_012 = ${template.subSys}
+                    ORDER BY Field_001 DESC
+                `, 15000).catch(() => []);
+
+                const ln = Array.isArray(sampleLineRows) && sampleLineRows[0] ? sampleLineRows[0] : null;
+                if (ln) {
+                    if (ln.F36) template.lineField36 = String(ln.F36).trim();
+                    if (ln.F37) template.lineField37 = String(ln.F37).trim();
+                    if (ln.F14 === null || ln.F14 === undefined || ln.F14 === '') {
+                        // Existing real rows leave Field_014 empty/null — don't force an invalid value
+                        template.useLineField14ForWarehouse = false;
+                    }
+                }
+            }
+        }
+
+        remittanceTemplateCache.set(cacheKey, { ts: Date.now(), data: template });
+        return template;
+    } catch (err) {
+        console.warn('resolveSayanRemittanceTemplate fallback used:', err.message);
+        return fallback;
+    }
+};
+
+/**
  * 6. Issue & Register Sales / Inter-Warehouse Remittance into Sayan ERP (OpCode 23 / OpCode 25)
- * Full atomic transaction: creates STR_TBL_010 header and STR_TBL_011 items
+ * Full atomic transaction: creates STR_TBL_010 header and STR_TBL_011 items safely for 1 to 500+ cartons.
  */
 export const registerSalesRemittanceInSayan = async (data, user = 'کاربر سیستم') => {
     const {
@@ -463,122 +702,254 @@ export const registerSalesRemittanceInSayan = async (data, user = 'کاربر س
         subCode = '',
         notes = '',
         items = []
-    } = data;
+    } = data || {};
 
-    if (!warehouseCode) {
-        throw new Error('انبار مبدا انتخاب نشده است.');
+    if (!warehouseCode || !String(warehouseCode).trim()) {
+        const err = new Error('انبار مبدا انتخاب نشده است.');
+        err.statusCode = 400;
+        throw err;
     }
-    if (!customerCode) {
-        throw new Error(opCode === '25' ? 'انبار مقصد / تحویل‌گیرنده انتخاب نشده است.' : 'مشتری / طرف‌حساب انتخاب نشده است.');
+    if (!customerCode || !String(customerCode).trim()) {
+        const err = new Error(opCode === '25' ? 'انبار مقصد / تحویل‌گیرنده انتخاب نشده است.' : 'مشتری / طرف‌حساب انتخاب نشده است.');
+        err.statusCode = 400;
+        throw err;
     }
     if (!Array.isArray(items) || items.length === 0) {
-        throw new Error('حداقل یک ردیف کالا یا کارتن برای صدور حواله الزامی است.');
+        const err = new Error('حداقل یک ردیف کالا یا کارتن برای صدور حواله الزامی است.');
+        err.statusCode = 400;
+        throw err;
+    }
+    if (items.length > 600) {
+        const err = new Error('حداکثر ۶۰۰ کارتن در یک حواله قابل ثبت است. لطفاً کارتن‌های اضافی را در حواله بعدی ثبت کنید.');
+        err.statusCode = 400;
+        throw err;
     }
 
-    const fy = String(fiscalYear || '4').trim();
-    const wCode = String(warehouseCode).trim();
-    const cCode = String(customerCode).trim();
-    const sCode = String(subCode || '').replace(/'/g, "''").trim();
-    const cleanNotes = String(notes || '').replace(/'/g, "''").trim();
-    const cleanOpCode = String(opCode === '25' ? '25' : '23').trim();
-    const opTitle = cleanOpCode === '25' ? 'حواله بین انبار' : 'حواله فروش';
+    const fyNum = parseInt(String(fiscalYear || '4').trim(), 10);
+    if (isNaN(fyNum) || fyNum <= 0) {
+        const err = new Error('کد سال مالی سایان معتبر نیست.');
+        err.statusCode = 400;
+        throw err;
+    }
+    const fy = String(fyNum);
+    const wCode = sanitizeSqlString(warehouseCode, 30);
+    const cCode = sanitizeSqlString(customerCode, 40);
+    const sCode = sanitizeSqlString(subCode, 50);
+    const cleanNotes = sanitizeSqlString(notes, 400);
+    const requestedOpCode = String(opCode) === '25' ? '25' : '23';
 
-    // Date handling
+    // Discover live schema & real Sayan template values (cached)
+    const tpl = await resolveSayanRemittanceTemplate(fy, requestedOpCode);
+    const cleanOpCode = sanitizeSqlString(tpl.opCode || requestedOpCode, 10);
+    const subSys = Number.isFinite(Number(tpl.subSys)) ? Number(tpl.subSys) : 1;
+    const ownerGuid = sanitizeSqlString(tpl.ownerGuid || '0cd6777f-b6d7-4e42-9bec-e6400b85d409', 64);
+    const lineF36 = sanitizeSqlString(tpl.lineField36 || cleanOpCode, 20);
+    const lineF37 = sanitizeSqlString(tpl.lineField37 || '172806', 30);
+    const opTitle = requestedOpCode === '25' ? 'حواله بین انبار' : 'حواله فروش';
+
+    // Date handling (Jalali YYYY/MM/DD or ISO YYYY-MM-DD)
     let targetDate = new Date();
-    if (remittanceDate) {
-        if (remittanceDate.includes('-')) {
-            const parsed = new Date(remittanceDate);
+    if (remittanceDate && typeof remittanceDate === 'string') {
+        const normalizedDate = remittanceDate
+            .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+            .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+            .trim();
+        if (normalizedDate.includes('-')) {
+            const parsed = new Date(normalizedDate);
             if (!isNaN(parsed.getTime())) targetDate = parsed;
-        } else if (remittanceDate.includes('/')) {
-            const p = remittanceDate.split('/');
+        } else if (normalizedDate.includes('/')) {
+            const p = normalizedDate.split('/');
             if (p.length === 3) {
-                const g = jalaali.toGregorian(parseInt(p[0], 10), parseInt(p[1], 10), parseInt(p[2], 10));
-                targetDate = new Date(Date.UTC(g.gy, g.gm - 1, g.gd, 12, 0, 0));
+                const jy = parseInt(p[0], 10);
+                const jm = parseInt(p[1], 10);
+                const jd = parseInt(p[2], 10);
+                if (jy >= 1300 && jy <= 1500 && jm >= 1 && jm <= 12 && jd >= 1 && jd <= 31) {
+                    const g = jalaali.toGregorian(jy, jm, jd);
+                    targetDate = new Date(Date.UTC(g.gy, g.gm - 1, g.gd, 12, 0, 0));
+                }
             }
         }
     }
     const pad = (n) => String(n).padStart(2, '0');
     const docDateStr = `${targetDate.getUTCFullYear()}-${pad(targetDate.getUTCMonth() + 1)}-${pad(targetDate.getUTCDate())} ${pad(targetDate.getUTCHours())}:${pad(targetDate.getUTCMinutes())}:${pad(targetDate.getUTCSeconds())}`;
 
-    const headerDesc = `مشتری: ${cCode} | انبار: ${wCode} | کد فرعی: ${sCode} | توضیحات: ${cleanNotes}`.replace(/'/g, "''");
+    const headerDesc = sanitizeSqlString(
+        `مشتری: ${String(customerCode).trim()} | انبار: ${String(warehouseCode).trim()}${String(subCode || '').trim() ? ` | کد فرعی: ${String(subCode).trim()}` : ''}${String(notes || '').trim() ? ` | توضیحات: ${String(notes).trim()}` : ''}`,
+        450
+    );
 
-    // Build items SQL statements
-    let itemInsertStatements = [];
+    // Prepare STR_TBL_011 columns safely based on live schema
+    const lineCols = [
+        'Field_003', 'Field_004', 'Field_005', 'Field_006', 'Field_007', 'Field_008', 'Field_009',
+        'Field_010', 'Field_011', 'Field_012', 'Field_013'
+    ];
+    if (tpl.useLineField14ForWarehouse) lineCols.push('Field_014');
+    lineCols.push('Field_018', 'Field_020', 'Field_024', 'Field_025');
+    if (tpl.useLineField28ForBarcode) lineCols.push('Field_028');
+    lineCols.push('Field_031', 'Field_034', 'Field_035', 'Field_036', 'Field_037');
+
+    // Build validated row value tuples
+    const rowTuples = [];
     let totalNetWeight = 0;
+    let totalGrossWeight = 0;
     let totalCartons = 0;
     let totalBobbins = 0;
 
     for (let i = 0; i < items.length; i++) {
-        const item = items[i];
+        const item = items[i] || {};
         const rowNo = i + 1;
-        const itemCode = String(item.itemCode || item.code || '0402010105').replace(/'/g, "''").trim();
-        const netQty = Number(item.netWeight || item.netQty || item.quantity || 0);
-        const grossQty = Number(item.grossWeight || item.grossQty || (netQty + 4.35));
-        const cartonCount = Number(item.cartonCount || 1);
-        const bobbinCount = Number(item.bobbinCount || 56);
-        const batchBarcode = String(item.barcode || item.batch || `LOT-${rowNo}`).replace(/'/g, "''").trim();
-        const rawGrade = String(item.rawGrade || '00011002').replace(/'/g, "''").trim();
-        const rawTwist = String(item.rawTwist || '00021001').replace(/'/g, "''").trim();
-        
+        const itemCode = sanitizeSqlString(item.itemCode || item.code || '0402010105', 50) || '0402010105';
+        const rawNet = Number(item.netWeight ?? item.netQty ?? item.quantity ?? 0);
+        const netQty = Number.isFinite(rawNet) && rawNet > 0 ? Number(rawNet.toFixed(3)) : 0.001;
+        const rawGross = Number(item.grossWeight ?? item.grossQty ?? (netQty + 4.35));
+        const grossQty = Number.isFinite(rawGross) && rawGross > 0 ? Number(rawGross.toFixed(2)) : Number((netQty + 4.35).toFixed(2));
+        const cartonCount = Number.isFinite(Number(item.cartonCount)) && Number(item.cartonCount) > 0 ? Math.round(Number(item.cartonCount)) : 1;
+        const bobbinCount = Number.isFinite(Number(item.bobbinCount)) && Number(item.bobbinCount) >= 0 ? Math.round(Number(item.bobbinCount)) : 56;
+        const batchBarcode = sanitizeSqlString(item.barcode || item.batch || `LOT-${rowNo}`, 100);
+        const rawGrade = sanitizeSqlString(item.rawGrade || '00011002', 30);
+        const rawTwist = sanitizeSqlString(item.rawTwist || '00021001', 30);
+
         totalNetWeight += netQty;
+        totalGrossWeight += grossQty;
         totalCartons += cartonCount;
         totalBobbins += bobbinCount;
 
-        const specNote = (item.note || `سری ساخت: ${batchBarcode} | همبافت:  | تعداد بوبین: ${bobbinCount} | تعداد کارتن: ${cartonCount} | گرید: ${rawGrade} | جهت تاب: ${rawTwist} | وزن ناخالص: ${grossQty}`).replace(/'/g, "''");
+        const specNote = sanitizeSqlString(
+            item.note || `سری ساخت: ${batchBarcode} | همبافت:  | تعداد بوبین: ${bobbinCount} | تعداد کارتن: ${cartonCount} | گرید: ${rawGrade} | جهت تاب: ${rawTwist} | وزن ناخالص: ${grossQty}`,
+            450
+        );
 
-        itemInsertStatements.push(`
-            N'IN' + N'SERT INTO STR_TBL_011 (' +
-            N'Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, ' +
-            N'Field_010, Field_011, Field_012, Field_013, Field_014, Field_018, Field_020, ' +
-            N'Field_024, Field_025, Field_028, Field_031, Field_034, Field_035, Field_036, Field_037) ' +
-            N'VALUES (' +
-            N'@FiscalYear, @NextDocNo, N''${itemCode}'', ${netQty}, NULL, NULL, 0, ' +
-            N'CONCAT(@FiscalYear, ''-1-'', @NextDocNo, ''-'', SCOPE_IDENTITY()), N'''', 1, N''${cCode}'', N''${wCode}'', NULL, NULL, ' +
-            N'1, 0, N''${batchBarcode}'', N''${specNote}'', ${rowNo}, 0, N''12'', N''172806''); ' +
-        `);
+        // Escape single quotes twice because values sit inside EXEC(N'...')
+        const escExec = (s) => s.replace(/'/g, "''");
+
+        const vals = [
+            '@FiscalYear',
+            '@NextDocNo',
+            `N''${escExec(itemCode)}''`,
+            String(netQty),
+            '1',     // Field_007 (non-null factor/unit)
+            '0',     // Field_008 (non-null ref)
+            '0',     // Field_009
+            `CONCAT(@FiscalYear, ''-${subSys}-'', @NextDocNo, ''-${rowNo}'')`, // Field_010 unique row tracking key
+            tpl.useLineField28ForBarcode ? `N''''` : `N''${escExec(batchBarcode)}''`, // Field_011
+            String(subSys), // Field_012 matches STR_TBL_010.Field_018
+            `N''${escExec(cCode)}''` // Field_013 customer code
+        ];
+        if (tpl.useLineField14ForWarehouse) vals.push(`N''${escExec(wCode)}''`);
+        vals.push(
+            '0', // Field_018
+            '0', // Field_020
+            '1', // Field_024
+            '0'  // Field_025
+        );
+        if (tpl.useLineField28ForBarcode) vals.push(`N''${escExec(batchBarcode)}''`);
+        vals.push(
+            `N''${escExec(specNote)}''`, // Field_031
+            String(rowNo),               // Field_034
+            '0',                         // Field_035
+            `N''${escExec(lineF36)}''`,  // Field_036
+            `N''${escExec(lineF37)}''`   // Field_037
+        );
+
+        rowTuples.push(`(${vals.join(', ')})`);
+    }
+
+    // Group row inserts into batches of 20 rows per multi-row INSERT statement
+    // IMPORTANT: Prefix with CAST(N'' AS NVARCHAR(MAX)) so SQL Server NEVER truncates at 4000 chars!
+    const BATCH_SIZE = 20;
+    const itemBatchSqlParts = [];
+    const colListSql = lineCols.join(', ');
+    for (let i = 0; i < rowTuples.length; i += BATCH_SIZE) {
+        const batch = rowTuples.slice(i, i + BATCH_SIZE);
+        const batchValuesSql = batch.join(', ');
+        itemBatchSqlParts.push(
+            `CAST(N'IN' + N'SERT INTO STR_TBL_011 (${colListSql}) VALUES ${batchValuesSql}; ' AS NVARCHAR(MAX))`
+        );
     }
 
     const itemsCount = items.length;
+    const escExec = (s) => s.replace(/'/g, "''");
 
-    // Full atomic SQL script
-    const sql = `
-    EXEC(
-        N'SET XACT_ABORT ON; ' +
-        N'BE' + N'GIN TRAN; ' +
-        N'DECLARE @FiscalYear BIGINT = ${fy}; ' +
-        N'DECLARE @NextDocNo BIGINT; ' +
-        N'DECLARE @NextSubNo BIGINT; ' +
-        N'SELECT @NextDocNo = ISNULL(MAX(Field_005), 0) + 1 FROM STR_TBL_010 WITH (NOLOCK) WHERE Field_004 = @FiscalYear AND Field_018 = 1; ' +
-        N'SELECT @NextSubNo = ISNULL(MAX(Field_006), 0) + 1 FROM STR_TBL_010 WITH (NOLOCK) WHERE Field_004 = @FiscalYear AND Field_009 = ''${cleanOpCode}''; ' +
-        N'DECLARE @NewDocId BIGINT; ' +
-        
-        N'IN' + N'SERT INTO STR_TBL_010 (' +
-        N'Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, ' +
-        N'Field_015, Field_016, Field_017, Field_018, Field_019, Field_020, Field_021, ' +
-        N'Field_024, Field_025, Field_026, Field_029, Field_036, Field_037) ' +
-        N'VALUES (' +
-        N'@FiscalYear, @NextDocNo, @NextSubNo, N''${sCode}'', CAST(''${docDateStr}'' AS DATETIME), N''${cleanOpCode}'', N''${cCode}'', N''${wCode}'', ' +
-        N'0, 0, NULL, 1, 0, NEWID(), 0, ' +
-        N'0, 0, ${itemsCount}, N''${headerDesc}'', CAST(''${docDateStr}'' AS DATETIME), 0); ' +
-        N'SET @NewDocId = SCOPE_IDENTITY(); ' +
-        
-        ${itemInsertStatements.join('\n')}
-
-        N'SELECT @NewDocId as DocId, @NextDocNo as DocNo, @NextSubNo as SubNo, ${itemsCount} as ItemsCount; ' +
-        N'COM' + N'MIT TRAN;'
+    // Build header columns safely according to live schema
+    const headerCols = [
+        'Field_004', 'Field_005', 'Field_006', 'Field_007', 'Field_008', 'Field_009', 'Field_010'
+    ];
+    const headerVals = [
+        '@FiscalYear',
+        '@NextDocNo',
+        '@NextSubNo',
+        `N''${escExec(sCode)}''`,
+        `CAST(''${docDateStr}'' AS DATETIME)`,
+        `N''${escExec(cleanOpCode)}''`,
+        `N''${escExec(cCode)}''`
+    ];
+    if (tpl.t10Cols.has('Field_011')) {
+        headerCols.push('Field_011');
+        headerVals.push(`N''${escExec(wCode)}''`);
+    }
+    headerCols.push(
+        'Field_015', 'Field_016', 'Field_017', 'Field_018', 'Field_019', 'Field_020', 'Field_021',
+        'Field_024', 'Field_025', 'Field_026', 'Field_029', 'Field_036', 'Field_037'
     );
-    `;
+    headerVals.push(
+        '0',
+        '0',
+        `N''${escExec(cleanNotes)}''`,
+        String(subSys),
+        '0',
+        `N''${escExec(ownerGuid)}''`,
+        '0',
+        '0',
+        '0',
+        String(itemsCount),
+        `N''${escExec(headerDesc)}''`,
+        `CAST(''${docDateStr}'' AS DATETIME)`,
+        String(itemsCount)
+    );
 
-    const res = await executeSayanQuery(sql, 90000);
-    const docResult = res && res[0] ? res[0] : null;
+    // Full atomic NVARCHAR(MAX) SQL script — supports 1 to 600 cartons with zero 4000-char truncation
+    const sqlParts = [
+        `CAST(N'SET XACT_ABORT ON; ' AS NVARCHAR(MAX))`,
+        `N'BE' + N'GIN TRAN; '`,
+        `N'DECLARE @FiscalYear BIGINT = ${fyNum}; '`,
+        `N'DECLARE @SubSys INT = ${subSys}; '`,
+        `N'DECLARE @NextDocNo BIGINT; '`,
+        `N'DECLARE @NextSubNo BIGINT; '`,
+        `N'SELECT @NextDocNo = ISNULL(MAX(TRY_CAST(RTRIM(LTRIM(CAST(Field_005 AS NVARCHAR(50)))) AS BIGINT)), 0) + 1 FROM STR_TBL_010 WITH (UPDLOCK, HOLDLOCK) WHERE Field_004 = @FiscalYear AND Field_018 = @SubSys; '`,
+        `N'SELECT @NextSubNo = ISNULL(MAX(TRY_CAST(RTRIM(LTRIM(CAST(Field_006 AS NVARCHAR(50)))) AS BIGINT)), 0) + 1 FROM STR_TBL_010 WITH (UPDLOCK, HOLDLOCK) WHERE Field_004 = @FiscalYear AND RTRIM(LTRIM(CAST(Field_009 AS NVARCHAR(50)))) = N''${escExec(cleanOpCode)}''; '`,
+        `N'DECLARE @NewDocId BIGINT; '`,
+        `CAST(N'IN' + N'SERT INTO STR_TBL_010 (${headerCols.join(', ')}) VALUES (${headerVals.join(', ')}); ' AS NVARCHAR(MAX))`,
+        `N'SET @NewDocId = SCOPE_IDENTITY(); '`,
+        ...itemBatchSqlParts,
+        `N'SELECT @NewDocId as DocId, @NextDocNo as DocNo, @NextSubNo as SubNo, ${itemsCount} as ItemsCount; '`,
+        `N'COM' + N'MIT TRAN;'`
+    ];
 
+    const sql = `EXEC(\n  ${sqlParts.join(' +\n  ')}\n);`;
+
+    let res;
+    try {
+        res = await executeSayanQuery(sql, 90000);
+    } catch (sqlErr) {
+        // Invalidate cached template in case Sayan schema changed, and surface exact readable cause
+        remittanceTemplateCache.delete(`${fy}:${requestedOpCode}`);
+        console.error('Sayan Remittance SQL Execution Failed:', sqlErr.message);
+        const err = new Error(`خطا در ثبت ${opTitle} در پایگاه داده سایان: ${sqlErr.message}`);
+        err.statusCode = 502;
+        err.sayanError = sqlErr.message;
+        throw err;
+    }
+
+    const docResult = Array.isArray(res) && res[0] ? res[0] : null;
     if (!docResult || !docResult.DocNo) {
-        throw new Error(`خطا در دریافت شماره ${opTitle} صادرشده از سایان`);
+        const err = new Error(`پاسخ نامعتبر از سایان هنگام دریافت شماره ${opTitle} صادرشده`);
+        err.statusCode = 502;
+        throw err;
     }
 
     const docNo = String(docResult.DocNo);
-    const subNo = String(docResult.SubNo);
-    const docId = String(docResult.DocId);
+    const subNo = String(docResult.SubNo || '');
+    const docId = String(docResult.DocId || '');
 
     // Save to Local System Archive (database.json)
     const db = getDb();
@@ -596,17 +967,18 @@ export const registerSalesRemittanceInSayan = async (data, user = 'کاربر س
         fiscalYear: fy,
         warehouseCode: wCode,
         customerCode: cCode,
-        customerName,
+        customerName: String(customerName || '').trim() || cCode,
         remittanceDate: docDateStr,
-        shamsiDate: remittanceDate || `${targetDate.getFullYear()}/${targetDate.getMonth()+1}/${targetDate.getDate()}`,
-        notes: cleanNotes,
-        subCode: sCode,
+        shamsiDate: remittanceDate || `${targetDate.getFullYear()}/${targetDate.getMonth() + 1}/${targetDate.getDate()}`,
+        notes: String(notes || '').trim(),
+        subCode: String(subCode || '').trim(),
         itemsCount,
         totalNetWeight: Number(totalNetWeight.toFixed(2)),
+        totalGrossWeight: Number(totalGrossWeight.toFixed(2)),
         totalCartons,
         totalBobbins,
         items,
-        createdBy: user?.fullName || user?.username || 'کاربر سیستم',
+        createdBy: user?.fullName || user?.username || (typeof user === 'string' ? user : 'کاربر سیستم'),
         createdAt: new Date().toISOString(),
         status: 'registered_in_sayan'
     };
@@ -627,7 +999,10 @@ export const registerSalesRemittanceInSayan = async (data, user = 'کاربر س
         opName: opTitle,
         archiveId: archiveRecord.id,
         itemsCount,
-        totalNetWeight: archiveRecord.totalNetWeight
+        totalNetWeight: archiveRecord.totalNetWeight,
+        totalGrossWeight: archiveRecord.totalGrossWeight,
+        totalCartons,
+        totalBobbins
     };
 };
 

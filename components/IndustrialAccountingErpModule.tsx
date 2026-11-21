@@ -1459,6 +1459,9 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     { id: 'wh_warehouses', label: 'انبارها (ویرایش/حذف)', icon: Boxes, color: 'text-teal-600 bg-teal-50 border-teal-200' },
     { id: 'wh_stock_report', label: 'موجودی و نقطه سفارش', icon: Boxes, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
     { id: 'wacc_pricing', label: 'حسابداری انبار (میانگین موزون)', icon: FileSpreadsheet, color: 'text-cyan-700 bg-cyan-50 border-cyan-200' },
+    { id: 'fin_voucher_new', label: 'صدور سند دوبل / اتوماتیک', icon: FileSpreadsheet, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+    { id: 'fin_chart', label: 'درختواره کدینگ حسابداری', icon: Layers, color: 'text-indigo-700 bg-indigo-50 border-indigo-200' },
+    { id: 'fin_voucher_list', label: 'بایگانی اسناد حسابداری', icon: Archive, color: 'text-slate-700 bg-slate-100 border-slate-300' },
     { id: 'prd_archive', label: 'بایگانی تولید', icon: FolderKanban, color: 'text-amber-600 bg-amber-50 border-amber-200' },
     { id: 'wh_archive', label: 'بایگانی اسناد انبار', icon: FolderKanban, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' }
   ];
@@ -1819,6 +1822,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
                   persistErpState={persistErpState}
                   currentUser={currentUser}
                   showToast={showToast}
+                  openSubViewTab={openSubViewTab}
                   cutoffDateInput={cutoffDateInput}
                   setCutoffDateInput={setCutoffDateInput}
                   importingTrialBalance={importingTrialBalance}

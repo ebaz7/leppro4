@@ -1135,14 +1135,14 @@ const syncSettingsBanksIntoAccounts = (bankAccounts, settingsCompany) => {
   return list;
 };
 
-const hydrateChartOfAccounts = (coa) => {
-  const list = Array.isArray(coa) ? [...coa] : [];
-  for (const acc of DEFAULT_ERP_CHART_OF_ACCOUNTS) {
-    if (!list.some((a) => a.code === acc.code)) {
-      list.push(acc);
+const hydrateChartOfAccounts = (coa, cutoverConfig = null) => {
+  const isCustomized = Boolean(cutoverConfig?.chartOfAccountsCustomized || cutoverConfig?.accountingSettings?.chartOfAccountsCustomized);
+  if (Array.isArray(coa)) {
+    if (isCustomized || coa.length > 0) {
+      return [...coa];
     }
   }
-  return list;
+  return DEFAULT_ERP_CHART_OF_ACCOUNTS.map((acc) => ({ ...acc }));
 };
 
 async function readCompanyStateInsideTx(tx, companyId) {
@@ -1567,7 +1567,8 @@ async function readCompanyStateInsideTx(tx, companyId) {
         parentCode: r.parentCode || undefined,
         nature: r.nature,
         systemRole: r.systemRole || undefined,
-      }))
+      })),
+      compRow.cutoverConfig
     ),
     vouchers: vouchersRows
       .map((r) => ({
@@ -2192,7 +2193,7 @@ async function writeCompanyStateInsideTx(tx, companyId, state, nextRevision) {
     }))
   );
 
-  const hydratedCoa = hydrateChartOfAccounts(state.chartOfAccounts || []);
+  const hydratedCoa = hydrateChartOfAccounts(state.chartOfAccounts || [], state.cutoverConfig);
   await insertBatched(
     tx,
     erpChartOfAccounts,
@@ -2370,7 +2371,7 @@ export async function getCompanyErpStateFromPg(
         }
 
         initial.bankAccounts = syncSettingsBanksIntoAccounts(initial.bankAccounts, settingsCompany);
-        initial.chartOfAccounts = hydrateChartOfAccounts(initial.chartOfAccounts);
+        initial.chartOfAccounts = hydrateChartOfAccounts(initial.chartOfAccounts, initial.cutoverConfig);
         const startRev = Math.max(
           safeInt(initial._revision, 1),
           safeInt(aliasMergedState?._revision, 1),
@@ -2415,7 +2416,7 @@ export async function getCompanyErpStateFromPg(
         }
 
         if (needsWrite) {
-          workingState.chartOfAccounts = hydrateChartOfAccounts(workingState.chartOfAccounts);
+          workingState.chartOfAccounts = hydrateChartOfAccounts(workingState.chartOfAccounts, workingState.cutoverConfig);
           const nextRev = safeInt(workingState._revision, 1) + 1;
           await writeCompanyStateInsideTx(tx, companyId, workingState, nextRev);
           for (const aliasId of aliasIds) {
@@ -2499,7 +2500,7 @@ export async function saveCompanyErpStateToPg(
       if (settingsCompany) {
         stateToPersist.bankAccounts = syncSettingsBanksIntoAccounts(stateToPersist.bankAccounts, settingsCompany);
       }
-      stateToPersist.chartOfAccounts = hydrateChartOfAccounts(stateToPersist.chartOfAccounts);
+      stateToPersist.chartOfAccounts = hydrateChartOfAccounts(stateToPersist.chartOfAccounts, stateToPersist.cutoverConfig);
 
       const nextRevision = currentRevision + 1;
       await writeCompanyStateInsideTx(tx, companyId, stateToPersist, nextRevision);
