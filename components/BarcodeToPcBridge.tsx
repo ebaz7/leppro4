@@ -428,6 +428,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
         );
 
         let typedOk = false;
+        let usedDirectOsTyping = false;
         let errMessage: string | null = null;
 
         try {
@@ -438,6 +439,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
               focusSayanRef.current
             );
             typedOk = true;
+            usedDirectOsTyping = true;
           } else {
             // Clipboard fallback in web mode or when direct typing is toggled off
             try {
@@ -446,6 +448,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
               else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(nextItem.barcode);
             } catch {}
             typedOk = true;
+            usedDirectOsTyping = false;
           }
         } catch (err: any) {
           typedOk = false;
@@ -468,7 +471,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
             hostToken: hostTokenRef.current,
             scanId: nextItem.id,
             status: finalStatus,
-            error: errMessage
+            error: errMessage || (!usedDirectOsTyping && !wedgeSupportedRef.current ? 'WEB_CLIPBOARD_ONLY' : null)
           }).catch(() => {});
         }
 
@@ -855,9 +858,12 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           );
           if (ack.status === 'typed') {
             playBeep('ack');
+            const isWebClipboardOnly = ack.error === 'WEB_CLIPBOARD_ONLY';
             setSenderFeedback({
-              type: 'ok',
-              text: `✓ در سایان / کامپیوتر تایپ شد: ${ack.barcode}`
+              type: isWebClipboardOnly ? 'warn' : 'ok',
+              text: isWebClipboardOnly
+                ? `در مرورگر کامپیوتر دریافت و کپی شد: ${ack.barcode} (برای تایپ خودکار در سایان، سمت کامپیوتر را در اپ ویندوز دلکام باز کنید)`
+                : `✓ مستقیم در سایان / کامپیوتر تایپ شد: ${ack.barcode}`
             });
           } else {
             playBeep('error');
@@ -1378,12 +1384,12 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                 <p className="font-black text-xs">
                   {wedgeSupported
                     ? `موتور تایپ مستقیم سیستمی ویندوز (${wedgeRuntime === 'electron' ? 'Electron' : 'Tauri'}) فعال است — مقاوم در برابر زبان کیبورد فارسی/انگلیسی`
-                    : 'نسخه تحت وب (مرورگر): بارکدها به‌صورت لحظه‌ای دریافت و در کلیپ‌بورد کپی می‌شوند'}
+                    : 'حالت مرورگر وب (بدون دسترسی تایپ در سایان): بارکدها لحظه‌ای دریافت و کپی می‌شوند'}
                 </p>
-                <p className="text-[11px] opacity-85 mt-0.5">
+                <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
                   {wedgeSupported
-                    ? 'کافی است داخل پنجره سایان (کادر بارکد/کد کالا) کلیک کنید؛ هر بارکدی که با دستگاه اندرویدی اسکن شود، بلافاصله دونه به دونه در سایان تایپ و ثبت می‌شود.'
-                    : 'برای تایپ خودکار و مستقیم داخل پنجره نرم‌افزار سایان، همین صفحه را داخل اپلیکیشن ویندوز دلکام باز کنید.'}
+                    ? 'کافی است داخل پنجره سایان (کادر بارکد/کد کالا) کلیک کنید؛ هر بارکدی که با گوشی/بارکدخوان اسکن شود، بلافاصله دونه به دونه در سایان تایپ و ثبت می‌شود.'
+                    : 'مرورگرهای وب به دلیل محدودیت امنیتی اجازه تایپ مستقیم در پنجره نرم‌افزارهای ویندوزی (مثل سایان) را ندارند. برای تایپ خودکار دونه به دونه در سایان، سمت کامپیوتر را در اپلیکیشن ویندوز دلکام باز کنید (سمت بارکدخوان می‌تواند هم وب باشد هم اپ اندروید). همچنین برای ثبت مستقیم حواله در سرور سایان از تب «صدور حواله فروش» استفاده کنید.'}
                 </p>
               </div>
             </div>
@@ -1394,7 +1400,13 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
               className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-black flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-60"
             >
               <Zap size={13} />
-              <span>{testCountdown > 0 ? `کلیک روی سایان (${testCountdown})...` : 'تست تایپ در سایان'}</span>
+              <span>
+                {testCountdown > 0
+                  ? `کلیک روی سایان (${testCountdown})...`
+                  : wedgeSupported
+                    ? 'تست تایپ در سایان'
+                    : 'تست کپی در کلیپ‌بورد'}
+              </span>
             </button>
           </div>
 

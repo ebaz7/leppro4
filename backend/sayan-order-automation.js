@@ -83,16 +83,23 @@ export const executeSayanQuery = async (queryStr, timeoutMs = 60000) => {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     let response;
     try {
-        response = await fetch(finalUrl, {
+        response = await robustFetch(finalUrl, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${serverSayanApiKey}`,
+                'x-api-key': serverSayanApiKey,
                 'Accept': 'application/json',
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ query: queryStr }),
-            signal: controller.signal
+            signal: controller.signal,
+            timeout: timeoutMs
         });
+    } catch (fetchErr) {
+        if (fetchErr?.name === 'AbortError' || fetchErr?.name === 'TimeoutError' || fetchErr?.message?.includes('aborted')) {
+            throw new Error(`مهلت زمان اجرای درخواست در سرور سایان (${Math.round(timeoutMs / 1000)} ثانیه) به پایان رسید.`);
+        }
+        throw new Error(`عدم امکان اتصال به وب‌سرویس سایان (${cleanBase}): ${fetchErr?.message || 'خطای شبکه'}`);
     } finally {
         clearTimeout(timeout);
     }
@@ -103,11 +110,11 @@ export const executeSayanQuery = async (queryStr, timeoutMs = 60000) => {
     if (!response.ok) {
         if (!isJson) {
             const rawText = await response.text().catch(() => '');
-            console.error(`Sayan API Error (${response.status}): Non-JSON response:`, rawText.slice(0, 150));
-            throw new Error(`خطا در برقراری ارتباط با وب‌سرویس سایان (${cleanBase}): کد وضعیت ${response.status}`);
+            console.error(`Sayan API Error (${response.status}): Non-JSON response:`, rawText.slice(0, 200));
+            throw new Error(`خطا در برقراری ارتباط با وب‌سرویس سایان (${cleanBase}): کد وضعیت ${response.status}${rawText ? ` - ${rawText.slice(0, 120).trim()}` : ''}`);
         }
         const err = await response.json().catch(() => ({}));
-        throw new Error(err.error || err.message || `خطا در ارتباط با وب‌سرویس سایان: کد وضعیت ${response.status}`);
+        throw new Error(err.error || err.message || err.detail || `خطا در ارتباط با وب‌سرویس سایان: کد وضعیت ${response.status}`);
     }
 
     const data = await response.json();
