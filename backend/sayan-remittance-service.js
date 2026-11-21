@@ -87,14 +87,14 @@ export const getSayanWarehouses = async () => {
         if (!rows || rows.length === 0) {
             // High reliability fallback
             return [
-                { Id: '1', Code: '11', Name: 'انبار کارخانه', IsActive: true },
-                { Id: '2', Code: '12', Name: 'انبار تولید', IsActive: true },
-                { Id: '3', Code: '13', Name: 'انبار ضایعات', IsActive: true },
-                { Id: '10004', Code: '14', Name: 'انبار ملزومات و قطعات', IsActive: true },
-                { Id: '10006', Code: '15', Name: 'انبار تهران', IsActive: true },
-                { Id: '10007', Code: '16', Name: 'انبار تک ', IsActive: true },
-                { Id: '10008', Code: '17', Name: 'انبار تلاش', IsActive: true },
-                { Id: '10009', Code: '18', Name: 'انبار ملزومات و قطعات جدید', IsActive: true }
+                { id: '1', code: '11', name: 'انبار کارخانه', isActive: true },
+                { id: '2', code: '12', name: 'انبار تولید', isActive: true },
+                { id: '3', code: '13', name: 'انبار ضایعات', isActive: true },
+                { id: '10004', code: '14', name: 'انبار ملزومات و قطعات', isActive: true },
+                { id: '10006', code: '15', name: 'انبار تهران', isActive: true },
+                { id: '10007', code: '16', name: 'انبار تک', isActive: true },
+                { id: '10008', code: '17', name: 'انبار تلاش', isActive: true },
+                { id: '10009', code: '18', name: 'انبار ملزومات و قطعات جدید', isActive: true }
             ];
         }
         return rows.map(r => ({
@@ -406,8 +406,11 @@ export const lookupBarcodeInSayan = async (barcode, options = {}) => {
 
         return parseLocalBarcodeStructure(rawBarcode);
     } catch (err) {
-        console.error('lookupBarcodeInSayan error:', err.message);
-        throw err;
+        console.error('lookupBarcodeInSayan error (falling back to local parser):', err.message);
+        return {
+            ...parseLocalBarcodeStructure(rawBarcode),
+            sayanLookupFallback: true
+        };
     }
 };
 

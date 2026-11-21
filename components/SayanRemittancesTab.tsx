@@ -28,9 +28,11 @@ import {
   Loader2,
   Barcode,
   Camera,
-  Zap
+  Zap,
+  Building2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { apiCall } from '../services/apiService';
 import { shareElementToChat } from '../services/chatShareService';
 import { exportReportHtmlSmart } from '../utils/pdfGenerator';
 import { saveWorkbookAndOpen } from '../services/fileService';
@@ -44,6 +46,33 @@ import SayanSalesRemittanceDoc, { SayanRemittanceData } from './SayanSalesRemitt
 import { AiSayanReportModal } from './AiSayanReportModal';
 import { SayanSalesRemittanceIssuer } from './SayanSalesRemittanceIssuer';
 import * as jalaali from 'jalaali-js';
+
+interface SayanWarehouseDef {
+  id: string;
+  code: string;
+  name: string;
+  isActive?: boolean;
+}
+
+interface WarehouseBreakdownStat {
+  code: string;
+  name: string;
+  count: number;
+  totalNetWeight: number;
+  totalGrossWeight: number;
+  totalCartons: number;
+}
+
+const DEFAULT_SAYAN_WAREHOUSES: SayanWarehouseDef[] = [
+  { id: '1', code: '11', name: 'انبار کارخانه', isActive: true },
+  { id: '2', code: '12', name: 'انبار تولید', isActive: true },
+  { id: '3', code: '13', name: 'انبار ضایعات', isActive: true },
+  { id: '10004', code: '14', name: 'انبار ملزومات و قطعات', isActive: true },
+  { id: '10006', code: '15', name: 'انبار تهران', isActive: true },
+  { id: '10007', code: '16', name: 'انبار تک', isActive: true },
+  { id: '10008', code: '17', name: 'انبار تلاش', isActive: true },
+  { id: '10009', code: '18', name: 'انبار ملزومات و قطعات جدید', isActive: true }
+];
 
 interface SayanRemittancesTabProps {
   settings?: any;
@@ -178,6 +207,8 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
   const [search, setSearch] = useState<string>('');
   const [docType, setDocType] = useState<string>('23');
   const [storeId, setStoreId] = useState<string>('all');
+  const [sayanWarehouses, setSayanWarehouses] = useState<SayanWarehouseDef[]>(DEFAULT_SAYAN_WAREHOUSES);
+  const [warehouseStatsSnapshot, setWarehouseStatsSnapshot] = useState<Record<string, WarehouseBreakdownStat>>({});
   
   const [remittances, setRemittances] = useState<SayanSalesRemittanceResult[]>([]);
   const [summary, setSummary] = useState<SayanSalesRemittanceSummary | null>(null);
@@ -442,6 +473,7 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
         const { remittances: processedList, summary: summaryObj } = processRawRows(rawRows || []);
         setRemittances(processedList);
         setSummary(summaryObj);
+        updateWarehouseStatsFromList(processedList, storeId);
       } else {
         // Fallback to backend API endpoint
         const res = await fetchSayanSalesRemittances({
@@ -454,8 +486,10 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
         });
 
         if (res.success) {
-          setRemittances(res.remittances || []);
+          const list = res.remittances || [];
+          setRemittances(list);
           setSummary(res.summary || null);
+          updateWarehouseStatsFromList(list, storeId);
         } else {
           setError(res.message || 'خطا در دریافت حواله‌های فروش سایان');
         }
@@ -468,18 +502,128 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
     }
   };
 
+  // Fetch all live Sayan warehouses (STR_TBL_001) on mount so per-warehouse view ALWAYS shows real Sayan warehouse names
+  useEffect(() => {
+    let cancelled = false;
+    const loadWarehouses = async () => {
+      try {
+        const res = await apiCall<{ success?: boolean; warehouses?: any[] }>('/sayan/warehouses', 'GET', undefined, 0);
+        if (!cancelled && res?.success && Array.isArray(res.warehouses) && res.warehouses.length > 0) {
+          const normalized: SayanWarehouseDef[] = res.warehouses
+            .map((w: any) => ({
+              id: String(w.id ?? w.Id ?? w.code ?? w.Code ?? ''),
+              code: String(w.code ?? w.Code ?? '').trim(),
+              name: String(w.name ?? w.Name ?? '').trim() || `انبار ${w.code ?? w.Code}`,
+              isActive: w.isActive !== false
+            }))
+            .filter((w: SayanWarehouseDef) => Boolean(w.code));
+          if (normalized.length > 0) {
+            setSayanWarehouses(normalized);
+          }
+        }
+      } catch {
+        // Keep DEFAULT_SAYAN_WAREHOUSES fallback cleanly
+      }
+    };
+    loadWarehouses();
+    return () => { cancelled = true; };
+  }, []);
+
+  const warehouseNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    DEFAULT_SAYAN_WAREHOUSES.forEach((w) => map.set(w.code, w.name));
+    sayanWarehouses.forEach((w) => {
+      if (w.code) map.set(w.code, w.name || `انبار ${w.code}`);
+    });
+    return map;
+  }, [sayanWarehouses]);
+
+  const getWarehouseLabel = (code?: string | null): string => {
+    const c = String(code || '').trim();
+    if (!c) return 'نامشخص';
+    const name = warehouseNameMap.get(c);
+    return name ? `${name} (کد ${c})` : `انبار ${c}`;
+  };
+
+  const getWarehouseShortName = (code?: string | null): string => {
+    const c = String(code || '').trim();
+    if (!c) return 'نامشخص';
+    return warehouseNameMap.get(c) || `انبار ${c}`;
+  };
+
+  const updateWarehouseStatsFromList = (list: SayanSalesRemittanceResult[], activeFilterStoreId: string) => {
+    const grouped: Record<string, WarehouseBreakdownStat> = {};
+    list.forEach((r) => {
+      const code = String(r.storeId || '').trim();
+      if (!code) return;
+      if (!grouped[code]) {
+        grouped[code] = {
+          code,
+          name: warehouseNameMap.get(code) || `انبار ${code}`,
+          count: 0,
+          totalNetWeight: 0,
+          totalGrossWeight: 0,
+          totalCartons: 0
+        };
+      }
+      grouped[code].count += 1;
+      grouped[code].totalNetWeight = Number((grouped[code].totalNetWeight + (Number(r.totalNetWeight) || 0)).toFixed(2));
+      grouped[code].totalGrossWeight = Number((grouped[code].totalGrossWeight + (Number(r.totalGrossWeight) || 0)).toFixed(2));
+      grouped[code].totalCartons += Number(r.totalCartons) || 0;
+    });
+
+    if (activeFilterStoreId === 'all') {
+      setWarehouseStatsSnapshot(grouped);
+    } else {
+      // Preserve other warehouses' stats while refreshing the currently selected warehouse's exact stats
+      setWarehouseStatsSnapshot((prev) => ({
+        ...prev,
+        [activeFilterStoreId]: grouped[activeFilterStoreId] || {
+          code: activeFilterStoreId,
+          name: warehouseNameMap.get(activeFilterStoreId) || `انبار ${activeFilterStoreId}`,
+          count: 0,
+          totalNetWeight: 0,
+          totalGrossWeight: 0,
+          totalCartons: 0
+        }
+      }));
+    }
+  };
+
   useEffect(() => {
     loadRemittances();
   }, [docType, storeId]);
 
-  // Unique stores list from remittances
+  // Always show ALL Sayan warehouses (merged with any storeId seen in remittances) so switching stores never hides other warehouses
   const availableStores = useMemo(() => {
-    const s = new Set<string>();
-    remittances.forEach(r => {
-      if (r.storeId) s.add(r.storeId);
+    const map = new Map<string, SayanWarehouseDef>();
+    sayanWarehouses.forEach((w) => {
+      if (w.code) map.set(w.code, w);
     });
-    return Array.from(s).sort();
-  }, [remittances]);
+    Object.keys(warehouseStatsSnapshot).forEach((code) => {
+      if (code && !map.has(code)) {
+        map.set(code, { id: code, code, name: `انبار ${code}`, isActive: true });
+      }
+    });
+    remittances.forEach((r) => {
+      const code = String(r.storeId || '').trim();
+      if (code && !map.has(code)) {
+        map.set(code, { id: code, code, name: `انبار ${code}`, isActive: true });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const statA = warehouseStatsSnapshot[a.code]?.count || 0;
+      const statB = warehouseStatsSnapshot[b.code]?.count || 0;
+      if (statA !== statB) return statB - statA;
+      return (parseInt(a.code, 10) || 999) - (parseInt(b.code, 10) || 999);
+    });
+  }, [sayanWarehouses, warehouseStatsSnapshot, remittances]);
+
+  const totalAllWarehousesCount = useMemo(() => {
+    const vals = Object.values(warehouseStatsSnapshot);
+    if (vals.length === 0) return remittances.length;
+    return vals.reduce((acc, s) => acc + s.count, 0);
+  }, [warehouseStatsSnapshot, remittances.length]);
 
   // Filtered & Sorted Remittances
   const filteredRemittances = useMemo(() => {
@@ -535,6 +679,7 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
       'کد شخص': r.personCode,
       'نام خریدار / طرف حساب': r.personFullName,
       'کد انبار': r.storeId || '',
+      'نام انبار سایان': getWarehouseShortName(r.storeId),
       'تعداد ردیف کالا': r.itemsCount || r.items.length,
       'وزن خالص (kg)': r.totalNetWeight,
       'وزن ناخالص (kg)': r.totalGrossWeight,
@@ -734,10 +879,15 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
               onChange={(e) => setStoreId(e.target.value)}
               className="w-full px-2.5 py-1.5 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-semibold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
-              <option value="all">همه انبارها</option>
-              {availableStores.map(st => (
-                <option key={st} value={st}>انبار {st}</option>
-              ))}
+              <option value="all">همه انبارهای سایان ({availableStores.length.toLocaleString('fa-IR')} انبار)</option>
+              {availableStores.map(wh => {
+                const st = warehouseStatsSnapshot[wh.code];
+                return (
+                  <option key={wh.code} value={wh.code}>
+                    {wh.name} (کد {wh.code}){st && st.count > 0 ? ` — ${st.count} حواله` : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
@@ -824,6 +974,99 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
             <Download size={14} />
             <span>خروجی کامل اکسل (شامل ریز اقلام)</span>
           </button>
+        </div>
+      </div>
+
+      {/* Interactive Sayan Warehouses Breakdown Strip (View All or Per-Warehouse in 1 Tap) */}
+      <div className="bg-white dark:bg-zinc-900 rounded-xl border border-slate-200 dark:border-zinc-800 p-3 shadow-sm space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-black text-slate-800 dark:text-slate-100">
+            <Building2 size={15} className="text-blue-600 dark:text-blue-400" />
+            <span>تفکیک حواله‌ها بر اساس انبارهای سایان</span>
+            {storeId !== 'all' && (
+              <span className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
+                فیلتر فعال: {getWarehouseLabel(storeId)}
+              </span>
+            )}
+          </div>
+          {storeId !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setStoreId('all')}
+              className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+            >
+              نمایش همه انبارها
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-stretch gap-2 overflow-x-auto pb-1 custom-scrollbar">
+          {/* All Warehouses Card */}
+          <button
+            type="button"
+            onClick={() => setStoreId('all')}
+            className={`shrink-0 min-w-[125px] text-right px-3 py-2 rounded-xl border transition-all cursor-pointer ${
+              storeId === 'all'
+                ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-600/20'
+                : 'bg-slate-50 dark:bg-zinc-800/70 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-zinc-700 hover:border-blue-400'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-black">همه انبارها</span>
+              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md font-bold ${
+                storeId === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-slate-200'
+              }`}>
+                {totalAllWarehousesCount.toLocaleString('fa-IR')}
+              </span>
+            </div>
+            <div className={`text-[10px] mt-1 ${storeId === 'all' ? 'text-blue-100' : 'text-slate-500 dark:text-slate-400'}`}>
+              {availableStores.length.toLocaleString('fa-IR')} انبار سایان
+            </div>
+          </button>
+
+          {/* Individual Sayan Warehouse Breakdown Cards */}
+          {availableStores.map((wh) => {
+            const stat = warehouseStatsSnapshot[wh.code];
+            const isActive = storeId === wh.code;
+            const hasActivity = Boolean(stat && stat.count > 0);
+            return (
+              <button
+                key={wh.code}
+                type="button"
+                onClick={() => setStoreId(wh.code)}
+                className={`shrink-0 min-w-[155px] text-right px-3 py-2 rounded-xl border transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/20'
+                    : hasActivity
+                    ? 'bg-emerald-50/70 dark:bg-emerald-950/25 text-slate-800 dark:text-slate-100 border-emerald-200 dark:border-emerald-800/60 hover:border-indigo-400'
+                    : 'bg-slate-50/70 dark:bg-zinc-800/40 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-zinc-800 hover:border-blue-400'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-black truncate max-w-[115px]" title={`${wh.name} (کد ${wh.code})`}>
+                    {wh.name}
+                  </span>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md font-bold shrink-0 ${
+                    isActive
+                      ? 'bg-white/20 text-white'
+                      : 'bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-slate-300'
+                  }`}>
+                    کد {wh.code}
+                  </span>
+                </div>
+                <div className={`text-[10px] font-mono mt-1 flex items-center justify-between gap-2 ${
+                  isActive ? 'text-indigo-100' : 'text-slate-500 dark:text-slate-400'
+                }`}>
+                  <span>{stat ? `${stat.count.toLocaleString('fa-IR')} حواله` : '۰ حواله'}</span>
+                  {stat && stat.totalNetWeight > 0 && (
+                    <span className="font-bold">
+                      {stat.totalNetWeight.toLocaleString('fa-IR')} kg
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -1008,8 +1251,8 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
 
                   <div className="bg-slate-50 dark:bg-zinc-800/40 p-2 rounded-lg border border-slate-100 dark:border-zinc-800">
                     <span className="text-[10px] text-slate-500 dark:text-slate-400 block mb-0.5">انبار مبدأ:</span>
-                    <span className="font-bold text-slate-700 dark:text-slate-300 text-xs font-mono">
-                      انبار {r.storeId || '---'}
+                    <span className="font-bold text-slate-700 dark:text-slate-300 text-xs">
+                      {getWarehouseLabel(r.storeId)}
                     </span>
                   </div>
                 </div>
@@ -1194,9 +1437,14 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
                         {r.docTypeLabel || `کد ${r.docType}`}
                       </span>
                       {r.storeId && (
-                        <span className="text-[10px] text-slate-400 mr-1 font-mono">
-                          انبار {r.storeId}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setStoreId(String(r.storeId))}
+                          className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline mr-1.5 font-bold cursor-pointer"
+                          title="فیلتر بر اساس این انبار سایان"
+                        >
+                          {getWarehouseLabel(r.storeId)}
+                        </button>
                       )}
                     </td>
 
@@ -1364,8 +1612,8 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px]">انبار مبدأ:</span>
-                <span className="font-bold text-slate-800 dark:text-slate-100 font-mono">
-                  انبار {selectedRemittance.storeId || '---'}
+                <span className="font-bold text-slate-800 dark:text-slate-100">
+                  {getWarehouseLabel(selectedRemittance.storeId)}
                 </span>
               </div>
             </div>
@@ -1616,13 +1864,21 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
         settings={settings}
       />
 
-      {/* Sayan Sales Remittance Issuer Full Modal */}
-      {isIssuerOpen && (
-        <div className="fixed inset-0 z-[99999999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 select-text animate-in fade-in duration-150">
-          <div className="w-full max-w-7xl h-[95vh] rounded-3xl overflow-hidden shadow-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex flex-col">
+      {/* Sayan Sales Remittance Issuer Full Modal (Portal + Exact Viewport Fit for 4-inch Android PDAs) */}
+      {isIssuerOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[99999999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 select-text animate-in fade-in duration-150"
+          style={{ height: 'var(--app-vh, 100vh)' }}
+          dir="rtl"
+        >
+          <div
+            className="w-full max-w-7xl h-full sm:h-[95vh] rounded-none sm:rounded-3xl overflow-hidden shadow-2xl border-0 sm:border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex flex-col"
+            style={{ maxHeight: 'var(--app-vh, 100vh)' }}
+          >
             <SayanSalesRemittanceIssuer
               currentUser={currentUser}
               settings={settings}
+              initialWarehouseCode={storeId !== 'all' ? storeId : '15'}
               autoStartCamera={issuerAutoCamera}
               onClose={() => {
                 setIsIssuerOpen(false);
@@ -1634,7 +1890,8 @@ export const SayanRemittancesTab: React.FC<SayanRemittancesTabProps> = ({
               }}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

@@ -4,10 +4,12 @@ import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -22,10 +24,12 @@ import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
+import android.webkit.PermissionRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.view.View;
 import android.util.DisplayMetrics;
+import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -36,6 +40,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebChromeClient;
 import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
 import androidx.work.NetworkType;
@@ -54,8 +59,14 @@ public class MainActivity extends BridgeActivity {
     private static final String PREFS_NAME = "CapacitorStorage";
     private static final String APP_FILES_FOLDER = "DlkamFiles";
     private static final int REQ_POST_NOTIFICATIONS = 1091;
+    private static final int REQ_CAMERA_PERMISSION = 1092;
     private ScheduledExecutorService nativePollExecutor;
     private volatile String pendingNotificationTargetUrl = null;
+    private PermissionRequest pendingWebViewPermissionRequest = null;
+    private BroadcastReceiver hardwareBarcodeReceiver = null;
+    private boolean isBarcodeReceiverRegistered = false;
+    private String lastNativeBarcodeValue = "";
+    private long lastNativeBarcodeAt = 0L;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -75,6 +86,7 @@ public class MainActivity extends BridgeActivity {
             if (this.getBridge() != null && this.getBridge().getWebView() != null) {
                 WebView webView = this.getBridge().getWebView();
                 configureAdaptiveDisplayAndInsets(webView);
+                configureCameraWebChromeClient(webView);
                 webView.addJavascriptInterface(new DlkamAndroidBridge(this), "DlkamAndroid");
                 webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
                     try {
@@ -241,6 +253,226 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * Wraps Capacitor's BridgeWebChromeClient so WebView getUserMedia() camera requests
+     * automatically trigger Android runtime CAMERA permission and grant RESOURCE_VIDEO_CAPTURE
+     * across all Android 7-15+ phones and rugged barcode PDAs.
+     */
+    private void configureCameraWebChromeClient(WebView webView) {
+        try {
+            if (webView == null || this.getBridge() == null) return;
+            webView.setWebChromeClient(new BridgeWebChromeClient(this.getBridge()) {
+                @Override
+                public void onPermissionRequest(final PermissionRequest request) {
+                    if (request == null) return;
+                    runOnUiThread(() -> {
+                        try {
+                            String[] resources = request.getResources();
+                            boolean needsCamera = false;
+                            if (resources != null) {
+                                for (String res : resources) {
+                                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)) {
+                                        needsCamera = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (needsCamera) {
+                                if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA)
+                                        == PackageManager.PERMISSION_GRANTED) {
+                                    request.grant(resources);
+                                } else {
+                                    if (pendingWebViewPermissionRequest != null) {
+                                        try { pendingWebViewPermissionRequest.deny(); } catch (Exception ignored) {}
+                                    }
+                                    pendingWebViewPermissionRequest = request;
+                                    ActivityCompat.requestPermissions(
+                                            MainActivity.this,
+                                            new String[]{Manifest.permission.CAMERA},
+                                            REQ_CAMERA_PERMISSION
+                                    );
+                                }
+                            } else {
+                                super.onPermissionRequest(request);
+                            }
+                        } catch (Exception e) {
+                            Log.w(TAG, "WebChromeClient onPermissionRequest error", e);
+                            try { super.onPermissionRequest(request); } catch (Exception ignored) {}
+                        }
+                    });
+                }
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "configureCameraWebChromeClient warning", e);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_CAMERA_PERMISSION) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            final PermissionRequest pending = pendingWebViewPermissionRequest;
+            pendingWebViewPermissionRequest = null;
+            if (pending != null) {
+                try {
+                    if (granted) {
+                        pending.grant(pending.getResources());
+                    } else {
+                        pending.deny();
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Pending WebView permission resolution error", e);
+                }
+            }
+            try {
+                if (this.getBridge() != null && this.getBridge().getWebView() != null) {
+                    final WebView wv = this.getBridge().getWebView();
+                    wv.post(() -> wv.evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('dlkam-camera-permission',{detail:{granted:" + (granted ? "true" : "false") + "}}));",
+                            null
+                    ));
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Registers a universal BroadcastReceiver for industrial Android barcode PDAs
+     * (Urovo, Chainway, Seuic, Newland, Zebra DataWedge, Honeywell, Sunmi, iData, Unitech, etc.)
+     * so pressing the hardware SCAN key works even when the PDA is configured in Broadcast/Intent mode.
+     */
+    private void registerHardwareBarcodeReceiver() {
+        if (isBarcodeReceiverRegistered) return;
+        try {
+            if (hardwareBarcodeReceiver == null) {
+                hardwareBarcodeReceiver = new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        if (intent == null) return;
+                        String decoded = extractBarcodeFromIntent(intent);
+                        if (decoded == null || decoded.isEmpty()) return;
+                        long now = System.currentTimeMillis();
+                        // Deduplicate identical double-broadcasts within 250ms
+                        if (decoded.equals(lastNativeBarcodeValue) && (now - lastNativeBarcodeAt) < 250L) {
+                            return;
+                        }
+                        lastNativeBarcodeValue = decoded;
+                        lastNativeBarcodeAt = now;
+                        dispatchHardwareBarcodeToWebView(decoded);
+                    }
+                };
+            }
+            IntentFilter filter = new IntentFilter();
+            String[] actions = new String[]{
+                    "android.intent.ACTION_DECODE_DATA",
+                    "scan.rcv.message",
+                    "com.scanner.broadcast",
+                    "com.android.scanner.service_settings",
+                    "com.android.server.scannerservice.broadcast",
+                    "nlscan.action.SCANNER_RESULT",
+                    "com.symbol.datawedge.api.RESULT_ACTION",
+                    "com.motorolasolutions.emdk.datawedge.api.RESULT_ACTION",
+                    "com.honeywell.decode.intent.action.EDIT_DATA",
+                    "com.honeywell.ezpairing.SCAN_RESULT",
+                    "com.seuic.scanner.action.BARCODE",
+                    "com.sunmi.scanner.ACTION_DATA_CODE_RECEIVED",
+                    "com.urovo.scan.ACTION_DECODE_RESULT",
+                    "urovo.rcv.message",
+                    "com.idata.scan.action.DATA_RECEIVED",
+                    "com.barcode.sendBroadcast",
+                    "com.rscja.scanner.action.scanner.data",
+                    "com.unitech.scanner.ACTION_BARCODE_DATA",
+                    "com.cilico.scanner.ACTION_BARCODE_DATA",
+                    "com.m3.scanner.ACTION_BARCODE_DATA",
+                    "device.scanner.EVENT"
+            };
+            for (String act : actions) {
+                filter.addAction(act);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(hardwareBarcodeReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(hardwareBarcodeReceiver, filter);
+            }
+            isBarcodeReceiverRegistered = true;
+        } catch (Exception e) {
+            Log.w(TAG, "registerHardwareBarcodeReceiver warning", e);
+        }
+    }
+
+    private void unregisterHardwareBarcodeReceiver() {
+        if (!isBarcodeReceiverRegistered || hardwareBarcodeReceiver == null) return;
+        try {
+            unregisterReceiver(hardwareBarcodeReceiver);
+        } catch (Exception ignored) {
+        } finally {
+            isBarcodeReceiverRegistered = false;
+        }
+    }
+
+    private String extractBarcodeFromIntent(Intent intent) {
+        try {
+            Bundle extras = intent.getExtras();
+            if (extras == null) return null;
+            String[] stringKeys = new String[]{
+                    "barcode_string",
+                    "com.symbol.datawedge.data_string",
+                    "SCAN_BARCODE1",
+                    "scannerdata",
+                    "data",
+                    "value",
+                    "barcode",
+                    "code",
+                    "decode_rslt",
+                    "result",
+                    "text",
+                    "barCode",
+                    "EXTRA_BARCODE_DECODING_DATA",
+                    "scan_result"
+            };
+            for (String key : stringKeys) {
+                Object val = extras.get(key);
+                if (val instanceof String) {
+                    String s = ((String) val).replaceAll("[\\r\\n\\t]+", "").trim();
+                    if (!s.isEmpty()) return s;
+                } else if (val instanceof byte[]) {
+                    String s = new String((byte[]) val).replaceAll("[\\r\\n\\t\\u0000]+", "").trim();
+                    if (!s.isEmpty()) return s;
+                }
+            }
+            // Urovo / Chainway legacy byte[] key ("barocode" typo is intentional in vendor SDK!)
+            Object legacyBytes = extras.get("barocode");
+            if (legacyBytes instanceof byte[]) {
+                int len = extras.getInt("length", ((byte[]) legacyBytes).length);
+                int safeLen = Math.min(len, ((byte[]) legacyBytes).length);
+                String s = new String((byte[]) legacyBytes, 0, safeLen).replaceAll("[\\r\\n\\t\\u0000]+", "").trim();
+                if (!s.isEmpty()) return s;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "extractBarcodeFromIntent error", e);
+        }
+        return null;
+    }
+
+    private void dispatchHardwareBarcodeToWebView(final String barcode) {
+        try {
+            if (this.getBridge() == null || this.getBridge().getWebView() == null) return;
+            final WebView webView = this.getBridge().getWebView();
+            final String quoted = org.json.JSONObject.quote(barcode);
+            webView.post(() -> {
+                try {
+                    webView.evaluateJavascript(
+                            "window.dispatchEvent(new CustomEvent('dlkam-hardware-barcode',{detail:{barcode:" + quoted + ",source:'android-broadcast'}}));",
+                            null
+                    );
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "dispatchHardwareBarcodeToWebView error", e);
+        }
+    }
+
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -382,11 +614,13 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        registerHardwareBarcodeReceiver();
         syncWebViewUserToNativePrefsIfNeeded();
     }
 
     @Override
     public void onPause() {
+        unregisterHardwareBarcodeReceiver();
         syncWebViewUserToNativePrefsIfNeeded();
         try {
             Context appCtx = getApplicationContext();
@@ -1121,6 +1355,38 @@ public class MainActivity extends BridgeActivity {
                         ",\"density\":" + density + "}";
             } catch (Exception e) {
                 return "{}";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean hasCameraPermission() {
+            try {
+                return ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        == PackageManager.PERMISSION_GRANTED;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean requestCameraPermission() {
+            try {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    return true;
+                }
+                if (context instanceof android.app.Activity) {
+                    android.app.Activity act = (android.app.Activity) context;
+                    act.runOnUiThread(() -> ActivityCompat.requestPermissions(
+                            act,
+                            new String[]{Manifest.permission.CAMERA},
+                            REQ_CAMERA_PERMISSION
+                    ));
+                }
+                return false;
+            } catch (Exception e) {
+                Log.w(TAG, "requestCameraPermission error", e);
+                return false;
             }
         }
     }

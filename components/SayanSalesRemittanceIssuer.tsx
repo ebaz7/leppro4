@@ -54,6 +54,14 @@ import * as jalaali from 'jalaali-js';
 import { apiCall } from '../services/apiService';
 import { openSendToChat } from '../services/chatShareService';
 import BarcodeToPcBridge from './BarcodeToPcBridge';
+import {
+  normalizeScannedBarcode,
+  openRearCameraStream,
+  attachStreamToVideo,
+  createUniversalBarcodeDecoder,
+  subscribeHardwareBarcodeEvents,
+  UniversalBarcodeDecoder
+} from '../utils/barcodeScannerUtils';
 
 const DRAFT_STORAGE_KEY = 'sayan_remittance_draft_v1';
 const META_CACHE_STORAGE_KEY = 'sayan_remittance_meta_cache_v1';
@@ -307,14 +315,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const [isSoundEnabled, setIsSoundEnabled] = useState<boolean>(true);
   const [isResolvingBarcode, setIsResolvingBarcode] = useState<boolean>(false);
   const [lastScanResult, setLastScanResult] = useState<{ text: string; success: boolean; offline?: boolean; item?: any } | null>(null);
-  // Hardware Gun Mode (suppresses Android soft keyboard so red SCAN button scans 100+ boxes effortlessly)
-  const [isHardwareGunMode, setIsHardwareGunMode] = useState<boolean>(() => {
-    try {
-      return typeof window !== 'undefined' && window.innerWidth < 768;
-    } catch {
-      return false;
-    }
-  });
+  // Optional soft-keyboard suppression toggle (default OFF so Android PDA IME/commitText wedges ALWAYS receive input cleanly!)
+  const [isHardwareGunMode, setIsHardwareGunMode] = useState<boolean>(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
   const [cartonSearchQuery, setCartonSearchQuery] = useState<string>('');
   const [confirmClearList, setConfirmClearList] = useState<boolean>(false);
@@ -333,6 +335,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
   // Mobile Camera Scanner Station State & Refs
   const [isCameraScannerOpen, setIsCameraScannerOpen] = useState<boolean>(false);
+  const [cameraStreamVersion, setCameraStreamVersion] = useState<number>(0);
+  const [isCameraStarting, setIsCameraStarting] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [isTorchSupported, setIsTorchSupported] = useState<boolean>(true);
@@ -341,11 +345,16 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const barcodeDecoderRef = useRef<UniversalBarcodeDecoder | null>(null);
   const scanIntervalRef = useRef<number | null>(null);
   const isFrameBusyRef = useRef<boolean>(false);
   const recentCameraScansRef = useRef<Map<string, number>>(new Map());
   const isResolvingBarcodeRef = useRef<boolean>(false);
+  const pendingScanQueueRef = useRef<Array<{ raw: string; fromCamera: boolean }>>([]);
+  const inputBurstTimerRef = useRef<number | null>(null);
+  const lastInputValueRef = useRef<string>('');
 
   // Submission, Review Sheet & Dialogs
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -746,8 +755,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   };
 
   const processBarcodeValue = async (rawInput: string, fromCamera = false) => {
-    const raw = (rawInput || '').trim();
-    if (!raw) return;
+    const raw = normalizeScannedBarcode(rawInput);
+    if (!raw || raw.length < 2) return;
 
     const normalizedKey = raw.toLowerCase();
 
@@ -771,7 +780,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         text: `⚠️ بارکد «${raw}» قبلاً در این حواله اسکن شده است!`,
         success: false
       });
-      if (!fromCamera) setScannedBarcode('');
+      if (!fromCamera) {
+        setScannedBarcode('');
+        lastInputValueRef.current = '';
+      }
       return;
     }
 
@@ -780,6 +792,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       addOfflineParsedCarton(raw, normalizedKey, fromCamera);
       if (!fromCamera) {
         setScannedBarcode('');
+        lastInputValueRef.current = '';
         if (isContinuousScan && !isCameraScannerOpen) {
           setTimeout(() => barcodeInputRef.current?.focus(), 30);
         }
@@ -787,17 +800,38 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       return;
     }
 
-    if (isResolvingBarcodeRef.current) return;
+    // FIFO Queue: if another lookup is in flight, NEVER drop the barcode — queue it and drain sequentially!
+    if (isResolvingBarcodeRef.current) {
+      if (!pendingScanQueueRef.current.some(q => q.raw.toLowerCase() === normalizedKey)) {
+        pendingScanQueueRef.current.push({ raw, fromCamera });
+      }
+      if (!fromCamera) {
+        setScannedBarcode('');
+        lastInputValueRef.current = '';
+      }
+      return;
+    }
+
     isResolvingBarcodeRef.current = true;
     setIsResolvingBarcode(true);
+    if (!fromCamera) {
+      setScannedBarcode('');
+      lastInputValueRef.current = '';
+    }
 
     try {
-      // retries: 0 so weak warehouse WiFi doesn't freeze for 15 seconds — immediately falls back to offline queue!
-      const res = await apiCall<any>('/sayan/barcode/lookup', 'POST', {
-        barcode: raw,
-        warehouseCode: selectedWarehouse,
-        fiscalYear: selectedFiscalYear
-      }, 0);
+      // Race lookup against a 4s timeout so slow warehouse WiFi or busy Sayan DB never stalls or drops a scan
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        window.setTimeout(() => reject(new Error('timeout')), 4000)
+      );
+      const res: any = await Promise.race([
+        apiCall<any>('/sayan/barcode/lookup', 'POST', {
+          barcode: raw,
+          warehouseCode: selectedWarehouse,
+          fiscalYear: selectedFiscalYear
+        }, 0),
+        timeoutPromise
+      ]);
 
       if (res && res.success) {
         // Double-check duplicate after async resolution
@@ -807,8 +841,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
         const itemCode = res.itemCode || activeItemCode;
         const itemName = res.itemName || activeItemName;
-        const netWeight = res.netWeight > 0 ? res.netWeight : 14.5;
+        const netWeight = res.netWeight > 0 ? res.netWeight : parseLocalLepanBarcode(raw).netWeight;
         const grossWeight = res.grossWeight > 0 ? res.grossWeight : Number((netWeight + 4.35).toFixed(2));
+        const isFallback = Boolean(res.sayanLookupFallback);
 
         const newItem: RemittanceItemRow = {
           id: `row-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
@@ -825,7 +860,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
           rawGrade: res.rawGrade || '00011002',
           rawTwist: res.rawTwist || '00021001',
           note: res.note || `سری ساخت: ${raw} | همبافت:  | تعداد بوبین: 56 | تعداد کارتن: 1 | گرید: 00011002 | جهت تاب: 00021001 | وزن ناخالص: ${grossWeight}`,
-          offlinePendingSync: false,
+          offlinePendingSync: isFallback,
           resolvedFromSayan: Boolean(res.found)
         };
 
@@ -848,32 +883,32 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         }
 
         setLastScanResult({
-          text: `✅ کارتن ${raw} • ${netWeight} kg اضافه شد.`,
+          text: isFallback
+            ? `✅ کارتن ${raw} • ${netWeight} kg ثبت شد (در انتظار تطبیق سایان)`
+            : `✅ کارتن ${raw} • ${netWeight} kg اضافه شد.`,
           success: true,
+          offline: isFallback,
           item: newItem
         });
       } else {
-        throw new Error(res?.message || 'خطا در تحلیل بارکد');
-      }
-    } catch (err: any) {
-      // Seamless automatic fallback to offline queue on any network/gateway interruption!
-      if (isLikelyNetworkError(err)) {
+        // Never lose a scanned carton even if Sayan lookup returned an unexpected payload
         addOfflineParsedCarton(raw, normalizedKey, fromCamera);
-      } else {
-        if (isSoundEnabled) playBeepSound('error');
-        setLastScanResult({
-          text: `❌ خطا در استعلام بارکد: ${err.message || 'نامشخص'}`,
-          success: false
-        });
       }
+    } catch (_err: any) {
+      // Seamless automatic fallback on ANY network, timeout, or Sayan SQL error — ZERO dropped scans!
+      addOfflineParsedCarton(raw, normalizedKey, fromCamera);
     } finally {
       isResolvingBarcodeRef.current = false;
       setIsResolvingBarcode(false);
-      if (!fromCamera) {
-        setScannedBarcode('');
-        if (isContinuousScan && !isCameraScannerOpen) {
-          setTimeout(() => barcodeInputRef.current?.focus(), 40);
+      if (pendingScanQueueRef.current.length > 0) {
+        const nextQueued = pendingScanQueueRef.current.shift();
+        if (nextQueued) {
+          setTimeout(() => {
+            processBarcodeValue(nextQueued.raw, nextQueued.fromCamera);
+          }, 15);
         }
+      } else if (!fromCamera && isContinuousScan && !isCameraScannerOpen) {
+        setTimeout(() => barcodeInputRef.current?.focus(), 40);
       }
     }
   };
@@ -945,10 +980,137 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
   const handleBarcodeSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    await processBarcodeValue(scannedBarcode, false);
+    if (inputBurstTimerRef.current) {
+      window.clearTimeout(inputBurstTimerRef.current);
+      inputBurstTimerRef.current = null;
+    }
+    const val = barcodeInputRef.current?.value ?? scannedBarcode;
+    await processBarcodeValue(val, false);
   };
 
-  // 4b. Mobile Camera Scanner Lifecycle (Auto-Torch, Toggle Torch, Low-CPU Hardware Accelerated Loop)
+  // Keep a ref to latest processBarcodeValue so global Android Broadcast + Keyboard Wedge listeners never read stale state
+  const processBarcodeRef = useRef(processBarcodeValue);
+  useEffect(() => {
+    processBarcodeRef.current = processBarcodeValue;
+  });
+
+  // Subscribe to BOTH Android native PDA Broadcast Intents AND global Keyboard-Wedge hardware scanners
+  useEffect(() => {
+    if (activeSubTab !== 'issuer') return;
+    return subscribeHardwareBarcodeEvents(
+      (barcode) => {
+        processBarcodeRef.current(barcode, false);
+      },
+      {
+        enabled: activeSubTab === 'issuer' && !isReviewModalOpen && !isCustomerDropdownOpen,
+        ignoreInputElement: () => barcodeInputRef.current
+      }
+    );
+  }, [activeSubTab, isReviewModalOpen, isCustomerDropdownOpen]);
+
+  const handleBarcodeInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawVal = e.target.value;
+    const prevVal = lastInputValueRef.current;
+
+    // 1. Embedded newline / carriage return / tab from Android PDA commitText wedge
+    if (/[\r\n\t]/.test(rawVal)) {
+      if (inputBurstTimerRef.current) {
+        window.clearTimeout(inputBurstTimerRef.current);
+        inputBurstTimerRef.current = null;
+      }
+      const chunks = rawVal
+        .split(/[\r\n\t]+/)
+        .map((c) => normalizeScannedBarcode(c))
+        .filter((c) => c.length >= 2);
+      setScannedBarcode('');
+      lastInputValueRef.current = '';
+      chunks.forEach((code) => {
+        processBarcodeValue(code, false);
+      });
+      return;
+    }
+
+    setScannedBarcode(rawVal);
+    lastInputValueRef.current = rawVal;
+
+    // 2. Rapid burst injection (PDA injects >= 5 chars at once via IME commitText without Enter)
+    const addedLen = rawVal.length - prevVal.length;
+    if (inputBurstTimerRef.current) {
+      window.clearTimeout(inputBurstTimerRef.current);
+      inputBurstTimerRef.current = null;
+    }
+    if (addedLen >= 5 && normalizeScannedBarcode(rawVal).length >= 5) {
+      const candidate = rawVal;
+      inputBurstTimerRef.current = window.setTimeout(() => {
+        inputBurstTimerRef.current = null;
+        if (lastInputValueRef.current === candidate) {
+          processBarcodeRef.current(candidate, false);
+        }
+      }, 160);
+    }
+  };
+
+  const handleBarcodeInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === 'Tab' || e.keyCode === 13 || e.keyCode === 9) {
+      const currentVal = normalizeScannedBarcode(e.currentTarget.value || scannedBarcode);
+      if (currentVal.length >= 2) {
+        e.preventDefault();
+        if (inputBurstTimerRef.current) {
+          window.clearTimeout(inputBurstTimerRef.current);
+          inputBurstTimerRef.current = null;
+        }
+        processBarcodeValue(currentVal, false);
+      }
+    }
+  };
+
+  const handleBarcodeInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData?.getData('text') || '';
+    const cleaned = normalizeScannedBarcode(pasted);
+    if (cleaned.length >= 4) {
+      e.preventDefault();
+      if (inputBurstTimerRef.current) {
+        window.clearTimeout(inputBurstTimerRef.current);
+        inputBurstTimerRef.current = null;
+      }
+      const lines = pasted
+        .split(/[\r\n\t]+/)
+        .map((l) => normalizeScannedBarcode(l))
+        .filter((l) => l.length >= 3);
+      setScannedBarcode('');
+      lastInputValueRef.current = '';
+      lines.forEach((code) => processBarcodeValue(code, false));
+    }
+  };
+
+  // Photo-capture fallback decoder (works on EVERY phone/Android even on HTTP non-HTTPS LAN!)
+  const handlePhotoBarcodeSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      if (!barcodeDecoderRef.current) {
+        barcodeDecoderRef.current = await createUniversalBarcodeDecoder();
+      }
+      const decoded = await barcodeDecoderRef.current.decodeFromImageFile(file);
+      if (decoded) {
+        await processBarcodeValue(decoded, false);
+      } else {
+        if (isSoundEnabled) playBeepSound('error');
+        setLastScanResult({
+          text: '⚠️ بارکد در عکس خوانده نشد؛ لطفاً عکس واضح‌تر و مستقیم‌تر از لیبل بگیرید.',
+          success: false
+        });
+      }
+    } catch (err: any) {
+      setLastScanResult({
+        text: `❌ خطا در خواندن عکس بارکد: ${err?.message || 'نامشخص'}`,
+        success: false
+      });
+    }
+  };
+
+  // 4b. Mobile Camera Scanner Lifecycle (Auto-Torch, Toggle Torch, Universal 1D+2D ZXing + BarcodeDetector Loop)
   const applyTorchState = async (stream: MediaStream | null, turnOn: boolean): Promise<boolean> => {
     if (!stream) return false;
     const track = stream.getVideoTracks()[0];
@@ -989,7 +1151,6 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       scanIntervalRef.current = null;
     }
     if (cameraStreamRef.current) {
-      // Turn off torch cleanly before stopping tracks
       const track = cameraStreamRef.current.getVideoTracks()[0];
       if (track) {
         try {
@@ -1005,42 +1166,53 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       videoRef.current.srcObject = null;
     }
     isFrameBusyRef.current = false;
+    setIsCameraStarting(false);
     setIsTorchOn(false);
     setIsCameraScannerOpen(false);
     setIsCameraCustomerPickerOpen(false);
   };
 
+  // Guarantee <video> element receives MediaStream AFTER React Portal mounts (fixes black-screen race!)
+  useEffect(() => {
+    if (!isCameraScannerOpen || !cameraStreamRef.current) return;
+    let cancelled = false;
+    const bind = async () => {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        if (cancelled) return;
+        if (videoRef.current && cameraStreamRef.current) {
+          await attachStreamToVideo(videoRef.current, cameraStreamRef.current);
+          return;
+        }
+        await new Promise((r) => window.setTimeout(r, 40));
+      }
+    };
+    bind();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCameraScannerOpen, cameraStreamVersion]);
+
   const startCameraScanner = async () => {
     setCameraError(null);
+    setIsCameraStarting(true);
     setIsCameraScannerOpen(true);
 
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('مرورگر یا دستگاه شما به دوربین دسترسی ندارد (نیازمند HTTPS یا دسترسی دوربین در اپ).');
-      }
-
       // Stop any existing stream first
       if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach(t => t.stop());
+        cameraStreamRef.current.getTracks().forEach(t => {
+          try { t.stop(); } catch {}
+        });
+        cameraStreamRef.current = null;
       }
 
-      // Request 720p @ max 24fps rear camera to ensure crisp barcode edges with minimal CPU/battery load
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280, max: 1920 },
-          height: { ideal: 720, max: 1080 },
-          frameRate: { ideal: 24, max: 30 }
-        },
-        audio: false
-      });
-
+      const stream = await openRearCameraStream();
       cameraStreamRef.current = stream;
+      setCameraStreamVersion((v) => v + 1);
 
+      // Attach immediately if video element is already mounted; useEffect above also guarantees post-portal mount binding
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        await videoRef.current.play().catch(() => {});
+        await attachStreamToVideo(videoRef.current, stream);
       }
 
       // Configure continuous autofocus + auto turn ON flashlight (torch)
@@ -1053,7 +1225,6 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
           } catch {}
         }
 
-        // Attempt auto-torch immediately, then retry after 350ms once Android camera sensor is warm
         const immediateTorch = await applyTorchState(stream, true);
         if (!immediateTorch) {
           setTimeout(async () => {
@@ -1067,43 +1238,12 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         }
       }
 
-      // Initialize hardware-accelerated BarcodeDetector if available (Android WebView / Chrome)
-      let nativeDetector: any = null;
-      if ('BarcodeDetector' in window) {
-        try {
-          const BarcodeDetectorClass = (window as any).BarcodeDetector;
-          const supportedFormats = await BarcodeDetectorClass.getSupportedFormats?.().catch(() => null);
-          const desiredFormats = [
-            'code_128',
-            'code_39',
-            'code_93',
-            'ean_13',
-            'ean_8',
-            'itf',
-            'qr_code',
-            'data_matrix',
-            'upc_a',
-            'upc_e',
-            'codabar',
-            'pdf417'
-          ];
-          const formatsToUse = Array.isArray(supportedFormats) && supportedFormats.length > 0
-            ? desiredFormats.filter(f => supportedFormats.includes(f))
-            : desiredFormats;
-
-          nativeDetector = new BarcodeDetectorClass({
-            formats: formatsToUse.length > 0 ? formatsToUse : undefined
-          });
-        } catch {
-          try {
-            nativeDetector = new (window as any).BarcodeDetector();
-          } catch {
-            nativeDetector = null;
-          }
-        }
+      // Initialize universal multi-engine 1D + 2D barcode decoder (Native BarcodeDetector + ZXing Code128/Code39/EAN + jsQR)
+      if (!barcodeDecoderRef.current) {
+        barcodeDecoderRef.current = await createUniversalBarcodeDecoder();
       }
+      const decoder = barcodeDecoderRef.current;
 
-      // Throttled 140ms (~7 FPS) single-flight scan loop: instant response like a physical scanner, <4% CPU load
       if (scanIntervalRef.current) {
         window.clearInterval(scanIntervalRef.current);
       }
@@ -1112,78 +1252,40 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         if (
           document.hidden ||
           isFrameBusyRef.current ||
-          isResolvingBarcodeRef.current ||
           !videoRef.current ||
-          videoRef.current.readyState !== videoRef.current.HAVE_ENOUGH_DATA
+          !canvasRef.current ||
+          videoRef.current.readyState < 2
         ) {
           return;
         }
 
         isFrameBusyRef.current = true;
         try {
-          const videoEl = videoRef.current;
-
-          // 1. Hardware-accelerated native BarcodeDetector (1D + 2D barcodes directly from video element)
-          if (nativeDetector) {
-            try {
-              const detected = await nativeDetector.detect(videoEl);
-              if (Array.isArray(detected) && detected.length > 0) {
-                const validHit = detected.find((d: any) => d?.rawValue && String(d.rawValue).trim().length >= 3);
-                if (validHit) {
-                  await processBarcodeValue(String(validHit.rawValue).trim(), true);
-                  isFrameBusyRef.current = false;
-                  return;
-                }
-              }
-            } catch {
-              // Fall through to lightweight ROI canvas
-            }
-          }
-
-          // 2. Lightweight cropped center Region-of-Interest (ROI) canvas fallback (360x220 max)
-          if (canvasRef.current && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
-            const canvas = canvasRef.current;
-            const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            if (ctx) {
-              const cropW = Math.min(videoEl.videoWidth, Math.floor(videoEl.videoWidth * 0.8));
-              const cropH = Math.min(videoEl.videoHeight, Math.floor(videoEl.videoHeight * 0.45));
-              const sx = Math.floor((videoEl.videoWidth - cropW) / 2);
-              const sy = Math.floor((videoEl.videoHeight - cropH) / 2);
-
-              const targetW = 360;
-              const targetH = 200;
-              if (canvas.width !== targetW) canvas.width = targetW;
-              if (canvas.height !== targetH) canvas.height = targetH;
-
-              ctx.drawImage(videoEl, sx, sy, cropW, cropH, 0, 0, targetW, targetH);
-              const imageData = ctx.getImageData(0, 0, targetW, targetH);
-              const qrCode = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'dontInvert'
-              });
-
-              if (qrCode && qrCode.data && qrCode.data.trim().length >= 3) {
-                await processBarcodeValue(qrCode.data.trim(), true);
-              }
-            }
+          const decoded = await decoder.decodeFromVideo(videoRef.current, canvasRef.current);
+          if (decoded && decoded.length >= 3) {
+            await processBarcodeRef.current(decoded, true);
           }
         } catch {
-          // Ignore single frame errors
+          // Ignore single-frame decode errors
         } finally {
           isFrameBusyRef.current = false;
         }
-      }, 140);
+      }, 160);
     } catch (err: any) {
       console.error('Camera start error:', err);
       setCameraError(err?.message || 'خطا در باز کردن دوربین گوشی. لطفاً مجوز دوربین را بررسی کنید.');
+    } finally {
+      setIsCameraStarting(false);
     }
   };
 
-  // Auto-open camera if requested via prop, and always clean up camera tracks on unmount
+  // Auto-open camera if requested via prop, and always clean up camera tracks & timers on unmount
   useEffect(() => {
     if (autoStartCamera) {
       startCameraScanner();
     }
     return () => {
+      if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
       if (scanIntervalRef.current) window.clearInterval(scanIntervalRef.current);
       if (cameraStreamRef.current) {
         cameraStreamRef.current.getTracks().forEach(t => {
@@ -2018,30 +2120,41 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     <Camera size={14} />
                     <span>دوربین</span>
                   </button>
+
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handlePhotoBarcodeSelected}
+                    className="hidden"
+                  />
                 </div>
               </div>
 
-              {/* Scanner Input Bar */}
+              {/* Scanner Input Bar (NEVER disabled during async lookup so rapid PDA scanning never drops a carton!) */}
               <form onSubmit={handleBarcodeSubmit} className="flex items-center gap-1.5 sm:gap-2">
                 <div className="relative flex-1 min-w-0">
                   <input
                     ref={barcodeInputRef}
                     type="text"
                     inputMode={isHardwareGunMode ? 'none' : 'text'}
+                    enterKeyHint="send"
                     autoComplete="off"
                     autoCorrect="off"
                     spellCheck={false}
                     value={scannedBarcode}
-                    onChange={(e) => setScannedBarcode(e.target.value)}
-                    placeholder={isHardwareGunMode ? 'آماده اسکن با دکمه SCAN...' : 'تایپ دستی بارکد (PO-F-...)'}
-                    disabled={isResolvingBarcode}
+                    onChange={handleBarcodeInputChange}
+                    onKeyDown={handleBarcodeInputKeyDown}
+                    onPaste={handleBarcodeInputPaste}
+                    placeholder="آماده اسکن با بارکدخوان یا تایپ دستی (PO-F-...)"
                     className="w-full h-11 sm:h-12 pr-9 pl-3 rounded-xl bg-white/10 border-2 border-blue-400/50 focus:border-cyan-300 text-white placeholder-blue-200/60 font-mono text-sm sm:text-base font-bold outline-none transition-all dir-ltr text-left"
                   />
                   <Barcode className="w-4 h-4 text-cyan-300 absolute right-3 top-3.5 pointer-events-none" />
                 </div>
                 <button
                   type="submit"
-                  disabled={isResolvingBarcode || !scannedBarcode.trim()}
+                  disabled={!scannedBarcode.trim()}
                   className="px-3.5 sm:px-5 h-11 sm:h-12 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-md active:scale-95 disabled:opacity-45 shrink-0 cursor-pointer"
                 >
                   {isResolvingBarcode ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}
@@ -3034,26 +3147,42 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
               </div>
             </div>
 
-            {/* Camera Error Overlay */}
+            {/* Camera Starting Overlay */}
+            {isCameraStarting && !cameraError && (
+              <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center gap-2 z-20">
+                <Loader2 size={30} className="animate-spin text-amber-400" />
+                <span className="text-xs font-black text-white">در حال باز کردن دوربین دستگاه...</span>
+              </div>
+            )}
+
+            {/* Camera Error Overlay + Instant Photo-Capture Fallback */}
             {cameraError && (
-              <div className="absolute inset-0 bg-slate-950/90 p-6 flex flex-col items-center justify-center text-center space-y-3 z-20">
-                <AlertCircle size={36} className="text-rose-400" />
-                <p className="text-sm font-black text-white">{cameraError}</p>
-                <p className="text-xs text-slate-400 max-w-md">
-                  در صورتی که مجوز دوربین را نداده‌اید، از بخش تنظیمات مرورگر یا اپلیکیشن مجوز Camera را فعال کرده و مجدداً تلاش کنید.
+              <div className="absolute inset-0 bg-slate-950/92 p-5 flex flex-col items-center justify-center text-center space-y-3 z-20 overflow-y-auto">
+                <AlertCircle size={34} className="text-rose-400 shrink-0" />
+                <p className="text-xs sm:text-sm font-black text-white max-w-md leading-relaxed">{cameraError}</p>
+                <p className="text-[11px] text-slate-400 max-w-md leading-relaxed">
+                  در صورتی که مجوز دوربین را نداده‌اید، از تنظیمات گوشی مجوز Camera را فعال کنید؛ همچنین می‌توانید مستقیم از دوربین گوشی عکس بگیرید تا بارکد فوری خوانده شود.
                 </p>
-                <div className="flex items-center gap-2 pt-2">
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => photoInputRef.current?.click()}
+                    className="px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Camera size={15} />
+                    <span>اسکن از عکس دوربین</span>
+                  </button>
                   <button
                     type="button"
                     onClick={startCameraScanner}
-                    className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold"
+                    className="px-3.5 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold cursor-pointer"
                   >
-                    تلاش مجدد باز کردن دوربین
+                    تلاش مجدد دوربین زنده
                   </button>
                   <button
                     type="button"
                     onClick={stopCameraScanner}
-                    className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
                   >
                     بازگشت
                   </button>

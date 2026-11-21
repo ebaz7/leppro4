@@ -37,6 +37,14 @@ import {
 import { apiCall, getServerHost, getAuthToken } from '../services/apiService';
 import { isWindowsDesktopApp, isElectronDesktop, isTauriDesktopOnly, isTouchMobileDevice } from '../utils/platformDetection';
 import { User } from '../types';
+import {
+  normalizeScannedBarcode,
+  openRearCameraStream,
+  attachStreamToVideo,
+  createUniversalBarcodeDecoder,
+  subscribeHardwareBarcodeEvents,
+  UniversalBarcodeDecoder
+} from '../utils/barcodeScannerUtils';
 
 type BridgeRole = 'receiver' | 'sender';
 type SuffixKey = 'enter' | 'tab' | 'enter2' | 'tab_enter' | 'none';
@@ -210,7 +218,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
   const [senderStreamConnected, setSenderStreamConnected] = useState<boolean>(false);
   const [isPairing, setIsPairing] = useState<boolean>(false);
   const [barcodeInput, setBarcodeInput] = useState<string>('');
-  const [hardwareGunMode, setHardwareGunMode] = useState<boolean>(isTouch);
+  const [hardwareGunMode, setHardwareGunMode] = useState<boolean>(false);
   const [senderScans, setSenderScans] = useState<BridgeScanItem[]>([]);
   const [offlineQueue, setOfflineQueue] = useState<OfflineQueuedBarcode[]>(() => {
     try {
@@ -237,8 +245,12 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
-  const cameraRafRef = useRef<number | null>(null);
+  const cameraIntervalRef = useRef<number | null>(null);
+  const cameraDecoderRef = useRef<UniversalBarcodeDecoder | null>(null);
+  const cameraFrameBusyRef = useRef<boolean>(false);
   const lastCameraCodeRef = useRef<{ code: string; at: number }>({ code: '', at: 0 });
+  const inputBurstTimerRef = useRef<number | null>(null);
+  const lastInputValRef = useRef<string>('');
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Sync refs
@@ -707,7 +719,8 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
       if (cameraStreamRef.current) {
         cameraStreamRef.current.getTracks().forEach((t) => t.stop());
       }
-      if (cameraRafRef.current) cancelAnimationFrame(cameraRafRef.current);
+      if (cameraIntervalRef.current) window.clearInterval(cameraIntervalRef.current);
+      if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
     };
   }, []);
 
@@ -1119,16 +1132,41 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
     }
   };
 
+  // Keep ref to latest submitScannedBarcode for global Android Broadcast + Keyboard-Wedge listener
+  const submitScannedRef = useRef(submitScannedBarcode);
+  useEffect(() => {
+    submitScannedRef.current = submitScannedBarcode;
+  });
+
+  useEffect(() => {
+    if (role !== 'sender') return;
+    return subscribeHardwareBarcodeEvents(
+      (barcode) => {
+        submitScannedRef.current(barcode);
+      },
+      {
+        enabled: role === 'sender',
+        ignoreInputElement: () => scannerInputRef.current
+      }
+    );
+  }, [role]);
+
   // ---------------- CAMERA QR / BARCODE SCANNER ----------------
   const stopCamera = useCallback(() => {
-    if (cameraRafRef.current) {
-      cancelAnimationFrame(cameraRafRef.current);
-      cameraRafRef.current = null;
+    if (cameraIntervalRef.current) {
+      window.clearInterval(cameraIntervalRef.current);
+      cameraIntervalRef.current = null;
     }
     if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current.getTracks().forEach((t) => {
+        try { t.stop(); } catch {}
+      });
       cameraStreamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    cameraFrameBusyRef.current = false;
     setCameraMode('none');
     setCameraError('');
   }, []);
@@ -1137,82 +1175,73 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
     setCameraError('');
     setCameraMode(mode);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('دوربین در این مرورگر در دسترس نیست (نیاز به اتصال HTTPS).');
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((t) => {
+          try { t.stop(); } catch {}
+        });
+        cameraStreamRef.current = null;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false
-      });
+
+      const stream = await openRearCameraStream();
       cameraStreamRef.current = stream;
 
-      const waitVideoAndScan = () => {
-        const video = videoRef.current;
-        if (!video) {
-          cameraRafRef.current = requestAnimationFrame(waitVideoAndScan);
+      // Wait briefly for portal <video> mount if needed and attach reliably
+      for (let i = 0; i < 10; i++) {
+        if (videoRef.current) {
+          await attachStreamToVideo(videoRef.current, stream);
+          break;
+        }
+        await new Promise((r) => window.setTimeout(r, 40));
+      }
+
+      if (!cameraDecoderRef.current) {
+        cameraDecoderRef.current = await createUniversalBarcodeDecoder();
+      }
+      const decoder = cameraDecoderRef.current;
+
+      if (cameraIntervalRef.current) {
+        window.clearInterval(cameraIntervalRef.current);
+      }
+
+      cameraIntervalRef.current = window.setInterval(async () => {
+        if (
+          document.hidden ||
+          cameraFrameBusyRef.current ||
+          !cameraStreamRef.current ||
+          !videoRef.current ||
+          !canvasRef.current ||
+          videoRef.current.readyState < 2
+        ) {
           return;
         }
-        video.srcObject = stream;
-        video.setAttribute('playsinline', 'true');
-        video.play().catch(() => {});
-
-        const hasBarcodeDetector = typeof (window as any).BarcodeDetector === 'function';
-        const detector = hasBarcodeDetector
-          ? new (window as any).BarcodeDetector({
-              formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'upc_a']
-            })
-          : null;
-
-        const tick = async () => {
-          if (!cameraStreamRef.current) return;
-          if (video.readyState >= 2 && video.videoWidth > 0) {
-            let detected = '';
-            if (detector) {
-              try {
-                const found = await detector.detect(video);
-                if (found && found.length > 0 && found[0].rawValue) {
-                  detected = String(found[0].rawValue).trim();
+        cameraFrameBusyRef.current = true;
+        try {
+          const detected = await decoder.decodeFromVideo(videoRef.current, canvasRef.current);
+          if (detected) {
+            const now = Date.now();
+            const isSameQuick =
+              lastCameraCodeRef.current.code === detected &&
+              now - lastCameraCodeRef.current.at < 1600;
+            if (!isSameQuick) {
+              lastCameraCodeRef.current = { code: detected, at: now };
+              if (mode === 'pair_qr') {
+                const m = detected.match(/(\d{6})/);
+                if (m) {
+                  stopCamera();
+                  pairWithPc(m[1]);
+                  return;
                 }
-              } catch {}
-            }
-            if (!detected && canvasRef.current) {
-              const canvas = canvasRef.current;
-              canvas.width = video.videoWidth;
-              canvas.height = video.videoHeight;
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const qr = jsQR(imgData.data, imgData.width, imgData.height);
-                if (qr?.data) detected = qr.data.trim();
-              }
-            }
-
-            if (detected) {
-              const now = Date.now();
-              const isSameQuick =
-                lastCameraCodeRef.current.code === detected &&
-                now - lastCameraCodeRef.current.at < 1500;
-              if (!isSameQuick) {
-                lastCameraCodeRef.current = { code: detected, at: now };
-                if (mode === 'pair_qr') {
-                  const m = detected.match(/(\d{6})/);
-                  if (m) {
-                    stopCamera();
-                    pairWithPc(m[1]);
-                    return;
-                  }
-                } else {
-                  submitScannedBarcode(detected);
-                }
+              } else {
+                submitScannedRef.current(detected);
               }
             }
           }
-          cameraRafRef.current = requestAnimationFrame(tick);
-        };
-        cameraRafRef.current = requestAnimationFrame(tick);
-      };
-      cameraRafRef.current = requestAnimationFrame(waitVideoAndScan);
+        } catch {
+          // Ignore single frame errors
+        } finally {
+          cameraFrameBusyRef.current = false;
+        }
+      }, 160);
     } catch (err: any) {
       setCameraError(err?.message || 'دسترسی به دوربین رد شد یا دوربین یافت نشد.');
     }
@@ -1977,19 +2006,47 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                 ref={scannerInputRef}
                 type="text"
                 inputMode={hardwareGunMode ? 'none' : 'text'}
+                enterKeyHint="send"
                 value={barcodeInput}
-                onChange={(e) => setBarcodeInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    submitScannedBarcode(barcodeInput);
+                onChange={(e) => {
+                  const rawVal = e.target.value;
+                  const prevVal = lastInputValRef.current;
+                  if (/[\r\n\t]/.test(rawVal)) {
+                    if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
+                    const chunks = rawVal
+                      .split(/[\r\n\t]+/)
+                      .map((c) => normalizeScannedBarcode(c))
+                      .filter((c) => c.length >= 2);
+                    setBarcodeInput('');
+                    lastInputValRef.current = '';
+                    chunks.forEach((c) => submitScannedBarcode(c));
+                    return;
+                  }
+                  setBarcodeInput(rawVal);
+                  lastInputValRef.current = rawVal;
+                  if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
+                  if (rawVal.length - prevVal.length >= 5 && normalizeScannedBarcode(rawVal).length >= 5) {
+                    const candidate = rawVal;
+                    inputBurstTimerRef.current = window.setTimeout(() => {
+                      if (lastInputValRef.current === candidate) {
+                        lastInputValRef.current = '';
+                        submitScannedRef.current(normalizeScannedBarcode(candidate));
+                      }
+                    }, 160);
                   }
                 }}
-                placeholder={
-                  hardwareGunMode
-                    ? 'دکمه SCAN بارکدخوان را بزنید...'
-                    : 'بارکد را تایپ و Enter بزنید...'
-                }
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === 'Tab' || e.keyCode === 13 || e.keyCode === 9) {
+                    const val = normalizeScannedBarcode(e.currentTarget.value || barcodeInput);
+                    if (val.length >= 2) {
+                      e.preventDefault();
+                      if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
+                      lastInputValRef.current = '';
+                      submitScannedBarcode(val);
+                    }
+                  }
+                }}
+                placeholder="آماده اسکن با بارکدخوان یا تایپ دستی..."
                 dir="ltr"
                 autoComplete="off"
                 autoCorrect="off"
