@@ -820,6 +820,7 @@ html {
   height: 100%;
   height: -webkit-fill-available;
   height: 100dvh;
+  height: var(--app-vh, 100%);
   width: 100%;
   max-width: 100%;
   overflow-x: hidden !important;
@@ -835,6 +836,7 @@ body {
   height: 100%;
   height: -webkit-fill-available;
   height: 100dvh;
+  height: var(--app-vh, 100%);
   width: 100%;
   max-width: 100%;
   overflow-x: hidden !important;
@@ -861,9 +863,11 @@ body {
   min-height: 100%;
   height: -webkit-fill-available;
   height: 100dvh;
+  height: var(--app-vh, 100%);
   max-height: 100%;
   max-height: -webkit-fill-available;
   max-height: 100dvh;
+  max-height: var(--app-vh, 100%);
   width: 100%;
   max-width: 100%;
   overflow-x: hidden !important;
@@ -3563,5 +3567,47 @@ html.ai-features-disabled button[title*="هوش مصنوعی"] {
   background-color: #1e293b !important;
   color: #f8fafc !important;
 }
+
+/* ============================================================================
+   Universal Android & Compact Barcode PDA Screen-Fit Scaling
+   Ensures every modal, card, and page scales cleanly to the exact screen size
+   on 3.5"-4.5" rugged handheld PDAs, older WebViews, and phones without touching Desktop
+   ============================================================================ */
+html.screen-compact-pda {
+  font-size: 13.5px;
+}
+
+html.screen-ultra-compact-pda {
+  font-size: 12px;
+}
+
+html.screen-compact-pda .rounded-3xl {
+  border-radius: 18px !important;
+}
+
+html.screen-compact-pda .rounded-2xl {
+  border-radius: 14px !important;
+}
+
+/* Safe viewport-bound dialog utility compatible with Chrome 60+ (no bare dvh dependency) */
+.dlkam-viewport-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100%;
+  height: var(--app-vh, 100vh);
+  max-height: var(--app-vh, 100vh);
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.dlkam-viewport-modal-card {
+  max-height: calc(var(--app-vh, 100vh) - 16px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  height: auto;
+}
+
 
 

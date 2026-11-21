@@ -684,6 +684,39 @@
           document.documentElement.classList.add('low-spec-mode');
         }
       } catch (e) {}
+
+      // Universal Adaptive Viewport & Screen-Fit Engine (Android PDAs, older WebViews < Chrome 108, iOS & Mobile Web)
+      (function() {
+        var syncViewport = function() {
+          try {
+            var vv = window.visualViewport;
+            var h = Math.round((vv && vv.height) ? vv.height : (window.innerHeight || document.documentElement.clientHeight || 0));
+            var w = Math.round((vv && vv.width) ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 0));
+            if (h > 100) {
+              document.documentElement.style.setProperty('--app-vh', h + 'px');
+            }
+            if (w > 100) {
+              document.documentElement.style.setProperty('--app-vw', w + 'px');
+            }
+            // Apply proportional compact density strictly on small touch/PDA screens (never on Desktop)
+            var isTouchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || /android|iphone|ipad|ipod/i.test(navigator.userAgent || '') || Boolean(window.DlkamAndroid);
+            var isCompactPda = isTouchLike && ((w > 0 && w <= 375) || (h > 0 && h <= 640));
+            var isUltraCompactPda = isTouchLike && ((w > 0 && w <= 335) || (h > 0 && h <= 540));
+            document.documentElement.classList.toggle('screen-compact-pda', isCompactPda);
+            document.documentElement.classList.toggle('screen-ultra-compact-pda', isUltraCompactPda);
+          } catch (e) {}
+        };
+        syncViewport();
+        window.addEventListener('resize', syncViewport, { passive: true });
+        window.addEventListener('orientationchange', function() {
+          setTimeout(syncViewport, 80);
+          setTimeout(syncViewport, 280);
+        }, { passive: true });
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', syncViewport, { passive: true });
+        }
+        document.addEventListener('DOMContentLoaded', syncViewport);
+      })();
     </script>
 
     <!-- Dynamic Page Size Style Placeholder -->

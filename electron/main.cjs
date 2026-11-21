@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const https = require('https');
+const { spawn } = require('child_process');
 
 let mainWindow = null;
 let tray = null;
@@ -1118,6 +1119,359 @@ ipcMain.handle('copy-text', (_event, text) => {
   }
 });
 
+// 10. Windows Direct Keyboard-Wedge Engine (Barcode-to-PC -> Sayan ERP active window)
+// Uses Win32 SendInput with KEYEVENTF_UNICODE via a persistent hidden PowerShell helper
+// so typing is <5ms, immune to Persian/English keyboard layout, and 100% safe against shell injection.
+let winKeyWedgeProc = null;
+let winKeyWedgeReady = false;
+let winKeyWedgeStdoutBuf = '';
+let winKeyWedgePending = new Map();
+let winKeyWedgeReqSeq = 1;
+
+const ALLOWED_WEDGE_SUFFIXES = new Set(['enter', 'tab', 'enter2', 'tab_enter', 'none']);
+
+const WIN32_KEYWEDGE_PS_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Threading;
+using System.Runtime.InteropServices;
+
+public static class DlkamWin32KeyWedge {
+    [StructLayout(LayoutKind.Sequential)]
+    struct INPUT {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    struct InputUnion {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MOUSEINPUT {
+        public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct HARDWAREINPUT {
+        public uint uMsg; public ushort wParamL; public ushort wParamH;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct KEYBDINPUT {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    const uint INPUT_KEYBOARD = 1;
+    const uint KEYEVENTF_KEYUP = 0x0002;
+    const uint KEYEVENTF_UNICODE = 0x0004;
+    const ushort VK_RETURN = 0x0D;
+    const ushort VK_TAB = 0x09;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    static extern bool IsIconic(IntPtr hWnd);
+
+    public static bool FocusWindowByKeywords(string[] keywords) {
+        if (keywords == null || keywords.Length == 0) return false;
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hWnd, lParam) => {
+            if (!IsWindowVisible(hWnd)) return true;
+            var sb = new StringBuilder(256);
+            int len = GetWindowText(hWnd, sb, sb.Capacity);
+            if (len <= 0) return true;
+            string title = sb.ToString();
+            foreach (var kw in keywords) {
+                if (!string.IsNullOrEmpty(kw) && title.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0) {
+                    found = hWnd;
+                    return false;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (found != IntPtr.Zero) {
+            if (IsIconic(found)) ShowWindow(found, 9);
+            SetForegroundWindow(found);
+            Thread.Sleep(60);
+            return true;
+        }
+        return false;
+    }
+
+    static void SendUnicodeChar(char ch) {
+        INPUT[] inputs = new INPUT[2];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = 0;
+        inputs[0].u.ki.wScan = (ushort)ch;
+        inputs[0].u.ki.dwFlags = KEYEVENTF_UNICODE;
+
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = 0;
+        inputs[1].u.ki.wScan = (ushort)ch;
+        inputs[1].u.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+
+        SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    static void SendVirtualKey(ushort vk) {
+        INPUT[] inputs = new INPUT[2];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = vk;
+        inputs[0].u.ki.dwFlags = 0;
+
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = vk;
+        inputs[1].u.ki.dwFlags = KEYEVENTF_KEYUP;
+
+        SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    public static void TypeBarcode(string text, string suffix, int charDelayMs, bool focusSayan) {
+        if (focusSayan) {
+            FocusWindowByKeywords(new string[] { "Sayan", "سایان" });
+        }
+        int delay = Math.Max(0, Math.Min(50, charDelayMs));
+        if (!string.IsNullOrEmpty(text)) {
+            foreach (char c in text) {
+                SendUnicodeChar(c);
+                if (delay > 0) Thread.Sleep(delay);
+            }
+        }
+        if (suffix == "enter") {
+            Thread.Sleep(25);
+            SendVirtualKey(VK_RETURN);
+        } else if (suffix == "tab") {
+            Thread.Sleep(25);
+            SendVirtualKey(VK_TAB);
+        } else if (suffix == "enter2") {
+            Thread.Sleep(25);
+            SendVirtualKey(VK_RETURN);
+            Thread.Sleep(70);
+            SendVirtualKey(VK_RETURN);
+        } else if (suffix == "tab_enter") {
+            Thread.Sleep(25);
+            SendVirtualKey(VK_TAB);
+            Thread.Sleep(50);
+            SendVirtualKey(VK_RETURN);
+        }
+    }
+}
+"@
+[Console]::Out.WriteLine('{"ready":true}')
+[Console]::Out.Flush()
+while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) { break }
+    $trimmed = $line.Trim()
+    if ($trimmed.Length -eq 0) { continue }
+    try {
+        $req = $trimmed | ConvertFrom-Json
+        if ($req.cmd -eq 'exit') { break }
+        $id = [int]$req.id
+        $txt = [string]$req.text
+        $suf = [string]$req.suffix
+        $cd = [int]$req.charDelayMs
+        $fs = [bool]$req.focusSayan
+        [DlkamWin32KeyWedge]::TypeBarcode($txt, $suf, $cd, $fs)
+        $resp = @{ id = $id; ok = $true } | ConvertTo-Json -Compress
+        [Console]::Out.WriteLine($resp)
+        [Console]::Out.Flush()
+    } catch {
+        $errMsg = $_.Exception.Message
+        $resp = @{ id = 0; ok = $false; error = $errMsg } | ConvertTo-Json -Compress
+        [Console]::Out.WriteLine($resp)
+        [Console]::Out.Flush()
+    }
+}
+`;
+
+function stopWinKeyWedgeHelper() {
+  try {
+    if (winKeyWedgeProc && !winKeyWedgeProc.killed) {
+      try { winKeyWedgeProc.stdin.write(JSON.stringify({ cmd: 'exit' }) + '\n'); } catch (_) {}
+      setTimeout(() => {
+        try { if (winKeyWedgeProc && !winKeyWedgeProc.killed) winKeyWedgeProc.kill(); } catch (_) {}
+      }, 150);
+    }
+  } catch (_) {}
+  winKeyWedgeProc = null;
+  winKeyWedgeReady = false;
+  for (const [, pending] of winKeyWedgePending.entries()) {
+    try { clearTimeout(pending.timer); } catch (_) {}
+    pending.reject(new Error('Keyboard wedge helper stopped'));
+  }
+  winKeyWedgePending.clear();
+}
+
+function ensureWinKeyWedgeHelper() {
+  if (process.platform !== 'win32') {
+    return Promise.reject(new Error('Direct OS barcode typing is only supported on Windows'));
+  }
+  if (winKeyWedgeProc && !winKeyWedgeProc.killed && winKeyWedgeReady) {
+    return Promise.resolve(winKeyWedgeProc);
+  }
+
+  return new Promise((resolve, reject) => {
+    stopWinKeyWedgeHelper();
+    winKeyWedgeStdoutBuf = '';
+
+    const encodedScript = Buffer.from(WIN32_KEYWEDGE_PS_SCRIPT, 'utf16le').toString('base64');
+    const proc = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encodedScript],
+      { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    winKeyWedgeProc = proc;
+
+    let settledInit = false;
+    const initTimeout = setTimeout(() => {
+      if (!settledInit) {
+        settledInit = true;
+        stopWinKeyWedgeHelper();
+        reject(new Error('Windows keyboard wedge startup timed out'));
+      }
+    }, 12000);
+
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => {
+      winKeyWedgeStdoutBuf += chunk;
+      let idx;
+      while ((idx = winKeyWedgeStdoutBuf.indexOf('\n')) >= 0) {
+        const line = winKeyWedgeStdoutBuf.slice(0, idx).trim();
+        winKeyWedgeStdoutBuf = winKeyWedgeStdoutBuf.slice(idx + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.ready) {
+            winKeyWedgeReady = true;
+            if (!settledInit) {
+              settledInit = true;
+              clearTimeout(initTimeout);
+              resolve(proc);
+            }
+            continue;
+          }
+          if (msg.id && winKeyWedgePending.has(msg.id)) {
+            const p = winKeyWedgePending.get(msg.id);
+            winKeyWedgePending.delete(msg.id);
+            clearTimeout(p.timer);
+            if (msg.ok) p.resolve({ ok: true });
+            else p.reject(new Error(msg.error || 'Win32 SendInput failed'));
+          }
+        } catch (_) {}
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (!settledInit) {
+        settledInit = true;
+        clearTimeout(initTimeout);
+        reject(err);
+      }
+      stopWinKeyWedgeHelper();
+    });
+
+    proc.on('exit', () => {
+      if (!settledInit) {
+        settledInit = true;
+        clearTimeout(initTimeout);
+        reject(new Error('Windows keyboard wedge helper exited unexpectedly'));
+      }
+      winKeyWedgeProc = null;
+      winKeyWedgeReady = false;
+    });
+  });
+}
+
+ipcMain.handle('barcode-wedge-status', () => {
+  return {
+    supported: process.platform === 'win32',
+    ready: winKeyWedgeReady,
+    runtime: 'electron'
+  };
+});
+
+ipcMain.handle('barcode-wedge-warmup', async () => {
+  if (process.platform !== 'win32') return { supported: false, ready: false };
+  try {
+    await ensureWinKeyWedgeHelper();
+    return { supported: true, ready: true };
+  } catch (err) {
+    return { supported: true, ready: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('barcode-wedge-stop', () => {
+  stopWinKeyWedgeHelper();
+  return { ok: true };
+});
+
+ipcMain.handle('type-barcode-to-active-window', async (_event, payload = {}) => {
+  if (process.platform !== 'win32') {
+    throw new Error('تایپ مستقیم سیستمی فقط در اپلیکیشن ویندوز پشتیبانی می‌شود.');
+  }
+  const cleanText = String(payload.text || '')
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .trim()
+    .slice(0, 128);
+  if (!cleanText) {
+    throw new Error('متن بارکد خالی است.');
+  }
+  const suffix = ALLOWED_WEDGE_SUFFIXES.has(payload.suffix) ? payload.suffix : 'enter';
+  const charDelayMs = Math.max(0, Math.min(40, Number(payload.charDelayMs ?? 4) || 0));
+  const focusSayan = Boolean(payload.focusSayan);
+
+  const proc = await ensureWinKeyWedgeHelper();
+  const id = winKeyWedgeReqSeq++;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      winKeyWedgePending.delete(id);
+      reject(new Error('مهلت ارسال کلید به پنجره ویندوز به پایان رسید.'));
+    }, 8000);
+
+    winKeyWedgePending.set(id, { resolve, reject, timer });
+    try {
+      proc.stdin.write(
+        JSON.stringify({ id, text: cleanText, suffix, charDelayMs, focusSayan }) + '\n'
+      );
+    } catch (writeErr) {
+      clearTimeout(timer);
+      winKeyWedgePending.delete(id);
+      reject(writeErr);
+    }
+  });
+});
+
 app.whenReady().then(() => {
   try {
     if (session && session.defaultSession) {
@@ -1184,6 +1538,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  stopWinKeyWedgeHelper();
   flushElectronSessionStorage();
 });
 

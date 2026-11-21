@@ -916,7 +916,7 @@ const Layout: React.FC<LayoutProps> = ({
 
   const getItemCategory = (id: string): 'finance' | 'warehouse' | 'sales' | 'admin' => {
     if (['create', 'manage', 'ccti', 'cheque-receipts', 'balances'].includes(id)) return 'finance';
-    if (['create-exit', 'manage-exit', 'warehouse', 'security', 'meetings', 'purchase'].includes(id)) return 'warehouse';
+    if (['create-exit', 'manage-exit', 'warehouse', 'barcode-to-pc', 'security', 'meetings', 'purchase'].includes(id)) return 'warehouse';
     if (['sayan', 'sayan-operations', 'manage-invoices', 'trade', 'products', 'sales'].includes(id)) return 'sales';
     return 'admin';
   };

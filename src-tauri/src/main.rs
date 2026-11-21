@@ -489,6 +489,161 @@ fn get_or_create_config(handle: &tauri::AppHandle) -> ClientConfig {
     default_config
 }
 
+#[tauri::command]
+fn get_barcode_wedge_support() -> bool {
+    cfg!(target_os = "windows")
+}
+
+#[tauri::command]
+fn type_barcode_to_active_window(
+    text: String,
+    suffix: Option<String>,
+    char_delay_ms: Option<u64>,
+) -> Result<bool, String> {
+    let clean: String = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(128)
+        .collect();
+    let trimmed = clean.trim();
+    if trimmed.is_empty() {
+        return Err("بارکد خالی است".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct KeybdInput {
+            w_vk: u16,
+            w_scan: u16,
+            dw_flags: u32,
+            time: u32,
+            dw_extra_info: usize,
+        }
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct Input {
+            r#type: u32,
+            ki: KeybdInput,
+            _pad: [u8; 8],
+        }
+
+        #[link(name = "user32")]
+        extern "system" {
+            fn SendInput(c_inputs: u32, p_inputs: *const Input, cb_size: i32) -> u32;
+        }
+
+        const INPUT_KEYBOARD: u32 = 1;
+        const KEYEVENTF_KEYUP: u32 = 0x0002;
+        const KEYEVENTF_UNICODE: u32 = 0x0004;
+        const VK_RETURN: u16 = 0x0D;
+        const VK_TAB: u16 = 0x09;
+
+        let send_unicode = |code_unit: u16| {
+            let inputs = [
+                Input {
+                    r#type: INPUT_KEYBOARD,
+                    ki: KeybdInput {
+                        w_vk: 0,
+                        w_scan: code_unit,
+                        dw_flags: KEYEVENTF_UNICODE,
+                        time: 0,
+                        dw_extra_info: 0,
+                    },
+                    _pad: [0; 8],
+                },
+                Input {
+                    r#type: INPUT_KEYBOARD,
+                    ki: KeybdInput {
+                        w_vk: 0,
+                        w_scan: code_unit,
+                        dw_flags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                        time: 0,
+                        dw_extra_info: 0,
+                    },
+                    _pad: [0; 8],
+                },
+            ];
+            unsafe {
+                SendInput(2, inputs.as_ptr(), std::mem::size_of::<Input>() as i32);
+            }
+        };
+
+        let send_vk = |vk: u16| {
+            let inputs = [
+                Input {
+                    r#type: INPUT_KEYBOARD,
+                    ki: KeybdInput {
+                        w_vk: vk,
+                        w_scan: 0,
+                        dw_flags: 0,
+                        time: 0,
+                        dw_extra_info: 0,
+                    },
+                    _pad: [0; 8],
+                },
+                Input {
+                    r#type: INPUT_KEYBOARD,
+                    ki: KeybdInput {
+                        w_vk: vk,
+                        w_scan: 0,
+                        dw_flags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dw_extra_info: 0,
+                    },
+                    _pad: [0; 8],
+                },
+            ];
+            unsafe {
+                SendInput(2, inputs.as_ptr(), std::mem::size_of::<Input>() as i32);
+            }
+        };
+
+        let delay = char_delay_ms.unwrap_or(4).min(40);
+        for u in trimmed.encode_utf16() {
+            send_unicode(u);
+            if delay > 0 {
+                std::thread::sleep(Duration::from_millis(delay));
+            }
+        }
+
+        let suf = suffix.unwrap_or_else(|| "enter".to_string());
+        match suf.as_str() {
+            "enter" => {
+                std::thread::sleep(Duration::from_millis(25));
+                send_vk(VK_RETURN);
+            }
+            "tab" => {
+                std::thread::sleep(Duration::from_millis(25));
+                send_vk(VK_TAB);
+            }
+            "enter2" => {
+                std::thread::sleep(Duration::from_millis(25));
+                send_vk(VK_RETURN);
+                std::thread::sleep(Duration::from_millis(70));
+                send_vk(VK_RETURN);
+            }
+            "tab_enter" => {
+                std::thread::sleep(Duration::from_millis(25));
+                send_vk(VK_TAB);
+                std::thread::sleep(Duration::from_millis(50));
+                send_vk(VK_RETURN);
+            }
+            _ => {}
+        }
+
+        return Ok(true);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (suffix, char_delay_ms);
+        Err("تایپ مستقیم سیستمی فقط روی ویندوز پشتیبانی می‌شود.".to_string())
+    }
+}
+
 fn main() {
     #[cfg(target_os = "windows")]
     {
@@ -616,7 +771,9 @@ fn main() {
             check_local_file_exists,
             open_local_file,
             open_local_file_dir,
-            save_and_open_local_file
+            save_and_open_local_file,
+            get_barcode_wedge_support,
+            type_barcode_to_active_window
         ])
         .run(tauri::generate_context!())
         .expect("error_running_tauri");

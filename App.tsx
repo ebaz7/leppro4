@@ -35,6 +35,7 @@ const CustomerBalanceModule = lazy(() => import('./components/CustomerBalanceMod
 const CctiConverter = lazy(() => import('./components/CctiConverter'));
 const SayanReports = lazy(() => import('./components/SayanReports'));
 const SayanRegistrationsModule = lazy(() => import('./components/SayanRegistrationsModule'));
+const BarcodeToPcBridge = lazy(() => import('./components/BarcodeToPcBridge'));
 const SecretariatModule = lazy(() => import('./components/SecretariatModule'));
 const ChequeReceiptModule = lazy(() => import('./components/ChequeReceiptModule').then(m => ({ default: m.ChequeReceiptModule })));
 const AiExecutiveCopilot = lazy(() => import('./components/AiExecutiveCopilot').then(m => ({ default: m.AiExecutiveCopilot })));
@@ -1083,7 +1084,7 @@ function App() {
     }
 
     const defaultTab = (window.location.hash || '').replace(/^#\/?/, '') || 'dashboard';
-    const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'industrial-erp', 'security', 'meetings', 'secretariat', 'purchase', 'balances', 'knowledge', 'notes', 'ccti', 'sayan', 'sayan-operations', 'cheque-receipts', 'digital-card', 'products', 'sales', 'tickets'];
+    const validTabs = ['dashboard', 'create', 'manage', 'chat', 'trade', 'users', 'settings', 'create-exit', 'manage-exit', 'manage-invoices', 'warehouse', 'industrial-erp', 'security', 'meetings', 'secretariat', 'purchase', 'balances', 'knowledge', 'notes', 'ccti', 'sayan', 'sayan-operations', 'barcode-to-pc', 'cheque-receipts', 'digital-card', 'products', 'sales', 'tickets'];
 
     if (validTabs.includes(defaultTab)) {
         setActiveTabState(defaultTab); 
@@ -2413,6 +2414,8 @@ function App() {
         return <div className="page-transition w-full bg-transparent"><SayanReports currentUser={currentUser} settings={settings} onNavigateToChat={(target) => { setDirectChatTarget(target); if (isSecondary) setSecondaryTab('chat'); else setActiveTab('chat'); }} /></div>;
       case 'sayan-operations':
         return <div className="page-transition w-full bg-transparent"><SayanRegistrationsModule currentUser={currentUser} settings={settings} /></div>;
+      case 'barcode-to-pc':
+        return <div className="page-transition w-full bg-transparent"><BarcodeToPcBridge currentUser={currentUser} /></div>;
       case 'users':
         return <div className="page-transition w-full"><ManageUsers /></div>;
       case 'settings':
@@ -2629,6 +2632,7 @@ function App() {
                     {activeTab === 'ccti' && <div className="page-transition flex flex-col flex-1 min-h-0"><CctiConverter financialYear={financialYear} currentUser={currentUser} canManageArchive={currentUser.role === UserRole.ADMIN || (settings && getRolePermissions(currentUser.role, settings, currentUser).canManageCctiArchive === true)} /></div>}
                     {activeTab === 'sayan' && <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><SayanReports currentUser={currentUser} settings={settings} onNavigateToChat={(target) => { setDirectChatTarget(target); setActiveTab('chat'); }} /></div>}
                     {activeTab === 'sayan-operations' && <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><SayanRegistrationsModule currentUser={currentUser} settings={settings} /></div>}
+                    {activeTab === 'barcode-to-pc' && <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><BarcodeToPcBridge currentUser={currentUser} /></div>}
                     {activeTab === 'users' && <div className="page-transition flex flex-col flex-1 min-h-0"><ManageUsers /></div>}
                     {activeTab === 'settings' && <div className="page-transition flex flex-col flex-1 min-h-0"><Settings financialYear={financialYear} settings={settings} onUpdateSettings={setSettings} /></div>}
                     {(activeTab === 'knowledge' || activeTab === 'notes') && <div className="page-transition flex flex-col flex-1 min-h-0"><KnowledgeBaseModule currentUser={currentUser} settings={settings} onUpdateSettings={setSettings} /></div>}

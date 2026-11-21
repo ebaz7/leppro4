@@ -46,12 +46,14 @@ import {
   Undo2,
   ChevronUp,
   Eye,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Monitor
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import * as jalaali from 'jalaali-js';
 import { apiCall } from '../services/apiService';
 import { openSendToChat } from '../services/chatShareService';
+import BarcodeToPcBridge from './BarcodeToPcBridge';
 
 const DRAFT_STORAGE_KEY = 'sayan_remittance_draft_v1';
 const META_CACHE_STORAGE_KEY = 'sayan_remittance_meta_cache_v1';
@@ -201,7 +203,7 @@ export interface ArchiveRecord {
 interface SayanSalesRemittanceIssuerProps {
   currentUser?: any;
   settings?: any;
-  initialSubTab?: 'issuer' | 'archive' | 'warehouses';
+  initialSubTab?: 'issuer' | 'archive' | 'warehouses' | 'barcode_to_pc';
   initialWarehouseCode?: string;
   autoStartCamera?: boolean;
   onSuccessRegistered?: (docNo: string, archiveRecord?: any) => void;
@@ -258,7 +260,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   onClose
 }) => {
   // Navigation / View State
-  const [activeSubTab, setActiveSubTab] = useState<'issuer' | 'archive' | 'warehouses'>(initialSubTab);
+  const [activeSubTab, setActiveSubTab] = useState<'issuer' | 'archive' | 'warehouses' | 'barcode_to_pc'>(initialSubTab);
 
   // Form Headers
   const [warehouses, setWarehouses] = useState<WarehouseItem[]>([]);
@@ -365,7 +367,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   // Suppress floating bottom-nav and AI pill on mobile/PDA while issuing remittances so nothing covers fields
   useEffect(() => {
     const syncChrome = () => {
-      const shouldHide = activeSubTab === 'issuer' && typeof window !== 'undefined' && window.innerWidth < 768;
+      const shouldHide = (activeSubTab === 'issuer' || activeSubTab === 'barcode_to_pc') && typeof window !== 'undefined' && window.innerWidth < 768;
       window.dispatchEvent(new CustomEvent('APP_HIDE_MOBILE_CHROME', { detail: shouldHide }));
     };
     syncChrome();
@@ -1476,6 +1478,18 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 <Building2 size={14} />
                 <span>انبارها و آمار</span>
               </button>
+              <button
+                onClick={() => setActiveSubTab('barcode_to_pc')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                  activeSubTab === 'barcode_to_pc'
+                    ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                }`}
+                title="اتصال مستقیم بارکدخوان اندروید به پنجره سایان روی کامپیوتر ویندوز"
+              >
+                <Monitor size={14} />
+                <span>اتصال مستقیم PC</span>
+              </button>
             </div>
 
             {onClose && (
@@ -1528,49 +1542,65 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             )}
           </div>
 
-          <div className="grid grid-cols-3 gap-1 p-0.5 rounded-xl bg-slate-100 dark:bg-zinc-800">
+          <div className="grid grid-cols-4 gap-1 p-0.5 rounded-xl bg-slate-100 dark:bg-zinc-800">
             <button
               type="button"
               onClick={() => setActiveSubTab('issuer')}
-              className={`py-1.5 px-1 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition-all ${
+              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
                 activeSubTab === 'issuer'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-slate-600 dark:text-zinc-400'
               }`}
             >
-              <Package size={12} />
-              <span>صدور حواله</span>
+              <Package size={11} className="shrink-0" />
+              <span className="truncate">صدور</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('barcode_to_pc')}
+              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
+                activeSubTab === 'barcode_to_pc'
+                  ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                  : 'text-slate-600 dark:text-zinc-400'
+              }`}
+            >
+              <Monitor size={11} className="shrink-0" />
+              <span className="truncate">به PC</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveSubTab('archive')}
-              className={`py-1.5 px-1 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition-all ${
+              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
                 activeSubTab === 'archive'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-slate-600 dark:text-zinc-400'
               }`}
             >
-              <History size={12} />
-              <span>بایگانی ({archiveList.length})</span>
+              <History size={11} className="shrink-0" />
+              <span className="truncate">بایگانی ({archiveList.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveSubTab('warehouses')}
-              className={`py-1.5 px-1 rounded-lg text-[11px] font-black flex items-center justify-center gap-1 transition-all ${
+              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
                 activeSubTab === 'warehouses'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-slate-600 dark:text-zinc-400'
               }`}
             >
-              <Building2 size={12} />
-              <span>انبارها</span>
+              <Building2 size={11} className="shrink-0" />
+              <span className="truncate">انبارها</span>
             </button>
           </div>
         </div>
       </div>
 
       {/* Main Workspace */}
-      {activeSubTab === 'issuer' ? (
+      {activeSubTab === 'barcode_to_pc' ? (
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <BarcodeToPcBridge currentUser={currentUser} embedded />
+        </div>
+      ) : activeSubTab === 'issuer' ? (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5 space-y-2.5 sm:space-y-4 pb-24 sm:pb-6 custom-scrollbar">
 
@@ -3221,7 +3251,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       {/* Neat Pre-Submit Final Review & Confirmation Sheet (Replaces window.confirm) */}
       {isReviewModalOpen && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[999999995] flex items-end sm:items-center justify-center sm:p-4 bg-slate-950/75 backdrop-blur-xs select-text" dir="rtl">
-          <div className="bg-white dark:bg-zinc-900 border-t sm:border border-slate-200 dark:border-zinc-800 rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-2xl max-h-[94dvh] flex flex-col overflow-hidden">
+          <div
+            className="bg-white dark:bg-zinc-900 border-t sm:border border-slate-200 dark:border-zinc-800 rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-2xl max-h-[94dvh] flex flex-col overflow-hidden"
+            style={{ maxHeight: 'calc(var(--app-vh, 100vh) - 16px)' }}
+          >
             {/* Sticky Header */}
             <div className="flex-none px-4 py-3 border-b border-slate-200 dark:border-zinc-800 bg-slate-50/90 dark:bg-zinc-900 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
@@ -3432,7 +3465,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       {/* Success Modal (Scroll-safe on small 4-inch PDA screens) */}
       {successResult && createPortal(
         <div className="fixed inset-0 z-[999999999] flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200 select-text" dir="rtl">
-          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 text-center space-y-3.5 animate-in zoom-in-95 duration-150">
+          <div
+            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 text-center space-y-3.5 animate-in zoom-in-95 duration-150"
+            style={{ maxHeight: 'calc(var(--app-vh, 100vh) - 16px)' }}
+          >
             <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl sm:rounded-3xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 mx-auto flex items-center justify-center shadow-lg shadow-emerald-500/20">
               <CheckCircle2 size={30} />
             </div>

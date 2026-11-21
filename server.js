@@ -55,6 +55,7 @@ import * as sayanChequeService from './backend/sayan-cheque-service.js';
 import * as sayanPartsService from './backend/sayan-parts-service.js';
 import * as sayanAgingService from './backend/sayan-aging-service.js';
 import * as sayanRemittanceService from './backend/sayan-remittance-service.js';
+import * as barcodeBridgeService from './backend/barcode-bridge-service.js';
 import { mergeFilesToPdf, enhanceDocumentImage } from './backend/pdf-merger.js';
 import { generateBenchmarkData } from './backend/sayanBenchmarkData.js';
 import * as notificationQueue from './backend/notification-queue.js';
@@ -253,9 +254,12 @@ app.use(compression({
     level: 5,
     filter: (req, res) => {
         const reqPath = String(req.path || '').toLowerCase();
+        const acceptHeader = String(req.headers?.accept || '').toLowerCase();
         if (
             reqPath.startsWith('/api/downloads') ||
             reqPath.startsWith('/downloads') ||
+            reqPath.endsWith('/stream') ||
+            acceptHeader.includes('text/event-stream') ||
             /\.(exe|msi|apk|zip|gz)$/i.test(reqPath)
         ) {
             return false;
@@ -6889,6 +6893,160 @@ app.get('/api/sayan/sales-remittances/archive', async (req, res) => {
         res.json({ success: true, archive });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message, archive: [] });
+    }
+});
+
+// ============================================================================
+// Real-Time Barcode-to-PC Direct Sayan Typing Bridge (Android PDA <-> Windows PC)
+// ============================================================================
+
+app.post('/api/barcode-bridge/sessions', (req, res) => {
+    try {
+        const {
+            preferredCode,
+            hostToken,
+            hostDeviceName,
+            hostPlatform,
+            hostUsername,
+            hostFullName,
+            duplicateGuard
+        } = req.body || {};
+        const result = barcodeBridgeService.createOrResumeSession({
+            preferredCode,
+            hostToken,
+            hostDeviceName,
+            hostPlatform,
+            hostUsername: hostUsername || req.user?.username || '',
+            hostFullName: hostFullName || req.user?.fullName || '',
+            duplicateGuard
+        });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({ success: false, message: err.message || 'خطا در ایجاد جلسه اتصال بارکدخوان' });
+    }
+});
+
+app.get('/api/barcode-bridge/my-sessions', (req, res) => {
+    try {
+        const username = String(req.query.username || req.user?.username || '').trim();
+        const sessions = barcodeBridgeService.listDiscoverableSessions({ username });
+        res.json({ success: true, sessions });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message, sessions: [] });
+    }
+});
+
+app.get('/api/barcode-bridge/sessions/:code', (req, res) => {
+    try {
+        const session = barcodeBridgeService.getSessionByCode(req.params.code);
+        if (!session) {
+            return res.status(404).json({ success: false, message: 'جلسه اتصال یافت نشد یا بسته شده است.' });
+        }
+        res.json({ success: true, session: barcodeBridgeService.serializeSessionPublic(session, true) });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.post('/api/barcode-bridge/sessions/:code/join', (req, res) => {
+    try {
+        const result = barcodeBridgeService.joinScanner(req.params.code, {
+            scannerId: req.body?.scannerId,
+            deviceName: req.body?.deviceName,
+            username: req.body?.username || req.user?.username || '',
+            fullName: req.body?.fullName || req.user?.fullName || ''
+        });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({ success: false, message: err.message || 'خطا در اتصال به کامپیوتر' });
+    }
+});
+
+app.post('/api/barcode-bridge/sessions/:code/leave', (req, res) => {
+    try {
+        const result = barcodeBridgeService.leaveScanner(req.params.code, req.body?.scannerId);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+app.get('/api/barcode-bridge/sessions/:code/stream', (req, res) => {
+    const code = String(req.params.code || '').replace(/\D/g, '');
+    const role = req.query.role === 'host' ? 'host' : 'scanner';
+    const clientId = String(req.query.clientId || '');
+    const hostToken = String(req.query.hostToken || '');
+
+    const session = barcodeBridgeService.getSessionByCode(code);
+    if (!session) {
+        return res.status(404).json({ success: false, message: 'جلسه اتصال یافت نشد.' });
+    }
+    if (role === 'host' && (!hostToken || session.hostToken !== hostToken)) {
+        return res.status(403).json({ success: false, message: 'توکن میزبان نامعتبر است.' });
+    }
+
+    const origin = req.headers.origin;
+    const headers = {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    };
+    if (origin) {
+        headers['Access-Control-Allow-Origin'] = origin;
+        headers['Vary'] = 'Origin';
+    }
+    res.writeHead(200, headers);
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
+
+    const ok = barcodeBridgeService.registerSseStream(code, res, { role, clientId, hostToken });
+    if (!ok) {
+        try { res.end(); } catch (_) {}
+    }
+});
+
+app.post('/api/barcode-bridge/sessions/:code/scan', (req, res) => {
+    try {
+        const result = barcodeBridgeService.pushScans(req.params.code, req.body || {});
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({ success: false, message: err.message || 'خطا در ارسال بارکد به کامپیوتر' });
+    }
+});
+
+app.post('/api/barcode-bridge/sessions/:code/ack', (req, res) => {
+    try {
+        const result = barcodeBridgeService.acknowledgeScan(req.params.code, req.body || {});
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({ success: false, message: err.message || 'خطا در ثبت تاییدیه تایپ' });
+    }
+});
+
+app.patch('/api/barcode-bridge/sessions/:code/settings', (req, res) => {
+    try {
+        const result = barcodeBridgeService.updateSessionSettings(req.params.code, req.body || {});
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({ success: false, message: err.message || 'خطا در بروزرسانی تنظیمات جلسه' });
+    }
+});
+
+app.delete('/api/barcode-bridge/sessions/:code', (req, res) => {
+    try {
+        const hostToken = String(req.body?.hostToken || req.query.hostToken || '');
+        const result = barcodeBridgeService.closeSession(req.params.code, hostToken);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({ success: false, message: err.message || 'خطا در بستن جلسه' });
     }
 });
 

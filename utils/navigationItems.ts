@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BadgePlus, Receipt, ArrowLeftRight, Truck, ScrollText, 
   ClipboardCheck, Warehouse, BarChart3, FileCheck2, ShieldCheck, CalendarDays, 
   ShoppingCart, FolderArchive, Banknote, MessagesSquare, BookOpen, Globe, 
-  Wallet, Boxes, Handshake, Headset, UserCog, Settings, QrCode, Scale
+  Wallet, Boxes, Handshake, Headset, UserCog, Settings, QrCode, Scale, Barcode
 } from 'lucide-react';
 import { User, UserRole, SystemSettings } from '../types';
 import { getRolePermissions, hasPermission } from '../services/authService';
@@ -28,6 +28,7 @@ export const ALL_NAVIGATION_ITEMS: Record<string, AppNavItem> = {
   'industrial-erp': { id: 'industrial-erp', label: 'حسابداری صنعتی و باسکول', icon: Scale, desc: 'انبار، توزین باسکول، لیبل QR، فرمول نخ (BOM)، خرید، فروش و اسناد مالی' },
   'sayan': { id: 'sayan', label: 'گزارشات سایان', icon: BarChart3, desc: 'تراز، فروش، تولید و چک‌ها' },
   'sayan-operations': { id: 'sayan-operations', label: 'ثبت‌های سایان', icon: FileCheck2, desc: 'پیش‌فاکتور، دریافت چک و اسناد معلق' },
+  'barcode-to-pc': { id: 'barcode-to-pc', label: 'بارکدخوان به کامپیوتر', icon: Barcode, desc: 'اتصال زنده بارکدخوان اندروید به ویندوز و تایپ مستقیم در سایان' },
   'security': { id: 'security', label: 'انتظامات', icon: ShieldCheck, desc: 'حراست، تردد و ثبت ورود/خروج' },
   'meetings': { id: 'meetings', label: 'جلسات تولید', icon: CalendarDays, desc: 'تقویم جلسات و صورتجلسات' },
   'purchase': { id: 'purchase', label: 'درخواست خرید', icon: ShoppingCart, desc: 'درخواست‌های خرید و تامین قطعات' },
@@ -174,6 +175,7 @@ export const getAppNavItems = (currentUser: User | null, settings: SystemSetting
   if (canSeeIndustrialErp) items.push(ALL_NAVIGATION_ITEMS['industrial-erp']);
   if (canSeeSayan) items.push(ALL_NAVIGATION_ITEMS['sayan']);
   if (canSeeSayanOps) items.push(ALL_NAVIGATION_ITEMS['sayan-operations']);
+  if (canManageWarehouse || canSeeSayan || canSeeSayanOps || canSeeIndustrialErp) items.push(ALL_NAVIGATION_ITEMS['barcode-to-pc']);
   if (canSeeSecurity) items.push(ALL_NAVIGATION_ITEMS['security']);
   if (canSeeMeetings) items.push(ALL_NAVIGATION_ITEMS['meetings']);
   if (canSeePurchase) items.push(ALL_NAVIGATION_ITEMS['purchase']);

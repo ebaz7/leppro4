@@ -22,12 +22,19 @@ import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.view.View;
+import android.util.DisplayMetrics;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
@@ -67,6 +74,7 @@ public class MainActivity extends BridgeActivity {
         try {
             if (this.getBridge() != null && this.getBridge().getWebView() != null) {
                 WebView webView = this.getBridge().getWebView();
+                configureAdaptiveDisplayAndInsets(webView);
                 webView.addJavascriptInterface(new DlkamAndroidBridge(this), "DlkamAndroid");
                 webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
                     try {
@@ -185,6 +193,52 @@ public class MainActivity extends BridgeActivity {
         // Enqueue the WorkManager background synchronization task + live background executor
         setupScheduler();
         startFastNativeNotificationPoller();
+    }
+
+    /**
+     * Ensures the Capacitor WebView fits strictly within every Android device's exact visible bounds
+     * (from 4-inch industrial barcode PDAs to tablets & Android 15 edge-to-edge screens) without
+     * clipping behind the top status bar, bottom navigation bar, or soft keyboard.
+     */
+    private void configureAdaptiveDisplayAndInsets(WebView webView) {
+        try {
+            // Keep decor fitting system windows so Android 15+ edge-to-edge never pushes UI under bars
+            WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+
+            View rootContent = findViewById(android.R.id.content);
+            if (rootContent != null) {
+                ViewCompat.setOnApplyWindowInsetsListener(rootContent, (view, windowInsets) -> {
+                    Insets bars = windowInsets.getInsets(
+                            WindowInsetsCompat.Type.systemBars()
+                                    | WindowInsetsCompat.Type.displayCutout()
+                                    | WindowInsetsCompat.Type.ime()
+                    );
+                    view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+                    return WindowInsetsCompat.CONSUMED;
+                });
+                ViewCompat.requestApplyInsets(rootContent);
+            }
+        } catch (Exception insetErr) {
+            Log.w(TAG, "WindowInsets adaptive setup warning", insetErr);
+        }
+
+        try {
+            if (webView != null) {
+                WebSettings settings = webView.getSettings();
+                if (settings != null) {
+                    settings.setUseWideViewPort(true);
+                    settings.setLoadWithOverviewMode(true);
+                    // Normalize Android OS display/font zoom so small PDA screens never overflow modals
+                    settings.setTextZoom(100);
+                    settings.setSupportZoom(false);
+                    settings.setBuiltInZoomControls(false);
+                    settings.setDisplayZoomControls(false);
+                }
+                webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            }
+        } catch (Exception webSettingsErr) {
+            Log.w(TAG, "WebView adaptive settings warning", webSettingsErr);
+        }
     }
 
     @Override
@@ -1050,6 +1104,23 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 Log.e(TAG, "saveImageToGallery error", e);
                 return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String getDeviceDisplayInfo() {
+            try {
+                DisplayMetrics dm = context.getResources().getDisplayMetrics();
+                float density = dm.density > 0 ? dm.density : 1f;
+                int dpWidth = Math.round(dm.widthPixels / density);
+                int dpHeight = Math.round(dm.heightPixels / density);
+                return "{\"widthPx\":" + dm.widthPixels +
+                        ",\"heightPx\":" + dm.heightPixels +
+                        ",\"dpWidth\":" + dpWidth +
+                        ",\"dpHeight\":" + dpHeight +
+                        ",\"density\":" + density + "}";
+            } catch (Exception e) {
+                return "{}";
             }
         }
     }

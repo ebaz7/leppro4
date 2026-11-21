@@ -235,48 +235,64 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
     }
   };
 
+  const handleSkipForNow = async () => {
+    try {
+      localStorage.setItem(PERMISSION_ONBOARDED_KEY, 'true');
+      if (Capacitor.isNativePlatform()) {
+        await Preferences.set({ key: PERMISSION_ONBOARDED_KEY, value: 'true' });
+      }
+    } catch (_) {}
+    setIsOpen(false);
+  };
+
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-2.5 sm:p-4 bg-black/60 backdrop-blur-md animate-fade-in"
+      className="dlkam-viewport-modal-backdrop z-[9999] flex items-center justify-center bg-black/65 animate-fade-in"
       dir="rtl"
       role="dialog"
       aria-modal="true"
     >
-      <div className="relative w-full max-w-md max-h-[92dvh] flex flex-col rounded-2xl sm:rounded-3xl bg-white dark:bg-zinc-900 border border-blue-200/70 dark:border-blue-900/60 shadow-2xl overflow-hidden">
-        {/* Top Accent Banner (Sticky, never clipped) */}
-        <div className="flex-none flex items-center gap-2.5 sm:gap-3.5 px-3.5 py-3 sm:px-6 sm:pt-5 sm:pb-4 border-b border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/25 shrink-0">
-            <BellRing size={20} className="sm:w-6 sm:h-6 animate-bounce" />
+      <div
+        className="dlkam-viewport-modal-card relative w-full max-w-md flex flex-col rounded-2xl sm:rounded-3xl bg-white dark:bg-zinc-900 border border-blue-200/70 dark:border-blue-900/60 shadow-2xl overflow-hidden"
+        style={{ maxHeight: 'calc(var(--app-vh, 100vh) - 16px)' }}
+      >
+        {/* Top Accent Banner (Sticky, never clipped on 4-inch PDA screens) */}
+        <div className="flex-none flex items-center gap-2.5 sm:gap-3.5 px-3 py-2.5 sm:px-6 sm:pt-5 sm:pb-4 border-b border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+          <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-blue-600/25 shrink-0">
+            <BellRing size={18} className="sm:w-6 sm:h-6" />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] sm:text-[11px] font-extrabold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate">
                 راه‌اندازی اولیه {platformLabel}
               </span>
             </div>
-            <h2 className="text-sm sm:text-lg font-black text-zinc-900 dark:text-zinc-100 mt-0.5 sm:mt-1 leading-snug">
+            <h2 className="text-[13px] sm:text-lg font-black text-zinc-900 dark:text-zinc-100 mt-0.5 leading-snug">
               فعال‌سازی دسترسی‌های ضروری برنامه
             </h2>
           </div>
         </div>
 
-        {/* Scrollable Middle Body (Fits 4-inch PDA screens cleanly) */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-3.5 py-3 sm:px-6 sm:py-4 space-y-2.5 sm:space-y-3 custom-scrollbar">
+        {/* Scrollable Middle Body (Fits 4-inch PDA screens cleanly with native momentum scroll) */}
+        <div
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 py-2.5 sm:px-6 sm:py-4 space-y-2 sm:space-y-3 custom-scrollbar"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
           <p className="text-[11px] sm:text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed font-medium">
-            برای اینکه پیام‌های گفتگوی سازمانی، کارتابل وظایف و هشدارها بدون تأخیر و حتی هنگام بسته بودن صفحه در{' '}
+            برای دریافت بدون تأخیر پیام‌ها و هشدارها در{' '}
             <strong className="text-blue-700 dark:text-blue-400 font-extrabold">
-              {isAndroid ? 'نوار وضعیت بالای گوشی اندروید' : 'مرکز اعلان ویندوز (Notification Center)'}
+              {isAndroid ? 'نوار وضعیت اندروید' : 'مرکز اعلان ویندوز'}
             </strong>{' '}
-            نمایش داده شوند، لطفاً دسترسی‌های زیر را تأیید نمایید:
+            دسترسی‌های زیر را تأیید کنید:
           </p>
 
           {/* Permission Items List */}
-          <div className="space-y-2">
-            <div className="flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
+          <div className="space-y-1.5 sm:space-y-2">
+            <div className="flex items-start gap-2 sm:gap-3 p-2 sm:p-3 rounded-xl sm:rounded-2xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
               <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-blue-600 text-white shrink-0 mt-0.5">
-                <BellRing size={15} />
+                <BellRing size={14} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
@@ -284,7 +300,7 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
                     دریافت اعلان‌های آنی و صدای هشدار
                   </h4>
                   {stepStatus.notifications === 'granted' && (
-                    <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                    <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
                   )}
                 </div>
                 <p className="text-[10px] sm:text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
@@ -293,9 +309,9 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
               </div>
             </div>
 
-            <div className="flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/25 border border-indigo-100 dark:border-indigo-900/40">
+            <div className="flex items-start gap-2 sm:gap-3 p-2 sm:p-3 rounded-xl sm:rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/25 border border-indigo-100 dark:border-indigo-900/40">
               <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-indigo-600 text-white shrink-0 mt-0.5">
-                <Cpu size={15} />
+                <Cpu size={14} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
@@ -303,7 +319,7 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
                     فعالیت در پس‌زمینه و عدم خواب برنامه
                   </h4>
                   {stepStatus.background === 'granted' && (
-                    <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                    <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
                   )}
                 </div>
                 <p className="text-[10px] sm:text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
@@ -312,16 +328,16 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
               </div>
             </div>
 
-            <div className="flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/25 border border-emerald-100 dark:border-emerald-900/40">
+            <div className="flex items-start gap-2 sm:gap-3 p-2 sm:p-3 rounded-xl sm:rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/25 border border-emerald-100 dark:border-emerald-900/40">
               <div className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-emerald-600 text-white shrink-0 mt-0.5">
-                <FolderCheck size={15} />
+                <FolderCheck size={14} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <h4 className="text-xs sm:text-sm font-extrabold text-zinc-900 dark:text-zinc-100">
                     ذخیره فایل‌ها و به‌روزرسانی درون‌برنامه‌ای
                   </h4>
-                  <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
                 </div>
                 <p className="text-[10px] sm:text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-snug">
                   دسترسی به پوشه اختصاصی برنامه جهت باز کردن پیوست‌ها و نصب آسان نسخه‌های جدید
@@ -331,21 +347,29 @@ export const FirstLaunchPermissionsModal: React.FC<FirstLaunchPermissionsModalPr
           </div>
         </div>
 
-        {/* Sticky Footer Action Button (Always Visible on Small PDA Screens) */}
-        <div className="flex-none px-3.5 py-3 sm:px-6 sm:py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-900/95 flex flex-col gap-1.5">
+        {/* Sticky Footer Action Button (Guaranteed Visible on Every Android & PDA Screen) */}
+        <div className="flex-none px-3 py-2.5 sm:px-6 sm:py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/90 dark:bg-zinc-900/95 flex flex-col gap-1.5">
           <button
             type="button"
             onClick={handleGrantAllPermissions}
             disabled={isGranting}
-            className="w-full py-2.5 sm:py-3 px-4 rounded-xl sm:rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs sm:text-sm shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-70"
+            className="w-full py-2.5 sm:py-3 px-3 rounded-xl sm:rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs sm:text-sm shadow-lg shadow-blue-600/25 flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-70"
           >
-            <ShieldCheck size={17} />
+            <ShieldCheck size={16} />
             <span>
               {isGranting
                 ? 'در حال فعال‌سازی دسترسی‌ها...'
                 : 'تأیید و فعال‌سازی دسترسی‌ها'}
             </span>
-            <Sparkles size={14} />
+            <Sparkles size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={handleSkipForNow}
+            disabled={isGranting}
+            className="w-full py-1 text-[11px] font-bold text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+          >
+            فعلاً بستن و ادامه کار با برنامه
           </button>
         </div>
       </div>
