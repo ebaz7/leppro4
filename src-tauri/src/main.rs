@@ -499,6 +499,7 @@ fn type_barcode_to_active_window(
     text: String,
     suffix: Option<String>,
     char_delay_ms: Option<u64>,
+    focus_sayan: Option<bool>,
 ) -> Result<bool, String> {
     let clean: String = text
         .chars()
@@ -530,9 +531,57 @@ fn type_barcode_to_active_window(
             _pad: [u8; 8],
         }
 
+        type EnumWindowsProc = extern "system" fn(isize, isize) -> i32;
+
         #[link(name = "user32")]
         extern "system" {
             fn SendInput(c_inputs: u32, p_inputs: *const Input, cb_size: i32) -> u32;
+            fn EnumWindows(lp_enum_func: EnumWindowsProc, l_param: isize) -> i32;
+            fn IsWindowVisible(h_wnd: isize) -> i32;
+            fn GetWindowTextW(h_wnd: isize, lp_string: *mut u16, n_max_count: i32) -> i32;
+            fn IsIconic(h_wnd: isize) -> i32;
+            fn ShowWindow(h_wnd: isize, n_cmd_show: i32) -> i32;
+            fn SetForegroundWindow(h_wnd: isize) -> i32;
+        }
+
+        if focus_sayan.unwrap_or(false) {
+            extern "system" fn enum_sayan_window(hwnd: isize, lparam: isize) -> i32 {
+                unsafe {
+                    if IsWindowVisible(hwnd) == 0 {
+                        return 1;
+                    }
+                    let mut buf = [0u16; 256];
+                    let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+                    if len <= 0 {
+                        return 1;
+                    }
+                    let title = String::from_utf16_lossy(&buf[..len as usize]);
+                    let lower = title.to_lowercase();
+                    if lower.contains("sayan")
+                        || title.contains("\u{0633}\u{0627}\u{06CC}\u{0627}\u{0646}")
+                        || title.contains("\u{0633}\u{0627}\u{064A}\u{0627}\u{0646}")
+                    {
+                        let out_ptr = lparam as *mut isize;
+                        if !out_ptr.is_null() {
+                            *out_ptr = hwnd;
+                        }
+                        return 0;
+                    }
+                }
+                1
+            }
+
+            let mut found_hwnd: isize = 0;
+            unsafe {
+                EnumWindows(enum_sayan_window, (&mut found_hwnd as *mut isize) as isize);
+                if found_hwnd != 0 {
+                    if IsIconic(found_hwnd) != 0 {
+                        ShowWindow(found_hwnd, 9);
+                    }
+                    SetForegroundWindow(found_hwnd);
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+            }
         }
 
         const INPUT_KEYBOARD: u32 = 1;
@@ -639,7 +688,7 @@ fn type_barcode_to_active_window(
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (suffix, char_delay_ms);
+        let _ = (suffix, char_delay_ms, focus_sayan);
         Err("تایپ مستقیم سیستمی فقط روی ویندوز پشتیبانی می‌شود.".to_string())
     }
 }

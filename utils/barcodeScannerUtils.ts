@@ -438,10 +438,18 @@ export const subscribeHardwareBarcodeEvents = (
       return;
     }
 
-    // Do not hijack typing when user is intentionally inside another text input / search box / textarea / select
+    // Do not hijack typing when user is intentionally inside another editable text input / search box / textarea / select
     if (activeEl) {
       const tag = activeEl.tagName.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || activeEl.isContentEditable) {
+      const isReadOnlyOrDisabledInput =
+        tag === 'input' &&
+        ((activeEl as HTMLInputElement).readOnly || (activeEl as HTMLInputElement).disabled);
+      if (
+        (tag === 'input' && !isReadOnlyOrDisabledInput) ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        activeEl.isContentEditable
+      ) {
         return;
       }
     }
@@ -450,7 +458,7 @@ export const subscribeHardwareBarcodeEvents = (
 
     const now = Date.now();
     const gap = now - lastKeyTime;
-    if (gap > 140) {
+    if (gap > 180) {
       buffer = '';
     }
     lastKeyTime = now;
@@ -467,7 +475,7 @@ export const subscribeHardwareBarcodeEvents = (
       e.keyCode === 9;
 
     if (isTerminator) {
-      if (buffer.length >= 4) {
+      if (buffer.length >= 3) {
         e.preventDefault();
         const code = buffer;
         buffer = '';
@@ -480,7 +488,7 @@ export const subscribeHardwareBarcodeEvents = (
 
     if (e.key && e.key.length === 1) {
       buffer += e.key;
-      // If scanner does not append Enter/Tab, auto-flush rapid burst (>= 6 chars) after 130ms idle
+      // If scanner does not append Enter/Tab, auto-flush rapid burst (>= 6 chars) after 150ms idle
       if (buffer.length >= 6) {
         flushTimer = window.setTimeout(() => {
           const code = buffer;
@@ -488,7 +496,7 @@ export const subscribeHardwareBarcodeEvents = (
           if (code.length >= 6) {
             deliver(code, 'keyboard-wedge');
           }
-        }, 130);
+        }, 150);
       }
     }
   };

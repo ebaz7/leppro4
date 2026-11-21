@@ -218,7 +218,12 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
   const [senderStreamConnected, setSenderStreamConnected] = useState<boolean>(false);
   const [isPairing, setIsPairing] = useState<boolean>(false);
   const [barcodeInput, setBarcodeInput] = useState<string>('');
-  const [hardwareGunMode, setHardwareGunMode] = useState<boolean>(false);
+  // Soft-keyboard lock: OFF by default so Android PDA virtual keyboard NEVER pops up unless user explicitly enables manual typing
+  const [manualKeyboardMode, setManualKeyboardMode] = useState<boolean>(false);
+  const manualKeyboardModeRef = useRef<boolean>(false);
+  useEffect(() => {
+    manualKeyboardModeRef.current = manualKeyboardMode;
+  }, [manualKeyboardMode]);
   const [senderScans, setSenderScans] = useState<BridgeScanItem[]>([]);
   const [offlineQueue, setOfflineQueue] = useState<OfflineQueuedBarcode[]>(() => {
     try {
@@ -399,7 +404,8 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
         await invokeTauri('type_barcode_to_active_window', {
           text,
           suffix,
-          charDelayMs: 4
+          charDelayMs: 4,
+          focusSayan: shouldFocusSayan
         });
         return;
       }
@@ -943,7 +949,12 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           type: 'ok',
           text: `متصل به «${res.session?.hostDeviceName || 'کامپیوتر'}» — آماده اسکن مستقیم به سایان`
         });
-        setTimeout(() => scannerInputRef.current?.focus(), 180);
+        // Dismiss any active soft keyboard (e.g. from 6-digit pair code) unless manual typing is explicitly enabled
+        if (manualKeyboardModeRef.current) {
+          setTimeout(() => scannerInputRef.current?.focus(), 180);
+        } else {
+          try { (document.activeElement as HTMLElement | null)?.blur?.(); } catch {}
+        }
       } catch (err: any) {
         playBeep('error');
         setSenderFeedback({
@@ -1011,7 +1022,9 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           });
           return [...prev, { clientScanId, barcode: clean, scannedAt: Date.now() }];
         });
-        setTimeout(() => scannerInputRef.current?.focus(), 40);
+        if (manualKeyboardModeRef.current) {
+          setTimeout(() => scannerInputRef.current?.focus(), 40);
+        }
         return;
       }
 
@@ -1077,7 +1090,9 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           text: `اختلال شبکه؛ بارکد «${clean}» جهت جلوگیری از ازدست‌رفتن در صف آفلاین ذخیره شد.`
         });
       } finally {
-        setTimeout(() => scannerInputRef.current?.focus(), 40);
+        if (manualKeyboardModeRef.current) {
+          setTimeout(() => scannerInputRef.current?.focus(), 40);
+        }
       }
     },
     [currentUser?.fullName, currentUser?.username, isOnline, pairWithPc, pairedCode, playBeep]
@@ -1152,7 +1167,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
       },
       {
         enabled: role === 'sender',
-        ignoreInputElement: () => scannerInputRef.current
+        ignoreInputElement: () => (manualKeyboardModeRef.current ? scannerInputRef.current : null)
       }
     );
   }, [role]);
@@ -1602,7 +1617,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                     />
                   </label>
 
-                  {isElectron && (
+                  {(isElectron || isTauri) && (
                     <label className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-zinc-800/70 cursor-pointer">
                       <span className="font-bold text-[11px] text-slate-700 dark:text-zinc-200">
                         فوکوس خودکار روی پنجره سایان (Sayan)
@@ -1992,15 +2007,28 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setHardwareGunMode((v) => !v);
-                    setTimeout(() => scannerInputRef.current?.focus(), 60);
+                    setManualKeyboardMode((prev) => {
+                      const next = !prev;
+                      if (next) {
+                        setTimeout(() => scannerInputRef.current?.focus(), 50);
+                      } else {
+                        try {
+                          scannerInputRef.current?.blur();
+                          (document.activeElement as HTMLElement | null)?.blur?.();
+                        } catch {}
+                      }
+                      return next;
+                    });
                   }}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 cursor-pointer ${
-                    hardwareGunMode ? 'bg-emerald-500 text-slate-950' : 'bg-white/15 text-white'
+                  className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 cursor-pointer transition-colors ${
+                    manualKeyboardMode
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'bg-white/15 text-white hover:bg-white/25'
                   }`}
+                  title="تا زمانی که این گزینه را فعال نکنید، کیبورد گوشی/بارکدخوان بالا نمی‌آید"
                 >
                   <Keyboard size={11} />
-                  <span>{hardwareGunMode ? 'بارکدخوان لیزری' : 'کیبورد دستی'}</span>
+                  <span>{manualKeyboardMode ? 'تایپ دستی (فعال)' : 'تایپ دستی'}</span>
                 </button>
                 <button
                   type="button"
@@ -2017,10 +2045,18 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
               <input
                 ref={scannerInputRef}
                 type="text"
-                inputMode={hardwareGunMode ? 'none' : 'text'}
+                readOnly={!manualKeyboardMode}
+                inputMode={manualKeyboardMode ? 'text' : 'none'}
+                tabIndex={manualKeyboardMode ? 0 : -1}
                 enterKeyHint="send"
                 value={barcodeInput}
+                onFocus={(e) => {
+                  if (!manualKeyboardModeRef.current) {
+                    e.currentTarget.blur();
+                  }
+                }}
                 onChange={(e) => {
+                  if (!manualKeyboardModeRef.current) return;
                   const rawVal = e.target.value;
                   const prevVal = lastInputValRef.current;
                   if (/[\r\n\t]/.test(rawVal)) {
@@ -2058,21 +2094,32 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                     }
                   }
                 }}
-                placeholder="آماده اسکن با بارکدخوان یا تایپ دستی..."
+                placeholder={
+                  manualKeyboardMode
+                    ? 'کد بارکد را دستی تایپ و ارسال کنید...'
+                    : 'آماده اسکن با بارکدخوان (کیبورد غیرفعال)'
+                }
                 dir="ltr"
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
-                className="flex-1 min-w-0 px-3 py-2.5 rounded-xl bg-white text-slate-900 font-mono font-black text-sm border-2 border-emerald-400 focus:outline-none"
+                className={`flex-1 min-w-0 px-3 py-2.5 rounded-xl font-mono font-black text-sm border-2 focus:outline-none transition-colors ${
+                  manualKeyboardMode
+                    ? 'bg-white text-slate-900 border-amber-400'
+                    : 'bg-slate-800/90 text-emerald-200 placeholder-slate-400 border-emerald-500/60 select-none'
+                }`}
               />
-              <button
-                type="button"
-                onClick={() => submitScannedBarcode(barcodeInput)}
-                className="px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1 shrink-0 cursor-pointer"
-              >
-                <Send size={14} />
-                <span>ارسال</span>
-              </button>
+              {manualKeyboardMode && (
+                <button
+                  type="button"
+                  onClick={() => submitScannedBarcode(barcodeInput)}
+                  disabled={!barcodeInput.trim()}
+                  className="px-3.5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-45"
+                >
+                  <Send size={14} />
+                  <span>ارسال</span>
+                </button>
+              )}
             </div>
 
             {/* Compact Live KPI Row */}

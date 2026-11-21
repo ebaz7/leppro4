@@ -283,8 +283,15 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const [remittanceDate, setRemittanceDate] = useState<string>(getTodayShamsi());
   const [subCode, setSubCode] = useState<string>('');
   const [headerNotes, setHeaderNotes] = useState<string>('');
-  const [operationType, setOperationType] = useState<'23' | '25'>('23');
+  const [operationType, setOperationType] = useState<'23' | '25' | '26'>('23');
   const [archiveOpFilter, setArchiveOpFilter] = useState<string>('all');
+
+  const getOperationTitle = (code: string) => {
+    if (code === '25') return 'حواله بین انبار';
+    if (code === '26') return 'رسید بین انبار';
+    return 'حواله فروش';
+  };
+  const isInterWarehouseOp = operationType === '25' || operationType === '26';
 
   // Live Warehouses Stats & Recent Documents
   const [warehouseStats, setWarehouseStats] = useState<LiveWarehouseStat[]>([]);
@@ -315,8 +322,12 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const [isSoundEnabled, setIsSoundEnabled] = useState<boolean>(true);
   const [isResolvingBarcode, setIsResolvingBarcode] = useState<boolean>(false);
   const [lastScanResult, setLastScanResult] = useState<{ text: string; success: boolean; offline?: boolean; item?: any } | null>(null);
-  // Optional soft-keyboard suppression toggle (default OFF so Android PDA IME/commitText wedges ALWAYS receive input cleanly!)
-  const [isHardwareGunMode, setIsHardwareGunMode] = useState<boolean>(false);
+  // Explicit Manual Keyboard toggle (default OFF so Android PDA soft keyboard NEVER pops up automatically!)
+  const [isManualKeyboard, setIsManualKeyboard] = useState<boolean>(false);
+  const isManualKeyboardRef = useRef<boolean>(false);
+  useEffect(() => {
+    isManualKeyboardRef.current = isManualKeyboard;
+  }, [isManualKeyboard]);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
   const [cartonSearchQuery, setCartonSearchQuery] = useState<string>('');
   const [confirmClearList, setConfirmClearList] = useState<boolean>(false);
@@ -424,7 +435,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       if (rawDraft) {
         const draft = JSON.parse(rawDraft);
         if (draft && typeof draft === 'object') {
-          if (draft.operationType === '23' || draft.operationType === '25') setOperationType(draft.operationType);
+          if (draft.operationType === '23' || draft.operationType === '25' || draft.operationType === '26') setOperationType(draft.operationType);
           if (draft.selectedWarehouse) setSelectedWarehouse(draft.selectedWarehouse);
           if (draft.selectedDestinationWarehouse) setSelectedDestinationWarehouse(draft.selectedDestinationWarehouse);
           if (draft.selectedFiscalYear) setSelectedFiscalYear(draft.selectedFiscalYear);
@@ -627,15 +638,15 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     }
   }, [customerSearch, allCustomersList]);
 
-  // Keep scanner input focused when continuous mode is active
+  // Only auto-focus scanner input when user explicitly enabled manual typing mode
   useEffect(() => {
-    if (activeSubTab === 'issuer' && isContinuousScan) {
+    if (activeSubTab === 'issuer' && isContinuousScan && isManualKeyboard) {
       const focusTimer = setTimeout(() => {
         barcodeInputRef.current?.focus();
       }, 100);
       return () => clearTimeout(focusTimer);
     }
-  }, [activeSubTab, isContinuousScan, items.length]);
+  }, [activeSubTab, isContinuousScan, isManualKeyboard, items.length]);
 
   // Load Archive on tab switch
   useEffect(() => {
@@ -793,7 +804,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       if (!fromCamera) {
         setScannedBarcode('');
         lastInputValueRef.current = '';
-        if (isContinuousScan && !isCameraScannerOpen) {
+        if (isContinuousScan && !isCameraScannerOpen && isManualKeyboardRef.current) {
           setTimeout(() => barcodeInputRef.current?.focus(), 30);
         }
       }
@@ -907,7 +918,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             processBarcodeValue(nextQueued.raw, nextQueued.fromCamera);
           }, 15);
         }
-      } else if (!fromCamera && isContinuousScan && !isCameraScannerOpen) {
+      } else if (!fromCamera && isContinuousScan && !isCameraScannerOpen && isManualKeyboardRef.current) {
         setTimeout(() => barcodeInputRef.current?.focus(), 40);
       }
     }
@@ -1003,7 +1014,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       },
       {
         enabled: activeSubTab === 'issuer' && !isReviewModalOpen && !isCustomerDropdownOpen,
-        ignoreInputElement: () => barcodeInputRef.current
+        ignoreInputElement: () => (isManualKeyboardRef.current ? barcodeInputRef.current : null)
       }
     );
   }, [activeSubTab, isReviewModalOpen, isCustomerDropdownOpen]);
@@ -1364,8 +1375,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   // 6a. Open Neat Pre-Submit Review Sheet (replaces window.confirm)
   const handleRegisterInSayan = () => {
     setErrorMsg(null);
-    if (!selectedCustomer) {
-      setErrorMsg(operationType === '25' ? 'لطفاً ابتدا انبار مقصد را انتخاب نمایید.' : 'لطفاً ابتدا خریدار / طرف‌حساب را انتخاب نمایید.');
+    if (!selectedCustomer && !isInterWarehouseOp) {
+      setErrorMsg('لطفاً ابتدا خریدار / طرف‌حساب را انتخاب نمایید.');
       setIsHeaderCollapsed(false);
       if (isCameraScannerOpen) {
         setIsCameraCustomerPickerOpen(true);
@@ -1386,7 +1397,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   // 6b. Confirmed Final Submit to Sayan ERP (auto-syncs offline items first if needed)
   const handleConfirmRegisterInSayan = async () => {
     setErrorMsg(null);
-    if (!selectedCustomer) {
+    if (!selectedCustomer && !isInterWarehouseOp) {
       setErrorMsg('لطفاً ابتدا خریدار / طرف‌حساب را انتخاب نمایید.');
       return;
     }
@@ -1416,17 +1427,34 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       const finalGross = Number(itemsToSubmit.reduce((s, it) => s + (Number(it.grossWeight) || 0), 0).toFixed(2));
       const finalCartons = itemsToSubmit.reduce((s, it) => s + (Number(it.cartonCount) || 1), 0);
       const finalBobbins = itemsToSubmit.reduce((s, it) => s + (Number(it.bobbinCount) || 56), 0);
-      const opTitle = operationType === '25' ? 'حواله بین انبار' : 'حواله فروش';
+      const opTitle = getOperationTitle(operationType);
+
+      // For inter-warehouse ops (25/26), always send valid Sayan internal person code 2471
+      // (GNR_Person_STR_Voucher FK requires GNR_TBL_001.Field_003) and keep counterpart warehouse in notes.
+      const counterpartWh = warehouses.find(w => w.code === selectedDestinationWarehouse);
+      const counterpartLabel = counterpartWh ? counterpartWh.name : `انبار کد ${selectedDestinationWarehouse}`;
+      const effectiveCustomerCode = isInterWarehouseOp
+        ? '2471'
+        : (selectedCustomer?.personCode || '');
+      const effectiveCustomerName = isInterWarehouseOp
+        ? `دفتر تهران-لپان بافت (${operationType === '26' ? 'مبدا' : 'مقصد'}: ${counterpartLabel})`
+        : (selectedCustomer?.name || '');
+      const counterpartNotePrefix = isInterWarehouseOp && selectedDestinationWarehouse
+        ? (operationType === '26' ? `از انبار: ${counterpartLabel}` : `به انبار: ${counterpartLabel}`)
+        : '';
+      const combinedNotes = [counterpartNotePrefix, headerNotes.trim()]
+        .filter(Boolean)
+        .join(' - ');
 
       const payload = {
         fiscalYear: selectedFiscalYear,
         opCode: operationType,
         warehouseCode: selectedWarehouse,
-        customerCode: selectedCustomer.personCode,
-        customerName: selectedCustomer.name,
+        customerCode: effectiveCustomerCode,
+        customerName: effectiveCustomerName,
         remittanceDate,
         subCode,
-        notes: headerNotes,
+        notes: combinedNotes,
         items: itemsToSubmit,
         currentUser: currentUser ? { fullName: currentUser.fullName, username: currentUser.username } : undefined
       };
@@ -1437,8 +1465,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         const resultData = {
           ...res,
           opCode: operationType,
-          opName: opTitle,
-          customerName: selectedCustomer.name,
+          opName: res.opName || opTitle,
+          customerName: effectiveCustomerName,
           warehouseName: warehouses.find(w => w.code === selectedWarehouse)?.name || `انبار ${selectedWarehouse}`,
           totalNetWeight: finalNet,
           totalGrossWeight: finalGross,
@@ -1457,11 +1485,16 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
         }
         loadArchive();
       } else {
-        throw new Error(res?.message || res?.error || 'خطا در ثبت حواله در پایگاه داده سایان');
+        throw new Error(res?.message || res?.error || 'خطا در ثبت سند در پایگاه داده سایان');
       }
     } catch (err: any) {
       console.error('Registration error:', err);
-      setErrorMsg(err?.message || 'خطای شبکه در ارتباط با سرور سایان');
+      const rawMsg = String(err?.message || '');
+      if (/failed to fetch|networkerror|load failed|abort/i.test(rawMsg)) {
+        setErrorMsg('ارتباط با سرور هنگام ثبت در سایان قطع شد (Failed to fetch). لیست کارتن‌های شما کاملاً امن ذخیره شده است؛ اینترنت و وضعیت سرور را بررسی کرده و دوباره تلاش کنید.');
+      } else {
+        setErrorMsg(rawMsg || 'خطای شبکه در ارتباط با سرور سایان');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -1481,18 +1514,19 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     setConfirmClearList(false);
     setCartonSearchQuery('');
     try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch {}
-    if (isContinuousScan) {
+    if (isContinuousScan && isManualKeyboardRef.current) {
       setTimeout(() => barcodeInputRef.current?.focus(), 100);
     }
   };
 
   const handleShareToChat = (record: any) => {
-    const title = record.opCode === '25' ? 'حواله بین انبار' : 'حواله فروش';
+    const title = record.opName || getOperationTitle(String(record.opCode || '23'));
     openSendToChat({
       title: `ارسال ${title} به گفتگو`,
-      defaultMessage: `📄 ${title} رسمی سایان ERP شماره #${record.docNo || record.DocNo} (فرعی ${record.subNo || '-'})
+      defaultMessage: `📄 ${title} رسمی سایان ERP
+🔢 شماره سند: #${record.subNo || '-'} | کد بایگانی: #${record.docNo || record.DocNo}
 👤 تحویل‌گیرنده / خریدار: ${record.customerName || record.personFullName || 'شخص'}
-🏢 انبار مبدا: ${record.warehouseName || record.storeId || 'انبار'}
+🏢 انبار: ${record.warehouseName || record.storeId || 'انبار'}
 📅 تاریخ: ${record.shamsiDate || record.remittanceDate}
 📦 تعداد کارتن: ${record.totalCartons || record.itemsCount} کارتن
 ⚖️ وزن خالص: ${Number(record.totalNetWeight || 0).toLocaleString('fa-IR')} کیلوگرم
@@ -1768,9 +1802,11 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black shrink-0 ${
                       operationType === '25'
                         ? 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300'
+                        : operationType === '26'
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                         : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
                     }`}>
-                      {operationType === '25' ? 'بین انبار ۲۵' : 'حواله فروش'}
+                      {operationType === '25' ? 'حواله بین انبار ۲۵' : operationType === '26' ? 'رسید بین انبار ۲۶' : 'حواله فروش ۲۳'}
                     </span>
                     <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400 truncate">
                       {warehouses.find(w => w.code === selectedWarehouse)?.name || `انبار ${selectedWarehouse}`}
@@ -1780,7 +1816,11 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                   <div className="flex items-center gap-1 text-xs font-black text-slate-900 dark:text-white truncate">
                     <User size={12} className="text-blue-600 shrink-0" />
                     <span className="truncate">
-                      {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.personCode})` : 'مشتری انتخاب نشده!'}
+                      {isInterWarehouseOp
+                        ? `${operationType === '26' ? 'انبار مبدا' : 'انبار مقصد'}: ${warehouses.find(w => w.code === selectedDestinationWarehouse)?.name || `کد ${selectedDestinationWarehouse}`}`
+                        : selectedCustomer
+                        ? `${selectedCustomer.name} (${selectedCustomer.personCode})`
+                        : 'مشتری انتخاب نشده!'}
                     </span>
                   </div>
                 </div>
@@ -1796,43 +1836,62 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             ) : (
               /* Header Controls Card: Warehouse, Fiscal Year, Customer, Date */
               <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs space-y-3">
-                {/* Top Row: Operation Type Switcher & Collapse Toggle */}
+                {/* Top Row: Operation Type Switcher (23 / 25 / 26) & Collapse Toggle */}
                 <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-zinc-800">
-                  <div className="grid grid-cols-2 gap-1 p-0.5 bg-slate-100 dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 flex-1 sm:flex-none">
+                  <div className="grid grid-cols-3 gap-1 p-0.5 bg-slate-100 dark:bg-zinc-800 rounded-xl border border-slate-200 dark:border-zinc-700 flex-1 sm:flex-none">
                     <button
                       type="button"
                       onClick={() => setOperationType('23')}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
+                      className={`px-2 py-1.5 rounded-lg text-[10px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
                         operationType === '23'
                           ? 'bg-blue-600 text-white shadow-xs'
                           : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
                       }`}
                     >
-                      <Package size={13} />
-                      <span>حواله فروش</span>
+                      <Package size={12} className="shrink-0" />
+                      <span className="truncate">حواله فروش (۲۳)</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => {
                         setOperationType('25');
-                        if (!selectedCustomer) {
-                          setSelectedCustomer({
-                            personCode: '2471',
-                            name: 'دفتر تهران-لپان بافت',
-                            tafsiliCode: '112471',
-                            levelCode: '11'
-                          });
-                        }
+                        setSelectedCustomer({
+                          personCode: '2471',
+                          name: 'دفتر تهران-لپان بافت',
+                          tafsiliCode: '112471',
+                          levelCode: '11'
+                        });
                       }}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
+                      className={`px-2 py-1.5 rounded-lg text-[10px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
                         operationType === '25'
                           ? 'bg-purple-600 text-white shadow-xs'
                           : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
                       }`}
                     >
-                      <ArrowRight size={13} />
-                      <span>بین انبار (۲۵)</span>
+                      <ArrowRight size={12} className="shrink-0" />
+                      <span className="truncate">بین انبار (۲۵)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOperationType('26');
+                        setSelectedCustomer({
+                          personCode: '2471',
+                          name: 'دفتر تهران-لپان بافت',
+                          tafsiliCode: '112471',
+                          levelCode: '11'
+                        });
+                      }}
+                      className={`px-2 py-1.5 rounded-lg text-[10px] sm:text-xs font-black flex items-center justify-center gap-1 transition-all ${
+                        operationType === '26'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                      }`}
+                    >
+                      <Truck size={12} className="shrink-0" />
+                      <span className="truncate">رسید بین انبار (۲۶)</span>
                     </button>
                   </div>
 
@@ -1840,7 +1899,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     type="button"
                     onClick={() => {
                       setIsHeaderCollapsed(true);
-                      setTimeout(() => barcodeInputRef.current?.focus(), 60);
+                      if (isManualKeyboardRef.current) {
+                        setTimeout(() => barcodeInputRef.current?.focus(), 60);
+                      }
                     }}
                     className="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 text-[11px] font-bold flex items-center gap-1 shrink-0 hover:bg-slate-200"
                     title="بستن سربرگ برای فضای بیشتر اسکن"
@@ -1852,10 +1913,14 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
                 {/* Primary Fields Grid (Compact 2-col on mobile where sensible, 4-col on desktop) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                  {/* 1. Origin Warehouse + Fiscal Year paired nicely */}
+                  {/* 1. Active Warehouse */}
                   <div>
                     <label className="block text-[11px] font-bold text-slate-600 dark:text-zinc-400 mb-1">
-                      {operationType === '25' ? 'انبار مبدا (فرستنده) *' : 'انبار مبدا *'}
+                      {operationType === '26'
+                        ? 'انبار تحویل‌گیرنده (ثبت رسید) *'
+                        : operationType === '25'
+                        ? 'انبار مبدا (خروج حواله) *'
+                        : 'انبار مبدا *'}
                     </label>
                     <div className="relative">
                       <select
@@ -1873,11 +1938,15 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     </div>
                   </div>
 
-                  {/* 2. Customer / Destination Store Selection */}
+                  {/* 2. Customer / Counterpart Warehouse Selection */}
                   <div className="relative sm:col-span-1 lg:col-span-1" ref={customerDropdownRef}>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-[11px] font-bold text-slate-600 dark:text-zinc-400">
-                        {operationType === '25' ? 'انبار مقصد *' : 'مشتری / خریدار *'}
+                        {operationType === '26'
+                          ? 'انبار فرستنده (مبدا) *'
+                          : operationType === '25'
+                          ? 'انبار مقصد *'
+                          : 'مشتری / خریدار *'}
                       </label>
                       {operationType === '23' && allCustomersList.length > 0 && (
                         <span className="text-[9px] text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded">
@@ -1886,22 +1955,26 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                       )}
                     </div>
 
-                    {operationType === '25' ? (
+                    {isInterWarehouseOp ? (
                       <div className="relative">
                         <select
                           value={selectedDestinationWarehouse}
                           onChange={(e) => {
                             const code = e.target.value;
                             setSelectedDestinationWarehouse(code);
-                            const targetWh = warehouses.find(w => w.code === code);
+                            // Keep Sayan personCode strictly valid ('2471' in GNR_TBL_001) to satisfy GNR_Person_STR_Voucher FK
                             setSelectedCustomer({
-                              personCode: code === '15' ? '2471' : code,
-                              name: targetWh ? targetWh.name : `انبار کد ${code}`,
-                              tafsiliCode: code,
+                              personCode: '2471',
+                              name: 'دفتر تهران-لپان بافت',
+                              tafsiliCode: '112471',
                               levelCode: '11'
                             });
                           }}
-                          className="w-full h-9 sm:h-10 px-2.5 pr-8 rounded-xl border border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/30 text-xs font-bold text-slate-900 dark:text-white outline-none focus:border-purple-500 cursor-pointer"
+                          className={`w-full h-9 sm:h-10 px-2.5 pr-8 rounded-xl border text-xs font-bold text-slate-900 dark:text-white outline-none cursor-pointer ${
+                            operationType === '26'
+                              ? 'border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/30 focus:border-emerald-500'
+                              : 'border-purple-200 dark:border-purple-800/60 bg-purple-50/50 dark:bg-purple-950/30 focus:border-purple-500'
+                          }`}
                         >
                           {warehouses
                             .filter(w => w.code !== selectedWarehouse)
@@ -1911,7 +1984,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                               </option>
                             ))}
                         </select>
-                        <Building2 className="w-3.5 h-3.5 text-purple-600 absolute right-2.5 top-2.5 sm:top-3 pointer-events-none" />
+                        <Building2 className={`w-3.5 h-3.5 absolute right-2.5 top-2.5 sm:top-3 pointer-events-none ${operationType === '26' ? 'text-emerald-600' : 'text-purple-600'}`} />
                       </div>
                     ) : (
                       <div className="relative">
@@ -2079,24 +2152,33 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                   </div>
                 </div>
 
-                {/* Mode Toggles: Hardware Gun vs Keyboard, Sound, Camera */}
+                {/* Mode Toggles: Manual Keyboard (default OFF), Sound, Camera */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button
                     type="button"
                     onClick={() => {
-                      const next = !isHardwareGunMode;
-                      setIsHardwareGunMode(next);
-                      setTimeout(() => barcodeInputRef.current?.focus(), 40);
+                      setIsManualKeyboard((prev) => {
+                        const next = !prev;
+                        if (next) {
+                          setTimeout(() => barcodeInputRef.current?.focus(), 50);
+                        } else {
+                          try {
+                            barcodeInputRef.current?.blur();
+                            (document.activeElement as HTMLElement | null)?.blur?.();
+                          } catch {}
+                        }
+                        return next;
+                      });
                     }}
                     className={`px-2 py-1.5 rounded-lg border text-[10px] sm:text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer ${
-                      isHardwareGunMode
-                        ? 'bg-cyan-500/25 border-cyan-400/50 text-cyan-200'
-                        : 'bg-white/10 border-white/20 text-slate-200'
+                      isManualKeyboard
+                        ? 'bg-amber-400 border-amber-300 text-slate-950 font-black'
+                        : 'bg-white/10 border-white/20 text-slate-200 hover:bg-white/15'
                     }`}
-                    title="در حالت بارکدخوان، کیبورد لمسی بالا نمی‌آید تا با دکمه فیزیکی SCAN سریع اسکن کنید"
+                    title="تا زمانی که تایپ دستی را فعال نکنید، کیبورد گوشی/بارکدخوان بالا نمی‌آید و اسکن با دکمه فیزیکی SCAN مستقیم ثبت می‌شود"
                   >
-                    {isHardwareGunMode ? <Barcode size={13} /> : <Keyboard size={13} />}
-                    <span>{isHardwareGunMode ? 'حالت بارکدخوان' : 'تایپ دستی'}</span>
+                    <Keyboard size={13} />
+                    <span>{isManualKeyboard ? 'تایپ دستی (فعال)' : 'تایپ دستی'}</span>
                   </button>
 
                   <button
@@ -2132,34 +2214,54 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 </div>
               </div>
 
-              {/* Scanner Input Bar (NEVER disabled during async lookup so rapid PDA scanning never drops a carton!) */}
+              {/* Scanner Input Bar (Locked readOnly unless Manual Keyboard is enabled so Android soft keyboard NEVER pops up!) */}
               <form onSubmit={handleBarcodeSubmit} className="flex items-center gap-1.5 sm:gap-2">
                 <div className="relative flex-1 min-w-0">
                   <input
                     ref={barcodeInputRef}
                     type="text"
-                    inputMode={isHardwareGunMode ? 'none' : 'text'}
+                    readOnly={!isManualKeyboard}
+                    inputMode={isManualKeyboard ? 'text' : 'none'}
+                    tabIndex={isManualKeyboard ? 0 : -1}
                     enterKeyHint="send"
                     autoComplete="off"
                     autoCorrect="off"
                     spellCheck={false}
                     value={scannedBarcode}
-                    onChange={handleBarcodeInputChange}
+                    onFocus={(e) => {
+                      if (!isManualKeyboardRef.current) {
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    onChange={(e) => {
+                      if (!isManualKeyboardRef.current) return;
+                      handleBarcodeInputChange(e);
+                    }}
                     onKeyDown={handleBarcodeInputKeyDown}
                     onPaste={handleBarcodeInputPaste}
-                    placeholder="آماده اسکن با بارکدخوان یا تایپ دستی (PO-F-...)"
-                    className="w-full h-11 sm:h-12 pr-9 pl-3 rounded-xl bg-white/10 border-2 border-blue-400/50 focus:border-cyan-300 text-white placeholder-blue-200/60 font-mono text-sm sm:text-base font-bold outline-none transition-all dir-ltr text-left"
+                    placeholder={
+                      isManualKeyboard
+                        ? 'کد بارکد کارتن را دستی تایپ کنید (PO-F-...)'
+                        : 'آماده اسکن با بارکدخوان لیزری (کیبورد غیرفعال)'
+                    }
+                    className={`w-full h-11 sm:h-12 pr-9 pl-3 rounded-xl border-2 font-mono text-sm sm:text-base font-bold outline-none transition-all dir-ltr text-left ${
+                      isManualKeyboard
+                        ? 'bg-white/15 border-amber-400 focus:border-amber-300 text-white placeholder-amber-100/70'
+                        : 'bg-white/5 border-blue-400/40 text-cyan-200 placeholder-blue-200/70 select-none'
+                    }`}
                   />
                   <Barcode className="w-4 h-4 text-cyan-300 absolute right-3 top-3.5 pointer-events-none" />
                 </div>
-                <button
-                  type="submit"
-                  disabled={!scannedBarcode.trim()}
-                  className="px-3.5 sm:px-5 h-11 sm:h-12 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-md active:scale-95 disabled:opacity-45 shrink-0 cursor-pointer"
-                >
-                  {isResolvingBarcode ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}
-                  <span>ثبت</span>
-                </button>
+                {isManualKeyboard && (
+                  <button
+                    type="submit"
+                    disabled={!scannedBarcode.trim()}
+                    className="px-3.5 sm:px-5 h-11 sm:h-12 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-md active:scale-95 disabled:opacity-45 shrink-0 cursor-pointer"
+                  >
+                    {isResolvingBarcode ? <Loader2 size={16} className="animate-spin" /> : <Plus size={17} />}
+                    <span>ثبت</span>
+                  </button>
+                )}
               </form>
 
               {/* Compact Live KPI Strip right inside Scanner Deck */}
@@ -2733,7 +2835,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                           e.stopPropagation();
                           setSelectedWarehouse(wh.code);
                           setActiveSubTab('issuer');
-                          setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                          if (isManualKeyboardRef.current) {
+                            setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                          }
                         }}
                         className="w-full py-1.5 px-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 shadow-xs transition-transform active:scale-95"
                       >
@@ -2784,10 +2888,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 >
                   <option value="all">همه عملیات‌ها</option>
                   <option value="23">حواله فروش (۲۳)</option>
-                  <option value="12">حواله خروج (۱۲)</option>
-                  <option value="65">رسید انبار (۶۵)</option>
-                  <option value="67">انتقال (۶۷)</option>
-                  <option value="13">برگشت (۱۳)</option>
+                  <option value="25">حواله بین انبار (۲۵)</option>
+                  <option value="26">رسید بین انبار (۲۶)</option>
+                  <option value="46">رسید تولید (۴۶)</option>
+                  <option value="24">مرجوعی فروش (۲۴)</option>
                 </select>
 
                 <button
@@ -2858,7 +2962,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                             onClick={() => {
                               setSelectedWarehouse(doc.warehouseCode || selectedStatWarehouse);
                               setActiveSubTab('issuer');
-                              setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                              if (isManualKeyboardRef.current) {
+                                setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                              }
                             }}
                             className="px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold inline-flex items-center gap-1 shrink-0 active:scale-95"
                           >
@@ -2936,7 +3042,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                                 onClick={() => {
                                   setSelectedWarehouse(doc.warehouseCode || selectedStatWarehouse);
                                   setActiveSubTab('issuer');
-                                  setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                                  if (isManualKeyboardRef.current) {
+                                    setTimeout(() => barcodeInputRef.current?.focus(), 150);
+                                  }
                                 }}
                                 className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 hover:bg-blue-100 text-[11px] font-bold inline-flex items-center gap-1"
                                 title="صدور حواله فروش جدید"
@@ -3327,7 +3435,6 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             <div className="relative">
               <input
                 type="text"
-                autoFocus
                 value={customerSearch}
                 onChange={(e) => setCustomerSearch(e.target.value)}
                 placeholder="نام مشتری یا کد تفصیلی را تایپ کنید..."
@@ -3392,7 +3499,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 </div>
                 <div className="min-w-0">
                   <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate">
-                    پیش‌نمایش و تایید نهایی {operationType === '25' ? 'حواله بین انبار' : 'حواله فروش'}
+                    پیش‌نمایش و تایید نهایی {getOperationTitle(operationType)}
                   </h3>
                   <p className="text-[10px] text-slate-500 dark:text-zinc-400 truncate">
                     قبل از ثبت قطعی در سایان، لیست کالا، تعداد کارتن و وزن کل را بررسی کنید
@@ -3414,13 +3521,19 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
               {/* Header Metadata Summary */}
               <div className="grid grid-cols-2 gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/70 border border-slate-200/80 dark:border-zinc-700/60 text-xs">
                 <div>
-                  <span className="text-[10px] text-slate-400 block">خریدار / مقصد:</span>
+                  <span className="text-[10px] text-slate-400 block">
+                    {operationType === '26' ? 'انبار مبدا (فرستنده):' : operationType === '25' ? 'انبار مقصد:' : 'خریدار / طرف‌حساب:'}
+                  </span>
                   <span className="font-black text-slate-900 dark:text-white truncate block">
-                    {selectedCustomer?.name || '-'} ({selectedCustomer?.personCode || '-'})
+                    {isInterWarehouseOp
+                      ? `${warehouses.find(w => w.code === selectedDestinationWarehouse)?.name || `انبار ${selectedDestinationWarehouse}`} (کد طرف‌حساب ۲۴۷۱)`
+                      : `${selectedCustomer?.name || '-'} (${selectedCustomer?.personCode || '-'})`}
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 block">انبار مبدا:</span>
+                  <span className="text-[10px] text-slate-400 block">
+                    {operationType === '26' ? 'انبار تحویل‌گیرنده:' : 'انبار مبدا:'}
+                  </span>
                   <span className="font-black text-slate-900 dark:text-white truncate block">
                     {warehouses.find(w => w.code === selectedWarehouse)?.name || `کد ${selectedWarehouse}`}
                   </span>
@@ -3434,7 +3547,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 <div>
                   <span className="text-[10px] text-slate-400 block">نوع عملیات:</span>
                   <span className="font-black text-blue-600 dark:text-blue-400">
-                    {operationType === '25' ? 'حواله بین انبار (۲۵)' : 'حواله فروش (سایان)'}
+                    {getOperationTitle(operationType)} ({operationType})
                   </span>
                 </div>
               </div>
@@ -3613,15 +3726,15 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
             <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-800 border border-slate-100 dark:border-zinc-700/60 space-y-2 text-right">
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-500">شماره حواله سایان:</span>
+                <span className="text-slate-500">شماره سند سایان:</span>
                 <span className="font-mono font-black text-base text-blue-600 dark:text-blue-400">
-                  #{successResult.docNo}
+                  #{successResult.subNo || successResult.docNo}
                 </span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-500">شماره فرعی سند:</span>
+                <span className="text-slate-500">کد بایگانی سایان:</span>
                 <span className="font-mono font-bold text-slate-900 dark:text-white">
-                  {successResult.subNo}
+                  {successResult.docNo}
                 </span>
               </div>
               <div className="flex justify-between items-center text-xs">
