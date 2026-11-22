@@ -315,7 +315,20 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastFetchedRange, setLastFetchedRange] = useState<string>('');
   const [expandedInvoiceKeys, setExpandedInvoiceKeys] = useState<Set<string>>(new Set());
+  // Lookup caches fetched cleanly in parallel so the main invoice query stays lean and never times out
   const [dynamicOpTitles, setDynamicOpTitles] = useState<Record<string, string>>({});
+  const [warehouseNamesMap, setWarehouseNamesMap] = useState<Record<string, string>>({});
+  const [itemMetaMap, setItemMetaMap] = useState<Record<string, { name: string; group: string }>>({});
+
+  // Strict numeric parser so Sayan string tracking keys (e.g. '2-1-241-19449') or BIT flags (false/true) never become bogus numbers
+  const toStrictNumber = (val: any): number => {
+    if (typeof val === 'number') return isFinite(val) ? val : 0;
+    if (typeof val === 'boolean' || val === null || val === undefined) return 0;
+    const s = String(val).replace(/,/g, '').trim();
+    if (!s || !/^-?\d+(\.\d+)?$/.test(s)) return 0;
+    const n = parseFloat(s);
+    return isFinite(n) ? n : 0;
+  };
 
   // Close person dropdown on outside click
   useEffect(() => {
@@ -394,7 +407,7 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
 
       const dateFilter =
         gregFrom && gregTo
-          ? `AND t10.Field_008 >= '${gregFrom}T00:00:00.000Z' AND t10.Field_008 <= '${gregTo}T23:59:59.000Z'`
+          ? `AND t10.Field_008 >= '${gregFrom}T00:00:00' AND t10.Field_008 <= '${gregTo}T23:59:59'`
           : '';
 
       // Match person code cleanly (exact PersonCode or prefixed variants)
@@ -434,12 +447,14 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
         if (includeReturns) activeCodes.push(...purchaseReturnCodes);
       }
 
-      // Also include any unknown commercial (SubSystem=3) invoice opcode that is NOT a purchase request ('53')
+      // Include any unknown commercial (SubSystem=3) invoice opcode that is NOT a purchase request ('53')
+      // IMPORTANT: Never compare BIT/NVARCHAR columns (t11.Field_009/010/011) with > 0 in SQL!
       const commercialCatchAll =
         directionFilter === 'purchase' || directionFilter === 'all'
-          ? `OR (t10.Field_018 = 3 AND RTRIM(LTRIM(t10.Field_009)) NOT IN ('53'${includeProforma ? '' : ", '57'"}, '3', '12', '13', '23', '24') AND (ISNULL(t11.Field_007, 0) > 0 OR ISNULL(t11.Field_009, 0) > 0 OR ISNULL(t10.Field_037, 0) > 0))`
+          ? `OR (t10.Field_018 = 3 AND RTRIM(LTRIM(t10.Field_009)) NOT IN ('53'${includeProforma ? '' : ", '57'"}, '3', '12', '13', '23', '24') AND (ISNULL(t11.Field_007, 0) > 0 OR ISNULL(t10.Field_037, 0) > 0 OR ISNULL(t10.Field_026, 0) > 0))`
           : '';
 
+      // Lean, 100% schema-verified SQL query (zero nonexistent Field_002, zero BIT/NVARCHAR numeric casts, zero heavy nested GROUP BY joins)
       const sql = `
         SELECT TOP 8000
           t10.Field_001 as DocId,
@@ -448,78 +463,48 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           t10.Field_006 as InvoiceNum,
           t10.Field_007 as SubCode,
           t10.Field_008 as DocDate,
-          RTRIM(LTRIM(CAST(t10.Field_009 AS NVARCHAR(20)))) as OpCode,
+          RTRIM(LTRIM(t10.Field_009)) as OpCode,
           RTRIM(LTRIM(ISNULL(t10.Field_010, ''))) as PersonCode,
-          RTRIM(LTRIM(ISNULL(CAST(t10.Field_011 AS NVARCHAR(20)), ''))) as WarehouseCode,
-          RTRIM(LTRIM(ISNULL(CAST(t10.Field_018 AS NVARCHAR(20)), ''))) as SubSystem,
+          RTRIM(LTRIM(ISNULL(t10.Field_011, ''))) as WarehouseCode,
+          t10.Field_018 as SubSystem,
           ISNULL(t10.Field_029, '') as HeaderNotes,
           ISNULL(t10.Field_017, '') as HeaderNote2,
+          ISNULL(t10.Field_026, 0) as HeaderGross,
           ISNULL(t10.Field_037, 0) as HeaderPayable,
           t11.Field_001 as LineId,
-          ISNULL(t11.Field_034, t11.Field_002) as RowNo,
+          t11.Field_034 as RowNo,
           RTRIM(LTRIM(ISNULL(t11.Field_005, ''))) as ItemCode,
           COALESCE(
             NULLIF(RTRIM(LTRIM(t22.Field_004)), ''),
-            NULLIF(RTRIM(LTRIM(t_name.ItemName)), ''),
             NULLIF(RTRIM(LTRIM(g03.Field_008)), ''),
             NULLIF(RTRIM(LTRIM(s04.Field_003)), ''),
-            RTRIM(LTRIM(t11.Field_005)),
-            N'کالای بدون نام'
-          ) as ItemName,
-          COALESCE(NULLIF(RTRIM(LTRIM(t_group.GroupName)), ''), '') as GroupName,
+            ''
+          ) as DirectItemName,
           ISNULL(t11.Field_006, 0) as Quantity,
           ISNULL(t11.Field_007, 0) as Amount,
-          ISNULL(t11.Field_008, 0) as Discount,
-          ISNULL(t11.Field_009, 0) as NetOrFee,
-          ISNULL(t11.Field_010, 0) as VatOrTotal,
-          ISNULL(t11.Field_011, 0) as Tax,
+          t11.Field_008 as RawDiscount,
+          t11.Field_009 as RawNetOrFee,
+          t11.Field_010 as RawVatOrTotal,
+          t11.Field_011 as RawTax,
           ISNULL(t11.Field_031, '') as ItemNotes,
           ISNULL(t11.Field_017, '') as ItemNotes2,
-          COALESCE(NULLIF(RTRIM(LTRIM(p_name.PersonName)), ''), NULLIF(RTRIM(LTRIM(g01.Field_004)), ''), RTRIM(LTRIM(t10.Field_010)), N'نامشخص') as PersonName,
-          COALESCE(NULLIF(RTRIM(LTRIM(w01.Field_004)), ''), '') as WarehouseName
+          NULLIF(RTRIM(LTRIM(g01.Field_004)), '') as GnrPersonName
         FROM STR_TBL_010 t10 WITH (NOLOCK)
         INNER JOIN STR_TBL_011 t11 WITH (NOLOCK)
           ON t11.Field_004 = t10.Field_005
          AND t11.Field_003 = t10.Field_004
          AND t11.Field_012 = t10.Field_018
          AND (
-              t11.Field_036 = t10.Field_009
-              OR t11.Field_036 IS NULL
-              OR RTRIM(LTRIM(CAST(t11.Field_036 AS NVARCHAR(20)))) = ''
-              OR (t10.Field_009 = '13' AND t11.Field_036 IN ('3', '12', '23', '13'))
-              OR t10.Field_018 = 3
+              (t10.Field_009 IN ('3', '12', '23') AND (t11.Field_036 = t10.Field_009 OR t11.Field_036 IS NULL OR RTRIM(LTRIM(t11.Field_036)) = ''))
+              OR (t10.Field_009 = '13' AND (t11.Field_036 IN ('3', '12', '23', '13') OR t11.Field_036 IS NULL OR RTRIM(LTRIM(t11.Field_036)) = ''))
+              OR t10.Field_009 NOT IN ('3', '12', '23', '13')
          )
         LEFT JOIN IND_TBL_022 t22 WITH (NOLOCK) ON RTRIM(LTRIM(t22.Field_005)) = RTRIM(LTRIM(t11.Field_005))
         LEFT JOIN GNR_TBL_003 g03 WITH (NOLOCK) ON RTRIM(LTRIM(g03.Field_003)) = RTRIM(LTRIM(t11.Field_005))
         LEFT JOIN STR_TBL_004 s04 WITH (NOLOCK) ON RTRIM(LTRIM(s04.Field_004)) = RTRIM(LTRIM(t11.Field_005))
-        LEFT JOIN (
-          SELECT RTRIM(LTRIM(t21_sub.Field_004)) as ItemCode, MIN(t02_sub.Field_003) as ItemName
-          FROM IND_TBL_021 t21_sub WITH (NOLOCK)
-          LEFT JOIN IND_TBL_002 t02_sub WITH (NOLOCK) ON RTRIM(LTRIM(t21_sub.Field_003)) = RTRIM(LTRIM(t02_sub.Field_008))
-          GROUP BY RTRIM(LTRIM(t21_sub.Field_004))
-        ) t_name ON RTRIM(LTRIM(t11.Field_005)) = t_name.ItemCode
-        LEFT JOIN (
-          SELECT RTRIM(LTRIM(t21_sub.Field_004)) as ItemCode,
-                 MIN(COALESCE(t02_gp.Field_003, t02_p.Field_003, t02_sub.Field_003)) as GroupName
-          FROM IND_TBL_021 t21_sub WITH (NOLOCK)
-          LEFT JOIN IND_TBL_002 t02_sub WITH (NOLOCK) ON RTRIM(LTRIM(t21_sub.Field_003)) = RTRIM(LTRIM(t02_sub.Field_008))
-          LEFT JOIN IND_TBL_002 t02_p WITH (NOLOCK) ON RTRIM(LTRIM(t02_sub.Field_009)) = RTRIM(LTRIM(t02_p.Field_008))
-          LEFT JOIN IND_TBL_002 t02_gp WITH (NOLOCK) ON RTRIM(LTRIM(t02_p.Field_009)) = RTRIM(LTRIM(t02_gp.Field_008))
-          GROUP BY RTRIM(LTRIM(t21_sub.Field_004))
-        ) t_group ON RTRIM(LTRIM(t11.Field_005)) = t_group.ItemCode
-        LEFT JOIN (
-          SELECT RTRIM(LTRIM(Field_005)) as PCode,
-                 MIN(CASE WHEN Field_004 = '11' THEN Field_006 ELSE NULL END) as PrimaryName,
-                 MIN(Field_006) as AnyName,
-                 COALESCE(MIN(CASE WHEN Field_004 = '11' THEN Field_006 ELSE NULL END), MIN(Field_006)) as PersonName
-          FROM ACT_TBL_007 WITH (NOLOCK)
-          WHERE Field_005 IS NOT NULL AND RTRIM(LTRIM(Field_005)) <> ''
-          GROUP BY RTRIM(LTRIM(Field_005))
-        ) p_name ON RTRIM(LTRIM(t10.Field_010)) = p_name.PCode
         LEFT JOIN GNR_TBL_001 g01 WITH (NOLOCK) ON RTRIM(LTRIM(g01.Field_003)) = RTRIM(LTRIM(t10.Field_010))
-        LEFT JOIN STR_TBL_001 w01 WITH (NOLOCK) ON RTRIM(LTRIM(CAST(w01.Field_003 AS NVARCHAR(20)))) = RTRIM(LTRIM(CAST(t10.Field_011 AS NVARCHAR(20))))
         WHERE (
-          RTRIM(LTRIM(CAST(t10.Field_009 AS NVARCHAR(20)))) IN (${activeCodes.join(', ')})
+          RTRIM(LTRIM(t10.Field_009)) IN (${activeCodes.join(', ')})
           ${commercialCatchAll}
         )
         ${dateFilter}
@@ -527,13 +512,31 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
         ORDER BY t10.Field_008 DESC, t10.Field_005 DESC, t11.Field_001 ASC
       `;
 
-      // Try fetching dynamic operation titles from STR_TBL_002 in parallel (safe catch if unavailable)
-      const [rows, opRows] = await Promise.all([
+      // Run main query + lightweight lookup queries in parallel (each lookup cached once & fault-tolerant)
+      const [rows, opRows, whRows, itemGroupRows] = await Promise.all([
         runSayanQuery(sql),
         Object.keys(dynamicOpTitles).length === 0
           ? runSayanQuery(
-              `SELECT RTRIM(LTRIM(CAST(Field_003 AS NVARCHAR(20)))) as OpCode, RTRIM(LTRIM(Field_004)) as OpTitle FROM STR_TBL_002 WITH (NOLOCK)`
+              `SELECT RTRIM(LTRIM(Field_003)) as OpCode, RTRIM(LTRIM(Field_004)) as OpTitle FROM STR_TBL_002 WITH (NOLOCK)`
             ).catch(() => [])
+          : Promise.resolve([]),
+        Object.keys(warehouseNamesMap).length === 0
+          ? runSayanQuery(
+              `SELECT RTRIM(LTRIM(Field_003)) as WCode, RTRIM(LTRIM(Field_004)) as WName FROM STR_TBL_001 WITH (NOLOCK)`
+            ).catch(() => [])
+          : Promise.resolve([]),
+        Object.keys(itemMetaMap).length === 0
+          ? runSayanQuery(`
+              SELECT
+                RTRIM(LTRIM(t21.Field_004)) as ItemCode,
+                MIN(t02.Field_003) as ItemName,
+                MIN(COALESCE(t02_gp.Field_003, t02_p.Field_003, t02.Field_003)) as GroupName
+              FROM IND_TBL_021 t21 WITH (NOLOCK)
+              LEFT JOIN IND_TBL_002 t02 WITH (NOLOCK) ON RTRIM(LTRIM(t21.Field_003)) = RTRIM(LTRIM(t02.Field_008))
+              LEFT JOIN IND_TBL_002 t02_p WITH (NOLOCK) ON RTRIM(LTRIM(t02.Field_009)) = RTRIM(LTRIM(t02_p.Field_008))
+              LEFT JOIN IND_TBL_002 t02_gp WITH (NOLOCK) ON RTRIM(LTRIM(t02_p.Field_009)) = RTRIM(LTRIM(t02_gp.Field_008))
+              GROUP BY RTRIM(LTRIM(t21.Field_004))
+            `).catch(() => [])
           : Promise.resolve([])
       ]);
 
@@ -549,6 +552,42 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
         mergedOpTitles = nextMap;
       }
 
+      let mergedWhNames = warehouseNamesMap;
+      if (Array.isArray(whRows) && whRows.length > 0) {
+        const nextWh: Record<string, string> = { ...warehouseNamesMap };
+        whRows.forEach((w: any) => {
+          const code = String(w.WCode || '').trim();
+          const name = String(w.WName || '').trim();
+          if (code && name) nextWh[code] = name;
+        });
+        setWarehouseNamesMap(nextWh);
+        mergedWhNames = nextWh;
+      }
+
+      let mergedItemMeta = itemMetaMap;
+      if (Array.isArray(itemGroupRows) && itemGroupRows.length > 0) {
+        const nextItems: Record<string, { name: string; group: string }> = { ...itemMetaMap };
+        itemGroupRows.forEach((it: any) => {
+          const code = String(it.ItemCode || '').trim();
+          if (!code) return;
+          nextItems[code] = {
+            name: String(it.ItemName || '').trim(),
+            group: String(it.GroupName || '').trim()
+          };
+        });
+        setItemMetaMap(nextItems);
+        mergedItemMeta = nextItems;
+      }
+
+      // Fast O(1) person name lookup from preloaded ACT_TBL_007 / initialTafsilis
+      const personNameByCode = new Map<string, string>();
+      (persons.length > 0 ? persons : buildPersonsFromRows(initialTafsilis || [])).forEach(p => {
+        if (p.personCode && p.name) personNameByCode.set(p.personCode, p.name);
+        if (p.tafsiliCode && p.name && !personNameByCode.has(p.tafsiliCode)) {
+          personNameByCode.set(p.tafsiliCode, p.name);
+        }
+      });
+
       // Group raw rows by document to allocate HeaderPayable accurately when line amounts need normalization
       const byDoc = new Map<string, any[]>();
       (rows || []).forEach((r: any) => {
@@ -563,15 +602,15 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
         const opCode = String(first.OpCode || '').trim();
         const subSystem = String(first.SubSystem || '').trim();
         const opMeta = classifyOpCode(opCode, subSystem, mergedOpTitles);
-        const headerPayable = parseFloat(first.HeaderPayable || 0) || 0;
+        const headerPayable = toStrictNumber(first.HeaderPayable) || toStrictNumber(first.HeaderGross);
 
-        // Determine raw line amounts
+        // Determine raw line amounts safely (ignoring non-numeric tracking strings or BIT flags)
         const rawLineAmts = docRows.map(r => {
-          const amt7 = parseFloat(r.Amount || 0) || 0;
-          const net9 = parseFloat(r.NetOrFee || 0) || 0;
-          const vat10 = parseFloat(r.VatOrTotal || 0) || 0;
+          const amt7 = toStrictNumber(r.Amount);
+          const net9 = toStrictNumber(r.RawNetOrFee);
+          const vat10 = toStrictNumber(r.RawVatOrTotal);
           if (opCode === '57') {
-            return vat10 > 0 ? vat10 : net9 * (parseFloat(r.Quantity || 0) || 0);
+            return vat10 > 0 ? vat10 : net9 * toStrictNumber(r.Quantity);
           }
           if (amt7 > 0) return amt7;
           if (net9 > 0 && subSystem === '3') return net9;
@@ -579,23 +618,23 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
         });
 
         const sumRawAmt = rawLineAmts.reduce((s, a) => s + a, 0);
-        const sumQty = docRows.reduce((s, r) => s + (parseFloat(r.Quantity || 0) || 0), 0);
+        const sumQty = docRows.reduce((s, r) => s + toStrictNumber(r.Quantity), 0);
 
         docRows.forEach((r, idx) => {
           const rawItemNotes = [r.ItemNotes, r.ItemNotes2].filter(Boolean).join(' | ').trim();
           const headerNotes = [r.HeaderNotes, r.HeaderNote2].filter(Boolean).join(' | ').trim();
           const noteMeta = parseItemNotesMeta(rawItemNotes);
 
-          const qty = parseFloat(r.Quantity || 0) || 0;
+          const qty = toStrictNumber(r.Quantity);
           const netWeight = noteMeta.netWeight > 0 ? noteMeta.netWeight : qty;
           const grossWeight = noteMeta.grossWeight;
 
           const baseLineAmt = rawLineAmts[idx];
-          const discount = opCode === '57' ? 0 : parseFloat(r.Discount || 0) || 0;
+          const discount = opCode === '57' ? 0 : toStrictNumber(r.RawDiscount);
           const taxVat =
             opCode === '57'
               ? 0
-              : (parseFloat(r.VatOrTotal || 0) || 0) + (parseFloat(r.Tax || 0) || 0);
+              : toStrictNumber(r.RawVatOrTotal) + toStrictNumber(r.RawTax);
 
           let finalAmount = baseLineAmt;
           if (headerPayable > 0 && opCode !== '57') {
@@ -614,7 +653,7 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           const effectiveWeight = netWeight > 0 ? netWeight : qty;
           let unitPrice = 0;
           if (opCode === '57') {
-            unitPrice = parseFloat(r.NetOrFee || 0) || (effectiveWeight > 0 ? finalAmount / effectiveWeight : 0);
+            unitPrice = toStrictNumber(r.RawNetOrFee) || (effectiveWeight > 0 ? finalAmount / effectiveWeight : 0);
           } else if (effectiveWeight > 0 && baseLineAmt > 0) {
             unitPrice = baseLineAmt / effectiveWeight;
           } else if (effectiveWeight > 0 && finalAmount > 0) {
@@ -624,9 +663,17 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           }
 
           const wCode = String(r.WarehouseCode || '').trim();
-          const wName = String(r.WarehouseName || '').trim() || WAREHOUSE_FALLBACK_NAMES[wCode] || (wCode ? `انبار ${wCode}` : '-');
+          const wName = mergedWhNames[wCode] || WAREHOUSE_FALLBACK_NAMES[wCode] || (wCode ? `انبار ${wCode}` : '-');
           const itemCode = String(r.ItemCode || '').trim();
-          const itemName = String(r.ItemName || '').trim() || itemCode || 'کالای بدون نام';
+          const metaEntry = mergedItemMeta[itemCode];
+          const itemName = String(r.DirectItemName || '').trim() || metaEntry?.name || itemCode || 'کالای بدون نام';
+          const pCode = String(r.PersonCode || '').trim();
+          const pName =
+            personNameByCode.get(pCode) ||
+            (pCode.length > 2 ? personNameByCode.get(pCode.slice(2)) : undefined) ||
+            String(r.GnrPersonName || '').trim() ||
+            pCode ||
+            'نامشخص';
 
           parsed.push({
             lineKey: `${docKey}_${r.LineId || idx}`,
@@ -641,14 +688,14 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
             subSystem,
             direction: opMeta.direction,
             isReturn: opMeta.isReturn,
-            personCode: String(r.PersonCode || '').trim(),
-            personName: String(r.PersonName || '').trim() || 'نامشخص',
+            personCode: pCode,
+            personName: pName,
             warehouseCode: wCode,
             warehouseName: wName,
-            rowNo: Number(r.RowNo || idx + 1),
+            rowNo: toStrictNumber(r.RowNo) || idx + 1,
             itemCode,
             itemName,
-            itemType: detectItemTypeLabel(itemCode, itemName, String(r.GroupName || '')),
+            itemType: detectItemTypeLabel(itemCode, itemName, metaEntry?.group || ''),
             unitName: /^(01|02|04|05)/.test(itemCode) || noteMeta.netWeight > 0 ? 'کیلوگرم' : 'عدد / مقدار',
             quantity: qty,
             netWeight,

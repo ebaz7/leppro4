@@ -27,7 +27,9 @@ import android.webkit.MimeTypeMap;
 import android.webkit.PermissionRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.inputmethod.InputMethodManager;
 import android.util.DisplayMetrics;
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
@@ -366,8 +368,11 @@ public class MainActivity extends BridgeActivity {
             IntentFilter filter = new IntentFilter();
             String[] actions = new String[]{
                     "android.intent.ACTION_DECODE_DATA",
+                    "android.intent.action.SCANRESULT",
                     "scan.rcv.message",
                     "com.scanner.broadcast",
+                    "com.scan.broadcast",
+                    "com.android.decodewedge.decode_action",
                     "com.android.scanner.service_settings",
                     "com.android.server.scannerservice.broadcast",
                     "nlscan.action.SCANNER_RESULT",
@@ -375,7 +380,9 @@ public class MainActivity extends BridgeActivity {
                     "com.motorolasolutions.emdk.datawedge.api.RESULT_ACTION",
                     "com.honeywell.decode.intent.action.EDIT_DATA",
                     "com.honeywell.ezpairing.SCAN_RESULT",
+                    "com.honeywell.intent.action.SCAN_RESULT",
                     "com.seuic.scanner.action.BARCODE",
+                    "com.seuic.scanner.action.BARCODE_DATA",
                     "com.sunmi.scanner.ACTION_DATA_CODE_RECEIVED",
                     "com.urovo.scan.ACTION_DECODE_RESULT",
                     "urovo.rcv.message",
@@ -385,6 +392,9 @@ public class MainActivity extends BridgeActivity {
                     "com.unitech.scanner.ACTION_BARCODE_DATA",
                     "com.cilico.scanner.ACTION_BARCODE_DATA",
                     "com.m3.scanner.ACTION_BARCODE_DATA",
+                    "com.pda.scan.ACTION",
+                    "com.chc.scanner.broadcast",
+                    "com.xcheng.scanner.action.BARCODE_DECODING_BROADCAST",
                     "device.scanner.EVENT"
             };
             for (String act : actions) {
@@ -429,7 +439,9 @@ public class MainActivity extends BridgeActivity {
                     "text",
                     "barCode",
                     "EXTRA_BARCODE_DECODING_DATA",
-                    "scan_result"
+                    "scan_result",
+                    "barcodeData",
+                    "strBarcode"
             };
             for (String key : stringKeys) {
                 Object val = extras.get(key);
@@ -448,6 +460,16 @@ public class MainActivity extends BridgeActivity {
                 int safeLen = Math.min(len, ((byte[]) legacyBytes).length);
                 String s = new String((byte[]) legacyBytes, 0, safeLen).replaceAll("[\\r\\n\\t\\u0000]+", "").trim();
                 if (!s.isEmpty()) return s;
+            }
+            // Fallback: scan any remaining String extra from unknown vendor scanner service
+            for (String key : extras.keySet()) {
+                Object val = extras.get(key);
+                if (val instanceof String) {
+                    String s = ((String) val).replaceAll("[\\r\\n\\t]+", "").trim();
+                    if (s.length() >= 3 && s.length() <= 128 && !s.startsWith("com.") && !s.startsWith("android.")) {
+                        return s;
+                    }
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "extractBarcodeFromIntent error", e);
@@ -471,6 +493,35 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception e) {
             Log.w(TAG, "dispatchHardwareBarcodeToWebView error", e);
         }
+    }
+
+    /**
+     * Captures Android PDA hardware scanner bursts delivered as KeyEvent.ACTION_MULTIPLE
+     * (used by Urovo, Chainway, Seuic, iData, Newland in KeyEvent/Simulate mode)
+     * so barcode scans work even if no input element is focused.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        try {
+            if (event != null && event.getAction() == KeyEvent.ACTION_MULTIPLE) {
+                String chars = event.getCharacters();
+                if (chars != null) {
+                    String cleaned = chars.replaceAll("[\\r\\n\\t\\u0000]+", "").trim();
+                    if (cleaned.length() >= 3) {
+                        long now = System.currentTimeMillis();
+                        if (!cleaned.equals(lastNativeBarcodeValue) || (now - lastNativeBarcodeAt) >= 250L) {
+                            lastNativeBarcodeValue = cleaned;
+                            lastNativeBarcodeAt = now;
+                            dispatchHardwareBarcodeToWebView(cleaned);
+                        }
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "dispatchKeyEvent barcode capture warning", e);
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override
@@ -1387,6 +1438,54 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 Log.w(TAG, "requestCameraPermission error", e);
                 return false;
+            }
+        }
+
+        @JavascriptInterface
+        public void hideSoftKeyboard() {
+            try {
+                if (context instanceof android.app.Activity) {
+                    android.app.Activity act = (android.app.Activity) context;
+                    act.runOnUiThread(() -> {
+                        try {
+                            InputMethodManager imm = (InputMethodManager) act.getSystemService(Context.INPUT_METHOD_SERVICE);
+                            if (imm == null) return;
+                            View focusView = act.getCurrentFocus();
+                            if (focusView == null && getBridge() != null) {
+                                focusView = getBridge().getWebView();
+                            }
+                            if (focusView != null) {
+                                imm.hideSoftInputFromWindow(focusView.getWindowToken(), 0);
+                            }
+                        } catch (Exception ignored) {}
+                    });
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "hideSoftKeyboard warning", e);
+            }
+        }
+
+        @JavascriptInterface
+        public void showSoftKeyboard() {
+            try {
+                if (context instanceof android.app.Activity) {
+                    android.app.Activity act = (android.app.Activity) context;
+                    act.runOnUiThread(() -> {
+                        try {
+                            InputMethodManager imm = (InputMethodManager) act.getSystemService(Context.INPUT_METHOD_SERVICE);
+                            if (imm == null) return;
+                            View focusView = act.getCurrentFocus();
+                            if (focusView == null && getBridge() != null) {
+                                focusView = getBridge().getWebView();
+                            }
+                            if (focusView != null) {
+                                imm.showSoftInput(focusView, InputMethodManager.SHOW_IMPLICIT);
+                            }
+                        } catch (Exception ignored) {}
+                    });
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "showSoftKeyboard warning", e);
             }
         }
     }

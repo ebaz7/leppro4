@@ -62,6 +62,8 @@ import {
   attachStreamToVideo,
   createUniversalBarcodeDecoder,
   subscribeHardwareBarcodeEvents,
+  focusScannerInputSafely,
+  hideAndroidSoftKeyboard,
   UniversalBarcodeDecoder
 } from '../utils/barcodeScannerUtils';
 
@@ -389,6 +391,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const pendingScanQueueRef = useRef<Array<{ raw: string; fromCamera: boolean }>>([]);
   const inputBurstTimerRef = useRef<number | null>(null);
   const lastInputValueRef = useRef<string>('');
+  const lastInputChangeAtRef = useRef<number>(0);
 
   // Submission, Review Sheet & Dialogs
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -661,15 +664,15 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     }
   }, [customerSearch, allCustomersList]);
 
-  // Only auto-focus scanner input when user explicitly enabled manual typing mode
+  // Keep barcode scanner input focused & ready for Android PDA hardware scans (soft keyboard suppressed when manual mode is OFF)
   useEffect(() => {
-    if (activeSubTab === 'issuer' && isContinuousScan && isManualKeyboard) {
+    if (activeSubTab === 'issuer' && isContinuousScan && !isCameraScannerOpen && !isReviewModalOpen && !isCustomerDropdownOpen) {
       const focusTimer = setTimeout(() => {
-        barcodeInputRef.current?.focus();
+        focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current);
       }, 100);
       return () => clearTimeout(focusTimer);
     }
-  }, [activeSubTab, isContinuousScan, isManualKeyboard, items.length]);
+  }, [activeSubTab, isContinuousScan, isManualKeyboard, isCameraScannerOpen, isReviewModalOpen, isCustomerDropdownOpen, items.length]);
 
   // Load Archive on tab switch
   useEffect(() => {
@@ -827,8 +830,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       if (!fromCamera) {
         setScannedBarcode('');
         lastInputValueRef.current = '';
-        if (isContinuousScan && !isCameraScannerOpen && isManualKeyboardRef.current) {
-          setTimeout(() => barcodeInputRef.current?.focus(), 30);
+        if (isContinuousScan && !isCameraScannerOpen) {
+          setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 30);
         }
       }
       return;
@@ -941,8 +944,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             processBarcodeValue(nextQueued.raw, nextQueued.fromCamera);
           }, 15);
         }
-      } else if (!fromCamera && isContinuousScan && !isCameraScannerOpen && isManualKeyboardRef.current) {
-        setTimeout(() => barcodeInputRef.current?.focus(), 40);
+      } else if (!fromCamera && isContinuousScan && !isCameraScannerOpen) {
+        setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 40);
       }
     }
   };
@@ -1037,7 +1040,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
       },
       {
         enabled: activeSubTab === 'issuer' && !isReviewModalOpen && !isCustomerDropdownOpen,
-        ignoreInputElement: () => (isManualKeyboardRef.current ? barcodeInputRef.current : null)
+        ignoreInputElement: () => barcodeInputRef.current
       }
     );
   }, [activeSubTab, isReviewModalOpen, isCustomerDropdownOpen]);
@@ -1045,6 +1048,9 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   const handleBarcodeInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawVal = e.target.value;
     const prevVal = lastInputValueRef.current;
+    const now = Date.now();
+    const elapsed = now - lastInputChangeAtRef.current;
+    lastInputChangeAtRef.current = now;
 
     // 1. Embedded newline / carriage return / tab from Android PDA commitText wedge
     if (/[\r\n\t]/.test(rawVal)) {
@@ -1067,20 +1073,23 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     setScannedBarcode(rawVal);
     lastInputValueRef.current = rawVal;
 
-    // 2. Rapid burst injection (PDA injects >= 5 chars at once via IME commitText without Enter)
+    // 2. Rapid burst injection (PDA injects text via IME commitText OR fast keystroke wedge without trailing Enter)
     const addedLen = rawVal.length - prevVal.length;
+    const cleanedNow = normalizeScannedBarcode(rawVal);
     if (inputBurstTimerRef.current) {
       window.clearTimeout(inputBurstTimerRef.current);
       inputBurstTimerRef.current = null;
     }
-    if (addedLen >= 5 && normalizeScannedBarcode(rawVal).length >= 5) {
+    const isBulkInject = addedLen >= 4 && cleanedNow.length >= 4;
+    const isHardwareAutoFlush = !isManualKeyboardRef.current && cleanedNow.length >= 4 && (addedLen >= 2 || elapsed < 140);
+    if (isBulkInject || isHardwareAutoFlush) {
       const candidate = rawVal;
       inputBurstTimerRef.current = window.setTimeout(() => {
         inputBurstTimerRef.current = null;
         if (lastInputValueRef.current === candidate) {
           processBarcodeRef.current(candidate, false);
         }
-      }, 160);
+      }, isBulkInject ? 120 : 180);
     }
   };
 
@@ -1537,8 +1546,8 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
     setConfirmClearList(false);
     setCartonSearchQuery('');
     try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch {}
-    if (isContinuousScan && isManualKeyboardRef.current) {
-      setTimeout(() => barcodeInputRef.current?.focus(), 100);
+    if (isContinuousScan) {
+      setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 100);
     }
   };
 
@@ -1950,9 +1959,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     type="button"
                     onClick={() => {
                       setIsHeaderCollapsed(true);
-                      if (isManualKeyboardRef.current) {
-                        setTimeout(() => barcodeInputRef.current?.focus(), 60);
-                      }
+                      setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 60);
                     }}
                     className="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 text-[11px] font-bold flex items-center gap-1 shrink-0 hover:bg-slate-200"
                     title="بستن سربرگ برای فضای بیشتر اسکن"
@@ -2210,14 +2217,10 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     onClick={() => {
                       setIsManualKeyboard((prev) => {
                         const next = !prev;
-                        if (next) {
-                          setTimeout(() => barcodeInputRef.current?.focus(), 50);
-                        } else {
-                          try {
-                            barcodeInputRef.current?.blur();
-                            (document.activeElement as HTMLElement | null)?.blur?.();
-                          } catch {}
-                        }
+                        isManualKeyboardRef.current = next;
+                        setTimeout(() => {
+                          focusScannerInputSafely(barcodeInputRef.current, next);
+                        }, 40);
                         return next;
                       });
                     }}
@@ -2226,7 +2229,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                         ? 'bg-amber-400 border-amber-300 text-slate-950 font-black'
                         : 'bg-white/10 border-white/20 text-slate-200 hover:bg-white/15'
                     }`}
-                    title="تا زمانی که تایپ دستی را فعال نکنید، کیبورد گوشی/بارکدخوان بالا نمی‌آید و اسکن با دکمه فیزیکی SCAN مستقیم ثبت می‌شود"
+                    title="تا زمانی که تایپ دستی را فعال نکنید، کیبورد لمسی بالا نمی‌آید اما کادر برای اسکن بارکدخوان فیزیکی همیشه آماده است"
                   >
                     <Keyboard size={13} />
                     <span>{isManualKeyboard ? 'تایپ دستی (فعال)' : 'تایپ دستی'}</span>
@@ -2265,29 +2268,29 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                 </div>
               </div>
 
-              {/* Scanner Input Bar (Locked readOnly unless Manual Keyboard is enabled so Android soft keyboard NEVER pops up!) */}
+              {/* Scanner Input Bar (ALWAYS editable & focused for hardware PDA scanners; inputMode="none" + native hideSoftKeyboard prevents virtual keyboard popup) */}
               <form onSubmit={handleBarcodeSubmit} className="flex items-center gap-1.5 sm:gap-2">
                 <div className="relative flex-1 min-w-0">
                   <input
                     ref={barcodeInputRef}
                     type="text"
-                    readOnly={!isManualKeyboard}
                     inputMode={isManualKeyboard ? 'text' : 'none'}
-                    tabIndex={isManualKeyboard ? 0 : -1}
                     enterKeyHint="send"
                     autoComplete="off"
                     autoCorrect="off"
                     spellCheck={false}
                     value={scannedBarcode}
-                    onFocus={(e) => {
+                    onFocus={() => {
                       if (!isManualKeyboardRef.current) {
-                        e.currentTarget.blur();
+                        hideAndroidSoftKeyboard();
                       }
                     }}
-                    onChange={(e) => {
-                      if (!isManualKeyboardRef.current) return;
-                      handleBarcodeInputChange(e);
+                    onClick={() => {
+                      if (!isManualKeyboardRef.current) {
+                        hideAndroidSoftKeyboard();
+                      }
                     }}
+                    onChange={handleBarcodeInputChange}
                     onKeyDown={handleBarcodeInputKeyDown}
                     onPaste={handleBarcodeInputPaste}
                     placeholder={
@@ -2298,12 +2301,12 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                     className={`w-full h-11 sm:h-12 pr-9 pl-3 rounded-xl border-2 font-mono text-sm sm:text-base font-bold outline-none transition-all dir-ltr text-left ${
                       isManualKeyboard
                         ? 'bg-white/15 border-amber-400 focus:border-amber-300 text-white placeholder-amber-100/70'
-                        : 'bg-white/5 border-blue-400/40 text-cyan-200 placeholder-blue-200/70 select-none'
+                        : 'bg-white/5 border-blue-400/40 focus:border-cyan-400 text-cyan-200 placeholder-blue-200/70'
                     }`}
                   />
                   <Barcode className="w-4 h-4 text-cyan-300 absolute right-3 top-3.5 pointer-events-none" />
                 </div>
-                {isManualKeyboard && (
+                {(isManualKeyboard || scannedBarcode.trim().length > 0) && (
                   <button
                     type="submit"
                     disabled={!scannedBarcode.trim()}
@@ -2886,9 +2889,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                           e.stopPropagation();
                           setSelectedWarehouse(wh.code);
                           setActiveSubTab('issuer');
-                          if (isManualKeyboardRef.current) {
-                            setTimeout(() => barcodeInputRef.current?.focus(), 150);
-                          }
+                          setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 150);
                         }}
                         className="w-full py-1.5 px-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 shadow-xs transition-transform active:scale-95"
                       >
@@ -3013,9 +3014,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                             onClick={() => {
                               setSelectedWarehouse(doc.warehouseCode || selectedStatWarehouse);
                               setActiveSubTab('issuer');
-                              if (isManualKeyboardRef.current) {
-                                setTimeout(() => barcodeInputRef.current?.focus(), 150);
-                              }
+                              setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 150);
                             }}
                             className="px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold inline-flex items-center gap-1 shrink-0 active:scale-95"
                           >
@@ -3093,9 +3092,7 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
                                 onClick={() => {
                                   setSelectedWarehouse(doc.warehouseCode || selectedStatWarehouse);
                                   setActiveSubTab('issuer');
-                                  if (isManualKeyboardRef.current) {
-                                    setTimeout(() => barcodeInputRef.current?.focus(), 150);
-                                  }
+                                  setTimeout(() => focusScannerInputSafely(barcodeInputRef.current, isManualKeyboardRef.current), 150);
                                 }}
                                 className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 hover:bg-blue-100 text-[11px] font-bold inline-flex items-center gap-1"
                                 title="صدور حواله فروش جدید"

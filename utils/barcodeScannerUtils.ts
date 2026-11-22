@@ -3,10 +3,64 @@ import {
   BarcodeFormat,
   BinaryBitmap,
   DecodeHintType,
+  GlobalHistogramBinarizer,
   HybridBinarizer,
   MultiFormatReader,
   RGBLuminanceSource
 } from '@zxing/library';
+
+/**
+ * Hides the Android OS virtual soft keyboard while keeping the scanner <input>
+ * focused and editable so hardware PDA keyboard-wedge / IME commitText scans always work.
+ */
+export const hideAndroidSoftKeyboard = (): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const bridge = (window as any).DlkamAndroid;
+    if (bridge && typeof bridge.hideSoftKeyboard === 'function') {
+      bridge.hideSoftKeyboard();
+    }
+  } catch {}
+};
+
+/**
+ * Explicitly shows the Android OS virtual soft keyboard when user enables manual typing.
+ */
+export const showAndroidSoftKeyboard = (): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const bridge = (window as any).DlkamAndroid;
+    if (bridge && typeof bridge.showSoftKeyboard === 'function') {
+      bridge.showSoftKeyboard();
+    }
+  } catch {}
+};
+
+/**
+ * Focuses a dedicated barcode <input> so Android PDA Keyboard-Wedge / IME commitText
+ * scanners ALWAYS have an active editable target, while suppressing the soft keyboard
+ * whenever manualKeyboard is false.
+ */
+export const focusScannerInputSafely = (
+  inputEl: HTMLInputElement | null,
+  manualKeyboard: boolean
+): void => {
+  if (!inputEl) return;
+  try {
+    inputEl.inputMode = manualKeyboard ? 'text' : 'none';
+    inputEl.focus({ preventScroll: true });
+    if (!manualKeyboard) {
+      hideAndroidSoftKeyboard();
+      window.setTimeout(() => hideAndroidSoftKeyboard(), 60);
+    } else {
+      showAndroidSoftKeyboard();
+    }
+  } catch {
+    try {
+      inputEl.focus();
+    } catch {}
+  }
+};
 
 /**
  * Normalizes Persian/Arabic numerals and strips control characters / line endings
@@ -213,15 +267,15 @@ const decodeImageDataWithZxingAndJsQr = (
 ): string | null => {
   const { width, height, data } = imageData;
 
-  // 1. ZXing 1D + 2D universal luminance decoder (Code-128, Code-39, EAN, QR, DataMatrix, etc.)
+  const pixelCount = width * height;
+  const luminances = new Uint8ClampedArray(pixelCount);
+  for (let i = 0, p = 0; i < pixelCount; i++, p += 4) {
+    luminances[i] = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8;
+  }
+  const source = new RGBLuminanceSource(luminances, width, height);
+
+  // 1a. ZXing with HybridBinarizer (best for mixed 1D + 2D)
   try {
-    const pixelCount = width * height;
-    const luminances = new Uint8ClampedArray(pixelCount);
-    for (let i = 0, p = 0; i < pixelCount; i++, p += 4) {
-      // Fast perceptual luma
-      luminances[i] = (data[p] * 77 + data[p + 1] * 150 + data[p + 2] * 29) >> 8;
-    }
-    const source = new RGBLuminanceSource(luminances, width, height);
     const bitmap = new BinaryBitmap(new HybridBinarizer(source));
     const result = reader.decode(bitmap);
     const text = normalizeScannedBarcode(result?.getText?.() || '');
@@ -229,7 +283,23 @@ const decodeImageDataWithZxingAndJsQr = (
       return text;
     }
   } catch {
-    // NotFoundException on normal frames without barcode
+    // NotFoundException on normal frames
+  } finally {
+    try {
+      reader.reset();
+    } catch {}
+  }
+
+  // 1b. ZXing with GlobalHistogramBinarizer (superior on glossy 1D Code-128 warehouse labels)
+  try {
+    const bitmap = new BinaryBitmap(new GlobalHistogramBinarizer(source));
+    const result = reader.decode(bitmap);
+    const text = normalizeScannedBarcode(result?.getText?.() || '');
+    if (text.length >= 3) {
+      return text;
+    }
+  } catch {
+    // NotFoundException on normal frames
   } finally {
     try {
       reader.reset();
@@ -250,16 +320,21 @@ const decodeImageDataWithZxingAndJsQr = (
 
 /**
  * Creates a multi-engine universal 1D + 2D barcode decoder:
- * 1) Hardware-accelerated native BarcodeDetector (when available)
- * 2) ZXing MultiFormatReader (1D Code-128 / Code-39 / EAN / ITF + 2D QR / DataMatrix)
+ * 1) Hardware-accelerated native BarcodeDetector (with strict timeout & circuit breaker so rugged PDAs without Play Services never hang)
+ * 2) ZXing MultiFormatReader (Hybrid + GlobalHistogram for 1D Code-128 / Code-39 / EAN / ITF + 2D QR / DataMatrix)
  * 3) jsQR fallback
  */
 export const createUniversalBarcodeDecoder = async (): Promise<UniversalBarcodeDecoder> => {
   let nativeDetector: any = null;
+  let nativeFailureStreak = 0;
+
   if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
     try {
       const BarcodeDetectorClass = (window as any).BarcodeDetector;
-      const supportedFormats = await BarcodeDetectorClass.getSupportedFormats?.().catch(() => null);
+      const supportedFormats = await Promise.race([
+        BarcodeDetectorClass.getSupportedFormats?.().catch(() => null) || Promise.resolve(null),
+        new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 600))
+      ]);
       const desiredFormats = [
         'code_128',
         'code_39',
@@ -290,6 +365,30 @@ export const createUniversalBarcodeDecoder = async (): Promise<UniversalBarcodeD
     }
   }
 
+  const runNativeDetectSafe = async (source: HTMLVideoElement | HTMLImageElement): Promise<string | null> => {
+    if (!nativeDetector || nativeFailureStreak >= 3) return null;
+    try {
+      const hits = await Promise.race([
+        nativeDetector.detect(source),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('NATIVE_DETECTOR_TIMEOUT')), 450))
+      ]);
+      nativeFailureStreak = 0;
+      if (Array.isArray(hits) && hits.length > 0) {
+        const valid = hits.find((h: any) => normalizeScannedBarcode(h?.rawValue || '').length >= 3);
+        if (valid) {
+          return normalizeScannedBarcode(valid.rawValue);
+        }
+      }
+      return null;
+    } catch {
+      nativeFailureStreak += 1;
+      if (nativeFailureStreak >= 3) {
+        nativeDetector = null;
+      }
+      return null;
+    }
+  };
+
   const zxingReader = buildZxingReader();
 
   const decodeFromVideo = async (
@@ -300,33 +399,22 @@ export const createUniversalBarcodeDecoder = async (): Promise<UniversalBarcodeD
       return null;
     }
 
-    // 1. Hardware-accelerated native detector first
-    if (nativeDetector) {
-      try {
-        const hits = await nativeDetector.detect(videoEl);
-        if (Array.isArray(hits) && hits.length > 0) {
-          const valid = hits.find((h: any) => normalizeScannedBarcode(h?.rawValue || '').length >= 3);
-          if (valid) {
-            return normalizeScannedBarcode(valid.rawValue);
-          }
-        }
-      } catch {
-        // Fall through to canvas decoding
-      }
-    }
+    // 1. Hardware-accelerated native detector first (timeout-guarded)
+    const nativeHit = await runNativeDetectSafe(videoEl);
+    if (nativeHit) return nativeHit;
 
     // 2. Canvas ROI capture -> ZXing (1D + 2D) + jsQR fallback
-    // Use crisp 640x360 center crop so thin 1D Code-128 bars stay sharp on mobile screens
+    // Use crisp up-to-960px center crop so thin 1D Code-128 bars stay razor-sharp on mobile/PDA screens
     const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
 
-    const cropW = Math.min(videoEl.videoWidth, Math.floor(videoEl.videoWidth * 0.9));
-    const cropH = Math.min(videoEl.videoHeight, Math.floor(videoEl.videoHeight * 0.6));
+    const cropW = Math.min(videoEl.videoWidth, Math.floor(videoEl.videoWidth * 0.92));
+    const cropH = Math.min(videoEl.videoHeight, Math.floor(videoEl.videoHeight * 0.65));
     const sx = Math.floor((videoEl.videoWidth - cropW) / 2);
     const sy = Math.floor((videoEl.videoHeight - cropH) / 2);
 
-    const targetW = Math.min(640, cropW);
-    const targetH = Math.max(180, Math.round((cropH / cropW) * targetW));
+    const targetW = Math.min(960, cropW);
+    const targetH = Math.max(200, Math.round((cropH / cropW) * targetW));
     if (canvasEl.width !== targetW) canvasEl.width = targetW;
     if (canvasEl.height !== targetH) canvasEl.height = targetH;
 
@@ -346,15 +434,8 @@ export const createUniversalBarcodeDecoder = async (): Promise<UniversalBarcodeD
         el.src = imgUrl;
       });
 
-      if (nativeDetector) {
-        try {
-          const hits = await nativeDetector.detect(img);
-          if (Array.isArray(hits) && hits.length > 0) {
-            const valid = hits.find((h: any) => normalizeScannedBarcode(h?.rawValue || '').length >= 3);
-            if (valid) return normalizeScannedBarcode(valid.rawValue);
-          }
-        } catch {}
-      }
+      const nativeHit = await runNativeDetectSafe(img);
+      if (nativeHit) return nativeHit;
 
       const maxDim = 1280;
       const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));

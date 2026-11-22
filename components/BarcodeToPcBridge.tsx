@@ -43,6 +43,8 @@ import {
   attachStreamToVideo,
   createUniversalBarcodeDecoder,
   subscribeHardwareBarcodeEvents,
+  focusScannerInputSafely,
+  hideAndroidSoftKeyboard,
   UniversalBarcodeDecoder
 } from '../utils/barcodeScannerUtils';
 
@@ -256,6 +258,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
   const lastCameraCodeRef = useRef<{ code: string; at: number }>({ code: '', at: 0 });
   const inputBurstTimerRef = useRef<number | null>(null);
   const lastInputValRef = useRef<string>('');
+  const lastInputChangeAtRef = useRef<number>(0);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Sync refs
@@ -949,12 +952,8 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           type: 'ok',
           text: `متصل به «${res.session?.hostDeviceName || 'کامپیوتر'}» — آماده اسکن مستقیم به سایان`
         });
-        // Dismiss any active soft keyboard (e.g. from 6-digit pair code) unless manual typing is explicitly enabled
-        if (manualKeyboardModeRef.current) {
-          setTimeout(() => scannerInputRef.current?.focus(), 180);
-        } else {
-          try { (document.activeElement as HTMLElement | null)?.blur?.(); } catch {}
-        }
+        // Focus scanner input immediately for hardware PDA scanning while keeping soft keyboard hidden unless manual typing is enabled
+        setTimeout(() => focusScannerInputSafely(scannerInputRef.current, manualKeyboardModeRef.current), 140);
       } catch (err: any) {
         playBeep('error');
         setSenderFeedback({
@@ -1022,9 +1021,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           });
           return [...prev, { clientScanId, barcode: clean, scannedAt: Date.now() }];
         });
-        if (manualKeyboardModeRef.current) {
-          setTimeout(() => scannerInputRef.current?.focus(), 40);
-        }
+        setTimeout(() => focusScannerInputSafely(scannerInputRef.current, manualKeyboardModeRef.current), 40);
         return;
       }
 
@@ -1090,9 +1087,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
           text: `اختلال شبکه؛ بارکد «${clean}» جهت جلوگیری از ازدست‌رفتن در صف آفلاین ذخیره شد.`
         });
       } finally {
-        if (manualKeyboardModeRef.current) {
-          setTimeout(() => scannerInputRef.current?.focus(), 40);
-        }
+        setTimeout(() => focusScannerInputSafely(scannerInputRef.current, manualKeyboardModeRef.current), 40);
       }
     },
     [currentUser?.fullName, currentUser?.username, isOnline, pairWithPc, pairedCode, playBeep]
@@ -1167,10 +1162,20 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
       },
       {
         enabled: role === 'sender',
-        ignoreInputElement: () => (manualKeyboardModeRef.current ? scannerInputRef.current : null)
+        ignoreInputElement: () => scannerInputRef.current
       }
     );
   }, [role]);
+
+  // Keep scanner input focused when in sender mode (after pairing) so Android PDA hardware wedge always has an active target
+  useEffect(() => {
+    if (role === 'sender' && pairedCode && cameraMode === 'none') {
+      const t = window.setTimeout(() => {
+        focusScannerInputSafely(scannerInputRef.current, manualKeyboardModeRef.current);
+      }, 120);
+      return () => window.clearTimeout(t);
+    }
+  }, [role, pairedCode, cameraMode]);
 
   // ---------------- CAMERA QR / BARCODE SCANNER ----------------
   const stopCamera = useCallback(() => {
@@ -2009,14 +2014,10 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                   onClick={() => {
                     setManualKeyboardMode((prev) => {
                       const next = !prev;
-                      if (next) {
-                        setTimeout(() => scannerInputRef.current?.focus(), 50);
-                      } else {
-                        try {
-                          scannerInputRef.current?.blur();
-                          (document.activeElement as HTMLElement | null)?.blur?.();
-                        } catch {}
-                      }
+                      manualKeyboardModeRef.current = next;
+                      setTimeout(() => {
+                        focusScannerInputSafely(scannerInputRef.current, next);
+                      }, 40);
                       return next;
                     });
                   }}
@@ -2025,7 +2026,7 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                       ? 'bg-amber-400 text-slate-950'
                       : 'bg-white/15 text-white hover:bg-white/25'
                   }`}
-                  title="تا زمانی که این گزینه را فعال نکنید، کیبورد گوشی/بارکدخوان بالا نمی‌آید"
+                  title="تا زمانی که این گزینه را فعال نکنید، کیبورد لمسی بالا نمی‌آید اما کادر برای اسکن بارکدخوان فیزیکی همیشه آماده است"
                 >
                   <Keyboard size={11} />
                   <span>{manualKeyboardMode ? 'تایپ دستی (فعال)' : 'تایپ دستی'}</span>
@@ -2045,20 +2046,26 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
               <input
                 ref={scannerInputRef}
                 type="text"
-                readOnly={!manualKeyboardMode}
                 inputMode={manualKeyboardMode ? 'text' : 'none'}
-                tabIndex={manualKeyboardMode ? 0 : -1}
                 enterKeyHint="send"
                 value={barcodeInput}
-                onFocus={(e) => {
+                onFocus={() => {
                   if (!manualKeyboardModeRef.current) {
-                    e.currentTarget.blur();
+                    hideAndroidSoftKeyboard();
+                  }
+                }}
+                onClick={() => {
+                  if (!manualKeyboardModeRef.current) {
+                    hideAndroidSoftKeyboard();
                   }
                 }}
                 onChange={(e) => {
-                  if (!manualKeyboardModeRef.current) return;
                   const rawVal = e.target.value;
                   const prevVal = lastInputValRef.current;
+                  const now = Date.now();
+                  const elapsed = now - lastInputChangeAtRef.current;
+                  lastInputChangeAtRef.current = now;
+
                   if (/[\r\n\t]/.test(rawVal)) {
                     if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
                     const chunks = rawVal
@@ -2073,14 +2080,19 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                   setBarcodeInput(rawVal);
                   lastInputValRef.current = rawVal;
                   if (inputBurstTimerRef.current) window.clearTimeout(inputBurstTimerRef.current);
-                  if (rawVal.length - prevVal.length >= 5 && normalizeScannedBarcode(rawVal).length >= 5) {
+
+                  const addedLen = rawVal.length - prevVal.length;
+                  const cleanedNow = normalizeScannedBarcode(rawVal);
+                  const isBulkInject = addedLen >= 4 && cleanedNow.length >= 4;
+                  const isHardwareAutoFlush = !manualKeyboardModeRef.current && cleanedNow.length >= 4 && (addedLen >= 2 || elapsed < 140);
+                  if (isBulkInject || isHardwareAutoFlush) {
                     const candidate = rawVal;
                     inputBurstTimerRef.current = window.setTimeout(() => {
                       if (lastInputValRef.current === candidate) {
                         lastInputValRef.current = '';
                         submitScannedRef.current(normalizeScannedBarcode(candidate));
                       }
-                    }, 160);
+                    }, isBulkInject ? 120 : 180);
                   }
                 }}
                 onKeyDown={(e) => {
@@ -2106,10 +2118,10 @@ export const BarcodeToPcBridge: React.FC<BarcodeToPcBridgeProps> = ({
                 className={`flex-1 min-w-0 px-3 py-2.5 rounded-xl font-mono font-black text-sm border-2 focus:outline-none transition-colors ${
                   manualKeyboardMode
                     ? 'bg-white text-slate-900 border-amber-400'
-                    : 'bg-slate-800/90 text-emerald-200 placeholder-slate-400 border-emerald-500/60 select-none'
+                    : 'bg-slate-800/90 text-emerald-200 placeholder-slate-400 border-emerald-500/60 focus:border-emerald-400'
                 }`}
               />
-              {manualKeyboardMode && (
+              {(manualKeyboardMode || barcodeInput.trim().length > 0) && (
                 <button
                   type="button"
                   onClick={() => submitScannedBarcode(barcodeInput)}
