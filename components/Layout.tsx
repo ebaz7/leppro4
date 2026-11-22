@@ -400,8 +400,12 @@ const Layout: React.FC<LayoutProps> = ({
           el.classList.contains('bottom-nav-bar') ||
           el.classList.contains('bg-blobs') ||
           el.classList.contains('hidden') ||
+          el.classList.contains('invisible') ||
+          el.classList.contains('opacity-0') ||
+          el.getAttribute('data-mobile-menu-drawer') === 'true' ||
           el.style.display === 'none' ||
           el.style.visibility === 'hidden' ||
+          el.style.opacity === '0' ||
           el.closest('.hidden')
         ) {
           continue;
@@ -433,9 +437,15 @@ const Layout: React.FC<LayoutProps> = ({
       setHasBackAction(false);
       debouncedCheck();
     };
+    const handleCloseMobileMenu = () => {
+      setShowMobileMenu(false);
+      setIsSoftKeyboardOpen(false);
+      setTimeout(checkModal, 60);
+    };
     window.addEventListener('REGISTER_BACK_ACTION', handleRegister);
     window.addEventListener('UNREGISTER_BACK_ACTION', handleUnregister);
     window.addEventListener('APP_MODAL_CHECK', debouncedCheck);
+    window.addEventListener('CLOSE_MOBILE_MENU', handleCloseMobileMenu);
 
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
@@ -443,16 +453,32 @@ const Layout: React.FC<LayoutProps> = ({
       window.removeEventListener('REGISTER_BACK_ACTION', handleRegister);
       window.removeEventListener('UNREGISTER_BACK_ACTION', handleUnregister);
       window.removeEventListener('APP_MODAL_CHECK', debouncedCheck);
+      window.removeEventListener('CLOSE_MOBILE_MENU', handleCloseMobileMenu);
     };
   }, []);
 
-  // Reset stale back-action state and re-verify modals whenever the active tab changes
+  // Re-verify open modals/keyboard state when drawer, profile/search modals, or activeTab changes
   useEffect(() => {
     if (activeTab === 'dashboard') {
       setHasBackAction(false);
+      setIsMobileChromeHidden(false);
+      const activeEl = document.activeElement as HTMLElement | null;
+      const isEditing = activeEl && (
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl.tagName === 'INPUT' && (activeEl as HTMLInputElement).inputMode !== 'none' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'file', 'color'].includes(((activeEl as HTMLInputElement).type || 'text').toLowerCase())) ||
+        activeEl.isContentEditable
+      );
+      if (!isEditing) {
+        setIsSoftKeyboardOpen(false);
+      }
     }
-    setIsModalOpen(false);
-  }, [activeTab]);
+    const t1 = setTimeout(() => window.dispatchEvent(new Event('APP_MODAL_CHECK')), 60);
+    const t2 = setTimeout(() => window.dispatchEvent(new Event('APP_MODAL_CHECK')), 260);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [activeTab, showMobileMenu, showProfileModal, showNotifDropdown, isSearchOpen]);
 
   // Local Profile Form State
   const [profileForm, setProfileForm] = useState<{
@@ -1309,7 +1335,16 @@ const Layout: React.FC<LayoutProps> = ({
             >
               <Settings size={17} />
             </button>
-            <button onClick={() => setShowMobileMenu(false)} className="p-2 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-xl text-zinc-500 transition-colors">
+            <button
+              type="button"
+              data-close-modal="true"
+              aria-label="بستن"
+              onClick={() => {
+                setShowMobileMenu(false);
+                setIsSoftKeyboardOpen(false);
+              }}
+              className="p-2 bg-zinc-100 dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-xl text-zinc-500 transition-colors"
+            >
                 <X size={18} />
             </button>
           </div>
@@ -2027,10 +2062,13 @@ const Layout: React.FC<LayoutProps> = ({
       {/* Mobile Drawer - Native Android App Launcher Sheet with Search & Categorized Modules */}
       {isNativeAndroid || lowSpecMode ? (
         showMobileMenu && (
-          <div className="fixed inset-0 z-[100] md:hidden flex flex-col justify-end">
+          <div data-mobile-menu-drawer="true" className="fixed inset-0 z-[100] md:hidden flex flex-col justify-end">
               <div
                 className="absolute inset-0 bg-black/60"
-                onClick={() => setShowMobileMenu(false)}
+                onClick={() => {
+                  setShowMobileMenu(false);
+                  setIsSoftKeyboardOpen(false);
+                }}
               />
               <div className="relative w-full h-[90vh] max-h-[90vh] max-h-[90dvh] bg-white dark:bg-zinc-950 rounded-t-[28px] border-t border-zinc-200 dark:border-zinc-800 shadow-2xl flex flex-col overflow-hidden z-10 touch-pan-y">
                   {renderMobileDrawerContent()}
@@ -2040,14 +2078,17 @@ const Layout: React.FC<LayoutProps> = ({
       ) : (
         <AnimatePresence>
           {showMobileMenu && (
-            <div className="fixed inset-0 z-[100] md:hidden flex flex-col justify-end">
+            <div data-mobile-menu-drawer="true" className="fixed inset-0 z-[100] md:hidden flex flex-col justify-end">
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.18 }}
                 className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-                onClick={() => setShowMobileMenu(false)}
+                onClick={() => {
+                  setShowMobileMenu(false);
+                  setIsSoftKeyboardOpen(false);
+                }}
               />
               <motion.div
                 initial={{ y: "100%" }}

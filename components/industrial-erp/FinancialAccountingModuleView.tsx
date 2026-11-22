@@ -23,6 +23,7 @@ interface FinancialAccountingModuleViewProps {
   handleImportSayanTrialBalance: () => Promise<void>;
   handleToggleCutoverStage: (stageKey: keyof ErpCutoverConfig) => Promise<void>;
   openSubViewTab?: (id: ErpSubViewId) => void;
+  canAccessSubView?: (id: ErpSubViewId) => boolean;
 }
 
 const FINANCE_QUICK_TABS: { id: ErpSubViewId; label: string }[] = [
@@ -51,9 +52,14 @@ export const FinancialAccountingModuleView: React.FC<FinancialAccountingModuleVi
   importingTrialBalance,
   handleImportSayanTrialBalance,
   handleToggleCutoverStage,
-  openSubViewTab
+  openSubViewTab,
+  canAccessSubView
 }) => {
   const [editingVoucherId, setEditingVoucherId] = useState<string | null>(null);
+
+  const visibleFinanceTabs = canAccessSubView
+    ? FINANCE_QUICK_TABS.filter(tab => canAccessSubView(tab.id))
+    : FINANCE_QUICK_TABS;
 
   const handleStartEditVoucher = (voucherId: string) => {
     setEditingVoucherId(voucherId);
@@ -82,9 +88,9 @@ export const FinancialAccountingModuleView: React.FC<FinancialAccountingModuleVi
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 space-y-4 custom-scrollbar">
       {/* Compact Horizontal Finance Navigation Strip (Desktop + Mobile Web + Android touch-friendly) */}
-      {openSubViewTab && (
+      {openSubViewTab && visibleFinanceTabs.length > 0 && (
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
-          {FINANCE_QUICK_TABS.map(tab => {
+          {visibleFinanceTabs.map(tab => {
             const active = activeSubView === tab.id;
             return (
               <button

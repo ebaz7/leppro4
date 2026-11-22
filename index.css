@@ -129,7 +129,22 @@
   }
 }
 
-/* Global Smooth Performance & GPU Compositing Optimization */
+/* Global Smooth Performance, Touch-Zoom Lock & GPU Compositing Optimization */
+html, body {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overscroll-behavior-x: none;
+}
+
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 767px) {
+    input, select, textarea {
+      font-size: 16px;
+    }
+  }
+}
+
 * {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -151,7 +166,7 @@
 #main-scroll-container {
   -webkit-overflow-scrolling: touch !important;
   overscroll-behavior-y: auto !important;
-  touch-action: pan-y pinch-zoom !important;
+  touch-action: pan-y !important;
   overflow-x: hidden !important;
   width: 100% !important;
   max-width: 100% !important;

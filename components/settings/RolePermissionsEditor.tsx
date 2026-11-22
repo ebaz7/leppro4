@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { SystemSettings, UserRole, RolePermissions, CustomRole, User } from '../../types';
-import { ShieldCheck, Truck, Warehouse, Lock, ChevronDown, ChevronUp, Landmark, Trash2, CheckSquare, Square, Info, ClipboardList, ShoppingCart, Pencil, Check, FileText, Briefcase, Building2, Sliders, QrCode } from 'lucide-react';
+import { ShieldCheck, Truck, Warehouse, Lock, ChevronDown, ChevronUp, Landmark, Trash2, CheckSquare, Square, Info, ClipboardList, ShoppingCart, Pencil, Check, FileText, Briefcase, Building2, Sliders, QrCode, Barcode, Factory, Boxes, Calculator } from 'lucide-react';
 import PurchaseWorkflowApproversSettings from './PurchaseWorkflowApproversSettings';
 
 interface Props {
@@ -153,6 +153,7 @@ const PERMISSION_GROUPS = [
             { id: 'canViewSayan', label: 'دسترسی کلی به گزارشات سایان' },
             { id: 'canViewSayanTraz', label: 'مشاهده بخش تراز و مانده اشخاص سایان' },
             { id: 'canViewSayanSales', label: 'مشاهده بخش فروش و تحلیل مقایسه‌ای سایان' },
+            { id: 'canViewSayanInvoices', label: 'مشاهده گزارش فاکتور فروش و خرید (تفکیک اشخاص و اقلام)' },
             { id: 'canViewSayanProduction', label: 'مشاهده بخش تولید روزانه سایان' },
             { id: 'canViewSayanProdReturns', label: 'مشاهده بخش رسید برگشت از تولید سایان (۴۴)' },
             { id: 'canViewSayanCheques', label: 'مشاهده بخش لیست چک‌های سایان' },
@@ -185,6 +186,77 @@ const PERMISSION_GROUPS = [
         items: [
             { id: 'canAccessChequeReceipts', label: 'مشاهده و دسترسی به ماژول مستقل رسید دریافت چک عمومی (غیر سایان)' }
         ] 
+    },
+    { 
+        id: 'barcode', 
+        title: 'بخش بارکدخوان، اتصال مستقیم PC و اسکنر سایان', 
+        icon: Barcode, 
+        color: 'indigo', 
+        items: [
+            { id: 'canAccessBarcodeToPc', label: 'دسترسی به ماژول بارکدخوان به کامپیوتر و تایپ مستقیم در سایان (PC Bridge)' },
+            { id: 'canUseSayanBarcodeRemittance', label: 'دسترسی به صدور حواله فروش و بین‌انبار سایان با بارکدخوان و دوربین' }
+        ] 
+    },
+    {
+        id: 'industrial_erp_core',
+        title: 'حسابداری صنعتی (۱) — دسترسی کلی، محرمانگی مالی و شرکت‌ها',
+        icon: Factory,
+        color: 'emerald',
+        items: [
+            { id: 'canAccessIndustrialErp', label: 'ورود کلی به ماژول حسابداری صنعتی، تولید و انبار ERP' },
+            { id: 'canErpViewFinancialAmounts', label: '🔒 مجوز رویت مبالغ ریالی و قیمت‌های خرید/فروش (محرمانه مالی)' },
+            { id: 'canErpViewCostPrice', label: '🔒 مجوز محرمانه رویت بهای تمام‌شده نخ، دستمزد و سربار' },
+            { id: 'canErpSyncWithSayan', label: 'مدیریت سینک بارکدها و همگام‌سازی با سایان' },
+            { id: 'canErpManageCompanies', label: 'مدیریت شرکت‌های مستقل ERP و پنل انتقال تراز افتتاحیه/کات‌آور سایان' }
+        ]
+    },
+    {
+        id: 'industrial_erp_warehouse',
+        title: 'حسابداری صنعتی (۲) — برنامه‌ریزی تولید، باسکول، لیبل QR و انبار',
+        icon: Boxes,
+        color: 'teal',
+        items: [
+            { id: 'canErpProductionLines', label: 'تعریف خطوط تولید، عملکرد خط تولید و بایگانی تولید' },
+            { id: 'canErpWeighAndLabel', label: 'توزین روی باسکول و چاپ لیبل QR کارتن' },
+            { id: 'canErpCancelLabel', label: 'ابطال یا اصلاح لیبل کارتن تولیدی' },
+            { id: 'canErpManageMasterData', label: 'تعریف کالاها و گروه‌ها، وزن دوک/کارتن و تعریف/تخصیص انبارها' },
+            { id: 'canErpViewWarehouse', label: 'مشاهده موجودی انبارها، گزارش نقطه سفارش، کاردکس و رهگیری کارتن' },
+            { id: 'canErpWarehouseDocs', label: 'ثبت اسناد انبار (ابتدای دوره، تحویل تولید، حواله فروش، بین‌انبار، مرجوعی، تعدیل و بایگانی)' }
+        ]
+    },
+    {
+        id: 'industrial_erp_commerce',
+        title: 'حسابداری صنعتی (۳) — فرمول ساخت (BOM)، بهای تمام‌شده، سفارشات و بازرگانی',
+        icon: ShoppingCart,
+        color: 'sky',
+        items: [
+            { id: 'canErpManageBom', label: 'تعریف و ویرایش فرمول تولید نخ (BOM)' },
+            { id: 'canErpCalculateCost', label: 'ثبت دستمزد/سربار و محاسبه بهای تمام‌شده تولید' },
+            { id: 'canErpOrders', label: 'دریافت سفارشات، صدور/ویرایش سند سفارش و کارتابل سفارش' },
+            { id: 'canErpCreateSalesFromRemittance', label: 'کارتابل دفتر تهران (قیمت‌گذاری و صدور فاکتور فروش از حواله خروج)' },
+            { id: 'canErpApproveSales', label: 'تایید نهایی فاکتورهای فروش قطعی' },
+            { id: 'canErpCreatePurchase', label: 'ثبت فاکتور خرید مواد و ملزومات' },
+            { id: 'canErpApprovePurchase', label: 'تایید نهایی فاکتورهای خرید' },
+            { id: 'canErpManageReturns', label: 'ثبت برگشت از فروش و برگشت از خرید' }
+        ]
+    },
+    {
+        id: 'industrial_erp_finance',
+        title: 'حسابداری صنعتی (۴) — حسابداری مالی، انبار ریالی، خزانه، حقوق و دارایی',
+        icon: Calculator,
+        color: 'purple',
+        items: [
+            { id: 'canErpWarehouseAccounting', label: 'حسابداری انبار، قیمت‌گذاری میانگین موزون و کاردکس ریالی-تعدادی' },
+            { id: 'canErpManageChartOfAccounts', label: 'مدیریت درختواره کدینگ حساب‌ها، تفصیل‌ها و لایه‌های حساب' },
+            { id: 'canErpCreateVoucher', label: 'صدور و ویرایش سند حسابداری (دوبل/اتوماتیک) و اسناد مثبته' },
+            { id: 'canErpEditVoucher', label: 'ویرایش اسناد حسابداری موقت' },
+            { id: 'canErpApproveVoucher', label: 'تایید و قطعی‌سازی اسناد حسابداری' },
+            { id: 'canErpDeleteVoucher', label: 'حذف اسناد حسابداری' },
+            { id: 'canErpViewLedgersAndTraz', label: 'مرور حساب‌ها، دفاتر کل/معین و تراز آزمایشی (۲، ۴ و ۶ ستونی)' },
+            { id: 'canErpFinancialStatements', label: 'صورت‌های مالی (سود و زیان/ترازنامه)، پایان سال و تنظیمات دوره مالی' },
+            { id: 'canErpTreasury', label: 'خزانه‌داری، معرفی بانک‌ها/دسته‌چک، اسناد خزانه و عملیات چک' },
+            { id: 'canErpPayrollAndAssets', label: 'حقوق و دستمزد (پرسنل و فیش حقوقی) و دارایی ثابت / استهلاک' }
+        ]
     },
     { 
         id: 'digital_card', 

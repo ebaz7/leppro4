@@ -9361,8 +9361,15 @@ function getErpCompaniesList(db) {
     if (!Array.isArray(db.settings.companies)) db.settings.companies = [];
     if (!Array.isArray(db.settings.companyNames)) db.settings.companyNames = [];
 
+    const normCompKey = (nameStr) => String(nameStr || '')
+        .replace(/ي/g, 'ی')
+        .replace(/ك/g, 'ک')
+        .replace(/\u200c/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
     const makeStableCompanyId = (nameStr) => {
-        const clean = String(nameStr || '').trim();
+        const clean = normCompKey(nameStr);
         let hash = 0;
         for (let i = 0; i < clean.length; i++) {
             hash = ((hash << 5) - hash) + clean.charCodeAt(i);
@@ -9377,14 +9384,16 @@ function getErpCompaniesList(db) {
     (db.settings.companies || []).forEach(c => {
         if (c && c.name && String(c.name).trim()) {
             const cleanName = String(c.name).trim();
+            const mapKey = normCompKey(cleanName);
             // Skip synthetic demo company 'comp_arian' if not in companyNames
-            if (c.id === 'comp_arian' && !(db.settings.companyNames || []).includes(cleanName) && (db.settings.companyNames || []).length > 0) {
+            if (c.id === 'comp_arian' && !(db.settings.companyNames || []).some(n => normCompKey(n) === mapKey) && (db.settings.companyNames || []).length > 0) {
                 return;
             }
-            companyMap.set(cleanName, {
+            companyMap.set(mapKey, {
                 ...c,
                 id: c.id || makeStableCompanyId(cleanName),
                 name: cleanName,
+                isAccountingEnabled: c.isAccountingEnabled !== undefined ? c.isAccountingEnabled : true,
                 banks: Array.isArray(c.banks) ? c.banks : []
             });
         }
@@ -9394,11 +9403,13 @@ function getErpCompaniesList(db) {
     (db.settings.companyNames || []).forEach(name => {
         if (name && String(name).trim()) {
             const cleanName = String(name).trim();
-            if (!companyMap.has(cleanName)) {
-                companyMap.set(cleanName, {
+            const mapKey = normCompKey(cleanName);
+            if (!companyMap.has(mapKey)) {
+                companyMap.set(mapKey, {
                     id: makeStableCompanyId(cleanName),
                     name: cleanName,
                     showInWarehouse: true,
+                    isAccountingEnabled: true,
                     banks: []
                 });
             }
@@ -9412,11 +9423,13 @@ function getErpCompaniesList(db) {
                 Object.keys(fy.companySequences).forEach(k => {
                     if (k && String(k).trim()) {
                         const cleanName = String(k).trim();
-                        if (!companyMap.has(cleanName)) {
-                            companyMap.set(cleanName, {
+                        const mapKey = normCompKey(cleanName);
+                        if (!companyMap.has(mapKey)) {
+                            companyMap.set(mapKey, {
                                 id: makeStableCompanyId(cleanName),
                                 name: cleanName,
                                 showInWarehouse: true,
+                                isAccountingEnabled: true,
                                 banks: []
                             });
                         }
@@ -11121,6 +11134,7 @@ app.post('/api/industrial-erp/import-sayan-trial-balance', async (req, res) => {
 
 // --- SETTINGS AND DATABASE CONFIGURATION ENDPOINTS ---
 app.get('/api/settings', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const db = getDb();
     res.json(db.settings || {});
 });
@@ -13726,15 +13740,18 @@ app.get('/api/secretariat/onlyoffice/health', async (req, res) => {
         }
     }
 
-    // 3. Test public demo server
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const resp = await fetch('https://documentserver.onlyoffice.com/web-apps/apps/api/documents/api.js', { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (resp.ok) publicOnline = true;
-    } catch (e) {
-        publicOnline = false;
+    // 3. Only test external public demo server if explicitly requested AND no local/custom server is online
+    // (Prevents 2.5s timeout stalls on Iranian National Intranet / offline LAN environments)
+    if (!localOnline && !customOnline && req.query.checkPublic === 'true') {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            const resp = await fetch('https://documentserver.onlyoffice.com/web-apps/apps/api/documents/api.js', { signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (resp.ok) publicOnline = true;
+        } catch (e) {
+            publicOnline = false;
+        }
     }
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
@@ -13755,9 +13772,11 @@ app.get('/api/secretariat/onlyoffice/health', async (req, res) => {
         publicDemo: {
             online: publicOnline,
             url: 'https://documentserver.onlyoffice.com',
-            message: publicOnline ? 'سرور آنلاین و دمو آماده استفاده است' : 'عدم دسترسی به سرور عمومی اینترنت'
+            message: publicOnline ? 'سرور آنلاین و دمو آماده استفاده است' : 'بررسی سرور خارجی غیرفعال (حالت تمام‌داخلی / اینترانت)'
         },
-        recommendedUrl: localOnline ? `${protocol}://${host}/onlyoffice-proxy` : (publicOnline ? 'https://documentserver.onlyoffice.com' : `${protocol}://${host}/onlyoffice-proxy`)
+        recommendedUrl: localOnline
+            ? `${protocol}://${host}/onlyoffice-proxy`
+            : (customOnline && customTarget ? customTarget : `${protocol}://${host}/onlyoffice-proxy`)
     });
 });
 

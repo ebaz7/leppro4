@@ -225,54 +225,8 @@ export const PersianHandwritingPad: React.FC<PersianHandwritingPadProps> = ({
 
     try {
       const canvas = canvasRef.current;
-      const width = canvas ? canvas.width : 500;
-      const height = canvas ? canvas.height : 250;
 
-      const languageCode = languageMode === 'fa' ? 'fa-t-i0-handwrit' : 'en-t-i0-handwrit';
-
-      const payload = {
-        app: 'translate',
-        device: 'desktop',
-        input_type: '0',
-        itc: languageCode,
-        requests: [
-          {
-            writing_area_width: width,
-            writing_area_height: height,
-            ink: targetStrokes
-          }
-        ]
-      };
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
-
-      try {
-        const response = await fetch('https://inputtools.google.com/request?itc=' + languageCode + '&app=translate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data[0] === 'SUCCESS') {
-            const results = data[1][0][1];
-            if (results && results.length > 0) {
-              setCandidates(results);
-              return;
-            }
-          }
-        }
-      } catch (netErr) {
-        // Fallback to local offline OCR on canvas
-      }
-
-      // Local offline OCR fallback via Tesseract (Works 100% on LAN / National Internet)
+      // 100% Local offline OCR via self-hosted Tesseract (Works completely without international internet / on LAN & National Intranet)
       if (canvas) {
         try {
           const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
@@ -280,7 +234,12 @@ export const PersianHandwritingPad: React.FC<PersianHandwritingPadProps> = ({
           const ocrRes = await Tesseract.recognize(dataUrl, lang, TESSERACT_OFFLINE_CONFIG);
           const recognized = (ocrRes.data.text || '').trim();
           if (recognized) {
-            setCandidates([recognized]);
+            const lines = recognized
+              .split(/\r?\n/)
+              .map(l => l.trim())
+              .filter(Boolean);
+            const uniqueCandidates = Array.from(new Set([recognized, ...lines])).slice(0, 5);
+            setCandidates(uniqueCandidates);
             return;
           }
         } catch (ocrErr) {

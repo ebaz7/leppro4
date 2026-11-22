@@ -400,7 +400,7 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
                 canViewSecurity: true, canCreateSecurityLog: true, canApproveSecuritySupervisor: true, canManagePurchase: true,
                 canViewNotifications: true, canCreateNotifications: true, canCreateAnnouncements: true,
                 canViewCustomerBalances: true, canImportCustomerBalances: true,
-                canViewSayan: true, canViewSayanTraz: true, canViewSayanSales: true, canViewSayanProduction: true, canViewSayanProdReturns: true, canViewSayanCheques: true, canViewSayanRemittances: true, canViewSayanWarehouseOverview: true, canViewSayanWarehouseWidget: true,
+                canViewSayan: true, canViewSayanTraz: true, canViewSayanSales: true, canViewSayanInvoices: true, canViewSayanProduction: true, canViewSayanProdReturns: true, canViewSayanCheques: true, canViewSayanRemittances: true, canViewSayanWarehouseOverview: true, canViewSayanWarehouseWidget: true,
                 canAccessSayanRegistrations: true, canSayanPreInvoices: true,
                 canSayanRegisterCheque: true, canSayanEditReceipt: true, canSayanApproveAccounting: true, canSayanApproveCeo: true, canSayanDeleteReceipt: true,
                 canAccessChequeReceipts: true,
@@ -408,7 +408,10 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
                 canErpManageBom: true, canErpCalculateCost: true, canErpViewCostPrice: true, canErpViewFinancialAmounts: true,
                 canErpCreatePurchase: true, canErpApprovePurchase: true, canErpCreateSalesFromRemittance: true, canErpApproveSales: true, canErpManageReturns: true,
                 canErpManageChartOfAccounts: true, canErpCreateVoucher: true, canErpEditVoucher: true, canErpApproveVoucher: true, canErpDeleteVoucher: true,
-                canErpViewLedgersAndTraz: true, canErpSyncWithSayan: true
+                canErpViewLedgersAndTraz: true, canErpSyncWithSayan: true,
+                canErpProductionLines: true, canErpWarehouseDocs: true, canErpTreasury: true, canErpOrders: true,
+                canErpWarehouseAccounting: true, canErpFinancialStatements: true, canErpPayrollAndAssets: true, canErpManageCompanies: true,
+                canAccessBarcodeToPc: true, canUseSayanBarcodeRemittance: true
             };
         }
 
@@ -439,7 +442,7 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
             canViewSecurity: true, canCreateSecurityLog: true, canApproveSecuritySupervisor: true, canManagePurchase: true,
             canViewNotifications: true, canCreateNotifications: true, canCreateAnnouncements: true,
             canViewCustomerBalances: true, canImportCustomerBalances: true,
-            canViewSayan: true, canViewSayanTraz: true, canViewSayanSales: true, canViewSayanProduction: true, canViewSayanProdReturns: true, canViewSayanCheques: true, canViewSayanRemittances: true, canViewSayanWarehouseOverview: true, canViewSayanWarehouseWidget: true,
+            canViewSayan: true, canViewSayanTraz: true, canViewSayanSales: true, canViewSayanInvoices: true, canViewSayanProduction: true, canViewSayanProdReturns: true, canViewSayanCheques: true, canViewSayanRemittances: true, canViewSayanWarehouseOverview: true, canViewSayanWarehouseWidget: true,
             canAccessSayanRegistrations: true, canSayanPreInvoices: true,
             canSayanRegisterCheque: true, canSayanEditReceipt: true, canSayanApproveAccounting: true, canSayanApproveCeo: true, canSayanFinalApprove: true, canSayanDeleteReceipt: true,
             canAccessChequeReceipts: true,
@@ -453,7 +456,10 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
             canErpManageBom: true, canErpCalculateCost: true, canErpViewCostPrice: true, canErpViewFinancialAmounts: true,
             canErpCreatePurchase: true, canErpApprovePurchase: true, canErpCreateSalesFromRemittance: true, canErpApproveSales: true, canErpManageReturns: true,
             canErpManageChartOfAccounts: true, canErpCreateVoucher: true, canErpEditVoucher: true, canErpApproveVoucher: true, canErpDeleteVoucher: true,
-            canErpViewLedgersAndTraz: true, canErpSyncWithSayan: true
+            canErpViewLedgersAndTraz: true, canErpSyncWithSayan: true,
+            canErpProductionLines: true, canErpWarehouseDocs: true, canErpTreasury: true, canErpOrders: true,
+            canErpWarehouseAccounting: true, canErpFinancialStatements: true, canErpPayrollAndAssets: true, canErpManageCompanies: true,
+            canAccessBarcodeToPc: true, canUseSayanBarcodeRemittance: true
         };
     }
 
@@ -470,12 +476,43 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
         canViewSecurity: false, canCreateSecurityLog: false, canApproveSecuritySupervisor: false,
         canViewNotifications: false, canCreateNotifications: false, canCreateAnnouncements: false,
         canViewCustomerBalances: false, canImportCustomerBalances: false,
-        canViewSayan: false, canViewSayanTraz: false, canViewSayanSales: false, canViewSayanProduction: false, canViewSayanProdReturns: false, canViewSayanCheques: false, canViewSayanRemittances: false, canViewSayanWarehouseOverview: false, canViewSayanWarehouseWidget: false,
+        canViewSayan: false, canViewSayanTraz: false, canViewSayanSales: false, canViewSayanInvoices: false, canViewSayanProduction: false, canViewSayanProdReturns: false, canViewSayanCheques: false, canViewSayanRemittances: false, canViewSayanWarehouseOverview: false, canViewSayanWarehouseWidget: false,
         canAccessSayanRegistrations: false, canSayanPreInvoices: false,
         canSayanRegisterCheque: false, canSayanEditReceipt: false, canSayanApproveAccounting: false, canSayanApproveCeo: false, canSayanFinalApprove: false, canSayanDeleteReceipt: false,
         canAccessChequeReceipts: false,
         canAccessDigitalCard: false,
-        canManageDigitalCard: false
+        canManageDigitalCard: false,
+        canAccessBarcodeToPc: false,
+        canUseSayanBarcodeRemittance: false,
+        canAccessIndustrialErp: false,
+        canErpViewWarehouse: false,
+        canErpManageMasterData: false,
+        canErpWeighAndLabel: false,
+        canErpCancelLabel: false,
+        canErpManageBom: false,
+        canErpCalculateCost: false,
+        canErpViewCostPrice: false,
+        canErpViewFinancialAmounts: false,
+        canErpCreatePurchase: false,
+        canErpApprovePurchase: false,
+        canErpCreateSalesFromRemittance: false,
+        canErpApproveSales: false,
+        canErpManageReturns: false,
+        canErpManageChartOfAccounts: false,
+        canErpCreateVoucher: false,
+        canErpEditVoucher: false,
+        canErpApproveVoucher: false,
+        canErpDeleteVoucher: false,
+        canErpViewLedgersAndTraz: false,
+        canErpSyncWithSayan: false,
+        canErpProductionLines: false,
+        canErpWarehouseDocs: false,
+        canErpTreasury: false,
+        canErpOrders: false,
+        canErpWarehouseAccounting: false,
+        canErpFinancialStatements: false,
+        canErpPayrollAndAssets: false,
+        canErpManageCompanies: false
     };
 
     // Apply System Defaults (Hardcoded Logic)
@@ -774,6 +811,16 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
         if (userObject.canManageSecretariatSettings !== undefined) {
             perms.canManageSecretariatSettings = userObject.canManageSecretariatSettings;
         }
+        // --- Barcode & Sayan Scanner & Invoices User Overrides ---
+        if (userObject.canAccessBarcodeToPc === true) {
+            perms.canAccessBarcodeToPc = true;
+        }
+        if (userObject.canUseSayanBarcodeRemittance === true) {
+            perms.canUseSayanBarcodeRemittance = true;
+        }
+        if (userObject.canViewSayanInvoices === true) {
+            perms.canViewSayanInvoices = true;
+        }
         // --- Industrial ERP Granular User Overrides ---
         const erpKeys: (keyof User)[] = [
             'canAccessIndustrialErp',
@@ -796,17 +843,36 @@ export const getRolePermissions = (userRole: string, settings: SystemSettings | 
             'canErpApproveVoucher',
             'canErpDeleteVoucher',
             'canErpViewLedgersAndTraz',
-            'canErpSyncWithSayan'
+            'canErpSyncWithSayan',
+            'canErpProductionLines',
+            'canErpWarehouseDocs',
+            'canErpTreasury',
+            'canErpOrders',
+            'canErpWarehouseAccounting',
+            'canErpFinancialStatements',
+            'canErpPayrollAndAssets',
+            'canErpManageCompanies'
         ];
         for (const k of erpKeys) {
-            if ((userObject as any)[k] !== undefined) {
-                (perms as any)[k] = Boolean((userObject as any)[k]);
+            if ((userObject as any)[k] === true) {
+                (perms as any)[k] = true;
             }
         }
-        // Auto-grant module entry if any sub-permission is explicitly granted to the user
+        // Auto-grant module entry if any sub-permission is explicitly enabled via role or user
         if (erpKeys.some(k => k !== 'canAccessIndustrialErp' && Boolean((perms as any)[k]))) {
             perms.canAccessIndustrialErp = true;
         }
+    } else {
+        const anyErpPerm = [
+            'canErpViewWarehouse', 'canErpManageMasterData', 'canErpWeighAndLabel', 'canErpCancelLabel',
+            'canErpManageBom', 'canErpCalculateCost', 'canErpCreatePurchase', 'canErpApprovePurchase',
+            'canErpCreateSalesFromRemittance', 'canErpApproveSales', 'canErpManageReturns',
+            'canErpManageChartOfAccounts', 'canErpCreateVoucher', 'canErpEditVoucher', 'canErpApproveVoucher',
+            'canErpDeleteVoucher', 'canErpViewLedgersAndTraz', 'canErpSyncWithSayan',
+            'canErpProductionLines', 'canErpWarehouseDocs', 'canErpTreasury', 'canErpOrders',
+            'canErpWarehouseAccounting', 'canErpFinancialStatements', 'canErpPayrollAndAssets', 'canErpManageCompanies'
+        ].some(k => Boolean((perms as any)[k]));
+        if (anyErpPerm) perms.canAccessIndustrialErp = true;
     }
 
     // If user has permission to manage/attach files to payment archives, they inherently need view access to payments

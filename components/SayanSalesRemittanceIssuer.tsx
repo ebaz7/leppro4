@@ -53,6 +53,8 @@ import jsQR from 'jsqr';
 import * as jalaali from 'jalaali-js';
 import { apiCall } from '../services/apiService';
 import { openSendToChat } from '../services/chatShareService';
+import { getRolePermissions } from '../services/authService';
+import { UserRole } from '../types';
 import BarcodeToPcBridge from './BarcodeToPcBridge';
 import {
   normalizeScannedBarcode,
@@ -267,8 +269,29 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
   onSuccessRegistered,
   onClose
 }) => {
-  // Navigation / View State
-  const [activeSubTab, setActiveSubTab] = useState<'issuer' | 'archive' | 'warehouses' | 'barcode_to_pc'>(initialSubTab);
+  const isAdminUser = currentUser?.role === UserRole.ADMIN;
+  const rolePerms = useMemo(
+    () => (currentUser ? getRolePermissions(currentUser.role, settings || null, currentUser) : null),
+    [currentUser, settings]
+  );
+  const canUseBarcodeToPc = isAdminUser || rolePerms?.canAccessBarcodeToPc === true;
+  const canUseSayanRemittance = isAdminUser || rolePerms?.canUseSayanBarcodeRemittance === true;
+
+  // Navigation / View State (respecting user barcode permissions)
+  const [activeSubTab, setActiveSubTab] = useState<'issuer' | 'archive' | 'warehouses' | 'barcode_to_pc'>(() => {
+    if (initialSubTab === 'barcode_to_pc') {
+      return canUseBarcodeToPc ? 'barcode_to_pc' : (canUseSayanRemittance ? 'issuer' : 'barcode_to_pc');
+    }
+    return canUseSayanRemittance ? initialSubTab : (canUseBarcodeToPc ? 'barcode_to_pc' : initialSubTab);
+  });
+
+  useEffect(() => {
+    if (activeSubTab === 'barcode_to_pc' && !canUseBarcodeToPc && canUseSayanRemittance) {
+      setActiveSubTab('issuer');
+    } else if (activeSubTab !== 'barcode_to_pc' && !canUseSayanRemittance && canUseBarcodeToPc) {
+      setActiveSubTab('barcode_to_pc');
+    }
+  }, [activeSubTab, canUseBarcodeToPc, canUseSayanRemittance]);
 
   // Form Headers
   const [warehouses, setWarehouses] = useState<WarehouseItem[]>([]);
@@ -1581,51 +1604,57 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
 
           <div className="flex items-center gap-2">
             <div className="p-1 rounded-xl bg-slate-100 dark:bg-zinc-800 flex items-center gap-1">
-              <button
-                onClick={() => setActiveSubTab('issuer')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'issuer'
-                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
-                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
-                }`}
-              >
-                <Package size={14} />
-                <span>صدور حواله</span>
-              </button>
-              <button
-                onClick={() => setActiveSubTab('archive')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'archive'
-                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
-                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
-                }`}
-              >
-                <History size={14} />
-                <span>بایگانی ({archiveList.length})</span>
-              </button>
-              <button
-                onClick={() => setActiveSubTab('warehouses')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'warehouses'
-                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
-                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
-                }`}
-              >
-                <Building2 size={14} />
-                <span>انبارها و آمار</span>
-              </button>
-              <button
-                onClick={() => setActiveSubTab('barcode_to_pc')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeSubTab === 'barcode_to_pc'
-                    ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
-                }`}
-                title="اتصال مستقیم بارکدخوان اندروید به پنجره سایان روی کامپیوتر ویندوز"
-              >
-                <Monitor size={14} />
-                <span>اتصال مستقیم PC</span>
-              </button>
+              {canUseSayanRemittance && (
+                <>
+                  <button
+                    onClick={() => setActiveSubTab('issuer')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                      activeSubTab === 'issuer'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                    }`}
+                  >
+                    <Package size={14} />
+                    <span>صدور حواله</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveSubTab('archive')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                      activeSubTab === 'archive'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                    }`}
+                  >
+                    <History size={14} />
+                    <span>بایگانی ({archiveList.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveSubTab('warehouses')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                      activeSubTab === 'warehouses'
+                        ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                        : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                    }`}
+                  >
+                    <Building2 size={14} />
+                    <span>انبارها و آمار</span>
+                  </button>
+                </>
+              )}
+              {canUseBarcodeToPc && (
+                <button
+                  onClick={() => setActiveSubTab('barcode_to_pc')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+                    activeSubTab === 'barcode_to_pc'
+                      ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                  }`}
+                  title="اتصال مستقیم بارکدخوان اندروید به پنجره سایان روی کامپیوتر ویندوز"
+                >
+                  <Monitor size={14} />
+                  <span>اتصال مستقیم PC</span>
+                </button>
+              )}
             </div>
 
             {onClose && (
@@ -1678,65 +1707,87 @@ export const SayanSalesRemittanceIssuer: React.FC<SayanSalesRemittanceIssuerProp
             )}
           </div>
 
-          <div className="grid grid-cols-4 gap-1 p-0.5 rounded-xl bg-slate-100 dark:bg-zinc-800">
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('issuer')}
-              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
-                activeSubTab === 'issuer'
-                  ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
-                  : 'text-slate-600 dark:text-zinc-400'
-              }`}
-            >
-              <Package size={11} className="shrink-0" />
-              <span className="truncate">صدور</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('barcode_to_pc')}
-              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
-                activeSubTab === 'barcode_to_pc'
-                  ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                  : 'text-slate-600 dark:text-zinc-400'
-              }`}
-            >
-              <Monitor size={11} className="shrink-0" />
-              <span className="truncate">به PC</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('archive')}
-              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
-                activeSubTab === 'archive'
-                  ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
-                  : 'text-slate-600 dark:text-zinc-400'
-              }`}
-            >
-              <History size={11} className="shrink-0" />
-              <span className="truncate">بایگانی ({archiveList.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSubTab('warehouses')}
-              className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
-                activeSubTab === 'warehouses'
-                  ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
-                  : 'text-slate-600 dark:text-zinc-400'
-              }`}
-            >
-              <Building2 size={11} className="shrink-0" />
-              <span className="truncate">انبارها</span>
-            </button>
+          <div className={`grid gap-1 p-0.5 rounded-xl bg-slate-100 dark:bg-zinc-800 ${
+            canUseSayanRemittance && canUseBarcodeToPc
+              ? 'grid-cols-4'
+              : canUseSayanRemittance
+              ? 'grid-cols-3'
+              : 'grid-cols-1'
+          }`}>
+            {canUseSayanRemittance && (
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('issuer')}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
+                  activeSubTab === 'issuer'
+                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400'
+                }`}
+              >
+                <Package size={11} className="shrink-0" />
+                <span className="truncate">صدور</span>
+              </button>
+            )}
+            {canUseBarcodeToPc && (
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('barcode_to_pc')}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
+                  activeSubTab === 'barcode_to_pc'
+                    ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400'
+                }`}
+              >
+                <Monitor size={11} className="shrink-0" />
+                <span className="truncate">به PC</span>
+              </button>
+            )}
+            {canUseSayanRemittance && (
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('archive')}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
+                  activeSubTab === 'archive'
+                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400'
+                }`}
+              >
+                <History size={11} className="shrink-0" />
+                <span className="truncate">بایگانی ({archiveList.length})</span>
+              </button>
+            )}
+            {canUseSayanRemittance && (
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('warehouses')}
+                className={`py-1.5 px-1 rounded-lg text-[10px] font-black flex items-center justify-center gap-0.5 transition-all ${
+                  activeSubTab === 'warehouses'
+                    ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                    : 'text-slate-600 dark:text-zinc-400'
+                }`}
+              >
+                <Building2 size={11} className="shrink-0" />
+                <span className="truncate">انبارها</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Main Workspace */}
-      {activeSubTab === 'barcode_to_pc' ? (
+      {!canUseBarcodeToPc && !canUseSayanRemittance ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+          <AlertCircle size={40} className="text-rose-500 mb-3" />
+          <h3 className="text-sm font-black text-slate-800 dark:text-white mb-1">عدم دسترسی به بخش بارکدخوان و حواله سایان</h3>
+          <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-md">
+            حساب کاربری شما مجوز دسترسی به بخش بارکدخوان و صدور حواله سایان را ندارد. لطفاً از مدیر سیستم بخواهید در بخش تنظیمات دسترسی‌ها این مجوز را فعال کند.
+          </p>
+        </div>
+      ) : activeSubTab === 'barcode_to_pc' && canUseBarcodeToPc ? (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <BarcodeToPcBridge currentUser={currentUser} embedded />
         </div>
-      ) : activeSubTab === 'issuer' ? (
+      ) : activeSubTab === 'issuer' && canUseSayanRemittance ? (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5 space-y-2.5 sm:space-y-4 pb-24 sm:pb-6 custom-scrollbar">
 

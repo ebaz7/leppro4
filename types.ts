@@ -109,6 +109,17 @@ export interface User {
   canErpDeleteVoucher?: boolean;
   canErpViewLedgersAndTraz?: boolean;
   canErpSyncWithSayan?: boolean;
+  canErpProductionLines?: boolean;
+  canErpWarehouseDocs?: boolean;
+  canErpTreasury?: boolean;
+  canErpOrders?: boolean;
+  canErpWarehouseAccounting?: boolean;
+  canErpFinancialStatements?: boolean;
+  canErpPayrollAndAssets?: boolean;
+  canErpManageCompanies?: boolean;
+  canAccessBarcodeToPc?: boolean;
+  canUseSayanBarcodeRemittance?: boolean;
+  canViewSayanInvoices?: boolean;
 }
 
 export interface WorkstationWindow {
@@ -250,6 +261,7 @@ export interface RolePermissions {
   canViewSayan?: boolean;
   canViewSayanTraz?: boolean;
   canViewSayanSales?: boolean;
+  canViewSayanInvoices?: boolean;
   canViewSayanProduction?: boolean;
   canViewSayanProdReturns?: boolean;
   canViewSayanCheques?: boolean;
@@ -296,6 +308,17 @@ export interface RolePermissions {
   canErpDeleteVoucher?: boolean;
   canErpViewLedgersAndTraz?: boolean;
   canErpSyncWithSayan?: boolean;
+  canErpProductionLines?: boolean;
+  canErpWarehouseDocs?: boolean;
+  canErpTreasury?: boolean;
+  canErpOrders?: boolean;
+  canErpWarehouseAccounting?: boolean;
+  canErpFinancialStatements?: boolean;
+  canErpPayrollAndAssets?: boolean;
+  canErpManageCompanies?: boolean;
+  // --- دسترسی‌های بارکدخوان، اتصال به کامپیوتر و اسکنر سایان ---
+  canAccessBarcodeToPc?: boolean;
+  canUseSayanBarcodeRemittance?: boolean;
   [key: string]: boolean | undefined;
 }
 

@@ -1,4 +1,5 @@
 import ProductionReturnTab from './ProductionReturnTab';
+import SayanInvoicesReportTab from './SayanInvoicesReportTab';
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { PinchZoomContainer } from './PinchZoomContainer';
@@ -192,6 +193,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         canViewSayan: true,
         canViewSayanTraz: true,
         canViewSayanSales: true,
+        canViewSayanInvoices: true,
         canViewSayanProduction: true,
         canViewSayanProdReturns: true,
         canViewSayanCheques: true,
@@ -201,6 +203,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
 
     const isTrazAllowed = currentUser?.role === UserRole.ADMIN || perms.canViewSayan === true || perms.canViewSayanTraz === true;
     const isSalesAllowed = currentUser?.role === UserRole.ADMIN || perms.canViewSayan === true || perms.canViewSayanSales === true;
+    const isInvoicesAllowed = currentUser?.role === UserRole.ADMIN || perms.canViewSayan === true || (perms as any).canViewSayanInvoices === true || perms.canViewSayanSales === true;
     const isProductionAllowed = currentUser?.role === UserRole.ADMIN || perms.canViewSayan === true || perms.canViewSayanProduction === true;
     const isProdReturnsAllowed = currentUser?.role === UserRole.ADMIN || perms.canViewSayan === true || perms.canViewSayanProdReturns === true;
     const isChequesAllowed = currentUser?.role === UserRole.ADMIN || perms.canViewSayan === true || perms.canViewSayanCheques === true;
@@ -212,6 +215,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         try {
             const saved = localStorage.getItem('sayan_reports_active_tab');
             if (saved === 'sales' && isSalesAllowed) return 'sales';
+            if (saved === 'invoices' && isInvoicesAllowed) return 'invoices';
             if (saved === 'traz' && isTrazAllowed) return 'traz';
             if (saved === 'production' && isProductionAllowed) return 'production';
             if (saved === 'cheques' && isChequesAllowed) return 'cheques';
@@ -220,6 +224,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
         } catch {}
         if (isTrazAllowed) return 'traz';
         if (isSalesAllowed) return 'sales';
+        if (isInvoicesAllowed) return 'invoices';
         if (isProductionAllowed) return 'production';
         if (isProdReturnsAllowed) return 'prodReturns';
         if (isChequesAllowed) return 'cheques';
@@ -6275,6 +6280,18 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         <span>گزارش فروش و برگشت از فروش</span>
                     </button>
                 )}
+                {isInvoicesAllowed && (
+                    <button 
+                        onClick={() => {
+                            setActiveTab('invoices');
+                            try { localStorage.setItem('sayan_reports_active_tab', 'invoices'); } catch (e) {}
+                        }} 
+                        className={`flex items-center justify-center gap-1.5 py-2 px-3 sm:px-4 rounded-lg text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${activeTab === 'invoices' ? 'bg-white dark:bg-zinc-900 shadow-sm text-indigo-600 dark:text-indigo-400' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-zinc-700/50 hover:text-slate-900'}`}
+                    >
+                        <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-indigo-600 dark:text-indigo-400" />
+                        <span>گزارش فاکتور فروش و خرید</span>
+                    </button>
+                )}
                 {isProductionAllowed && (
                     <button 
                         onClick={() => {
@@ -11090,6 +11107,18 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                             setSendToChatDefaultMsg(defaultMsg || '');
                             setSendToChatOpen(true);
                         }}
+                    />
+                )}
+
+                {/* 9. DEDICATED SAYAN SALES & PURCHASE INVOICES REPORT TAB */}
+                {activeTab === 'invoices' && isInvoicesAllowed && (
+                    <SayanInvoicesReportTab
+                        settings={settings}
+                        currentUser={currentUser}
+                        dateFrom={dateFrom}
+                        dateTo={dateTo}
+                        runSayanQuery={runSayanQuery}
+                        initialTafsilis={tafsilis}
                     />
                 )}
             </div>

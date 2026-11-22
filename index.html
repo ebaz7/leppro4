@@ -3,7 +3,7 @@
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#2563eb" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -687,30 +687,59 @@
 
       // Universal Adaptive Viewport & Screen-Fit Engine (Android PDAs, older WebViews < Chrome 108, iOS & Mobile Web)
       (function() {
+        var resetStuckViewportZoom = function() {
+          try {
+            var vv = window.visualViewport;
+            if (!vv || vv.scale <= 1.02) return;
+            var meta = document.querySelector('meta[name="viewport"]');
+            if (meta) {
+              var original = meta.getAttribute('content') || '';
+              meta.setAttribute('content', 'width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content');
+              setTimeout(function() {
+                if (original && meta.getAttribute('content') !== original) {
+                  meta.setAttribute('content', original);
+                }
+                if (window.scrollX !== 0) {
+                  window.scrollTo(0, window.scrollY || 0);
+                }
+              }, 50);
+            }
+          } catch (e) {}
+        };
+
         var syncViewport = function() {
           try {
             var vv = window.visualViewport;
+            var scale = (vv && vv.scale) ? vv.scale : 1;
             var h = Math.round((vv && vv.height) ? vv.height : (window.innerHeight || document.documentElement.clientHeight || 0));
-            var w = Math.round((vv && vv.width) ? vv.width : (window.innerWidth || document.documentElement.clientWidth || 0));
+            // Keep layout width stable at scale 1 so zoomed visualViewport doesn't shrink UI into PDA mode
+            var layoutW = Math.round(window.innerWidth || document.documentElement.clientWidth || (vv && vv.width ? vv.width * scale : 0));
             if (h > 100) {
               document.documentElement.style.setProperty('--app-vh', h + 'px');
             }
-            if (w > 100) {
-              document.documentElement.style.setProperty('--app-vw', w + 'px');
+            if (layoutW > 100) {
+              document.documentElement.style.setProperty('--app-vw', layoutW + 'px');
             }
             // Apply proportional compact density strictly on small touch/PDA screens (never on Desktop)
             var isTouchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || /android|iphone|ipad|ipod/i.test(navigator.userAgent || '') || Boolean(window.DlkamAndroid);
-            var isCompactPda = isTouchLike && ((w > 0 && w <= 375) || (h > 0 && h <= 640));
-            var isUltraCompactPda = isTouchLike && ((w > 0 && w <= 335) || (h > 0 && h <= 540));
+            var isCompactPda = isTouchLike && ((layoutW > 0 && layoutW <= 375) || (h > 0 && h <= 640));
+            var isUltraCompactPda = isTouchLike && ((layoutW > 0 && layoutW <= 335) || (h > 0 && h <= 540));
             document.documentElement.classList.toggle('screen-compact-pda', isCompactPda);
             document.documentElement.classList.toggle('screen-ultra-compact-pda', isUltraCompactPda);
           } catch (e) {}
         };
+
         syncViewport();
         window.addEventListener('resize', syncViewport, { passive: true });
         window.addEventListener('orientationchange', function() {
-          setTimeout(syncViewport, 80);
-          setTimeout(syncViewport, 280);
+          setTimeout(function() { resetStuckViewportZoom(); syncViewport(); }, 80);
+          setTimeout(function() { resetStuckViewportZoom(); syncViewport(); }, 280);
+        }, { passive: true });
+        document.addEventListener('focusout', function() {
+          setTimeout(function() {
+            resetStuckViewportZoom();
+            syncViewport();
+          }, 160);
         }, { passive: true });
         if (window.visualViewport) {
           window.visualViewport.addEventListener('resize', syncViewport, { passive: true });

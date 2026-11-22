@@ -649,6 +649,17 @@ function App() {
       }
       
       // 2. Modals and drawers check (close top-most open modal/drawer first)
+      const mobileDrawerEl = document.querySelector('[data-mobile-menu-drawer="true"]') as HTMLElement | null;
+      if (mobileDrawerEl) {
+          const drawerStyle = window.getComputedStyle(mobileDrawerEl);
+          if (drawerStyle.display !== 'none' && drawerStyle.visibility !== 'hidden' && drawerStyle.opacity !== '0') {
+              window.dispatchEvent(new CustomEvent('CLOSE_MOBILE_MENU'));
+              setTimeout(() => window.dispatchEvent(new CustomEvent('APP_MODAL_CHECK')), 60);
+              setTimeout(() => window.dispatchEvent(new CustomEvent('APP_MODAL_CHECK')), 260);
+              return true;
+          }
+      }
+
       const activeModals = Array.from(
           document.querySelectorAll('.fixed.inset-0:not(.pointer-events-none):not(.invisible):not(.opacity-0), [role="dialog"], .notification-dropdown-container, .glass-panel.fixed:not(.pointer-events-none):not(.bottom-nav-bar), .modal-active')
       ).filter(el => {
@@ -658,7 +669,7 @@ function App() {
 
       if (activeModals.length > 0) {
           const lastModal = activeModals[activeModals.length - 1];
-          const closeBtn = lastModal.querySelector('button[onClick], .modal-close-btn, [aria-label="بستن"], [data-close-modal="true"], [data-close-announcement="true"]') as HTMLElement;
+          const closeBtn = lastModal.querySelector('[data-close-modal="true"], [data-close-announcement="true"], .modal-close-btn, [aria-label="بستن"], button[onClick]') as HTMLElement;
           if (closeBtn) {
               closeBtn.click();
           } else {
@@ -676,6 +687,8 @@ function App() {
                    window.dispatchEvent(new CustomEvent('CLOSE_ACTIVE_MODALS'));
               }
           }
+          setTimeout(() => window.dispatchEvent(new CustomEvent('APP_MODAL_CHECK')), 60);
+          setTimeout(() => window.dispatchEvent(new CustomEvent('APP_MODAL_CHECK')), 260);
           return true;
       }
 
@@ -1513,23 +1526,28 @@ function App() {
                 if (!Array.isArray(settingsData.fiscalYears)) settingsData.fiscalYears = [];
                 if (!Array.isArray(settingsData.savedContacts)) settingsData.savedContacts = [];
 
+                const normCompName = (s: any) => String(s || '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/\u200c/g, ' ').replace(/\s+/g, ' ').trim();
                 // Sync companyNames with companies
                 const companyMap = new Map<string, any>();
                 settingsData.companies.forEach((c: any) => {
                     if (c && c.name && c.name.trim()) {
-                        companyMap.set(c.name.trim(), {
+                        const key = normCompName(c.name);
+                        companyMap.set(key, {
                             ...c,
                             name: c.name.trim(),
+                            isAccountingEnabled: c.isAccountingEnabled !== undefined ? c.isAccountingEnabled : true,
                             banks: Array.isArray(c.banks) ? c.banks : []
                         });
                     }
                 });
                 settingsData.companyNames.forEach((name: string) => {
-                    if (name && name.trim() && !companyMap.has(name.trim())) {
-                        companyMap.set(name.trim(), {
+                    const key = normCompName(name);
+                    if (key && !companyMap.has(key)) {
+                        companyMap.set(key, {
                             id: Math.random().toString(36).substring(2, 11),
                             name: name.trim(),
                             showInWarehouse: true,
+                            isAccountingEnabled: true,
                             banks: []
                         });
                     }
@@ -2397,7 +2415,9 @@ function App() {
       case 'warehouse':
         return <div className="page-transition w-full"><WarehouseModule currentUser={currentUser} settings={settings} initialTab={warehouseInitialTab} financialYear={financialYear} /></div>;
       case 'industrial-erp':
-        return <div className="page-transition w-full"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>;
+        return (currentUser.role === UserRole.ADMIN || getRolePermissions(currentUser.role, settings, currentUser).canAccessIndustrialErp === true) ? (
+          <div className="page-transition w-full"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>
+        ) : <div className="p-8 text-center font-bold text-red-500">شما دسترسی لازم برای مشاهده ماژول حسابداری صنعتی را ندارید.</div>;
       case 'trade':
         return <div className="page-transition w-full"><TradeModule currentUser={currentUser} /></div>;
       case 'balances':
@@ -2415,7 +2435,9 @@ function App() {
       case 'sayan-operations':
         return <div className="page-transition w-full bg-transparent"><SayanRegistrationsModule currentUser={currentUser} settings={settings} /></div>;
       case 'barcode-to-pc':
-        return <div className="page-transition w-full bg-transparent"><BarcodeToPcBridge currentUser={currentUser} /></div>;
+        return (currentUser.role === UserRole.ADMIN || getRolePermissions(currentUser.role, settings, currentUser).canAccessBarcodeToPc === true || (currentUser as any).canAccessBarcodeToPc === true) ? (
+          <div className="page-transition w-full bg-transparent"><BarcodeToPcBridge currentUser={currentUser} /></div>
+        ) : <div className="p-8 text-center font-bold text-red-500">شما دسترسی لازم برای مشاهده بخش بارکدخوان به کامپیوتر را ندارید.</div>;
       case 'users':
         return <div className="page-transition w-full"><ManageUsers /></div>;
       case 'settings':
@@ -2623,7 +2645,7 @@ function App() {
                     {activeTab === 'manage-invoices' && <div className="page-transition flex flex-col flex-1 min-h-0"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="INVOICE" /></ErrorBoundary></div>}
                     {activeTab === 'manage-exit' && <div className="page-transition flex flex-col flex-1 min-h-0"><ErrorBoundary><ManageExitPermits currentUser={currentUser} settings={settings} statusFilter={exitPermitStatusFilter} financialYear={financialYear} mode="EXIT" /></ErrorBoundary></div>}
                     {activeTab === 'warehouse' && <div className="page-transition flex flex-col flex-1 min-h-0"><WarehouseModule currentUser={currentUser} settings={settings} initialTab={warehouseInitialTab} financialYear={financialYear} /></div>}
-                    {activeTab === 'industrial-erp' && <div className="page-transition flex flex-col flex-1 min-h-0 h-full overflow-hidden"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div>}
+                    {activeTab === 'industrial-erp' && ((currentUser.role === UserRole.ADMIN || getRolePermissions(currentUser.role, settings, currentUser).canAccessIndustrialErp === true) ? <div className="page-transition flex flex-col flex-1 min-h-0 h-full overflow-hidden"><IndustrialAccountingErpModule currentUser={currentUser} settings={settings} financialYear={financialYear} /></div> : <div className="p-8 text-center font-bold text-red-500">شما دسترسی لازم برای مشاهده ماژول حسابداری صنعتی را ندارید.</div>)}
                     {activeTab === 'trade' && <div className="page-transition flex flex-col flex-1 min-h-0"><TradeModule currentUser={currentUser} /></div>}
                     {activeTab === 'balances' && <div className="page-transition flex flex-col flex-1 min-h-0"><CustomerBalanceModule currentUser={currentUser} /></div>}
                     {activeTab === 'sales' && <div className="page-transition flex flex-col flex-1 min-h-0"><SalesCRMModule /></div>}
@@ -2632,7 +2654,7 @@ function App() {
                     {activeTab === 'ccti' && <div className="page-transition flex flex-col flex-1 min-h-0"><CctiConverter financialYear={financialYear} currentUser={currentUser} canManageArchive={currentUser.role === UserRole.ADMIN || (settings && getRolePermissions(currentUser.role, settings, currentUser).canManageCctiArchive === true)} /></div>}
                     {activeTab === 'sayan' && <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><SayanReports currentUser={currentUser} settings={settings} onNavigateToChat={(target) => { setDirectChatTarget(target); setActiveTab('chat'); }} /></div>}
                     {activeTab === 'sayan-operations' && <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><SayanRegistrationsModule currentUser={currentUser} settings={settings} /></div>}
-                    {activeTab === 'barcode-to-pc' && <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><BarcodeToPcBridge currentUser={currentUser} /></div>}
+                    {activeTab === 'barcode-to-pc' && ((currentUser.role === UserRole.ADMIN || getRolePermissions(currentUser.role, settings, currentUser).canAccessBarcodeToPc === true || (currentUser as any).canAccessBarcodeToPc === true) ? <div className="page-transition flex flex-col flex-1 min-h-0 bg-transparent"><BarcodeToPcBridge currentUser={currentUser} /></div> : <div className="p-8 text-center font-bold text-red-500">شما دسترسی لازم برای مشاهده بخش بارکدخوان به کامپیوتر را ندارید.</div>)}
                     {activeTab === 'users' && <div className="page-transition flex flex-col flex-1 min-h-0"><ManageUsers /></div>}
                     {activeTab === 'settings' && <div className="page-transition flex flex-col flex-1 min-h-0"><Settings financialYear={financialYear} settings={settings} onUpdateSettings={setSettings} /></div>}
                     {(activeTab === 'knowledge' || activeTab === 'notes') && <div className="page-transition flex flex-col flex-1 min-h-0"><KnowledgeBaseModule currentUser={currentUser} settings={settings} onUpdateSettings={setSettings} /></div>}

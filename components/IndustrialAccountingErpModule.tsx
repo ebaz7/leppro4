@@ -40,6 +40,7 @@ import {
 import { apiCall, getEffectiveApiUrl, getAuthToken, getServerHost } from '../services/apiService';
 import { saveBlobAndOpenFile } from '../services/fileService';
 import { getSettings } from '../services/storageService';
+import { getRolePermissions } from '../services/authService';
 import { User, UserRole } from '../types';
 import {
   ErpCompanySummary,
@@ -104,14 +105,43 @@ interface IndustrialAccountingErpModuleProps {
   financialYear?: string;
 }
 
+const normCompKey = (nameStr: string) =>
+  String(nameStr || '')
+    .trim()
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/\u200c/g, ' ')
+    .replace(/\s+/g, ' ');
+
 const makeStableCompanyId = (nameStr: string) => {
-  const clean = String(nameStr || '').trim();
+  const clean = normCompKey(nameStr);
   let hash = 0;
   for (let i = 0; i < clean.length; i++) {
     hash = ((hash << 5) - hash) + clean.charCodeAt(i);
     hash |= 0;
   }
   return 'comp_' + Math.abs(hash).toString(36);
+};
+
+const isCompanyExplicitlyDisabledInSettings = (
+  comp: { id?: string; name?: string } | null | undefined,
+  sysSettingsObj: any
+): boolean => {
+  if (!comp) return false;
+  const rawComps = Array.isArray(sysSettingsObj?.companies) ? sysSettingsObj.companies : [];
+  const targetId = String(comp.id || '').trim();
+  const targetKey = normCompKey(comp.name || '');
+  return rawComps.some((c: any) => {
+    if (!c || c.isAccountingEnabled !== false) return false;
+    const cId = String(c.id || '').trim();
+    const cKey = normCompKey(c.name || '');
+    const cStableId = cKey ? makeStableCompanyId(cKey) : '';
+    return (
+      (targetId && cId && targetId === cId) ||
+      (targetId && cStableId && targetId === cStableId) ||
+      (targetKey && cKey && targetKey === cKey)
+    );
+  });
 };
 
 const getCandidateCacheKeys = (companyId: string, companyName: string): string[] => {
@@ -170,7 +200,13 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       const raw = localStorage.getItem('delcom_erp_selected_company');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && parsed.id && parsed.name) return parsed;
+        if (parsed && parsed.id && parsed.name) {
+          if (isCompanyExplicitlyDisabledInSettings(parsed, settings)) {
+            localStorage.removeItem('delcom_erp_selected_company');
+            return null;
+          }
+          return parsed;
+        }
       }
     } catch {}
     return null;
@@ -555,21 +591,160 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     }
   };
 
-  // Granular Access Matrix
-  const userAny = currentUser as any;
-  const isAdmin =
-    currentUser.role === UserRole.ADMIN ||
-    currentUser.role === UserRole.MANAGER ||
-    currentUser.role === UserRole.FINANCIAL ||
-    Boolean(userAny.canManageSettings);
+  // Granular Access Matrix (strictly synced with Settings RolePermissions & ManageUsers)
+  const isAdmin = currentUser.role === UserRole.ADMIN;
+  const rolePerms = React.useMemo(
+    () => getRolePermissions(currentUser.role, settings || null, currentUser),
+    [currentUser, settings]
+  );
 
-  const perms = userAny.industrialErpPermissions || {};
-  const canWeighAndPrintLabel = isAdmin || Boolean(perms.canWeighAndPrintLabel ?? true);
-  const canIssueRemittance = isAdmin || Boolean(perms.canIssueWarehouseRemittance ?? true);
-  const canCreateSalesFromRemittance = isAdmin || Boolean(perms.canCreateSalesInvoiceFromRemittance ?? true);
-  const canViewCostPrice = isAdmin || Boolean(perms.canViewCostPrice ?? true);
-  const canViewFinancialAmounts = isAdmin || Boolean(perms.canViewFinancialAmounts ?? true);
-  const canManageMasterData = isAdmin || Boolean(perms.canManageMasterData ?? true);
+  const canWeighAndPrintLabel = isAdmin || rolePerms.canErpWeighAndLabel === true;
+  const canIssueRemittance = isAdmin || rolePerms.canErpWarehouseDocs === true;
+  const canCreateSalesFromRemittance =
+    isAdmin || rolePerms.canErpCreateSalesFromRemittance === true || rolePerms.canErpApproveSales === true;
+  const canViewCostPrice = isAdmin || rolePerms.canErpCalculateCost === true || rolePerms.canErpViewFinancialAmounts === true;
+  const canViewFinancialAmounts = isAdmin || rolePerms.canErpViewFinancialAmounts === true;
+  const canManageMasterData = isAdmin || rolePerms.canErpManageMasterData === true;
+  const canSyncSayan = isAdmin || rolePerms.canErpSyncWithSayan === true || rolePerms.canErpManageCompanies === true;
+  const canManageCompanies = isAdmin || rolePerms.canErpManageCompanies === true;
+  const canManageCompanyBackups =
+    isAdmin || rolePerms.canErpManageCompanies === true || rolePerms.canErpFinancialStatements === true;
+
+  const canAccessSubView = React.useCallback(
+    (subId: ErpSubViewId): boolean => {
+      if (isAdmin) return true;
+      switch (subId) {
+        case 'prd_lines':
+          return rolePerms.canErpProductionLines === true || rolePerms.canErpManageMasterData === true;
+        case 'prd_items':
+        case 'wh_items':
+        case 'wh_warehouses':
+          return rolePerms.canErpManageMasterData === true;
+        case 'prd_bom':
+          return rolePerms.canErpManageBom === true || rolePerms.canErpCalculateCost === true;
+        case 'prd_line_perf':
+        case 'wh_weighbridge':
+          return (
+            rolePerms.canErpWeighAndLabel === true ||
+            rolePerms.canErpProductionLines === true ||
+            rolePerms.canErpCancelLabel === true
+          );
+        case 'prd_archive':
+          return (
+            rolePerms.canErpProductionLines === true ||
+            rolePerms.canErpWeighAndLabel === true ||
+            rolePerms.canErpViewWarehouse === true
+          );
+        case 'wh_opening_balance':
+        case 'wh_production_delivery':
+        case 'wh_receipt_production':
+        case 'wh_sales_remittance':
+        case 'wh_exit_remittance':
+        case 'wh_inter_remittance':
+        case 'wh_inter_receipt':
+        case 'wh_sales_return':
+        case 'wh_stock_adjustment':
+        case 'wh_receipt_issue':
+        case 'wh_archive':
+        case 'wh_cartable':
+        case 'wh_stocktaking':
+          return rolePerms.canErpWarehouseDocs === true;
+        case 'wh_stock_report':
+        case 'wh_kardex':
+        case 'wh_tracking':
+          return rolePerms.canErpViewWarehouse === true || rolePerms.canErpWarehouseDocs === true;
+        case 'wacc_pricing':
+        case 'wacc_riali_kardex':
+          return rolePerms.canErpWarehouseAccounting === true || rolePerms.canErpCalculateCost === true;
+        case 'fin_chart':
+        case 'fin_tafsili':
+        case 'fin_layers':
+          return rolePerms.canErpManageChartOfAccounts === true;
+        case 'fin_voucher_new':
+          return rolePerms.canErpCreateVoucher === true || rolePerms.canErpEditVoucher === true;
+        case 'fin_supporting_docs':
+        case 'fin_voucher_list':
+          return (
+            rolePerms.canErpCreateVoucher === true ||
+            rolePerms.canErpEditVoucher === true ||
+            rolePerms.canErpApproveVoucher === true ||
+            rolePerms.canErpDeleteVoucher === true ||
+            rolePerms.canErpViewLedgersAndTraz === true
+          );
+        case 'fin_ledger_review':
+        case 'fin_trial_balance':
+          return rolePerms.canErpViewLedgersAndTraz === true;
+        case 'fin_financial_statements':
+        case 'fin_year_end':
+        case 'fin_settings':
+          return rolePerms.canErpFinancialStatements === true;
+        case 'trs_banks':
+        case 'trs_chequebooks':
+        case 'trs_doc_new':
+        case 'trs_cheque_ops':
+        case 'trs_archive':
+          return rolePerms.canErpTreasury === true;
+        case 'ord_new':
+        case 'ord_cartable':
+          return rolePerms.canErpOrders === true;
+        case 'com_tehran_pricing':
+        case 'com_sales':
+          return rolePerms.canErpCreateSalesFromRemittance === true || rolePerms.canErpApproveSales === true;
+        case 'com_purchases':
+          return rolePerms.canErpCreatePurchase === true || rolePerms.canErpApprovePurchase === true;
+        case 'com_returns':
+          return rolePerms.canErpManageReturns === true;
+        case 'pay_employees':
+        case 'pay_slips':
+        case 'ast_management':
+          return rolePerms.canErpPayrollAndAssets === true;
+        case 'mst_companies':
+          return rolePerms.canErpManageCompanies === true;
+        case 'mst_sayan_cutover':
+          return rolePerms.canErpSyncWithSayan === true || rolePerms.canErpManageCompanies === true;
+        default:
+          return rolePerms.canAccessIndustrialErp === true;
+      }
+    },
+    [isAdmin, rolePerms]
+  );
+
+  const visibleSidebarTree = React.useMemo(() => {
+    return ERP_SIDEBAR_TREE.map(cat => ({
+      ...cat,
+      groups: cat.groups
+        .map(grp => ({
+          ...grp,
+          items: grp.items.filter(item => canAccessSubView(item.id))
+        }))
+        .filter(grp => grp.items.length > 0)
+    })).filter(cat => cat.groups.length > 0);
+  }, [canAccessSubView]);
+
+  const firstAllowedSubView: ErpSubViewId | null = React.useMemo(() => {
+    for (const cat of visibleSidebarTree) {
+      for (const grp of cat.groups) {
+        if (grp.items.length > 0) return grp.items[0].id;
+      }
+    }
+    return null;
+  }, [visibleSidebarTree]);
+
+  useEffect(() => {
+    if (!firstAllowedSubView) return;
+    setOpenTabs(prev => {
+      const allowed = prev.filter(id => canAccessSubView(id));
+      if (allowed.length === 0) return [firstAllowedSubView];
+      return allowed.length === prev.length ? prev : allowed;
+    });
+    if (!canAccessSubView(activeSubView)) {
+      setActiveSubView(firstAllowedSubView);
+      const parentCat = visibleSidebarTree.find(cat =>
+        cat.groups.some(g => g.items.some(it => it.id === firstAllowedSubView))
+      );
+      if (parentCat) setExpandedCategory(parentCat.id);
+    }
+  }, [activeSubView, canAccessSubView, firstAllowedSubView, visibleSidebarTree]);
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setToastMsg({ type, text });
@@ -581,9 +756,14 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     if (subId === 'wh_weighbridge') targetId = 'prd_line_perf';
     if (subId === 'wh_exit_remittance') targetId = 'wh_sales_remittance';
 
+    if (!canAccessSubView(targetId)) {
+      showToast('error', 'شما مجوز دسترسی به این بخش از حسابداری صنعتی را ندارید.');
+      return;
+    }
+
     setActiveSubView(targetId);
     setOpenTabs(prev => (prev.includes(targetId) ? prev : [...prev, targetId]));
-    const parentCat = ERP_SIDEBAR_TREE.find(cat =>
+    const parentCat = visibleSidebarTree.find(cat =>
       cat.groups.some(g => g.items.some(it => it.id === targetId))
     );
     if (parentCat) {
@@ -605,15 +785,25 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     const companyMap = new Map<string, any>();
     const rawComps = Array.isArray(sysSettingsObj?.companies) ? sysSettingsObj.companies : [];
     const rawNames = Array.isArray(sysSettingsObj?.companyNames) ? sysSettingsObj.companyNames : [];
+    const normRawNames = new Set(rawNames.map((n: string) => normCompKey(n)).filter(Boolean));
 
     rawComps.forEach((c: any) => {
       if (c && c.name && String(c.name).trim()) {
         const cleanName = String(c.name).trim();
-        if (c.id === 'comp_arian' && !rawNames.includes(cleanName) && rawNames.length > 0) return;
-        companyMap.set(cleanName, {
+        const key = normCompKey(cleanName);
+        if (!key) return;
+        if (c.id === 'comp_arian' && !normRawNames.has(key) && normRawNames.size > 0) return;
+        const existing = companyMap.get(key);
+        const mergedIsEnabled =
+          c.isAccountingEnabled === false || existing?.isAccountingEnabled === false
+            ? false
+            : c.isAccountingEnabled !== false;
+        companyMap.set(key, {
+          ...(existing || {}),
           ...c,
-          id: c.id || makeStableCompanyId(cleanName),
-          name: cleanName
+          id: c.id || existing?.id || makeStableCompanyId(cleanName),
+          name: cleanName,
+          isAccountingEnabled: mergedIsEnabled
         });
       }
     });
@@ -621,20 +811,22 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     rawNames.forEach((name: string) => {
       if (name && String(name).trim()) {
         const cleanName = String(name).trim();
-        if (!companyMap.has(cleanName)) {
-          companyMap.set(cleanName, {
+        const key = normCompKey(cleanName);
+        if (key && !companyMap.has(key)) {
+          companyMap.set(key, {
             id: makeStableCompanyId(cleanName),
-            name: cleanName
+            name: cleanName,
+            isAccountingEnabled: true
           });
         }
       }
     });
 
     let merged = Array.from(companyMap.values());
-    if (merged.length > 1 && merged.some(c => c.name !== 'شرکت اصلی')) {
+    if (merged.length > 1 && merged.some(c => normCompKey(c.name) !== 'شرکت اصلی')) {
       merged = merged.filter(
         c =>
-          c.name !== 'شرکت اصلی' ||
+          normCompKey(c.name) !== 'شرکت اصلی' ||
           c.logo ||
           c.registrationNumber ||
           c.nationalId ||
@@ -657,8 +849,14 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       if (c && c.isAccountingEnabled === false) {
         if (c.id) disabledIds.add(String(c.id).trim());
         if (c.name) {
-          disabledNames.add(String(c.name).trim());
-          disabledIds.add(makeStableCompanyId(String(c.name).trim()));
+          const clean = String(c.name).trim();
+          const key = normCompKey(clean);
+          disabledNames.add(clean);
+          if (key) {
+            disabledNames.add(key);
+            disabledIds.add(makeStableCompanyId(key));
+          }
+          disabledIds.add(makeStableCompanyId(clean));
         }
       }
     });
@@ -670,6 +868,13 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       // 1. Instant local render from available settings
       const effectiveSettings = settings || {};
       const localComps = extractSettingsCompanies(effectiveSettings);
+      const localDisabled = buildDisabledCompanySets(effectiveSettings);
+      if (selectedCompanyRef.current && isCompanyExplicitlyDisabledInSettings(selectedCompanyRef.current, effectiveSettings)) {
+        setSelectedCompany(null);
+        try {
+          localStorage.removeItem('delcom_erp_selected_company');
+        } catch {}
+      }
       if (localComps.length > 0) {
         const mappedLocal: ErpCompanySummary[] = localComps.map((sc: any) => ({
           id: sc.id || makeStableCompanyId(sc.name),
@@ -685,14 +890,23 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           allowedUserIds: sc.erpAllowedUserIds || [],
           stats: undefined
         }));
-        setCompanies(prev => (prev.length === 0 ? mappedLocal : prev.filter(p => mappedLocal.some(m => m.id === p.id || m.name.trim() === p.name.trim()))));
+        setCompanies(prev => {
+          if (prev.length === 0) return mappedLocal;
+          const filtered = prev.filter(
+            p =>
+              !localDisabled.disabledIds.has(String(p.id || '').trim()) &&
+              !localDisabled.disabledNames.has(normCompKey(p.name)) &&
+              mappedLocal.some(m => m.id === p.id || normCompKey(m.name) === normCompKey(p.name))
+          );
+          return filtered.length > 0 ? filtered : mappedLocal;
+        });
       } else if (Array.isArray(effectiveSettings?.companies) && effectiveSettings.companies.length > 0) {
         setCompanies([]);
       }
 
       // 2. Fetch fresh settings & ERP companies asynchronously
       const [erpRes, freshSettings] = await Promise.all([
-        apiCall<any>('/industrial-erp/companies').catch(() => null),
+        apiCall<any>(`/industrial-erp/companies?_t=${Date.now()}`).catch(() => null),
         getSettings().catch(() => null)
       ]);
 
@@ -705,18 +919,24 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         ? erpRes.companies
         : [];
       const erpList = rawErpList.filter(
-        ec => !disabledIds.has(String(ec.id || '').trim()) && !disabledNames.has(String(ec.name || '').trim())
+        ec =>
+          !disabledIds.has(String(ec.id || '').trim()) &&
+          !disabledNames.has(String(ec.name || '').trim()) &&
+          !disabledNames.has(normCompKey(ec.name || ''))
       );
 
       const settingsComps = extractSettingsCompanies(latestSettings);
-      const hasAuthoritativeSettings = Boolean(freshSettings || (Array.isArray(latestSettings?.companies) && latestSettings.companies.length > 0));
+      const hasAuthoritativeSettings = Boolean(
+        freshSettings || (Array.isArray(latestSettings?.companies) && latestSettings.companies.length > 0)
+      );
 
       let nextCompanies: ErpCompanySummary[] | null = null;
 
       if (settingsComps.length > 0) {
         nextCompanies = settingsComps.map((sc: any) => {
+          const scKey = normCompKey(sc.name);
           const matchedErp = erpList.find(
-            ec => ec.id === sc.id || ec.name === sc.name || ec.name?.trim() === sc.name?.trim()
+            ec => ec.id === sc.id || normCompKey(ec.name) === scKey
           );
           return {
             id: matchedErp?.id || sc.id || makeStableCompanyId(sc.name),
@@ -733,9 +953,12 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
             stats: matchedErp?.stats
           };
         });
+      } else if (hasAuthoritativeSettings) {
+        // Every company in authoritative Settings has accounting disabled!
+        nextCompanies = [];
       } else if (erpList.length > 0) {
         nextCompanies = erpList;
-      } else if (hasAuthoritativeSettings || erpRes !== null) {
+      } else if (erpRes !== null) {
         nextCompanies = [];
       }
 
@@ -745,11 +968,13 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
         // Reconcile cached selectedCompany with enabled companies & central server ID
         const curSel = selectedCompanyRef.current;
         if (curSel) {
+          const curSelKey = normCompKey(curSel.name);
           const isExplicitlyDisabled =
             disabledIds.has(String(curSel.id || '').trim()) ||
-            disabledNames.has(String(curSel.name || '').trim());
+            disabledNames.has(String(curSel.name || '').trim()) ||
+            disabledNames.has(curSelKey);
           const reconciled = nextCompanies.find(
-            c => c.id === curSel.id || c.name.trim() === curSel.name.trim()
+            c => c.id === curSel.id || normCompKey(c.name) === curSelKey
           );
           if (isExplicitlyDisabled || ((hasAuthoritativeSettings || erpRes !== null) && !reconciled)) {
             setSelectedCompany(null);
@@ -908,8 +1133,14 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   };
 
   useEffect(() => {
+    if (selectedCompany && isCompanyExplicitlyDisabledInSettings(selectedCompany, settings)) {
+      setSelectedCompany(null);
+      try {
+        localStorage.removeItem('delcom_erp_selected_company');
+      } catch {}
+    }
     fetchCompaniesList();
-  }, [settings?.companies, settings?.companyNames]);
+  }, [settings?.companies, settings?.companyNames, selectedCompany?.id]);
 
   useEffect(() => {
     if (!selectedCompany) return;
@@ -1204,8 +1435,9 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
   // ============================================================================
   // STEP 1: MULTI-COMPANY SELECTION PORTAL (EXACTLY LIKE SECRETARIAT MODULE)
   // ============================================================================
-  if (!selectedCompany) {
+  if (!selectedCompany || isCompanyExplicitlyDisabledInSettings(selectedCompany, settings)) {
     const visibleCompanies = companies.filter(comp => {
+      if (isCompanyExplicitlyDisabledInSettings(comp, settings)) return false;
       if (isAdmin) return true;
       if (!comp.allowedUserIds || comp.allowedUserIds.length === 0) return true;
       return comp.allowedUserIds.includes(currentUser.id);
@@ -1445,7 +1677,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
       ? erpState
       : getCachedCompanyErpState(selectedCompany.id, selectedCompany.name);
 
-  const quickRibbonShortcuts: { id: ErpSubViewId; label: string; icon: any; color: string }[] = [
+  const allQuickRibbonShortcuts: { id: ErpSubViewId; label: string; icon: any; color: string }[] = [
     { id: 'prd_line_perf', label: 'عملکرد خط و باسکول (ورود به انبار تولید)', icon: Scale, color: 'text-orange-700 bg-orange-50 border-orange-200' },
     { id: 'wh_production_delivery', label: 'تحویل تولید به انبار مقصد', icon: Truck, color: 'text-teal-700 bg-teal-50 border-teal-200' },
     { id: 'wh_receipt_production', label: 'رسید دریافت از تولید', icon: CheckCircle2, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
@@ -1465,6 +1697,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
     { id: 'prd_archive', label: 'بایگانی تولید', icon: FolderKanban, color: 'text-amber-600 bg-amber-50 border-amber-200' },
     { id: 'wh_archive', label: 'بایگانی اسناد انبار', icon: FolderKanban, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' }
   ];
+  const quickRibbonShortcuts = allQuickRibbonShortcuts.filter(sc => canAccessSubView(sc.id));
 
   // Determine which isolated domain module handles the activeSubView
   const isWarehouseDomain =
@@ -1565,44 +1798,52 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           </button>
 
           {/* Backup to Telegram & Bale Bots */}
-          <button
-            onClick={handleBackupToBot}
-            disabled={backingUpToBot}
-            className="px-2.5 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
-            title="ارسال آنی بکاپ اختصاصی این شرکت به ربات‌های بله و تلگرام"
-          >
-            <Bot size={13} className={backingUpToBot ? 'animate-spin' : ''} />
-            <span className="hidden md:inline">ارسال بکاپ به بات</span>
-          </button>
+          {canManageCompanyBackups && (
+            <button
+              onClick={handleBackupToBot}
+              disabled={backingUpToBot}
+              className="px-2.5 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+              title="ارسال آنی بکاپ اختصاصی این شرکت به ربات‌های بله و تلگرام"
+            >
+              <Bot size={13} className={backingUpToBot ? 'animate-spin' : ''} />
+              <span className="hidden md:inline">ارسال بکاپ به بات</span>
+            </button>
+          )}
 
           {/* Per-Company Isolated Backup & Restore Center */}
-          <button
-            onClick={openCompanyBackupModal}
-            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-            title="مدیریت، دانلود و بازیابی بکاپ اختصاصی این شرکت"
-          >
-            <Archive size={13} className="text-emerald-400" />
-            <span className="hidden md:inline">بکاپ اختصاصی شرکت</span>
-          </button>
+          {canManageCompanyBackups && (
+            <button
+              onClick={openCompanyBackupModal}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="مدیریت، دانلود و بازیابی بکاپ اختصاصی این شرکت"
+            >
+              <Archive size={13} className="text-emerald-400" />
+              <span className="hidden md:inline">بکاپ اختصاصی شرکت</span>
+            </button>
+          )}
 
           {/* Clear / Raw Company Data */}
-          <button
-            onClick={() => setShowClearConfirmModal(true)}
-            className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-            title="خام‌سازی داده‌های این شرکت بدون دست‌خوردن دیتابیس اصلی نرم‌افزار"
-          >
-            <Trash2 size={13} />
-            <span className="hidden lg:inline">خام‌سازی شرکت</span>
-          </button>
+          {canManageCompanies && (
+            <button
+              onClick={() => setShowClearConfirmModal(true)}
+              className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="خام‌سازی داده‌های این شرکت بدون دست‌خوردن دیتابیس اصلی نرم‌افزار"
+            >
+              <Trash2 size={13} />
+              <span className="hidden lg:inline">خام‌سازی شرکت</span>
+            </button>
+          )}
 
-          <button
-            onClick={handleSyncSayanBarcodes}
-            disabled={syncingBarcodes}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
-          >
-            <RefreshCw size={13} className={syncingBarcodes ? 'animate-spin' : ''} />
-            <span className="hidden sm:inline">سینک بارکدهای سایان</span>
-          </button>
+          {canSyncSayan && (
+            <button
+              onClick={handleSyncSayanBarcodes}
+              disabled={syncingBarcodes}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw size={13} className={syncingBarcodes ? 'animate-spin' : ''} />
+              <span className="hidden sm:inline">سینک بارکدهای سایان</span>
+            </button>
+          )}
 
           <button
             onClick={() => setIsErpFullScreen(prev => !prev)}
@@ -1664,7 +1905,7 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
           </div>
 
           <div className="divide-y divide-slate-300/70 dark:divide-slate-800">
-            {ERP_SIDEBAR_TREE.map(cat => {
+            {visibleSidebarTree.map(cat => {
               const CatIcon = cat.icon;
               const isExpanded = expandedCategory === cat.id;
               return (
@@ -1755,100 +1996,115 @@ export const IndustrialAccountingErpModule: React.FC<IndustrialAccountingErpModu
 
           {/* ACTIVE SUBVIEW CONTENT CONTAINER (ISOLATED DOMAIN COMPONENTS) */}
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-            {isWarehouseDomain && (
-              <ErpDomainErrorBoundary moduleTitle="انبارداری، حواله‌ها و رهگیری کارتن">
-                <WarehouseModuleView
-                  activeSubView={activeSubView}
-                  selectedCompany={selectedCompany}
-                  erpState={currentErpState}
-                  setErpState={setErpState}
-                  persistErpState={persistErpState}
-                  currentUser={currentUser}
-                  showToast={showToast}
-                  openSubViewTab={openSubViewTab}
-                />
-              </ErpDomainErrorBoundary>
-            )}
+            {!firstAllowedSubView || !canAccessSubView(activeSubView) ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                <AlertTriangle size={36} className="text-amber-500 mb-3" />
+                <div className="font-black text-sm text-slate-800 dark:text-white mb-1">
+                  عدم دسترسی به زیربخش‌های حسابداری صنعتی
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md">
+                  هیچ زیرمجموعه‌ای از حسابداری صنعتی برای نقش یا حساب کاربری شما فعال نشده است. لطفاً از مدیر سیستم بخواهید در بخش «تنظیمات دسترسی‌ها» مجوزهای مربوطه را فعال نماید.
+                </p>
+              </div>
+            ) : (
+              <>
+                {isWarehouseDomain && (
+                  <ErpDomainErrorBoundary moduleTitle="انبارداری، حواله‌ها و رهگیری کارتن">
+                    <WarehouseModuleView
+                      activeSubView={activeSubView}
+                      selectedCompany={selectedCompany}
+                      erpState={currentErpState}
+                      setErpState={setErpState}
+                      persistErpState={persistErpState}
+                      currentUser={currentUser}
+                      showToast={showToast}
+                      openSubViewTab={openSubViewTab}
+                    />
+                  </ErpDomainErrorBoundary>
+                )}
 
-            {isCommercialDomain && (
-              <ErpDomainErrorBoundary moduleTitle="بازرگانی، خرید و فروش و دفتر تهران">
-                <CommercialTradeModuleView
-                  activeSubView={activeSubView}
-                  selectedCompany={selectedCompany}
-                  erpState={currentErpState}
-                  setErpState={setErpState}
-                  persistErpState={persistErpState}
-                  currentUser={currentUser}
-                  showToast={showToast}
-                  canCreateSalesFromRemittance={canCreateSalesFromRemittance}
-                  canViewFinancialAmounts={canViewFinancialAmounts}
-                />
-              </ErpDomainErrorBoundary>
-            )}
+                {isCommercialDomain && (
+                  <ErpDomainErrorBoundary moduleTitle="بازرگانی، خرید و فروش و دفتر تهران">
+                    <CommercialTradeModuleView
+                      activeSubView={activeSubView}
+                      selectedCompany={selectedCompany}
+                      erpState={currentErpState}
+                      setErpState={setErpState}
+                      persistErpState={persistErpState}
+                      currentUser={currentUser}
+                      showToast={showToast}
+                      canCreateSalesFromRemittance={canCreateSalesFromRemittance}
+                      canViewFinancialAmounts={canViewFinancialAmounts}
+                    />
+                  </ErpDomainErrorBoundary>
+                )}
 
-            {isProductionDomain && (
-              <ErpDomainErrorBoundary moduleTitle="عملکرد خط تولید، توزین باسکول و فرمول ساخت (BOM)">
-                <ProductionBomModuleView
-                  activeSubView={activeSubView}
-                  selectedCompany={selectedCompany}
-                  erpState={currentErpState}
-                  setErpState={setErpState}
-                  persistErpState={persistErpState}
-                  currentUser={currentUser}
-                  showToast={showToast}
-                  openSubViewTab={openSubViewTab}
-                />
-              </ErpDomainErrorBoundary>
-            )}
+                {isProductionDomain && (
+                  <ErpDomainErrorBoundary moduleTitle="عملکرد خط تولید، توزین باسکول و فرمول ساخت (BOM)">
+                    <ProductionBomModuleView
+                      activeSubView={activeSubView}
+                      selectedCompany={selectedCompany}
+                      erpState={currentErpState}
+                      setErpState={setErpState}
+                      persistErpState={persistErpState}
+                      currentUser={currentUser}
+                      showToast={showToast}
+                      openSubViewTab={openSubViewTab}
+                    />
+                  </ErpDomainErrorBoundary>
+                )}
 
-            {isTreasuryDomain && (
-              <ErpDomainErrorBoundary moduleTitle="خزانه‌داری، بانک و عملیات چک">
-                <TreasuryBankingModuleView
-                  activeSubView={activeSubView}
-                  selectedCompany={selectedCompany}
-                  erpState={currentErpState}
-                  persistErpState={persistErpState}
-                  currentUser={currentUser}
-                />
-              </ErpDomainErrorBoundary>
-            )}
+                {isTreasuryDomain && (
+                  <ErpDomainErrorBoundary moduleTitle="خزانه‌داری، بانک و عملیات چک">
+                    <TreasuryBankingModuleView
+                      activeSubView={activeSubView}
+                      selectedCompany={selectedCompany}
+                      erpState={currentErpState}
+                      persistErpState={persistErpState}
+                      currentUser={currentUser}
+                    />
+                  </ErpDomainErrorBoundary>
+                )}
 
-            {isFinanceDomain && (
-              <ErpDomainErrorBoundary moduleTitle="مالی و حسابداری">
-                <FinancialAccountingModuleView
-                  activeSubView={activeSubView}
-                  selectedCompany={selectedCompany}
-                  erpState={currentErpState}
-                  persistErpState={persistErpState}
-                  currentUser={currentUser}
-                  showToast={showToast}
-                  openSubViewTab={openSubViewTab}
-                  cutoffDateInput={cutoffDateInput}
-                  setCutoffDateInput={setCutoffDateInput}
-                  importingTrialBalance={importingTrialBalance}
-                  handleImportSayanTrialBalance={handleImportSayanTrialBalance}
-                  handleToggleCutoverStage={handleToggleCutoverStage}
-                />
-              </ErpDomainErrorBoundary>
-            )}
+                {isFinanceDomain && (
+                  <ErpDomainErrorBoundary moduleTitle="مالی و حسابداری">
+                    <FinancialAccountingModuleView
+                      activeSubView={activeSubView}
+                      selectedCompany={selectedCompany}
+                      erpState={currentErpState}
+                      persistErpState={persistErpState}
+                      currentUser={currentUser}
+                      showToast={showToast}
+                      openSubViewTab={openSubViewTab}
+                      canAccessSubView={canAccessSubView}
+                      cutoffDateInput={cutoffDateInput}
+                      setCutoffDateInput={setCutoffDateInput}
+                      importingTrialBalance={importingTrialBalance}
+                      handleImportSayanTrialBalance={handleImportSayanTrialBalance}
+                      handleToggleCutoverStage={handleToggleCutoverStage}
+                    />
+                  </ErpDomainErrorBoundary>
+                )}
 
-            {isPayrollAssetsMasterDomain && (
-              <ErpDomainErrorBoundary moduleTitle="حقوق و دستمزد، دارایی ثابت و اطلاعات پایه">
-                <PayrollAssetsMasterModuleView
-                  activeSubView={activeSubView}
-                  selectedCompany={selectedCompany}
-                  companies={companies}
-                  setSelectedCompany={setSelectedCompany}
-                  erpState={currentErpState}
-                  persistErpState={persistErpState}
-                  currentUser={currentUser}
-                  cutoffDateInput={cutoffDateInput}
-                  setCutoffDateInput={setCutoffDateInput}
-                  importingTrialBalance={importingTrialBalance}
-                  handleImportSayanTrialBalance={handleImportSayanTrialBalance}
-                  handleToggleCutoverStage={handleToggleCutoverStage}
-                />
-              </ErpDomainErrorBoundary>
+                {isPayrollAssetsMasterDomain && (
+                  <ErpDomainErrorBoundary moduleTitle="حقوق و دستمزد، دارایی ثابت و اطلاعات پایه">
+                    <PayrollAssetsMasterModuleView
+                      activeSubView={activeSubView}
+                      selectedCompany={selectedCompany}
+                      companies={companies}
+                      setSelectedCompany={setSelectedCompany}
+                      erpState={currentErpState}
+                      persistErpState={persistErpState}
+                      currentUser={currentUser}
+                      cutoffDateInput={cutoffDateInput}
+                      setCutoffDateInput={setCutoffDateInput}
+                      importingTrialBalance={importingTrialBalance}
+                      handleImportSayanTrialBalance={handleImportSayanTrialBalance}
+                      handleToggleCutoverStage={handleToggleCutoverStage}
+                    />
+                  </ErpDomainErrorBoundary>
+                )}
+              </>
             )}
           </div>
 

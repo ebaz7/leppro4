@@ -163,19 +163,40 @@ export const getAppNavItems = (currentUser: User | null, settings: SystemSetting
   const canSeeIndustrialErp = currentUser.role === UserRole.ADMIN ||
     perms.canAccessIndustrialErp === true ||
     perms.canErpViewWarehouse === true ||
+    perms.canErpWarehouseDocs === true ||
+    perms.canErpManageMasterData === true ||
+    perms.canErpProductionLines === true ||
     perms.canErpWeighAndLabel === true ||
     perms.canErpManageBom === true ||
+    perms.canErpCalculateCost === true ||
+    perms.canErpOrders === true ||
     perms.canErpCreatePurchase === true ||
+    perms.canErpApprovePurchase === true ||
     perms.canErpCreateSalesFromRemittance === true ||
+    perms.canErpApproveSales === true ||
+    perms.canErpManageReturns === true ||
+    perms.canErpWarehouseAccounting === true ||
+    perms.canErpManageChartOfAccounts === true ||
     perms.canErpCreateVoucher === true ||
+    perms.canErpEditVoucher === true ||
+    perms.canErpApproveVoucher === true ||
     perms.canErpViewLedgersAndTraz === true ||
+    perms.canErpFinancialStatements === true ||
+    perms.canErpTreasury === true ||
+    perms.canErpPayrollAndAssets === true ||
+    perms.canErpManageCompanies === true ||
+    perms.canErpSyncWithSayan === true ||
     (currentUser as any).canAccessIndustrialErp === true;
+
+  const canSeeBarcodeToPc = currentUser.role === UserRole.ADMIN ||
+    perms.canAccessBarcodeToPc === true ||
+    (currentUser as any).canAccessBarcodeToPc === true;
 
   if (canManageWarehouse) items.push(ALL_NAVIGATION_ITEMS['warehouse']);
   if (canSeeIndustrialErp) items.push(ALL_NAVIGATION_ITEMS['industrial-erp']);
   if (canSeeSayan) items.push(ALL_NAVIGATION_ITEMS['sayan']);
   if (canSeeSayanOps) items.push(ALL_NAVIGATION_ITEMS['sayan-operations']);
-  if (canManageWarehouse || canSeeSayan || canSeeSayanOps || canSeeIndustrialErp) items.push(ALL_NAVIGATION_ITEMS['barcode-to-pc']);
+  if (canSeeBarcodeToPc) items.push(ALL_NAVIGATION_ITEMS['barcode-to-pc']);
   if (canSeeSecurity) items.push(ALL_NAVIGATION_ITEMS['security']);
   if (canSeeMeetings) items.push(ALL_NAVIGATION_ITEMS['meetings']);
   if (canSeePurchase) items.push(ALL_NAVIGATION_ITEMS['purchase']);

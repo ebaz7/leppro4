@@ -495,27 +495,41 @@ export const getDb = () => {
                     MEMORY_DB_CACHE.settings.companyNames = [];
                 }
 
+                // Helper to normalize Persian company names consistently
+                const normCompName = (s) => String(s || '')
+                    .replace(/ي/g, 'ی')
+                    .replace(/ك/g, 'ک')
+                    .replace(/\u200c/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
                 // Populate companyMap from settings.companies, settings.companyNames, and fiscalYears
                 const companyMap = new Map();
 
                 // 1. From settings.companies
                 (MEMORY_DB_CACHE.settings.companies || []).forEach((c, idx) => {
-                    const cName = typeof c === 'string' ? c.trim() : (c && c.name ? c.name.trim() : '');
-                    if (cName) {
-                        companyMap.set(cName, {
-                            id: (typeof c === 'object' && c.id) ? c.id : ('comp_' + idx + '_' + Date.now()),
+                    const cName = typeof c === 'string' ? c.trim() : (c && c.name ? String(c.name).trim() : '');
+                    const key = normCompName(cName);
+                    if (key) {
+                        const existing = companyMap.get(key) || {};
+                        const obj = (typeof c === 'object' && c !== null) ? c : {};
+                        companyMap.set(key, {
+                            ...existing,
+                            ...obj,
+                            id: obj.id || existing.id || ('comp_' + idx + '_' + Date.now()),
                             name: cName,
-                            showInWarehouse: (typeof c === 'object' && c.showInWarehouse !== undefined) ? c.showInWarehouse : true,
-                            banks: (typeof c === 'object' && Array.isArray(c.banks)) ? c.banks : [],
-                            logo: (typeof c === 'object' && c.logo) || "",
-                            registrationNumber: (typeof c === 'object' && c.registrationNumber) || "",
-                            nationalId: (typeof c === 'object' && c.nationalId) || "",
-                            address: (typeof c === 'object' && c.address) || "",
-                            phone: (typeof c === 'object' && c.phone) || "",
-                            fax: (typeof c === 'object' && c.fax) || "",
-                            postalCode: (typeof c === 'object' && c.postalCode) || "",
-                            economicCode: (typeof c === 'object' && c.economicCode) || "",
-                            letterhead: (typeof c === 'object' && c.letterhead) || ""
+                            showInWarehouse: obj.showInWarehouse !== undefined ? obj.showInWarehouse : (existing.showInWarehouse !== undefined ? existing.showInWarehouse : true),
+                            isAccountingEnabled: obj.isAccountingEnabled !== undefined ? obj.isAccountingEnabled : (existing.isAccountingEnabled !== undefined ? existing.isAccountingEnabled : true),
+                            banks: Array.isArray(obj.banks) ? obj.banks : (Array.isArray(existing.banks) ? existing.banks : []),
+                            logo: obj.logo || existing.logo || "",
+                            registrationNumber: obj.registrationNumber || existing.registrationNumber || "",
+                            nationalId: obj.nationalId || existing.nationalId || "",
+                            address: obj.address || existing.address || "",
+                            phone: obj.phone || existing.phone || "",
+                            fax: obj.fax || existing.fax || "",
+                            postalCode: obj.postalCode || existing.postalCode || "",
+                            economicCode: obj.economicCode || existing.economicCode || "",
+                            letterhead: obj.letterhead || existing.letterhead || ""
                         });
                     }
                 });
@@ -523,11 +537,13 @@ export const getDb = () => {
                 // 2. From settings.companyNames if companyMap doesn't have it
                 (MEMORY_DB_CACHE.settings.companyNames || []).forEach((n, idx) => {
                     const name = typeof n === 'string' ? n.trim() : '';
-                    if (name && !companyMap.has(name)) {
-                        companyMap.set(name, {
+                    const key = normCompName(name);
+                    if (key && !companyMap.has(key)) {
+                        companyMap.set(key, {
                             id: 'comp_name_' + idx + '_' + Date.now(),
                             name,
                             showInWarehouse: true,
+                            isAccountingEnabled: true,
                             banks: []
                         });
                     }
@@ -539,11 +555,13 @@ export const getDb = () => {
                         if (fy && fy.companySequences) {
                             Object.keys(fy.companySequences).forEach((k, idx) => {
                                 const name = k ? k.trim() : '';
-                                if (name && !companyMap.has(name)) {
-                                    companyMap.set(name, {
+                                const key = normCompName(name);
+                                if (key && !companyMap.has(key)) {
+                                    companyMap.set(key, {
                                         id: 'comp_fy_' + idx + '_' + Date.now(),
                                         name,
                                         showInWarehouse: true,
+                                        isAccountingEnabled: true,
                                         banks: []
                                     });
                                 }

@@ -1284,28 +1284,33 @@ const Settings: React.FC<SettingsProps> = ({
             });
         }
         
+        const normCompName = (s: any) => String(s || '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/\u200c/g, ' ').replace(/\s+/g, ' ').trim();
         // Ensure companies and companyNames arrays exist and are in sync
         const companyMap = new Map<string, any>();
         (normalizedSettings.companies || []).forEach((c: any) => {
           if (c && c.name && c.name.trim()) {
-            companyMap.set(c.name.trim(), {
+            const key = normCompName(c.name);
+            companyMap.set(key, {
               ...c,
               name: c.name.trim(),
+              isAccountingEnabled: c.isAccountingEnabled !== undefined ? c.isAccountingEnabled : true,
               banks: Array.isArray(c.banks) ? c.banks : []
             });
           }
         });
         (normalizedSettings.companyNames || []).forEach((name: string) => {
-          if (name && name.trim() && !companyMap.has(name.trim())) {
-            companyMap.set(name.trim(), { id: generateUUID(), name: name.trim(), showInWarehouse: true, banks: [] });
+          const key = normCompName(name);
+          if (key && !companyMap.has(key)) {
+            companyMap.set(key, { id: generateUUID(), name: name.trim(), showInWarehouse: true, isAccountingEnabled: true, banks: [] });
           }
         });
         if (Array.isArray(normalizedSettings.fiscalYears)) {
           normalizedSettings.fiscalYears.forEach((fy: any) => {
             if (fy && fy.companySequences) {
               Object.keys(fy.companySequences).forEach((k: string) => {
-                if (k && k.trim() && !companyMap.has(k.trim())) {
-                  companyMap.set(k.trim(), { id: generateUUID(), name: k.trim(), showInWarehouse: true, banks: [] });
+                const key = normCompName(k);
+                if (key && !companyMap.has(key)) {
+                  companyMap.set(key, { id: generateUUID(), name: k.trim(), showInWarehouse: true, isAccountingEnabled: true, banks: [] });
                 }
               });
             }
@@ -1378,27 +1383,32 @@ const Settings: React.FC<SettingsProps> = ({
       safeData.companies = safeData.companies || [];
       safeData.operatingBankNames = safeData.operatingBankNames || [];
       safeData.insuranceCompanies = safeData.insuranceCompanies || [];
+      const normCompName = (s: any) => String(s || '').replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/\u200c/g, ' ').replace(/\s+/g, ' ').trim();
       const companyMap = new Map<string, any>();
       (safeData.companies || []).forEach((c: any) => {
         if (c && c.name && c.name.trim()) {
-          companyMap.set(c.name.trim(), {
+          const key = normCompName(c.name);
+          companyMap.set(key, {
             ...c,
             name: c.name.trim(),
+            isAccountingEnabled: c.isAccountingEnabled !== undefined ? c.isAccountingEnabled : true,
             banks: Array.isArray(c.banks) ? c.banks : []
           });
         }
       });
       (safeData.companyNames || []).forEach((name: string) => {
-        if (name && name.trim() && !companyMap.has(name.trim())) {
-          companyMap.set(name.trim(), { id: generateUUID(), name: name.trim(), showInWarehouse: true, banks: [] });
+        const key = normCompName(name);
+        if (key && !companyMap.has(key)) {
+          companyMap.set(key, { id: generateUUID(), name: name.trim(), showInWarehouse: true, isAccountingEnabled: true, banks: [] });
         }
       });
       if (Array.isArray(safeData.fiscalYears)) {
         safeData.fiscalYears.forEach((fy: any) => {
           if (fy && fy.companySequences) {
             Object.keys(fy.companySequences).forEach((k: string) => {
-              if (k && k.trim() && !companyMap.has(k.trim())) {
-                companyMap.set(k.trim(), { id: generateUUID(), name: k.trim(), showInWarehouse: true, banks: [] });
+              const key = normCompName(k);
+              if (key && !companyMap.has(key)) {
+                companyMap.set(key, { id: generateUUID(), name: k.trim(), showInWarehouse: true, isAccountingEnabled: true, banks: [] });
               }
             });
           }
@@ -1727,6 +1737,7 @@ const Settings: React.FC<SettingsProps> = ({
                   name: newCompanyName.trim(),
                   logo: newCompanyLogo,
                   showInWarehouse: newCompanyShowInWarehouse,
+                  isAccountingEnabled: newCompanyIsAccountingEnabled,
                   banks: newCompanyBanks,
                   letterhead: newCompanyLetterhead,
                   registrationNumber: newCompanyRegNum,
@@ -1747,6 +1758,7 @@ const Settings: React.FC<SettingsProps> = ({
               name: newCompanyName.trim(),
               logo: newCompanyLogo,
               showInWarehouse: newCompanyShowInWarehouse,
+              isAccountingEnabled: newCompanyIsAccountingEnabled,
               banks: newCompanyBanks,
               letterhead: newCompanyLetterhead,
               registrationNumber: newCompanyRegNum,

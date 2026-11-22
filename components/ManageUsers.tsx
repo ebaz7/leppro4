@@ -90,6 +90,17 @@ const ManageUsers: React.FC = () => {
     canErpDeleteVoucher: false,
     canErpViewLedgersAndTraz: false,
     canErpSyncWithSayan: false,
+    canErpProductionLines: false,
+    canErpWarehouseDocs: false,
+    canErpTreasury: false,
+    canErpOrders: false,
+    canErpWarehouseAccounting: false,
+    canErpFinancialStatements: false,
+    canErpPayrollAndAssets: false,
+    canErpManageCompanies: false,
+    canAccessBarcodeToPc: false,
+    canUseSayanBarcodeRemittance: false,
+    canViewSayanInvoices: false,
     avatar: '', 
     signatureUrl: '', 
     telegramChatId: '', 
@@ -220,6 +231,17 @@ const ManageUsers: React.FC = () => {
       canErpDeleteVoucher: user.canErpDeleteVoucher || false,
       canErpViewLedgersAndTraz: user.canErpViewLedgersAndTraz || false,
       canErpSyncWithSayan: user.canErpSyncWithSayan || false,
+      canErpProductionLines: user.canErpProductionLines || false,
+      canErpWarehouseDocs: user.canErpWarehouseDocs || false,
+      canErpTreasury: user.canErpTreasury || false,
+      canErpOrders: user.canErpOrders || false,
+      canErpWarehouseAccounting: user.canErpWarehouseAccounting || false,
+      canErpFinancialStatements: user.canErpFinancialStatements || false,
+      canErpPayrollAndAssets: user.canErpPayrollAndAssets || false,
+      canErpManageCompanies: user.canErpManageCompanies || false,
+      canAccessBarcodeToPc: user.canAccessBarcodeToPc || false,
+      canUseSayanBarcodeRemittance: user.canUseSayanBarcodeRemittance || false,
+      canViewSayanInvoices: user.canViewSayanInvoices || false,
       avatar: user.avatar || '', 
       signatureUrl: user.signatureUrl || '',
       telegramChatId: user.telegramChatId || '', 
@@ -1098,6 +1120,25 @@ const ManageUsers: React.FC = () => {
                             </label>
                           </div>
                         </div>
+
+                        {/* Barcode, Invoices & Sayan Scanner Access */}
+                        <div className="pt-2 border-t border-indigo-100 dark:border-indigo-900/50 space-y-2">
+                          <div className="text-xs font-black text-indigo-900 dark:text-indigo-300">دسترسی بارکدخوان، اتصال مستقیم PC و گزارش فاکتورها</div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <label className="flex items-center gap-2 text-[11px] text-indigo-900 dark:text-indigo-200 bg-indigo-50/80 dark:bg-gray-800 p-2 rounded-lg border border-indigo-200 cursor-pointer font-bold">
+                              <input type="checkbox" checked={formData.canAccessBarcodeToPc} onChange={e => setFormData({...formData, canAccessBarcodeToPc: e.target.checked})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                              <span>بارکدخوان به کامپیوتر (تایپ مستقیم سایان)</span>
+                            </label>
+                            <label className="flex items-center gap-2 text-[11px] text-blue-900 dark:text-blue-200 bg-blue-50/80 dark:bg-gray-800 p-2 rounded-lg border border-blue-200 cursor-pointer font-bold">
+                              <input type="checkbox" checked={formData.canUseSayanBarcodeRemittance} onChange={e => setFormData({...formData, canUseSayanBarcodeRemittance: e.target.checked})} className="w-3.5 h-3.5 text-blue-600 rounded" />
+                              <span>صدور حواله فروش و بین‌انبار سایان (اسکنر/دوربین)</span>
+                            </label>
+                            <label className="flex items-center gap-2 text-[11px] text-emerald-900 dark:text-emerald-200 bg-emerald-50/80 dark:bg-gray-800 p-2 rounded-lg border border-emerald-200 cursor-pointer font-bold sm:col-span-2">
+                              <input type="checkbox" checked={formData.canViewSayanInvoices} onChange={e => setFormData({...formData, canViewSayanInvoices: e.target.checked})} className="w-3.5 h-3.5 text-emerald-600 rounded" />
+                              <span>مشاهده گزارش فاکتورهای فروش و خرید سایان (تفکیک اشخاص و اقلام)</span>
+                            </label>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -1134,7 +1175,15 @@ const ManageUsers: React.FC = () => {
                                 canErpApproveVoucher: true,
                                 canErpDeleteVoucher: true,
                                 canErpViewLedgersAndTraz: true,
-                                canErpSyncWithSayan: true
+                                canErpSyncWithSayan: true,
+                                canErpProductionLines: true,
+                                canErpWarehouseDocs: true,
+                                canErpTreasury: true,
+                                canErpOrders: true,
+                                canErpWarehouseAccounting: true,
+                                canErpFinancialStatements: true,
+                                canErpPayrollAndAssets: true,
+                                canErpManageCompanies: true
                               });
                             }}
                             className="text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1 rounded-xl transition-colors cursor-pointer"
@@ -1166,7 +1215,15 @@ const ManageUsers: React.FC = () => {
                                 canErpApproveVoucher: false,
                                 canErpDeleteVoucher: false,
                                 canErpViewLedgersAndTraz: false,
-                                canErpSyncWithSayan: false
+                                canErpSyncWithSayan: false,
+                                canErpProductionLines: false,
+                                canErpWarehouseDocs: false,
+                                canErpTreasury: false,
+                                canErpOrders: false,
+                                canErpWarehouseAccounting: false,
+                                canErpFinancialStatements: false,
+                                canErpPayrollAndAssets: false,
+                                canErpManageCompanies: false
                               });
                             }}
                             className="text-[11px] bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 text-gray-700 dark:text-gray-300 font-bold px-3 py-1 rounded-xl transition-colors cursor-pointer"
@@ -1215,6 +1272,14 @@ const ManageUsers: React.FC = () => {
                             <input type="checkbox" checked={formData.canErpCancelLabel} onChange={e => setFormData({...formData, canErpCancelLabel: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-rose-600 rounded" />
                             <span>ابطال یا اصلاح لیبل کارتن تولیدی</span>
                           </label>
+                          <label className="flex items-center gap-2 text-[11px] text-emerald-700 dark:text-emerald-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpWarehouseDocs} onChange={e => setFormData({...formData, canErpWarehouseDocs: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-emerald-600 rounded" />
+                            <span>ثبت اسناد انبار (حواله فروش/بین‌انبار/تعدیل)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-orange-700 dark:text-orange-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpProductionLines} onChange={e => setFormData({...formData, canErpProductionLines: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-orange-600 rounded" />
+                            <span>تعریف خطوط تولید و بایگانی خط</span>
+                          </label>
                         </div>
 
                         {/* 2. BOM & Cost Accounting */}
@@ -1234,13 +1299,21 @@ const ManageUsers: React.FC = () => {
                             <input type="checkbox" checked={formData.canErpSyncWithSayan} onChange={e => setFormData({...formData, canErpSyncWithSayan: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
                             <span>مدیریت سینک اختیاری با سایان</span>
                           </label>
+                          <label className="flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpManageCompanies} onChange={e => setFormData({...formData, canErpManageCompanies: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                            <span>مدیریت شرکت‌ها و انتقال تراز سایان</span>
+                          </label>
                         </div>
 
                         {/* 3. Purchasing, Sales & Returns */}
                         <div className="p-3 bg-white/90 dark:bg-gray-800/90 rounded-2xl border border-sky-200 dark:border-gray-700 space-y-2">
                           <div className="text-xs font-black text-sky-800 dark:text-sky-300 border-b pb-1.5">
-                            ۳. خرید، فروش از حواله و مرجوعی
+                            ۳. خرید، فروش از حواله و سفارشات
                           </div>
+                          <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpOrders} onChange={e => setFormData({...formData, canErpOrders: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-amber-600 rounded" />
+                            <span>دریافت سفارشات و کارتابل سفارش</span>
+                          </label>
                           <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
                             <input type="checkbox" checked={formData.canErpCreatePurchase} onChange={e => setFormData({...formData, canErpCreatePurchase: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-sky-600 rounded" />
                             <span>ثبت فاکتور خرید مواد اولیه</span>
@@ -1263,11 +1336,15 @@ const ManageUsers: React.FC = () => {
                           </label>
                         </div>
 
-                        {/* 4. Financial Accounting & Vouchers */}
+                        {/* 4. Financial Accounting, Treasury & Payroll */}
                         <div className="p-3 bg-white/90 dark:bg-gray-800/90 rounded-2xl border border-purple-200 dark:border-gray-700 space-y-2">
                           <div className="text-xs font-black text-purple-800 dark:text-purple-300 border-b pb-1.5">
-                            ۴. اسناد مالی، سرفصل‌ها و تراز
+                            ۴. اسناد مالی، خزانه، تراز و حقوق
                           </div>
+                          <label className="flex items-center gap-2 text-[11px] text-cyan-800 dark:text-cyan-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpWarehouseAccounting} onChange={e => setFormData({...formData, canErpWarehouseAccounting: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-cyan-600 rounded" />
+                            <span>حسابداری انبار و کاردکس ریالی</span>
+                          </label>
                           <label className="flex items-center gap-2 text-[11px] text-gray-800 dark:text-gray-200 cursor-pointer">
                             <input type="checkbox" checked={formData.canErpManageChartOfAccounts} onChange={e => setFormData({...formData, canErpManageChartOfAccounts: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-purple-600 rounded" />
                             <span>مدیریت درختواره حساب‌ها (کل/معین/تفصیل)</span>
@@ -1291,6 +1368,18 @@ const ManageUsers: React.FC = () => {
                           <label className="flex items-center gap-2 text-[11px] text-indigo-800 dark:text-indigo-300 cursor-pointer">
                             <input type="checkbox" checked={formData.canErpViewLedgersAndTraz} onChange={e => setFormData({...formData, canErpViewLedgersAndTraz: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
                             <span>مشاهده دفاتر کل، معین و تراز آزمایشی</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-indigo-900 dark:text-indigo-200 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpFinancialStatements} onChange={e => setFormData({...formData, canErpFinancialStatements: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+                            <span>صورت‌های مالی، پایان سال و تنظیمات دوره</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-blue-800 dark:text-blue-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpTreasury} onChange={e => setFormData({...formData, canErpTreasury: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-blue-600 rounded" />
+                            <span>خزانه‌داری، بانک و عملیات چک</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-[11px] text-purple-800 dark:text-purple-300 cursor-pointer">
+                            <input type="checkbox" checked={formData.canErpPayrollAndAssets} onChange={e => setFormData({...formData, canErpPayrollAndAssets: e.target.checked, canAccessIndustrialErp: e.target.checked || formData.canAccessIndustrialErp})} className="w-3.5 h-3.5 text-purple-600 rounded" />
+                            <span>حقوق و دستمزد و دارایی ثابت</span>
                           </label>
                         </div>
                       </div>
