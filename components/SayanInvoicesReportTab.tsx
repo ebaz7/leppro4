@@ -468,7 +468,7 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           RTRIM(LTRIM(ISNULL(t10.Field_011, ''))) as WarehouseCode,
           t10.Field_018 as SubSystem,
           ISNULL(t10.Field_029, '') as HeaderNotes,
-          ISNULL(t10.Field_017, '') as HeaderNote2,
+          t10.Field_017 as HeaderNote2,
           ISNULL(t10.Field_026, 0) as HeaderGross,
           ISNULL(t10.Field_037, 0) as HeaderPayable,
           t11.Field_001 as LineId,
@@ -477,7 +477,6 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           COALESCE(
             NULLIF(RTRIM(LTRIM(t22.Field_004)), ''),
             NULLIF(RTRIM(LTRIM(g03.Field_008)), ''),
-            NULLIF(RTRIM(LTRIM(s04.Field_003)), ''),
             ''
           ) as DirectItemName,
           ISNULL(t11.Field_006, 0) as Quantity,
@@ -487,8 +486,8 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           t11.Field_010 as RawVatOrTotal,
           t11.Field_011 as RawTax,
           ISNULL(t11.Field_031, '') as ItemNotes,
-          ISNULL(t11.Field_017, '') as ItemNotes2,
-          NULLIF(RTRIM(LTRIM(g01.Field_004)), '') as GnrPersonName
+          t11.Field_017 as ItemNotes2,
+          NULLIF(RTRIM(LTRIM(COALESCE(g01.Field_006, '') + ' ' + COALESCE(g01.Field_007, ''))), '') as GnrPersonName
         FROM STR_TBL_010 t10 WITH (NOLOCK)
         INNER JOIN STR_TBL_011 t11 WITH (NOLOCK)
           ON t11.Field_004 = t10.Field_005
@@ -501,7 +500,6 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
          )
         LEFT JOIN IND_TBL_022 t22 WITH (NOLOCK) ON RTRIM(LTRIM(t22.Field_005)) = RTRIM(LTRIM(t11.Field_005))
         LEFT JOIN GNR_TBL_003 g03 WITH (NOLOCK) ON RTRIM(LTRIM(g03.Field_003)) = RTRIM(LTRIM(t11.Field_005))
-        LEFT JOIN STR_TBL_004 s04 WITH (NOLOCK) ON RTRIM(LTRIM(s04.Field_004)) = RTRIM(LTRIM(t11.Field_005))
         LEFT JOIN GNR_TBL_001 g01 WITH (NOLOCK) ON RTRIM(LTRIM(g01.Field_003)) = RTRIM(LTRIM(t10.Field_010))
         WHERE (
           RTRIM(LTRIM(t10.Field_009)) IN (${activeCodes.join(', ')})
@@ -513,13 +511,8 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
       `;
 
       // Run main query + lightweight lookup queries in parallel (each lookup cached once & fault-tolerant)
-      const [rows, opRows, whRows, itemGroupRows] = await Promise.all([
+      const [rows, whRows, itemGroupRows] = await Promise.all([
         runSayanQuery(sql),
-        Object.keys(dynamicOpTitles).length === 0
-          ? runSayanQuery(
-              `SELECT RTRIM(LTRIM(Field_003)) as OpCode, RTRIM(LTRIM(Field_004)) as OpTitle FROM STR_TBL_002 WITH (NOLOCK)`
-            ).catch(() => [])
-          : Promise.resolve([]),
         Object.keys(warehouseNamesMap).length === 0
           ? runSayanQuery(
               `SELECT RTRIM(LTRIM(Field_003)) as WCode, RTRIM(LTRIM(Field_004)) as WName FROM STR_TBL_001 WITH (NOLOCK)`
@@ -540,17 +533,7 @@ export const SayanInvoicesReportTab: React.FC<SayanInvoicesReportTabProps> = ({
           : Promise.resolve([])
       ]);
 
-      let mergedOpTitles = dynamicOpTitles;
-      if (Array.isArray(opRows) && opRows.length > 0) {
-        const nextMap: Record<string, string> = { ...dynamicOpTitles };
-        opRows.forEach((o: any) => {
-          const code = String(o.OpCode || '').trim();
-          const title = String(o.OpTitle || '').trim();
-          if (code && title) nextMap[code] = title;
-        });
-        setDynamicOpTitles(nextMap);
-        mergedOpTitles = nextMap;
-      }
+      const mergedOpTitles = dynamicOpTitles;
 
       let mergedWhNames = warehouseNamesMap;
       if (Array.isArray(whRows) && whRows.length > 0) {
