@@ -731,9 +731,18 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         doCopy();
     };
 
-    const scrollToBottom = () => {
+    const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        const container = messagesContainerRef.current;
+        if (container) {
+            if (behavior === 'auto') {
+                container.scrollTop = container.scrollHeight;
+            } else {
+                container.scrollTo({ top: container.scrollHeight, behavior });
+            }
+            return;
+        }
         if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            messagesEndRef.current.scrollIntoView({ behavior, block: 'end' });
         }
     };
 
@@ -772,6 +781,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     };
 
     // --- Refs ---
+    const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -1191,21 +1201,54 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     }, [currentUser?.username, activeChannel?.type, activeChannel?.id, isActiveTab]);
 
     useEffect(() => {
-        // Auto scroll with timeout to ensure rendering is done (Fix for Desktop)
+        // Auto scroll strictly inside the messages container (prevents outer window scroll pushing chat header off-screen on Android/iOS)
         if (activeChannel && !showInnerSearch) {
-            // Immediate scroll for better UX
-            if (messagesEndRef.current) {
-                messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
-            }
-            // Follow up with smooth scroll to catch any layout shifts
-            setTimeout(scrollToBottom, 150); 
+            scrollToBottom('auto');
+            const timer = setTimeout(() => scrollToBottom('smooth'), 150);
             
             // Auto-mark as read ONLY when user is actively inside the open conversation in foreground
             if (activeChannel.id && typeof document !== 'undefined' && !document.hidden) {
                 markAsRead(activeChannel.id, activeChannel.type);
             }
+            return () => clearTimeout(timer);
         }
     }, [activeChannel, messages.length]);
+
+    // Keep chat viewport pinned cleanly above soft keyboard on Android & Mobile Web
+    useEffect(() => {
+        if (!activeChannel || activeChannel.type === 'task_group') return;
+        let lastHeight = window.visualViewport?.height || window.innerHeight;
+
+        const handleViewportChange = () => {
+            const nextHeight = window.visualViewport?.height || window.innerHeight;
+            const shrank = nextHeight < lastHeight - 40;
+            lastHeight = nextHeight;
+
+            if (window.scrollY > 0 || window.scrollX > 0) {
+                window.scrollTo(0, 0);
+            }
+
+            const container = messagesContainerRef.current;
+            if (shrank && container) {
+                const distanceFromBottom = container.scrollHeight - (container.scrollTop + container.clientHeight);
+                // If user was near the bottom (or just focused input), keep latest messages visible above keyboard
+                if (distanceFromBottom < 280 || document.activeElement === inputAreaRef.current) {
+                    requestAnimationFrame(() => {
+                        if (messagesContainerRef.current) {
+                            messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+                        }
+                    });
+                }
+            }
+        };
+
+        window.visualViewport?.addEventListener('resize', handleViewportChange, { passive: true });
+        window.addEventListener('resize', handleViewportChange, { passive: true });
+        return () => {
+            window.visualViewport?.removeEventListener('resize', handleViewportChange);
+            window.removeEventListener('resize', handleViewportChange);
+        };
+    }, [activeChannel?.id, activeChannel?.type]);
 
     // Re-verify read status when user switches back to this tab/window while chat is open
     useEffect(() => {
@@ -3237,7 +3280,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                 {/* --- LIST SIDEBAR --- */}
                 <div className={`w-full md:w-80 lg:w-96 shrink-0 md:border-l border-gray-100 dark:border-white/5 flex-col min-h-0 h-full bg-white dark:bg-[#1c1c1e] z-20 ${activeChannel ? 'hidden md:flex' : 'flex'}`}>
                 {/* Header */}
-                <div className="sticky top-0 z-10 shrink-0 p-3 pt-12 md:pt-3 border-b bg-gray-50/90 dark:bg-gray-900/60 backdrop-blur-md text-slate-900 dark:text-slate-100">
+                <div className="shrink-0 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] md:pt-3 border-b bg-gray-50/90 dark:bg-gray-900/60 backdrop-blur-md text-slate-900 dark:text-slate-100 z-10">
                     <div className="flex justify-between items-center mb-3">
                         <div className="flex flex-wrap md:flex-nowrap gap-1 bg-slate-200/80 dark:bg-white/15 p-1 rounded-lg text-[11px] font-bold w-full">
                             <button onClick={() => setActiveTab('ALL')} className={`flex-1 py-1.5 px-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'ALL' ? 'bg-white dark:bg-zinc-800 shadow text-blue-700 dark:text-blue-300 font-black' : 'text-slate-700 dark:text-slate-300 hover:text-blue-600 font-bold'}`}>همه</button>
@@ -3380,7 +3423,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                 {activeChannel ? (
                     <>
                         {/* Chat Header - Slim & compact header */}
-                        <div className="sticky top-0 bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-md px-3 py-1.5 pt-12 md:pt-1.5 sm:py-2 flex justify-between items-center shadow-xs border-b border-gray-100 dark:border-zinc-800/80 z-30 shrink-0">
+                        <div className="bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-md px-3 py-1.5 pt-[max(0.5rem,env(safe-area-inset-top))] md:pt-1.5 sm:py-2 flex justify-between items-center shadow-xs border-b border-gray-100 dark:border-zinc-800/80 z-30 shrink-0">
                             <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
                                 <button 
                                     onClick={() => setActiveChannel(null)} 
@@ -3749,7 +3792,8 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
 
                                 {/* Messages List */}
                                 <div 
-                                    className="chat-messages-Viewport flex-1 overflow-y-auto p-4 flex flex-col gap-2 relative bg-white dark:bg-black"
+                                    ref={messagesContainerRef}
+                                    className="chat-messages-Viewport flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-2 relative bg-white dark:bg-black"
                                     onDragOver={handleDragOver}
                                     onDrop={handleDrop}
                                     onPaste={handlePaste}
@@ -3770,7 +3814,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                         </div>
 
                         {/* Input Area */}
-                        <div className="shrink-0 sticky bottom-0 bg-white dark:bg-[#1c1c1e] p-2 sm:p-2.5 px-3 flex items-end gap-1.5 sm:gap-2 border-t border-gray-200/80 dark:border-zinc-800/80 relative z-20 pb-[max(8px,env(safe-area-inset-bottom))] shadow-xs">
+                        <div className="shrink-0 bg-white dark:bg-[#1c1c1e] p-2 sm:p-2.5 px-3 flex items-end gap-1.5 sm:gap-2 border-t border-gray-200/80 dark:border-zinc-800/80 relative z-20 chat-composer-bar shadow-xs">
                             {activeChannel.type === 'system' ? (
                                 <div className="flex-1 py-2 px-3 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/40 flex items-center justify-between gap-2 shadow-xs">
                                     <div className="flex items-center gap-2 text-xs sm:text-sm text-indigo-800 dark:text-indigo-200 font-medium">
@@ -3940,6 +3984,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                                         <textarea 
                                             ref={inputAreaRef}
                                             value={inputText}
+                                            onFocus={() => {
+                                                if (window.scrollY > 0 || window.scrollX > 0) {
+                                                    window.scrollTo(0, 0);
+                                                }
+                                                setTimeout(() => scrollToBottom('auto'), 120);
+                                                setTimeout(() => scrollToBottom('auto'), 320);
+                                            }}
                                             onPaste={handlePaste}
                                             onChange={handleTextareaChange}
                                             onKeyDown={handleKeyDown}

@@ -893,6 +893,14 @@ body {
   flex-direction: column;
 }
 
+.chat-composer-bar {
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
+html.keyboard-open .chat-composer-bar {
+  padding-bottom: 8px;
+}
+
 /* Glassmorphism Global Restyling for generic util classes */
 .theme-light-aurora .bg-white, 
 .theme-light-aurora .bg-gray-50, 

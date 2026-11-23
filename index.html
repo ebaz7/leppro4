@@ -707,6 +707,9 @@
           } catch (e) {}
         };
 
+        var baselineHeight = 0;
+        var lastOrientationWidth = 0;
+
         var syncViewport = function() {
           try {
             var vv = window.visualViewport;
@@ -720,10 +723,32 @@
             if (layoutW > 100) {
               document.documentElement.style.setProperty('--app-vw', layoutW + 'px');
             }
-            // Apply proportional compact density strictly on small touch/PDA screens (never on Desktop)
+
+            // Track full (keyboard-closed) height per orientation so opening the soft keyboard never flips PDA mode on
+            if (Math.abs(layoutW - lastOrientationWidth) > 40) {
+              lastOrientationWidth = layoutW;
+              baselineHeight = h;
+            } else if (h > baselineHeight) {
+              baselineHeight = h;
+            }
+
             var isTouchLike = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || /android|iphone|ipad|ipod/i.test(navigator.userAgent || '') || Boolean(window.DlkamAndroid);
-            var isCompactPda = isTouchLike && ((layoutW > 0 && layoutW <= 375) || (h > 0 && h <= 640));
-            var isUltraCompactPda = isTouchLike && ((layoutW > 0 && layoutW <= 335) || (h > 0 && h <= 540));
+            var activeTag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+            var isInputFocused = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement && document.activeElement.isContentEditable);
+            var isKeyboardOpen = isTouchLike && baselineHeight > 0 && (baselineHeight - h) > 120 && (isInputFocused || (baselineHeight - h) > 180);
+            document.documentElement.classList.toggle('keyboard-open', isKeyboardOpen);
+
+            // Prevent Android WebView / mobile browsers from scrolling the outer document and pushing fixed headers off-screen
+            if (isKeyboardOpen && document.querySelector('.split-view-no-scroll')) {
+              if (window.scrollY > 0 || window.scrollX > 0) {
+                window.scrollTo(0, 0);
+              }
+            }
+
+            // Apply proportional compact density strictly on genuinely small touch/PDA screens (never triggered solely by IME)
+            var referenceH = baselineHeight > 0 ? baselineHeight : h;
+            var isCompactPda = isTouchLike && ((layoutW > 0 && layoutW <= 375) || (referenceH > 0 && referenceH <= 640));
+            var isUltraCompactPda = isTouchLike && ((layoutW > 0 && layoutW <= 335) || (referenceH > 0 && referenceH <= 540));
             document.documentElement.classList.toggle('screen-compact-pda', isCompactPda);
             document.documentElement.classList.toggle('screen-ultra-compact-pda', isUltraCompactPda);
           } catch (e) {}
@@ -732,6 +757,7 @@
         syncViewport();
         window.addEventListener('resize', syncViewport, { passive: true });
         window.addEventListener('orientationchange', function() {
+          baselineHeight = 0;
           setTimeout(function() { resetStuckViewportZoom(); syncViewport(); }, 80);
           setTimeout(function() { resetStuckViewportZoom(); syncViewport(); }, 280);
         }, { passive: true });
@@ -743,6 +769,11 @@
         }, { passive: true });
         if (window.visualViewport) {
           window.visualViewport.addEventListener('resize', syncViewport, { passive: true });
+          window.visualViewport.addEventListener('scroll', function() {
+            if (document.documentElement.classList.contains('keyboard-open') && document.querySelector('.split-view-no-scroll') && (window.scrollY > 0 || window.scrollX > 0)) {
+              window.scrollTo(0, 0);
+            }
+          }, { passive: true });
         }
         document.addEventListener('DOMContentLoaded', syncViewport);
       })();

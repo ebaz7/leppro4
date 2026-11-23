@@ -211,26 +211,52 @@ public class MainActivity extends BridgeActivity {
 
     /**
      * Ensures the Capacitor WebView fits strictly within every Android device's exact visible bounds
-     * (from 4-inch industrial barcode PDAs to tablets & Android 15 edge-to-edge screens) without
-     * clipping behind the top status bar, bottom navigation bar, or soft keyboard.
+     * (from 4-inch industrial barcode PDAs to tablets & Android 15/16 edge-to-edge screens) without
+     * clipping behind system bars or double-applying soft keyboard (IME) height.
      */
     private void configureAdaptiveDisplayAndInsets(WebView webView) {
         try {
-            // Keep decor fitting system windows so Android 15+ edge-to-edge never pushes UI under bars
-            WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Single source of truth on Android 11-16+ (API 30+):
+                // Disable competing DecorView adjustResize so soft keyboard height is NEVER applied twice
+                // (once by DecorView shrinking android.R.id.content and again as rootContent bottom padding).
+                WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
-            View rootContent = findViewById(android.R.id.content);
-            if (rootContent != null) {
-                ViewCompat.setOnApplyWindowInsetsListener(rootContent, (view, windowInsets) -> {
-                    Insets bars = windowInsets.getInsets(
-                            WindowInsetsCompat.Type.systemBars()
-                                    | WindowInsetsCompat.Type.displayCutout()
-                                    | WindowInsetsCompat.Type.ime()
-                    );
-                    view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-                    return WindowInsetsCompat.CONSUMED;
-                });
-                ViewCompat.requestApplyInsets(rootContent);
+                View rootContent = findViewById(android.R.id.content);
+                if (rootContent != null) {
+                    ViewCompat.setOnApplyWindowInsetsListener(rootContent, (view, windowInsets) -> {
+                        Insets sysBars = windowInsets.getInsets(
+                                WindowInsetsCompat.Type.systemBars()
+                                        | WindowInsetsCompat.Type.displayCutout()
+                        );
+                        Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
+                        int targetBottom = Math.max(sysBars.bottom, ime.bottom);
+
+                        // Defensive guard: if any OEM ROM still shrinks rootContent via adjustResize
+                        // when the IME opens, subtract that shrinkage so bottom padding is never doubled.
+                        int effectiveBottom = targetBottom;
+                        if (ime.bottom > 0) {
+                            View decorView = getWindow() != null ? getWindow().getDecorView() : null;
+                            if (decorView != null && decorView.getHeight() > 0 && view.getHeight() > 0) {
+                                int[] viewLoc = new int[2];
+                                view.getLocationInWindow(viewLoc);
+                                int viewBottomInWindow = viewLoc[1] + view.getHeight();
+                                int alreadyShrunkBottom = Math.max(0, decorView.getHeight() - viewBottomInWindow);
+                                if (alreadyShrunkBottom > 0) {
+                                    effectiveBottom = Math.max(0, targetBottom - alreadyShrunkBottom);
+                                }
+                            }
+                        }
+
+                        view.setPadding(sysBars.left, sysBars.top, sysBars.right, effectiveBottom);
+                        return WindowInsetsCompat.CONSUMED;
+                    });
+                    ViewCompat.requestApplyInsets(rootContent);
+                }
+            } else {
+                // Android 7-10 (API 22-29, including legacy industrial barcode PDAs):
+                // Let DecorView + windowSoftInputMode="adjustResize" handle system bars and IME natively once.
+                WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
             }
         } catch (Exception insetErr) {
             Log.w(TAG, "WindowInsets adaptive setup warning", insetErr);

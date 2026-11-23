@@ -112,3 +112,58 @@ test('Real-time chat typing indicator dispatches via SSE and renders in both sid
   assert.ok(chatRoom.includes('در حال تایپ...'), 'ChatRoom.tsx must display Persian typing label');
 });
 
+test('Android soft keyboard in Chat/PV never double-applies IME height or scrolls chat header off-screen', () => {
+  const mainActivity = fs.readFileSync(
+    path.join(ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'payment', 'system', 'MainActivity.java'),
+    'utf8'
+  );
+  assert.ok(
+    mainActivity.includes('Build.VERSION.SDK_INT >= Build.VERSION_CODES.R'),
+    'MainActivity.java must branch on API 30+ (Android 11+) for WindowInsets IME handling'
+  );
+  assert.ok(
+    mainActivity.includes('WindowCompat.setDecorFitsSystemWindows(getWindow(), false);'),
+    'MainActivity.java must disable DecorView fitsSystemWindows on API 30+ so adjustResize and IME insets never double-pad the WebView'
+  );
+  assert.ok(
+    mainActivity.includes('alreadyShrunkBottom'),
+    'MainActivity.java must include defensive OEM double-shrink subtraction guard'
+  );
+
+  const layoutCode = fs.readFileSync(path.join(ROOT, 'components', 'Layout.tsx'), 'utf8');
+  assert.equal(
+    layoutCode.includes('flex h-full h-[100dvh] w-full'),
+    false,
+    'Layout.tsx root container must use h-full bound to #root (--app-vh) instead of conflicting h-[100dvh]'
+  );
+  assert.ok(
+    layoutCode.includes("activeTab === 'chat' ? 'p-0 w-full max-w-full flex-1 flex flex-col min-h-0 h-full overflow-hidden'"),
+    'Layout.tsx must strictly lock chat tab wrapper to h-full overflow-hidden'
+  );
+
+  const chatRoom = fs.readFileSync(path.join(ROOT, 'components', 'ChatRoom.tsx'), 'utf8');
+  assert.ok(
+    chatRoom.includes('const messagesContainerRef = useRef<HTMLDivElement>(null);'),
+    'ChatRoom.tsx must keep a dedicated messagesContainerRef for isolated message scrolling'
+  );
+  assert.ok(
+    chatRoom.includes('container.scrollTop = container.scrollHeight;'),
+    'ChatRoom.tsx must scroll the messages container directly instead of outer-window scrollIntoView'
+  );
+  assert.ok(
+    chatRoom.includes('chat-composer-bar'),
+    'ChatRoom.tsx must use keyboard-aware chat-composer-bar class without redundant sticky bottom-0'
+  );
+
+  const indexHtml = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  assert.ok(
+    indexHtml.includes("document.documentElement.classList.toggle('keyboard-open', isKeyboardOpen)"),
+    'index.html must track soft keyboard open state cleanly'
+  );
+  assert.ok(
+    indexHtml.includes('var referenceH = baselineHeight > 0 ? baselineHeight : h;'),
+    'index.html must compute PDA compact mode against keyboard-closed baselineHeight'
+  );
+});
+
+

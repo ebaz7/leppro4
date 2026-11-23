@@ -1513,7 +1513,7 @@ const Layout: React.FC<LayoutProps> = ({
   const isPlainLight = theme === 'light' && !showCustomBg && bgMode !== 'preset';
 
   return (
-    <div className={`flex h-full h-[100dvh] w-full text-[var(--text-primary)] font-sans relative overflow-hidden ${isPlainLight ? 'bg-gray-100 dark:bg-gray-900' : 'bg-transparent'}`}>
+    <div className={`flex h-full w-full text-[var(--text-primary)] font-sans relative overflow-hidden ${isPlainLight ? 'bg-gray-100 dark:bg-gray-900' : 'bg-transparent'}`}>
       {/* Background Blobs & Custom Background Image */}
       {(!isPlainLight || showCustomBg || bgMode === 'preset') && !lowSpecMode && (
         <div 
@@ -2343,7 +2343,7 @@ const Layout: React.FC<LayoutProps> = ({
                       </select>
                   )}
               </div>
-              <div className={`${Boolean(secondaryTab) ? 'p-1.5 sm:p-2 md:p-3 w-full max-w-full flex-1 flex flex-col min-h-0 h-full overflow-hidden' : activeTab === 'industrial-erp' ? 'p-0 sm:p-2 md:p-4 w-full max-w-full flex-1 flex flex-col min-h-0 h-full overflow-hidden' : (activeTab === 'chat' || activeTab === 'sayan') ? 'p-0 w-full max-w-full flex-1 flex flex-col min-h-0 overflow-x-hidden' : 'p-0 sm:p-2 md:p-4 w-full max-w-full'} mx-auto min-w-0`}>
+              <div className={`${Boolean(secondaryTab) ? 'p-1.5 sm:p-2 md:p-3 w-full max-w-full flex-1 flex flex-col min-h-0 h-full overflow-hidden' : activeTab === 'industrial-erp' ? 'p-0 sm:p-2 md:p-4 w-full max-w-full flex-1 flex flex-col min-h-0 h-full overflow-hidden' : activeTab === 'chat' ? 'p-0 w-full max-w-full flex-1 flex flex-col min-h-0 h-full overflow-hidden' : activeTab === 'sayan' ? 'p-0 w-full max-w-full flex-1 flex flex-col min-h-0 overflow-x-hidden' : 'p-0 sm:p-2 md:p-4 w-full max-w-full'} mx-auto min-w-0`}>
                   {children}
               </div>
           </div>
