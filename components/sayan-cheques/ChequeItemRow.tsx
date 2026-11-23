@@ -8,16 +8,41 @@ import persian from "react-date-object/calendars/persian";
 // @ts-ignore
 import persian_fa from "react-date-object/locales/persian_fa";
 
+export type ChequeRegistrationType = 'company' | 'person' | 'unregistered';
+
 export interface ChequeItemInput {
     id: string;
     chequeNumber: string;
+    sayadId?: string; // Optional 16-digit Sayad ID (شناسه صیاد اختیاری)
     amount: number | '';
     dueDate: string; // ISO date or YYYY-MM-DD
     bankName: string;
     inNameOf: string;
     accountNo?: string;
     description?: string;
+    registrationType?: ChequeRegistrationType | ''; // 'company' | 'person' | 'unregistered'
+    registeredPersonName?: string; // Mandatory when registrationType === 'person'
+    isCustomerSelfIssuer?: boolean; // True when customer himself issued the cheque
 }
+
+export const getChequeRegistrationLabel = (
+    registrationType?: string,
+    registeredPersonName?: string
+): string => {
+    if (registrationType === 'company') return 'ثبت به نام شرکت';
+    if (registrationType === 'person') {
+        const cleanName = String(registeredPersonName || '').trim();
+        return cleanName ? `ثبت به نام شخص: ${cleanName}` : 'ثبت به نام شخص';
+    }
+    if (registrationType === 'unregistered') return 'ثبت نشده';
+    return 'نامشخص';
+};
+
+export const getChequeIssuerLabel = (isCustomerSelfIssuer?: boolean): string => {
+    if (isCustomerSelfIssuer === true) return 'چک خود مشتری (به نام خودش)';
+    if (isCustomerSelfIssuer === false) return 'چک شخص ثالث (غیر)';
+    return '-';
+};
 
 export const COMMON_IRANIAN_BANKS = [
     'سامان',
@@ -62,6 +87,7 @@ interface Props {
     onArrowNavigate?: (currentIndex: number, currentField: string, direction: 'up' | 'down' | 'left' | 'right') => void;
     onDuplicateRow?: (index: number) => void;
     onAddRowBelow?: () => void;
+    registeredPersonSuggestions?: string[];
 }
 
 const toPersianDigits = (num: string | number | undefined | null): string => {
@@ -129,7 +155,8 @@ export const ChequeItemRow: React.FC<Props> = ({
     onEnterNext,
     onArrowNavigate,
     onDuplicateRow,
-    onAddRowBelow
+    onAddRowBelow,
+    registeredPersonSuggestions = []
 }) => {
     // Bank autocomplete state
     const [bankDropdownOpen, setBankDropdownOpen] = useState(false);
@@ -334,6 +361,22 @@ export const ChequeItemRow: React.FC<Props> = ({
                             صادرکننده: {item.inNameOf}
                         </span>
                     ) : null}
+                    {item.registrationType ? (
+                        <span className={`text-[11px] font-black px-2 py-0.5 rounded-lg border ${
+                            item.registrationType === 'company'
+                                ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800'
+                                : item.registrationType === 'person'
+                                ? 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800'
+                                : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
+                        }`}>
+                            {getChequeRegistrationLabel(item.registrationType, item.registeredPersonName)}
+                        </span>
+                    ) : null}
+                    {item.isCustomerSelfIssuer ? (
+                        <span className="text-[11px] font-black px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800">
+                            به نام خود مشتری
+                        </span>
+                    ) : null}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -392,11 +435,11 @@ export const ChequeItemRow: React.FC<Props> = ({
             </div>
 
             {/* Inputs Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
                 {/* 1. Cheque Number */}
                 <div>
                     <label className="block text-xs font-black text-slate-800 dark:text-slate-200 mb-1 flex items-center gap-1">
-                        <span>شماره چک (صیادی)</span>
+                        <span>شماره چک (سریال)</span>
                         <span className="text-rose-500">*</span>
                     </label>
                     <input
@@ -407,8 +450,40 @@ export const ChequeItemRow: React.FC<Props> = ({
                         onFocus={(e) => e.currentTarget.select()}
                         onChange={(e) => onChange(index, 'chequeNumber', e.target.value)}
                         onKeyDown={(e) => handleFieldKeyDown(e, 'number')}
-                        placeholder="مثال: ۱۲۳۴۵۶۷۸"
+                        placeholder="مثال: ۴۱۷۸۶۳"
                         className="w-full bg-slate-50 dark:bg-slate-800/80 border-2 border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm font-mono font-black text-slate-900 dark:text-slate-100 outline-none caret-emerald-600 focus:border-emerald-500 focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-emerald-500/20 transition-all"
+                    />
+                </div>
+
+                {/* 1b. Optional Sayad ID */}
+                <div>
+                    <label className="block text-xs font-black text-slate-800 dark:text-slate-200 mb-1 flex items-center justify-between gap-1">
+                        <span className="flex items-center gap-1">
+                            <span>شناسه صیاد</span>
+                            <span className="text-[10px] font-medium text-slate-400">(اختیاری)</span>
+                        </span>
+                        {(item.sayadId || '').length > 0 && (
+                            <span className={`text-[10px] font-mono font-bold ${
+                                (item.sayadId || '').length === 16 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
+                            }`}>
+                                {toPersianDigits((item.sayadId || '').length)}/۱۶
+                            </span>
+                        )}
+                    </label>
+                    <input
+                        id={`cheque-${index}-sayadId`}
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={20}
+                        value={item.sayadId || ''}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onChange={(e) => {
+                            const digitsOnly = normalizeToAsciiDigits(e.target.value).replace(/[^0-9]/g, '').slice(0, 16);
+                            onChange(index, 'sayadId', digitsOnly);
+                        }}
+                        onKeyDown={(e) => handleFieldKeyDown(e, 'sayadId')}
+                        placeholder="۱۶ رقم (اختیاری)"
+                        className="w-full bg-slate-50 dark:bg-slate-800/80 border-2 border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 outline-none caret-emerald-600 focus:border-emerald-500 focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-emerald-500/20 transition-all"
                     />
                 </div>
 
@@ -589,6 +664,154 @@ export const ChequeItemRow: React.FC<Props> = ({
                         placeholder="مثال: قسط ۲ فاکتور ۴۰۵"
                         className="w-full bg-slate-50 dark:bg-slate-800/80 border-2 border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm outline-none caret-emerald-600 focus:border-emerald-500 focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-emerald-500/20 transition-all"
                     />
+                </div>
+            </div>
+
+            {/* Registration Status (3 Mutually Exclusive Ticks) & Customer Self-Issuer Tick */}
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
+                {/* 3 Mutually Exclusive Registration Options */}
+                <div className="xl:col-span-8 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-black text-slate-800 dark:text-slate-200 flex items-center gap-1">
+                            <span>وضعیت ثبت صیادی چک</span>
+                            <span className="text-rose-500">*</span>
+                            <span className="text-[10px] font-medium text-slate-400">(انتخاب یکی از ۳ گزینه الزامی است)</span>
+                        </span>
+                        {!item.registrationType && (
+                            <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 px-2 py-0.5 rounded-md border border-rose-200 dark:border-rose-800">
+                                انتخاب نشده
+                            </span>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {(
+                            [
+                                {
+                                    key: 'company' as ChequeRegistrationType,
+                                    label: 'ثبت به نام شرکت',
+                                    activeClass: 'bg-blue-50 dark:bg-blue-950/60 border-blue-500 text-blue-800 dark:text-blue-200 ring-2 ring-blue-500/20',
+                                    boxClass: 'bg-blue-600 border-blue-600 text-white'
+                                },
+                                {
+                                    key: 'person' as ChequeRegistrationType,
+                                    label: 'ثبت به نام شخص',
+                                    activeClass: 'bg-purple-50 dark:bg-purple-950/60 border-purple-500 text-purple-800 dark:text-purple-200 ring-2 ring-purple-500/20',
+                                    boxClass: 'bg-purple-600 border-purple-600 text-white'
+                                },
+                                {
+                                    key: 'unregistered' as ChequeRegistrationType,
+                                    label: 'ثبت نشده',
+                                    activeClass: 'bg-amber-50 dark:bg-amber-950/60 border-amber-500 text-amber-800 dark:text-amber-200 ring-2 ring-amber-500/20',
+                                    boxClass: 'bg-amber-600 border-amber-600 text-white'
+                                }
+                            ]
+                        ).map((opt) => {
+                            const isChecked = item.registrationType === opt.key;
+                            return (
+                                <button
+                                    key={opt.key}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={isChecked}
+                                    onClick={() => {
+                                        onChange(index, 'registrationType', opt.key);
+                                        if (opt.key !== 'person' && item.registeredPersonName) {
+                                            onChange(index, 'registeredPersonName', '');
+                                        }
+                                        if (opt.key === 'person') {
+                                            setTimeout(() => {
+                                                document.getElementById(`cheque-${index}-registeredPersonName`)?.focus();
+                                            }, 30);
+                                        }
+                                    }}
+                                    className={`min-h-[42px] px-3 py-2 rounded-xl border-2 text-xs font-black flex items-center gap-2 transition-all cursor-pointer text-right ${
+                                        isChecked
+                                            ? opt.activeClass
+                                            : 'bg-slate-50/80 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'
+                                    }`}
+                                >
+                                    <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors ${
+                                        isChecked ? opt.boxClass : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600'
+                                    }`}>
+                                        {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                                    </span>
+                                    <span className="truncate">{opt.label}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {item.registrationType === 'person' && (
+                        <div className="mt-2 p-2.5 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 flex flex-col sm:flex-row sm:items-center gap-2">
+                            <label
+                                htmlFor={`cheque-${index}-registeredPersonName`}
+                                className="text-xs font-black text-purple-800 dark:text-purple-300 shrink-0 flex items-center gap-1"
+                            >
+                                <User className="w-3.5 h-3.5" />
+                                <span>نام شخص ثبت‌شده</span>
+                                <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                                id={`cheque-${index}-registeredPersonName`}
+                                type="text"
+                                list={`registered-person-suggestions-${index}`}
+                                value={item.registeredPersonName || ''}
+                                onChange={(e) => onChange(index, 'registeredPersonName', e.target.value)}
+                                placeholder="نام و نام خانوادگی شخصی که چک به نام او ثبت شده است..."
+                                className="flex-1 bg-white dark:bg-slate-900 border-2 border-purple-300 dark:border-purple-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-slate-100 outline-none focus:border-purple-500 focus:ring-4 focus:ring-purple-500/20"
+                            />
+                            {registeredPersonSuggestions.length > 0 && (
+                                <datalist id={`registered-person-suggestions-${index}`}>
+                                    {registeredPersonSuggestions.map((name) => (
+                                        <option key={name} value={name} />
+                                    ))}
+                                </datalist>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Customer Self-Issuer Tick */}
+                <div className="xl:col-span-4 space-y-2">
+                    <span className="text-xs font-black text-slate-800 dark:text-slate-200 block">
+                        وضعیت صادرکننده چک
+                    </span>
+                    <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={Boolean(item.isCustomerSelfIssuer)}
+                        onClick={() => {
+                            const nextVal = !item.isCustomerSelfIssuer;
+                            onChange(index, 'isCustomerSelfIssuer', nextVal);
+                            if (nextVal && defaultInNameOf && (!item.inNameOf || !item.inNameOf.trim())) {
+                                onChange(index, 'inNameOf', defaultInNameOf);
+                            }
+                        }}
+                        className={`w-full min-h-[42px] px-3 py-2 rounded-xl border-2 text-xs font-black flex items-center justify-between gap-2 transition-all cursor-pointer text-right ${
+                            item.isCustomerSelfIssuer
+                                ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-800 dark:text-emerald-200 ring-2 ring-emerald-500/20'
+                                : 'bg-slate-50/80 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600'
+                        }`}
+                    >
+                        <span className="flex items-center gap-2 min-w-0">
+                            <span className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors ${
+                                item.isCustomerSelfIssuer
+                                    ? 'bg-emerald-600 border-emerald-600 text-white'
+                                    : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600'
+                            }`}>
+                                {item.isCustomerSelfIssuer && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                            </span>
+                            <span className="truncate">صادرکننده خود مشتری است</span>
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
+                            item.isCustomerSelfIssuer
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                        }`}>
+                            {item.isCustomerSelfIssuer ? 'به نام خودش' : 'شخص ثالث'}
+                        </span>
+                    </button>
                 </div>
             </div>
         </div>
