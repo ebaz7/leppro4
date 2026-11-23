@@ -324,6 +324,40 @@ export const getPendingSalesRemittancesForInvoicing = async ({
         )`
         : '';
 
+    // SQL-level status filter matching Sayan ERP's native "انتخاب مبنا" rules:
+    //   - Active remittance lines have ISNULL(r.Field_009, 0) = 0 (not voided / ابطال نشده)
+    //   - Sayan stores Sales Remittance (SubSys 1) -> Sales Invoice (SubSys 2) links in STR_TBL_021
+    //     where STR_TBL_021.Field_007 = Remittance STR_TBL_011.Field_001 and Field_005 = 2.
+    let statusWhere = '';
+    if (status === 'pending') {
+        statusWhere = `
+          AND EXISTS (
+              SELECT 1
+              FROM STR_TBL_011 r WITH (NOLOCK)
+              WHERE r.Field_003 = t10.Field_004
+                AND r.Field_004 = t10.Field_005
+                AND r.Field_012 = 1
+                AND ISNULL(r.Field_009, 0) = 0
+                AND NOT EXISTS (
+                    SELECT 1 FROM STR_TBL_021 m WITH (NOLOCK)
+                    WHERE m.Field_007 = r.Field_001 AND m.Field_005 = 2
+                )
+          )
+        `;
+    } else if (status === 'invoiced') {
+        statusWhere = `
+          AND EXISTS (
+              SELECT 1
+              FROM STR_TBL_011 r WITH (NOLOCK)
+              INNER JOIN STR_TBL_021 m WITH (NOLOCK)
+                  ON m.Field_007 = r.Field_001 AND m.Field_005 = 2
+              WHERE r.Field_003 = t10.Field_004
+                AND r.Field_004 = t10.Field_005
+                AND r.Field_012 = 1
+          )
+        `;
+    }
+
     const remSql = `
         SELECT TOP ${safeLimit}
             t10.Field_001 as DocId,
@@ -354,6 +388,7 @@ export const getPendingSalesRemittancesForInvoicing = async ({
         WHERE t10.Field_004 = ${fyNum}
           AND t10.Field_018 = 1
           AND RTRIM(LTRIM(t10.Field_009)) = '23'
+          ${statusWhere}
           ${searchWhere}
         ORDER BY t10.Field_008 DESC, CAST(t10.Field_005 AS BIGINT) DESC
     `;
@@ -366,75 +401,82 @@ export const getPendingSalesRemittancesForInvoicing = async ({
     const archiveNos = remRows
         .map((r) => Number(r.ArchiveNo))
         .filter((n) => Number.isFinite(n) && n > 0);
-    const docIds = remRows
-        .map((r) => Number(r.DocId))
-        .filter((n) => Number.isFinite(n) && n > 0);
 
-    // Parallel batch lookups: line stats + already-invoiced detection (Sayan STR_TBL_011 links & STR_TBL_029)
-    const [lineStatsRows, linkedLineRows, linkedDocRows] = await Promise.all([
+    // Parallel batch lookups: active/voided line stats + authoritative STR_TBL_021 invoice links
+    const [lineStatsRows, str021LinkRows] = await Promise.all([
         archiveNos.length > 0
             ? executeSayanQuery(`
                 SELECT
                     Field_004 as ArchiveNo,
-                    COUNT(*) as LineCount,
-                    ISNULL(SUM(CAST(ISNULL(Field_006, 0) AS FLOAT)), 0) as TotalNetWeight
+                    COUNT(*) as TotalLineCount,
+                    SUM(CASE WHEN ISNULL(Field_009, 0) = 0 THEN 1 ELSE 0 END) as ActiveLineCount,
+                    SUM(CASE WHEN ISNULL(Field_009, 0) = 1 THEN 1 ELSE 0 END) as VoidedLineCount,
+                    ISNULL(SUM(CASE WHEN ISNULL(Field_009, 0) = 0 THEN CAST(ISNULL(Field_006, 0) AS FLOAT) ELSE 0 END), 0) as TotalNetWeight
                 FROM STR_TBL_011 WITH (NOLOCK)
                 WHERE Field_003 = ${fyNum}
                   AND Field_012 = 1
                   AND Field_004 IN (${archiveNos.join(',')})
                 GROUP BY Field_004
-            `, 30000).catch(() => [])
+            `, 30000).catch((err) => {
+                console.warn('[SayanSalesInvoice] lineStats lookup warning:', err.message);
+                return [];
+            })
             : Promise.resolve([]),
         archiveNos.length > 0
             ? executeSayanQuery(`
-                SELECT DISTINCT
+                SELECT
                     rem.Field_004 as RemArchiveNo,
-                    inv.Field_004 as InvArchiveNo,
-                    invH.Field_006 as InvDocNo
+                    MIN(m.Field_004) as InvArchiveNo,
+                    MIN(invH.Field_006) as InvDocNo,
+                    MIN(pType.Field_006) as InvTypeLabel,
+                    COUNT(DISTINCT CASE WHEN ISNULL(rem.Field_009, 0) = 0 THEN rem.Field_001 END) as InvoicedActiveLineCount,
+                    COUNT(DISTINCT rem.Field_001) as InvoicedLineCount
                 FROM STR_TBL_011 rem WITH (NOLOCK)
-                INNER JOIN STR_TBL_011 inv WITH (NOLOCK)
-                    ON (inv.Field_018 = rem.Field_001 OR inv.Field_008 = rem.Field_001)
-                   AND inv.Field_012 IN (2, 3)
+                INNER JOIN STR_TBL_021 m WITH (NOLOCK)
+                    ON m.Field_007 = rem.Field_001
+                   AND m.Field_005 = 2
                 LEFT JOIN STR_TBL_010 invH WITH (NOLOCK)
-                    ON invH.Field_004 = inv.Field_003
-                   AND invH.Field_005 = inv.Field_004
-                   AND invH.Field_018 = inv.Field_012
+                    ON invH.Field_004 = m.Field_003
+                   AND invH.Field_005 = m.Field_004
+                   AND invH.Field_018 = m.Field_005
+                LEFT JOIN STR_TBL_013 pType WITH (NOLOCK)
+                    ON pType.Field_003 = m.Field_003
+                   AND pType.Field_004 = m.Field_004
+                   AND pType.Field_007 = m.Field_005
+                   AND pType.Field_005 = 336
                 WHERE rem.Field_003 = ${fyNum}
                   AND rem.Field_012 = 1
                   AND rem.Field_004 IN (${archiveNos.join(',')})
-            `, 30000).catch(() => [])
-            : Promise.resolve([]),
-        docIds.length > 0
-            ? executeSayanQuery(`
-                SELECT
-                    Field_003 as BaseDocId,
-                    Field_009 as TargetDocId
-                FROM STR_TBL_029 WITH (NOLOCK)
-                WHERE Field_004 = ${fyNum}
-                  AND Field_003 IN (${docIds.join(',')})
-                  AND Field_009 > 0
-            `, 20000).catch(() => [])
+                GROUP BY rem.Field_004
+            `, 30000).catch((err) => {
+                console.warn('[SayanSalesInvoice] STR_TBL_021 link lookup warning:', err.message);
+                return [];
+            })
             : Promise.resolve([])
     ]);
 
     const statsByArchive = new Map();
     for (const s of lineStatsRows || []) {
         statsByArchive.set(String(s.ArchiveNo), {
-            lineCount: Number(s.LineCount) || 0,
+            totalLineCount: Number(s.TotalLineCount) || 0,
+            activeLineCount: Number(s.ActiveLineCount) || 0,
+            voidedLineCount: Number(s.VoidedLineCount) || 0,
             totalNetWeight: Number((Number(s.TotalNetWeight) || 0).toFixed(2))
         });
     }
 
     const sayanInvoicedByArchive = new Map();
-    for (const lk of linkedLineRows || []) {
+    for (const lk of str021LinkRows || []) {
+        const rawType = String(lk.InvTypeLabel || '').trim();
+        const detectedType = rawType.includes('غیر') ? 'unofficial' : rawType.includes('رسمی') ? 'official' : null;
         sayanInvoicedByArchive.set(String(lk.RemArchiveNo), {
             invoiceArchiveNo: String(lk.InvArchiveNo || ''),
-            invoiceNo: String(lk.InvDocNo || lk.InvArchiveNo || '')
+            invoiceNo: String(lk.InvDocNo || lk.InvArchiveNo || ''),
+            invoiceType: detectedType,
+            invoicedActiveLineCount: Number(lk.InvoicedActiveLineCount) || 0,
+            invoicedLineCount: Number(lk.InvoicedLineCount) || 0
         });
     }
-    const sayanInvoicedByDocId = new Set(
-        (linkedDocRows || []).map((r) => String(r.BaseDocId))
-    );
 
     // Also inspect local archive of issued invoices
     const db = getDb();
@@ -448,10 +490,29 @@ export const getPendingSalesRemittancesForInvoicing = async ({
 
     let mapped = remRows.map((r) => {
         const archiveKey = String(r.ArchiveNo || '');
-        const stats = statsByArchive.get(archiveKey) || { lineCount: 0, totalNetWeight: 0 };
+        const stats = statsByArchive.get(archiveKey) || {
+            totalLineCount: 0,
+            activeLineCount: 0,
+            voidedLineCount: 0,
+            totalNetWeight: 0
+        };
         const sayanInv = sayanInvoicedByArchive.get(archiveKey) || null;
         const localInv = localByBaseArchive.get(archiveKey) || null;
-        const isInvoiced = Boolean(sayanInv || localInv || sayanInvoicedByDocId.has(String(r.DocId)));
+
+        const isVoided = stats.totalLineCount > 0 && stats.activeLineCount === 0;
+        const hasAnySayanLink = Boolean(sayanInv && sayanInv.invoicedLineCount > 0);
+        const isFullyInvoicedInSayan = Boolean(
+            hasAnySayanLink &&
+            (stats.activeLineCount === 0 || sayanInv.invoicedActiveLineCount >= stats.activeLineCount)
+        );
+        const isPartiallyInvoiced = Boolean(
+            !isVoided &&
+            hasAnySayanLink &&
+            stats.activeLineCount > 0 &&
+            sayanInv.invoicedActiveLineCount < stats.activeLineCount &&
+            !localInv
+        );
+        const isInvoiced = Boolean(isFullyInvoicedInSayan || localInv);
 
         return {
             docId: String(r.DocId || ''),
@@ -467,19 +528,25 @@ export const getPendingSalesRemittancesForInvoicing = async ({
             warehouseCode: String(r.WarehouseCode || '').trim(),
             warehouseName: String(r.WarehouseName || (r.WarehouseCode ? `انبار ${r.WarehouseCode}` : '-')).trim(),
             description: String(r.Description || '').trim(),
-            lineCount: stats.lineCount,
+            lineCount: stats.activeLineCount || stats.totalLineCount,
+            activeLineCount: stats.activeLineCount,
+            voidedLineCount: stats.voidedLineCount,
+            invoicedLineCount: sayanInv?.invoicedActiveLineCount || 0,
             totalNetWeight: stats.totalNetWeight,
+            isVoided,
             isInvoiced,
+            isPartiallyInvoiced,
             linkedInvoiceId: localInv?.id || null,
             linkedInvoiceNo: localInv?.invoiceNo || sayanInv?.invoiceNo || null,
-            linkedInvoiceType: localInv?.invoiceType || null
+            linkedInvoiceArchiveNo: localInv?.archiveNo || sayanInv?.invoiceArchiveNo || null,
+            linkedInvoiceType: localInv?.invoiceType || sayanInv?.invoiceType || null
         };
     });
 
     if (status === 'pending') {
-        mapped = mapped.filter((m) => !m.isInvoiced);
+        mapped = mapped.filter((m) => !m.isInvoiced && !m.isVoided);
     } else if (status === 'invoiced') {
-        mapped = mapped.filter((m) => m.isInvoiced);
+        mapped = mapped.filter((m) => m.isInvoiced || m.isPartiallyInvoiced);
     }
 
     return mapped;
@@ -542,6 +609,10 @@ export const getRemittanceLinesForInvoice = async (archiveCode, fiscalYear = '4'
             ISNULL(t11.Field_031, '') as SpecNote,
             RTRIM(LTRIM(ISNULL(t11.Field_036, '12'))) as UnitCode,
             ISNULL(t11.Field_037, '') as WareUnitId,
+            CASE WHEN EXISTS (
+                SELECT 1 FROM STR_TBL_021 m WITH (NOLOCK)
+                WHERE m.Field_007 = t11.Field_001 AND m.Field_005 = 2
+            ) THEN 1 ELSE 0 END as AlreadyInvoiced,
             COALESCE(
                 NULLIF(RTRIM(LTRIM(t22.Field_004)), ''),
                 NULLIF(RTRIM(LTRIM(g03.Field_008)), ''),
@@ -553,6 +624,7 @@ export const getRemittanceLinesForInvoice = async (archiveCode, fiscalYear = '4'
         WHERE t11.Field_003 = ${fyNum}
           AND t11.Field_004 = ${archNum}
           AND t11.Field_012 = 1
+          AND ISNULL(t11.Field_009, 0) = 0
         ORDER BY CAST(t11.Field_001 AS BIGINT) ASC
     `;
 
@@ -568,7 +640,7 @@ export const getRemittanceLinesForInvoice = async (archiveCode, fiscalYear = '4'
           AND Field_006 IN ('272', '271', '275', '273', '274')
     `;
 
-    const [headerRows, lineRows, paramRows] = await Promise.all([
+    const [headerRows, allActiveLineRows, paramRows] = await Promise.all([
         executeSayanQuery(headerSql, 30000),
         executeSayanQuery(linesSql, 30000),
         executeSayanQuery(cartonParamsSql, 20000).catch(() => [])
@@ -578,6 +650,11 @@ export const getRemittanceLinesForInvoice = async (archiveCode, fiscalYear = '4'
         throw new Error(`حواله فروش با کد بایگانی ${archNum} در سال مالی ${fyNum} یافت نشد.`);
     }
     const h = headerRows[0];
+
+    // If un-invoiced active lines exist, select ONLY those remaining un-invoiced lines (exact Sayan behavior)
+    const uninvoicedLineRows = (allActiveLineRows || []).filter((r) => Number(r.AlreadyInvoiced) === 0);
+    const lineRows = uninvoicedLineRows.length > 0 ? uninvoicedLineRows : (allActiveLineRows || []);
+    const allLinesAlreadyInvoiced = (allActiveLineRows || []).length > 0 && uninvoicedLineRows.length === 0;
 
     // Map STR_TBL_009 params per line
     const paramsByRow = new Map();
@@ -723,6 +800,7 @@ export const getRemittanceLinesForInvoice = async (archiveCode, fiscalYear = '4'
         },
         groupedItems,
         rawLinesCount: rawLines.length,
+        allLinesAlreadyInvoiced,
         totalCartons: groupedItems.reduce((s, it) => s + it.cartonCount, 0),
         totalNetWeight: Number(groupedItems.reduce((s, it) => s + it.netWeight, 0).toFixed(3))
     };
@@ -1365,6 +1443,35 @@ export const registerSalesInvoiceInSayan = async (payload, user = 'کاربر س
     const grandTotal = preparedItems.reduce((s, x) => s + x.lineTotal, 0);
 
     return await withSalesInvoiceWriteLock(async () => {
+        // Guard against accidental duplicate invoicing in Sayan via official STR_TBL_021
+        if (!isDryRun && !payload?.allowDuplicate) {
+            const allSourceRowIds = Array.from(
+                new Set(preparedItems.flatMap((it) => it.sourceRowIds || []).filter((n) => Number.isFinite(n) && n > 0))
+            );
+            if (allSourceRowIds.length > 0) {
+                const existingLinks = await executeSayanQuery(`
+                    SELECT TOP 1
+                        m.Field_004 as InvArchiveNo,
+                        invH.Field_006 as InvDocNo
+                    FROM STR_TBL_021 m WITH (NOLOCK)
+                    LEFT JOIN STR_TBL_010 invH WITH (NOLOCK)
+                        ON invH.Field_004 = m.Field_003
+                       AND invH.Field_005 = m.Field_004
+                       AND invH.Field_018 = m.Field_005
+                    WHERE m.Field_005 = 2
+                      AND m.Field_007 IN (${allSourceRowIds.join(',')})
+                `, 15000).catch(() => []);
+                if (Array.isArray(existingLinks) && existingLinks.length > 0) {
+                    const invNo = existingLinks[0].InvDocNo || existingLinks[0].InvArchiveNo || '';
+                    const err = new Error(
+                        `برای حواله فروش شماره ${baseRemittanceNo || baseArchNum} قبلاً فاکتور فروش${invNo ? ` شماره ${invNo}` : ''} در سایان ثبت شده است و امکان صدور فاکتور تکراری وجود ندارد.`
+                    );
+                    err.statusCode = 409;
+                    throw err;
+                }
+            }
+        }
+
         const liveMeta = await discoverLiveSayanSalesInvoiceMeta(String(fyNum));
         const docDateStr = parseShamsiOrIsoToSqlDatetime(invoiceDate);
         const cCodeEsc = sanitizeSqlString(cleanCustomerCode, 40);
@@ -1414,13 +1521,16 @@ export const registerSalesInvoiceInSayan = async (payload, user = 'کاربر س
             'DECLARE @NextArchiveNo BIGINT;',
             'DECLARE @NextInvoiceNo BIGINT;',
             'DECLARE @NewDocId BIGINT;',
+            'DECLARE @InvLineId BIGINT;',
             'SELECT @NextArchiveNo = ISNULL(MAX(Field_005), 0) + 1 FROM STR_TBL_010 WITH (NOLOCK) WHERE Field_004 = @FY AND Field_018 = @SubSys;',
             `SELECT @NextInvoiceNo = ISNULL(MAX(Field_006), 0) + 1 FROM STR_TBL_010 WITH (NOLOCK) WHERE Field_004 = @FY AND RTRIM(LTRIM(Field_009)) = N'${opCodeEsc}' AND Field_018 = @SubSys;`,
-            `INSERT INTO STR_TBL_010 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_015, Field_016, Field_017, Field_018, Field_019, Field_020, Field_021, Field_024, Field_025, Field_026, Field_029, Field_036, Field_037) VALUES (@FY, @NextArchiveNo, @NextInvoiceNo, ${sCodeEsc ? `N'${sCodeEsc}'` : 'NULL'}, CAST('${docDateStr}' AS DATETIME), N'${opCodeEsc}', N'${cCodeEsc}', N'${wCodeEsc}', 0, 0, ${notesEsc ? `N'${notesEsc}'` : 'NULL'}, @SubSys, 0, N'${ownerGuidEsc}', 0, ${totalDiscount}, ${totalVat}, ${subtotal}, N'${headerDescEsc}', GETDATE(), ${grandTotal});`,
-            'SET @NewDocId = SCOPE_IDENTITY();'
+            `INSERT INTO STR_TBL_010 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_015, Field_016, Field_017, Field_018, Field_019, Field_020, Field_021, Field_024, Field_025, Field_026, Field_029, Field_036, Field_037, Field_040) VALUES (@FY, @NextArchiveNo, @NextInvoiceNo, ${sCodeEsc ? `N'${sCodeEsc}'` : 'NULL'}, CAST('${docDateStr}' AS DATETIME), N'${opCodeEsc}', N'${cCodeEsc}', ${wCodeEsc ? `N'${wCodeEsc}'` : 'NULL'}, 0, 1, ${notesEsc ? `N'${notesEsc}'` : 'NULL'}, @SubSys, 0, N'${ownerGuidEsc}', 0, ${totalDiscount}, ${totalVat}, ${subtotal}, N'${headerDescEsc}', GETDATE(), ${grandTotal}, ${grandTotal});`,
+            'SET @NewDocId = SCOPE_IDENTITY();',
+            // Official Sayan Sales Invoice header parameters in STR_TBL_013 (14 = Customer, 336 = رسمی / غیر رسمی)
+            `INSERT INTO STR_TBL_013 (Field_003, Field_004, Field_005, Field_006, Field_007) VALUES (@FY, @NextArchiveNo, 14, N'${cCodeEsc}', @SubSys), (@FY, @NextArchiveNo, 336, N'${typeLabelFa}', @SubSys);`
         ];
 
-        // Insert invoice lines into STR_TBL_011 linking back to base remittance line via Field_018 (when available)
+        // Insert invoice lines into STR_TBL_011 & register official basis links in STR_TBL_021 for every base remittance row
         for (const it of preparedItems) {
             const icEsc = sanitizeSqlString(it.itemCode, 50);
             const resolvedWu = it.wareUnitId || wareUnitMap.get(it.itemCode)?.wareUnitId || null;
@@ -1431,24 +1541,33 @@ export const registerSalesInvoiceInSayan = async (payload, user = 'کاربر س
                 480
             );
             const trackingKeyExpr = `CONCAT(@FY, '-', @SubSys, '-', @NextArchiveNo, '-', ${it.rowNo})`;
-            const mabnaRowExpr = it.primarySourceRowId ? String(it.primarySourceRowId) : 'NULL';
             const wuExpr = resolvedWu ? String(resolvedWu) : 'NULL';
 
             sqlParts.push(
-                `INSERT INTO STR_TBL_011 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_018, Field_024, Field_025, Field_031, Field_034, Field_035, Field_036, Field_037) VALUES (@FY, @NextArchiveNo, N'${icEsc}', ${it.netWeight}, ${it.lineTotal}, 0, ${trackingKeyExpr}, N'', @SubSys, N'${cCodeEsc}', N'${wCodeEsc}', ${mabnaRowExpr}, 1, 0, N'${lineNote}', ${it.rowNo}, 0, N'${lineF36Esc}', ${wuExpr});`
+                `INSERT INTO STR_TBL_011 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_018, Field_024, Field_025, Field_031, Field_034, Field_035, Field_036, Field_037) VALUES (@FY, @NextArchiveNo, N'${icEsc}', ${it.netWeight}, ${it.lineTotal}, 0, ${trackingKeyExpr}, N'', @SubSys, N'${cCodeEsc}', NULL, NULL, 1, 0, N'${lineNote}', ${it.rowNo}, 0, N'${lineF36Esc}', ${wuExpr});`,
+                'SET @InvLineId = SCOPE_IDENTITY();'
             );
+
+            // Link every underlying OpCode 23 remittance row to this invoice line in STR_TBL_021 (batched in chunks of 40)
+            const validSrcIds = (it.sourceRowIds || []).filter((n) => Number.isFinite(n) && n > 0);
+            for (let b = 0; b < validSrcIds.length; b += 40) {
+                const chunk = validSrcIds.slice(b, b + 40);
+                const tuples = chunk.map((srcId) => `(@FY, @NextArchiveNo, @SubSys, @InvLineId, ${srcId})`).join(', ');
+                sqlParts.push(
+                    `INSERT INTO STR_TBL_021 (Field_003, Field_004, Field_005, Field_006, Field_007) VALUES ${tuples};`
+                );
+            }
         }
 
-        // Link base remittance document to new sales invoice in STR_TBL_029 (best-effort inside TRY/CATCH)
-        if (baseDocIdNum > 0) {
-            sqlParts.push(
-                `BEGIN TRY INSERT INTO STR_TBL_029 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_050, Field_051, Field_052, Field_053) VALUES (${baseDocIdNum}, @FY, ${baseArchNum}, 1, N'23', CAST('${docDateStr}' AS DATETIME), @NewDocId, GETDATE(), ${preparedItems.length}, 0, 0); END TRY BEGIN CATCH END CATCH;`
-            );
-        }
+        // Register Sales Invoice summary in STR_TBL_029 matching live Sayan structure (best-effort inside TRY/CATCH)
+        sqlParts.push(
+            `BEGIN TRY INSERT INTO STR_TBL_029 (Field_003, Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_050, Field_051, Field_052, Field_053) VALUES (@NewDocId, @FY, @NextArchiveNo, @SubSys, N'${opCodeEsc}', CAST('${docDateStr}' AS DATETIME), ${grandTotal}, N'${cCodeEsc}', GETDATE(), 1, 0, 0); END TRY BEGIN CATCH END CATCH;`
+        );
 
         sqlParts.push(
             'SELECT @NewDocId as DocId, @NextArchiveNo as ArchiveNo, @NextInvoiceNo as InvoiceNo, ' +
-            '(SELECT COUNT(*) FROM STR_TBL_011 WHERE Field_003 = @FY AND Field_004 = @NextArchiveNo AND Field_012 = @SubSys) as LineCnt;'
+            '(SELECT COUNT(*) FROM STR_TBL_011 WHERE Field_003 = @FY AND Field_004 = @NextArchiveNo AND Field_012 = @SubSys) as LineCnt, ' +
+            '(SELECT COUNT(*) FROM STR_TBL_021 WHERE Field_003 = @FY AND Field_004 = @NextArchiveNo AND Field_005 = @SubSys) as LinkCnt;'
         );
         sqlParts.push(isDryRun ? 'ROLLBACK TRAN;' : 'COMMIT TRAN;');
 

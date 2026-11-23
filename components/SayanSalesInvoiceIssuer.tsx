@@ -48,10 +48,16 @@ interface PendingRemittance {
     warehouseName: string;
     description: string;
     lineCount: number;
+    activeLineCount?: number;
+    voidedLineCount?: number;
+    invoicedLineCount?: number;
     totalNetWeight: number;
+    isVoided?: boolean;
     isInvoiced: boolean;
+    isPartiallyInvoiced?: boolean;
     linkedInvoiceId?: string | null;
     linkedInvoiceNo?: string | null;
+    linkedInvoiceArchiveNo?: string | null;
     linkedInvoiceType?: InvoiceMode | null;
 }
 
@@ -281,6 +287,16 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
     }, [fetchArchive]);
 
     const handleSelectRemittance = async (rem: PendingRemittance) => {
+        if (rem.isVoided) {
+            toast.error('تمام ردیف‌های این حواله فروش در سایان ابطال شده است.');
+            return;
+        }
+        if (rem.isInvoiced) {
+            toast.error(
+                `برای حواله #${toFaDigits(rem.remittanceNo)} قبلاً فاکتور فروش${rem.linkedInvoiceNo ? ` شماره #${toFaDigits(rem.linkedInvoiceNo)}` : ''} در سایان ثبت شده است.`
+            );
+            return;
+        }
         setLoadingLines(true);
         try {
             const resp = await fetch(
@@ -292,6 +308,11 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
             const data = await resp.json();
             if (!resp.ok || !data?.success) {
                 throw new Error(data?.message || 'خطا در بارگذاری اقلام حواله فروش');
+            }
+            if (data.allLinesAlreadyInvoiced) {
+                toast.error(`تمام ردیف‌های حواله #${toFaDigits(rem.remittanceNo)} در سایان فاکتور شده‌اند.`);
+                fetchPendingRemittances();
+                return;
             }
             setSelectedRemittance(data.remittance);
             const items: DraftInvoiceItem[] = (Array.isArray(data.groupedItems) ? data.groupedItems : []).map((it: any) => ({
@@ -315,11 +336,6 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
             setInvoiceType(null);
             setInvoiceDate(getTodayShamsi());
             setNotes(data.remittance?.description || '');
-            if (rem.isInvoiced) {
-                toast('توجه: برای این حواله قبلاً فاکتور ثبت شده است (در صورت نیاز می‌توانید مجدداً صادر یا از آرشیو چاپ کنید).', {
-                    icon: 'ℹ️'
-                });
-            }
         } catch (err: any) {
             toast.error(err?.message || 'خطا در دریافت اطلاعات حواله فروش');
         } finally {
@@ -755,12 +771,17 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                         <div className="bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800 rounded-2xl p-3 sm:p-4 space-y-3.5">
                             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                                 <div>
-                                    <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                                    <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
                                         <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center">۱</span>
                                         انتخاب حواله فروش مبنا از سایان
+                                        {!loadingRemittances && (
+                                            <span className="px-2 py-0.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-[11px] font-black">
+                                                {toFaDigits(remittances.length)} مورد
+                                            </span>
+                                        )}
                                     </h3>
                                     <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                                        روی هر حواله فروش کلیک کنید تا مشخصات مشتری، انبار، کالاها، وزن خالص و تعداد کارتن به‌صورت خودکار بارگذاری شود.
+                                        فقط حواله‌های فروش فعالِ بدون فاکتور در سایان (بررسی زنده جدول ارتباط اسناد) به‌عنوان مبنای آماده صدور نمایش داده می‌شوند.
                                     </p>
                                 </div>
 
@@ -889,10 +910,19 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                                             </span>
                                                         </td>
                                                         <td className="py-2.5 px-3 text-center">
-                                                            {r.isInvoiced ? (
+                                                            {r.isVoided ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 font-bold text-[11px]">
+                                                                    ابطال شده
+                                                                </span>
+                                                            ) : r.isInvoiced ? (
                                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold text-[11px]">
                                                                     <CheckCircle2 className="w-3 h-3" />
                                                                     فاکتور #{toFaDigits(r.linkedInvoiceNo || 'ثبت‌شده')}
+                                                                    {r.linkedInvoiceType === 'official' ? ' (رسمی)' : r.linkedInvoiceType === 'unofficial' ? ' (غیررسمی)' : ''}
+                                                                </span>
+                                                            ) : r.isPartiallyInvoiced ? (
+                                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-300 font-bold text-[11px]">
+                                                                    فاکتور جزئی (باقی‌مانده آماده)
                                                                 </span>
                                                             ) : (
                                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-bold text-[11px]">
@@ -902,13 +932,19 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                                         </td>
                                                         <td className="py-2.5 px-3 text-center">
                                                             <div className="inline-flex items-center gap-1.5">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleSelectRemittance(r)}
-                                                                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition-colors"
-                                                                >
-                                                                    انتخاب مبنا
-                                                                </button>
+                                                                {!r.isInvoiced && !r.isVoided ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleSelectRemittance(r)}
+                                                                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition-colors"
+                                                                    >
+                                                                        انتخاب مبنا
+                                                                    </button>
+                                                                ) : (
+                                                                    <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-slate-400 text-[11px] font-bold">
+                                                                        {r.isVoided ? 'غیرفعال' : 'صادر شده'}
+                                                                    </span>
+                                                                )}
                                                                 {r.linkedInvoiceId && (
                                                                     <button
                                                                         type="button"
@@ -947,13 +983,21 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                                             <span>{toFaDigits(r.shamsiDate)}</span>
                                                         </div>
                                                     </div>
-                                                    {r.isInvoiced ? (
+                                                    {r.isVoided ? (
+                                                        <span className="px-2 py-1 rounded-lg bg-rose-100 text-rose-700 text-[10px] font-black shrink-0">
+                                                            ابطال شده
+                                                        </span>
+                                                    ) : r.isInvoiced ? (
                                                         <span className="px-2 py-1 rounded-lg bg-emerald-100 text-emerald-700 text-[10px] font-black shrink-0">
-                                                            فاکتور شده
+                                                            فاکتور #{toFaDigits(r.linkedInvoiceNo || 'ثبت‌شده')}
+                                                        </span>
+                                                    ) : r.isPartiallyInvoiced ? (
+                                                        <span className="px-2 py-1 rounded-lg bg-sky-100 text-sky-800 text-[10px] font-black shrink-0">
+                                                            فاکتور جزئی
                                                         </span>
                                                     ) : (
                                                         <span className="px-2 py-1 rounded-lg bg-amber-100 text-amber-800 text-[10px] font-black shrink-0">
-                                                            در انتظار
+                                                            آماده فاکتور
                                                         </span>
                                                     )}
                                                 </div>
@@ -974,13 +1018,19 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                                 </div>
 
                                                 <div className="flex items-center gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleSelectRemittance(r)}
-                                                        className="flex-1 py-2.5 rounded-xl bg-indigo-600 active:bg-indigo-700 text-white text-xs font-black"
-                                                    >
-                                                        انتخاب به‌عنوان مبنای فاکتور
-                                                    </button>
+                                                    {!r.isInvoiced && !r.isVoided ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleSelectRemittance(r)}
+                                                            className="flex-1 py-2.5 rounded-xl bg-indigo-600 active:bg-indigo-700 text-white text-xs font-black"
+                                                        >
+                                                            انتخاب به‌عنوان مبنای فاکتور
+                                                        </button>
+                                                    ) : (
+                                                        <div className="flex-1 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-slate-400 text-xs font-bold text-center">
+                                                            {r.isVoided ? 'این حواله ابطال شده است' : `فاکتور فروش #${toFaDigits(r.linkedInvoiceNo || '-')} در سایان ثبت شده است`}
+                                                        </div>
+                                                    )}
                                                     {r.linkedInvoiceId && (
                                                         <button
                                                             type="button"
