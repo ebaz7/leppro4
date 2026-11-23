@@ -1472,6 +1472,99 @@ ipcMain.handle('type-barcode-to-active-window', async (_event, payload = {}) => 
   });
 });
 
+// 11. Native Windows/Desktop Isolated HTML Printer (fixes Chromium GDI double-rotation on A5 Landscape)
+ipcMain.handle('print-html-document', async (_event, payload = {}) => {
+  const {
+    html = '',
+    pageSize = 'A5',
+    landscape = true,
+    silent = false,
+    title = 'چاپ سند'
+  } = payload || {};
+
+  if (!html || typeof html !== 'string') {
+    return { success: false, error: 'Empty print HTML' };
+  }
+
+  let printWin = null;
+  let tempHtmlPath = null;
+  try {
+    tempHtmlPath = path.join(os.tmpdir(), `dlkam-print-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.html`);
+    fs.writeFileSync(tempHtmlPath, html, 'utf8');
+
+    printWin = new BrowserWindow({
+      show: false,
+      width: landscape ? 920 : 820,
+      height: landscape ? 660 : 1140,
+      backgroundColor: '#ffffff',
+      title: String(title || 'چاپ سند'),
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+        webSecurity: false
+      }
+    });
+
+    await printWin.loadFile(tempHtmlPath);
+
+    // Wait briefly for web fonts & embedded images to settle
+    await printWin.webContents.executeJavaScript(`
+      (async () => {
+        try {
+          if (document.fonts && document.fonts.ready) {
+            await Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 1200))]);
+          }
+          const imgs = Array.from(document.querySelectorAll('img'));
+          await Promise.race([
+            Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r; }))),
+            new Promise(r => setTimeout(r, 1500))
+          ]);
+        } catch (_) {}
+      })();
+    `).catch(() => {});
+
+    const normalizedPageSize =
+      typeof pageSize === 'string' && ['A3', 'A4', 'A5', 'Legal', 'Letter', 'Tabloid'].includes(pageSize)
+        ? pageSize
+        : (pageSize && typeof pageSize === 'object' ? pageSize : 'A5');
+
+    const printResult = await new Promise((resolve) => {
+      try {
+        printWin.webContents.print(
+          {
+            silent: Boolean(silent),
+            printBackground: true,
+            landscape: Boolean(landscape),
+            pageSize: normalizedPageSize,
+            margins: { marginType: 'none' },
+            preferCSSPageSize: false
+          },
+          (success, failureReason) => {
+            resolve({ success: Boolean(success), failureReason: failureReason || '' });
+          }
+        );
+      } catch (printErr) {
+        resolve({ success: false, failureReason: printErr?.message || String(printErr) });
+      }
+    });
+
+    return printResult;
+  } catch (err) {
+    console.error('[Electron] print-html-document error:', err);
+    return { success: false, error: err?.message || String(err) };
+  } finally {
+    try {
+      if (printWin && !printWin.isDestroyed()) printWin.close();
+    } catch (_) {}
+    if (tempHtmlPath) {
+      setTimeout(() => {
+        try { if (fs.existsSync(tempHtmlPath)) fs.unlinkSync(tempHtmlPath); } catch (_) {}
+      }, 2000);
+    }
+  }
+});
+
 app.whenReady().then(() => {
   try {
     if (session && session.defaultSession) {

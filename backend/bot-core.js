@@ -9,6 +9,12 @@ import * as dbManager from './db-manager.js';
 import * as utils from './utils.js';
 import * as whatsapp from './whatsapp.js';
 import { mergeFilesToPdf } from './pdf-merger.js';
+import {
+    getCustomerBotInvoices,
+    getSalesInvoiceById,
+    generateSalesInvoicePdfBuffer,
+    matchCustomerCode
+} from './sayan-sales-invoice-service.js';
 
 const getDb = dbManager.getDb;
 const saveDb = dbManager.saveDb;
@@ -1862,6 +1868,7 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                 [{ text: '📑 تبدیل و ادغام عکس/PDF به تک‌فایل PDF', callback_data: 'ACT_MERGE_PDF_START' }],
                 [{ text: '📞 ارتباط با بخش فروش (تیکت)', callback_data: 'GUEST_CONTACT' }],
                 [{ text: '💰 استعلام مانده حساب من', callback_data: 'GUEST_BALANCE_REQUEST' }],
+                [{ text: '🧾 فاکتورهای فروش من (PDF)', callback_data: 'GUEST_MY_INVOICES' }],
                 [{ text: '🔍 پیگیری درخواست', callback_data: 'GUEST_TRACK' }],
                 [{ text: '🏢 اطلاعات شرکت', callback_data: 'GUEST_COMPANY_INFO' }]
             ];
@@ -2212,12 +2219,80 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                 }
                 if (foundAny) {
                     const successMsg = `✅ *ارتباط با حسابداری برقرار شد!*\n\n👤 *مشتری:* ${name}\n🔢 کد حسابداری: \`${code}\`\n\n💰 *مانده حساب شما (آنلاین سایان):* ${balanceStr} ریال (${type})\n💬 مانده حساب شما ذخیره شد و در پرسش‌های بعدی مستقیماً نشان داده خواهد شد.`;
-                    return sendFn(chatId, successMsg, { reply_markup: { inline_keyboard: [[{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]] } });
+                    return sendFn(chatId, successMsg, {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🧾 دریافت فاکتورهای فروش من (PDF)', callback_data: 'GUEST_MY_INVOICES' }],
+                                [{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]
+                            ]
+                        }
+                    });
                 } else {
-                    const successMsg = `✅ *پیوند حساب برقرار شد!*\n🔢 کد حسابداری شما \`${code}\` با موفقیت در ربات ذخیره گردید.\n\n⚠️ اما در حال حاضر رکوردی با این کد در سرور حسابداری سایان یافت نشد. به محض برقراری اتصال یا تصحیح کد، مانده حساب شما نمایش داده خواهد شد.`;
-                    return sendFn(chatId, successMsg, { reply_markup: { inline_keyboard: [[{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]] } });
+                    const successMsg = `✅ *پیوند حساب برقرار شد!*\n🔢 کد حسابداری شما \`${code}\` با موفقیت در ربات ذخیره گردید.\n\n⚠️ اما در حال حاضر رکوردی با این کد در سرور حسابداری سایان یافت نشد. به محض برقراری اتصال یا تصحیح کد، مانده حساب و فاکتورهای شما نمایش داده خواهد شد.`;
+                    return sendFn(chatId, successMsg, {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🧾 بررسی فاکتورهای فروش من (PDF)', callback_data: 'GUEST_MY_INVOICES' }],
+                                [{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]
+                            ]
+                        }
+                    });
                 }
             }
+        }
+
+        if (session.state === 'GUEST_SUBMIT_ACCOUNT_CODE_FOR_INVOICES') {
+            const code = text
+                .trim()
+                .replace(/[۰-۹]/g, (ch) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(ch)))
+                .replace(/[٠-٩]/g, (ch) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(ch)))
+                .slice(0, 40);
+            if (!code) {
+                return sendFn(chatId, "⚠️ لطفاً کد مشتری معتبر خود را ارسال کنید:");
+            }
+            if (!db.customerChatCodes) db.customerChatCodes = [];
+            db.customerChatCodes = db.customerChatCodes.filter(c => !(c.chatId === String(chatId) && c.platform === platform));
+            db.customerChatCodes.push({
+                chatId: String(chatId),
+                platform: platform,
+                accountCode: code,
+                updatedAt: Date.now()
+            });
+            saveDb(db);
+            session.state = 'IDLE';
+
+            const invoices = getCustomerBotInvoices(code, 15);
+            if (invoices.length === 0) {
+                return sendFn(
+                    chatId,
+                    `✅ کد مشتری شما (\`${code}\`) با موفقیت در ربات ثبت شد.\n\n📭 در حال حاضر فاکتور فروش صادرشده‌ای برای این کد ثبت نشده است. به محض صدور فاکتور جدید، از همین بخش می‌توانید فایل PDF آن را دریافت کنید.`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🔄 تغییر کد مشتری', callback_data: 'GUEST_CHANGE_INVOICE_CODE' }],
+                                [{ text: '🏠 منوی اصلی', callback_data: 'GUEST_MAIN' }]
+                            ]
+                        }
+                    }
+                );
+            }
+
+            const invButtons = invoices.map((inv) => {
+                const modeIcon = inv.invoiceType === 'official' ? '🏛️ رسمی' : '🧾 غیررسمی';
+                const amtStr = Number(inv.grandTotal || 0).toLocaleString('fa-IR');
+                return [{
+                    text: `📄 فاکتور #${inv.invoiceNo} | ${inv.shamsiDate || ''} | ${modeIcon} | ${amtStr} ریال`,
+                    callback_data: `GUEST_INV_PDF_${inv.id}`
+                }];
+            });
+            invButtons.push([{ text: '🔄 تغییر کد مشتری', callback_data: 'GUEST_CHANGE_INVOICE_CODE' }]);
+            invButtons.push([{ text: '🏠 منوی اصلی', callback_data: 'GUEST_MAIN' }]);
+
+            return sendFn(
+                chatId,
+                `✅ *کد مشتری \`${code}\` ثبت شد.*\n\n🧾 *لیست فاکتورهای فروش شما (${invoices.length} فاکتور اخیر):*\nبرای دریافت فایل PDF، روی فاکتور مورد نظر کلیک کنید:`,
+                { reply_markup: { inline_keyboard: invButtons } }
+            );
         }
 
         if (session.state === 'BOT_SAYAN_WAIT_COMPARE_DATES') {
@@ -4682,6 +4757,7 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
                 [{ text: '🛒 ثبت سفارش خرید', callback_data: 'GUEST_ORDER' }],
                 [{ text: '🎫 ثبت تیکت / ارتباط با پشتیبانی', callback_data: 'GUEST_CONTACT_FLOW' }],
                 [{ text: '💰 استعلام مانده حساب من', callback_data: 'GUEST_BALANCE_REQUEST' }],
+                [{ text: '🧾 فاکتورهای فروش من (PDF)', callback_data: 'GUEST_MY_INVOICES' }],
                 [{ text: '🔍 پیگیری تیکت یا سفارش', callback_data: 'GUEST_TRACK' }],
                 [{ text: '🏢 اطلاعات شرکت و حساب‌ها', callback_data: 'GUEST_COMPANY_INFO' }]
             ];
@@ -4755,6 +4831,7 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
                     // Button to receive the latest statement file!
                     inline_keyboard.push([{ text: '📄 دریافت آخرین صورتحساب پیوست مالی', callback_data: `GUEST_STMT_${code}` }]);
                 }
+                inline_keyboard.push([{ text: '🧾 فاکتورهای فروش من (PDF)', callback_data: 'GUEST_MY_INVOICES' }]);
                 inline_keyboard.push([{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]);
 
                 if (rec) {
@@ -4846,6 +4923,141 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
                 }
             } else {
                 return sendFn(userId, `⚠️ صورتحساب بارگذاری‌شده‌ای برای کد حسابداری شما یافت نشد.`);
+            }
+        }
+
+        if (data === 'GUEST_CHANGE_INVOICE_CODE') {
+            session.state = 'GUEST_SUBMIT_ACCOUNT_CODE_FOR_INVOICES';
+            return sendFn(
+                userId,
+                `🔢 *ورود / تغییر کد مشتری*\n\nلطفاً *کد مشتری* (کد حسابداری اختصاصی دریافت‌شده از واحد فروش/مالی) را ارسال نمایید تا فاکتورهای فروش شما نمایش داده شود:`,
+                { reply_markup: { inline_keyboard: [[{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]] } }
+            );
+        }
+
+        if (data === 'GUEST_MY_INVOICES') {
+            let code = null;
+            const mapped = (db.customerChatCodes || []).find(
+                c => (c.chatId === String(userId) || c.chatId === String(chatId)) && c.platform === platform
+            );
+            if (mapped && mapped.accountCode) {
+                code = mapped.accountCode;
+            } else {
+                const salesContacts = (db.settings && db.settings.salesContacts) || [];
+                let matchedContact = salesContacts.find(c =>
+                    (platform === 'telegram' && c.telegramId && String(c.telegramId).replace('@', '').toLowerCase() === String(userId).toLowerCase()) ||
+                    (platform === 'bale' && c.baleId && String(c.baleId).replace('@', '').toLowerCase() === String(userId).toLowerCase())
+                );
+                if (!matchedContact) {
+                    const sub = (db.botSubscribers || []).find(
+                        s => (s.chatId === String(userId) || s.telegramChatId == userId || s.baleChatId == userId) && (!s.platform || s.platform === platform)
+                    );
+                    if (sub && sub.mobile) {
+                        const cleanedSubMobile = String(sub.mobile).replace(/\D/g, '').slice(-10);
+                        matchedContact = salesContacts.find(c => {
+                            const cleanedCMobile = String(c.mobile).replace(/\D/g, '').slice(-10);
+                            return cleanedCMobile && cleanedCMobile === cleanedSubMobile;
+                        });
+                    }
+                }
+                if (matchedContact && matchedContact.accountCode) {
+                    code = matchedContact.accountCode;
+                    if (!db.customerChatCodes) db.customerChatCodes = [];
+                    db.customerChatCodes.push({
+                        chatId: String(userId),
+                        platform,
+                        accountCode: code,
+                        updatedAt: Date.now()
+                    });
+                    saveDb(db);
+                }
+            }
+
+            if (!code) {
+                session.state = 'GUEST_SUBMIT_ACCOUNT_CODE_FOR_INVOICES';
+                return sendFn(
+                    userId,
+                    `🧾 *دریافت فایل PDF فاکتورهای فروش*\n\nبرای مشاهده و دانلود فاکتورهای فروش خود، لطفاً *کد مشتری* (کد حسابداری اختصاصی دریافتی از شرکت) را ارسال نمایید:`,
+                    { reply_markup: { inline_keyboard: [[{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]] } }
+                );
+            }
+
+            const invoices = getCustomerBotInvoices(code, 15);
+            if (invoices.length === 0) {
+                return sendFn(
+                    userId,
+                    `🧾 *فاکتورهای فروش شما*\n🔢 کد مشتری ثبت‌شده: \`${code}\`\n\n📭 در حال حاضر فاکتور فروش منتشرشده‌ای برای این کد ثبت نشده است.`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [
+                                [{ text: '🔄 تغییر کد مشتری', callback_data: 'GUEST_CHANGE_INVOICE_CODE' }],
+                                [{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]
+                            ]
+                        }
+                    }
+                );
+            }
+
+            const buttons = invoices.map((inv) => {
+                const modeLabel = inv.invoiceType === 'official' ? '🏛️ رسمی' : '🧾 غیررسمی';
+                const amtStr = Number(inv.grandTotal || 0).toLocaleString('fa-IR');
+                return [{
+                    text: `📄 فاکتور #${inv.invoiceNo} | ${inv.shamsiDate || ''} | ${modeLabel} | ${amtStr} ریال`,
+                    callback_data: `GUEST_INV_PDF_${inv.id}`
+                }];
+            });
+            buttons.push([{ text: '🔄 تغییر کد مشتری', callback_data: 'GUEST_CHANGE_INVOICE_CODE' }]);
+            buttons.push([{ text: '🔙 بازگشت', callback_data: 'GUEST_MAIN' }]);
+
+            return sendFn(
+                userId,
+                `🧾 *فاکتورهای فروش شما* (کد مشتری: \`${code}\`)\n\nتعداد *${invoices.length}* فاکتور اخیر قابل دانلود است. برای دریافت فایل PDF روی فاکتور مورد نظر بزنید:`,
+                { reply_markup: { inline_keyboard: buttons } }
+            );
+        }
+
+        if (data.startsWith('GUEST_INV_PDF_')) {
+            const invoiceId = data.replace('GUEST_INV_PDF_', '').trim();
+            const invoice = getSalesInvoiceById(invoiceId);
+            if (!invoice || invoice.publishedToBot === false) {
+                return sendFn(userId, `⚠️ فاکتور مورد نظر یافت نشد یا دسترسی آن غیرفعال شده است.`, {
+                    reply_markup: { inline_keyboard: [[{ text: '🧾 بازگشت به لیست فاکتورها', callback_data: 'GUEST_MY_INVOICES' }]] }
+                });
+            }
+
+            // Strictly verify invoice ownership against the customer's linked account code
+            const mapped = (db.customerChatCodes || []).find(
+                c => (c.chatId === String(userId) || c.chatId === String(chatId)) && c.platform === platform
+            );
+            const linkedCode = mapped?.accountCode || '';
+            const isOwner =
+                linkedCode &&
+                (matchCustomerCode(invoice.customerCode, linkedCode) ||
+                    matchCustomerCode(invoice.customerTafsiliCode, linkedCode));
+            if (!isOwner && !user) {
+                return sendFn(userId, `⛔ دسترسی به این فاکتور تنها با کد مشتری مالک فاکتور امکان‌پذیر است.`, {
+                    reply_markup: { inline_keyboard: [[{ text: '🔄 ورود کد مشتری', callback_data: 'GUEST_CHANGE_INVOICE_CODE' }]] }
+                });
+            }
+
+            try {
+                await sendFn(userId, `🔄 در حال آماده‌سازی فایل PDF فاکتور شماره *#${invoice.invoiceNo}*... لطفاً چند لحظه منتظر بمانید.`);
+                const mode = invoice.invoiceType === 'official' ? 'official' : 'unofficial';
+                const pdfBuffer = await generateSalesInvoicePdfBuffer(invoice, mode);
+                const safeNo = String(invoice.invoiceNo || invoice.archiveNo || 'Invoice').replace(/[^a-zA-Z0-9_-]/g, '');
+                const fileName = `Factor_${safeNo}_${mode === 'official' ? 'Official' : 'Unofficial'}.pdf`;
+                const typeLabel = mode === 'official' ? 'رسمی (با ۱۰٪ ارزش افزوده)' : 'غیر رسمی';
+                const caption =
+                    `🧾 *فاکتور فروش ${typeLabel} شماره #${invoice.invoiceNo}*\n` +
+                    `👤 خریدار: ${invoice.customerName} (کد: ${invoice.customerCode})\n` +
+                    `📅 تاریخ: ${invoice.shamsiDate || ''}\n` +
+                    `📦 تعداد کارتن: ${invoice.totalCartons || 0} کارتن | وزن کل: ${invoice.totalNetWeight || 0} کیلوگرم\n` +
+                    `💰 مبلغ قابل پرداخت: ${Number(invoice.grandTotal || 0).toLocaleString('fa-IR')} ریال`;
+                await sendDocFn(chatId, pdfBuffer, fileName, caption);
+                return;
+            } catch (e) {
+                console.error('GUEST_INV_PDF send error:', e);
+                return sendFn(userId, `❌ خطایی در تولید یا ارسال فایل PDF فاکتور رخ داد. لطفاً مجدداً تلاش کنید یا به واحد فروش اطلاع دهید.`);
             }
         }
 

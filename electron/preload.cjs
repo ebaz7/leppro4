@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPersistentKVSync: () => ipcRenderer.sendSync('get-persistent-kv-sync'),
   syncPersistentKV: (key, value) => ipcRenderer.invoke('set-persistent-kv', { key, value }),
   removePersistentKV: (key) => ipcRenderer.invoke('remove-persistent-kv', key),
+  printHtml: (payload) => ipcRenderer.invoke('print-html-document', payload),
   onDownloadProgress: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('download-progress', handler);

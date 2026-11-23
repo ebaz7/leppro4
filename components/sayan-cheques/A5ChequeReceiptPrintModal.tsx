@@ -18,9 +18,12 @@ import {
     Eye
 } from 'lucide-react';
 import * as jalaali from 'jalaali-js';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 import { formatChequeAmountInWords } from '../../utils/persianNumberToWords';
 import { shareElementToChat, openSendToChat } from '../../services/chatShareService';
 import { resolveImageUrl } from '../../services/apiService';
+import { saveBlobAndOpenFile } from '../../services/fileService';
 
 export interface A5ChequeData {
     id?: string | number;
@@ -83,15 +86,35 @@ const toShamsiStr = (dateStr?: string): string => {
 };
 
 /**
- * Builds standalone, isolated pure-white A5 Landscape HTML for direct printing.
- * This completely prevents dark mode, gray overlays, or parent container backgrounds.
+ * Resolve font URL safely across Web (https://), Electron (file://), and Tauri.
  */
-function buildA5ChequePrintHtml(receipt: A5ChequeData, printTarget: 'all' | 'receipt' | 'attachments'): string {
+function resolvePrintFontUrl(relPath: string): string {
+    try {
+        if (typeof window !== 'undefined' && window.location?.href) {
+            return new URL(relPath.replace(/^\//, ''), window.location.href).href;
+        }
+    } catch {}
+    return relPath;
+}
+
+/**
+ * Builds standalone, isolated pure-white A5 Landscape HTML for direct printing.
+ * This completely prevents dark mode, gray overlays, parent container backgrounds,
+ * and Windows Chromium GDI double-rotation caused by conflicting CSS @page landscape locks.
+ */
+function buildA5ChequePrintHtml(
+    receipt: A5ChequeData,
+    printTarget: 'all' | 'receipt' | 'attachments',
+    options: { omitCssPageSizeLock?: boolean } = {}
+): string {
     const totalAmount = Number(receipt.totalAmount) || 0;
     const amountInWords = formatChequeAmountInWords(totalAmount);
     const receiptDate = receipt.docDateShamsi || toShamsiStr(receipt.createdAt) || toShamsiStr(new Date().toISOString());
     const attachments = Array.isArray(receipt.attachments) ? receipt.attachments : [];
     const hasAttachments = attachments.length > 0;
+    const omitCssPageSizeLock = Boolean(options.omitCssPageSizeLock);
+    const fontRegUrl = resolvePrintFontUrl('./fonts/Vazirmatn-Regular.woff2');
+    const fontBoldUrl = resolvePrintFontUrl('./fonts/Vazirmatn-Bold.woff2');
 
     const includeReceipt = printTarget === 'all' || printTarget === 'receipt';
     const includeAttachments = hasAttachments && (printTarget === 'all' || printTarget === 'attachments');
@@ -322,19 +345,19 @@ function buildA5ChequePrintHtml(receipt: A5ChequeData, printTarget: 'all' | 'rec
         <style>
             @font-face {
                 font-family: 'Vazirmatn';
-                src: url('/fonts/Vazirmatn-Regular.woff2') format('woff2');
+                src: url('${fontRegUrl}') format('woff2');
                 font-weight: normal;
                 font-style: normal;
             }
             @font-face {
                 font-family: 'Vazirmatn';
-                src: url('/fonts/Vazirmatn-Bold.woff2') format('woff2');
+                src: url('${fontBoldUrl}') format('woff2');
                 font-weight: bold;
                 font-style: normal;
             }
             @page {
-                size: A5 landscape;
-                margin: 0;
+                ${omitCssPageSizeLock ? '' : 'size: 210mm 148mm;'}
+                margin: 0mm;
             }
             * {
                 box-sizing: border-box;
@@ -344,6 +367,7 @@ function buildA5ChequePrintHtml(receipt: A5ChequeData, printTarget: 'all' | 'rec
             html, body {
                 margin: 0;
                 padding: 0;
+                width: 210mm;
                 background-color: #ffffff !important;
                 background: #ffffff !important;
                 color: #000000 !important;
@@ -352,10 +376,10 @@ function buildA5ChequePrintHtml(receipt: A5ChequeData, printTarget: 'all' | 'rec
                 text-align: right;
             }
             .print-page {
-                width: 200mm;
-                height: 136mm;
-                max-height: 136mm;
-                margin: 6mm auto;
+                width: 202mm;
+                height: 140mm;
+                max-height: 140mm;
+                margin: 4mm auto;
                 padding: 3.5mm 5mm;
                 background-color: #ffffff !important;
                 background: #ffffff !important;
@@ -370,7 +394,16 @@ function buildA5ChequePrintHtml(receipt: A5ChequeData, printTarget: 'all' | 'rec
                 overflow: hidden;
             }
             @media print {
-                html, body, #root, #root *, [class*="theme-"], [class*="bg-"], [class*="text-"], .dark, .dark * {
+                html, body {
+                    width: 210mm !important;
+                    height: 148mm !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    background: #ffffff !important;
+                    background-color: #ffffff !important;
+                    color: #000000 !important;
+                }
+                #root, #root *, [class*="theme-"], [class*="bg-"], [class*="text-"], .dark, .dark * {
                     background: #ffffff !important;
                     background-color: #ffffff !important;
                     color: #000000 !important;
@@ -379,6 +412,10 @@ function buildA5ChequePrintHtml(receipt: A5ChequeData, printTarget: 'all' | 'rec
                     filter: none !important;
                 }
                 .print-page {
+                    width: 202mm !important;
+                    height: 140mm !important;
+                    max-height: 140mm !important;
+                    margin: 4mm auto !important;
                     page-break-inside: avoid;
                     break-inside: avoid;
                     border: 1.5px solid #000000 !important;
@@ -406,30 +443,66 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
     const [printTarget, setPrintTarget] = useState<'all' | 'receipt' | 'attachments'>('all');
     const [isPrinting, setIsPrinting] = useState(false);
 
+    const [downloadingPdf, setDownloadingPdf] = useState(false);
+
     if (!isOpen || !receipt) return null;
 
     const attachments = Array.isArray(receipt.attachments) ? receipt.attachments : [];
     const hasAttachments = attachments.length > 0;
 
     /**
-     * Isolated Pure White iframe Print:
-     * Eliminates 100% of gray backgrounds, dark mode artifacts, and modal backdrops.
+     * Exact A5 Landscape Print:
+     * 1. On Windows Electron (with native printHtml IPC): passes pageSize: 'A5', landscape: true,
+     *    preferCSSPageSize: false directly to Windows GDI without CSS @page lock, eliminating double-rotation
+     *    and respecting any user changes in the Windows Print Dialog.
+     * 2. On Web / Tauri / older Electron: uses isolated hidden iframe with exact 210mm x 148mm layout
+     *    (omitting conflicting CSS page locks on Electron so user printer settings are honored).
      */
-    const handlePrintDirectly = (target: 'all' | 'receipt' | 'attachments' = 'all') => {
+    const handlePrintDirectly = async (target: 'all' | 'receipt' | 'attachments' = 'all') => {
         setIsPrinting(true);
         setPrintTarget(target);
 
         try {
-            const htmlContent = buildA5ChequePrintHtml(receipt, target);
+            const electronApi = (window as any)?.electronAPI;
+            const isElectronRuntime =
+                Boolean(electronApi) ||
+                (typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent || ''));
 
-            // Create invisible iframe
+            // Path 1: Native Electron printHtml (exact Windows A5 Landscape DEVMODE, zero double-rotation)
+            if (electronApi && typeof electronApi.printHtml === 'function') {
+                const nativeHtml = buildA5ChequePrintHtml(receipt, target, { omitCssPageSizeLock: true });
+                const res = await electronApi.printHtml({
+                    html: nativeHtml,
+                    pageSize: 'A5',
+                    landscape: true,
+                    silent: false,
+                    title: `رسید دریافت چک #${receipt.receiptNo || receipt.id}`
+                });
+                if (res && res.success) {
+                    setIsPrinting(false);
+                    return;
+                }
+                // If user explicitly cancelled Windows print dialog, do not open a second dialog
+                if (res && /cancel/i.test(String(res.failureReason || ''))) {
+                    setIsPrinting(false);
+                    return;
+                }
+            }
+
+            // Path 2: Isolated hidden iframe (on older Electron omit CSS @page size lock so Windows printer settings work!)
+            const htmlContent = buildA5ChequePrintHtml(receipt, target, {
+                omitCssPageSizeLock: isElectronRuntime
+            });
+
             const iframe = document.createElement('iframe');
             iframe.style.position = 'fixed';
             iframe.style.right = '0';
             iframe.style.bottom = '0';
-            iframe.style.width = '0px';
-            iframe.style.height = '0px';
+            iframe.style.width = '210mm';
+            iframe.style.height = '148mm';
             iframe.style.border = '0';
+            iframe.style.opacity = '0';
+            iframe.style.pointerEvents = 'none';
             iframe.style.zIndex = '-9999';
             document.body.appendChild(iframe);
 
@@ -444,7 +517,7 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
             frameDoc.write(htmlContent);
             frameDoc.close();
 
-            // Allow rendering then print
+            // Wait briefly for fonts & images before invoking print
             setTimeout(() => {
                 try {
                     if (iframe.contentWindow) {
@@ -460,13 +533,56 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                         if (document.body.contains(iframe)) {
                             document.body.removeChild(iframe);
                         }
-                    }, 2000);
+                    }, 3000);
                 }
-            }, 250);
+            }, 300);
         } catch (e) {
             console.error('Print build error:', e);
             window.print();
             setIsPrinting(false);
+        }
+    };
+
+    /**
+     * Generates a pixel-exact A5 Landscape PDF (210mm x 148mm) and opens/downloads it.
+     * Guarantees 100% consistent A5 Landscape printing on any Windows printer driver and Android.
+     */
+    const handleDownloadExactA5Pdf = async () => {
+        const el = document.getElementById('a5-cheque-receipt-preview-card');
+        if (!el) return;
+        setDownloadingPdf(true);
+        try {
+            const canvas = await html2canvas(el, {
+                scale: 2.5,
+                useCORS: true,
+                allowTaint: true,
+                backgroundColor: '#ffffff',
+                logging: false
+            });
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF({
+                orientation: 'landscape',
+                unit: 'mm',
+                format: 'a5'
+            });
+            const pageW = pdf.internal.pageSize.getWidth(); // 210mm
+            const pageH = pdf.internal.pageSize.getHeight(); // 148mm
+            const margin = 4;
+            const availW = pageW - margin * 2;
+            const availH = pageH - margin * 2;
+            const ratio = Math.min(availW / canvas.width, availH / canvas.height);
+            const renderW = canvas.width * ratio;
+            const renderH = canvas.height * ratio;
+            const x = (pageW - renderW) / 2;
+            const y = (pageH - renderH) / 2;
+            pdf.addImage(imgData, 'PNG', x, y, renderW, renderH);
+            const blob = pdf.output('blob');
+            const fname = `Cheque_Receipt_A5_${receipt.receiptNo || receipt.id}.pdf`;
+            await saveBlobAndOpenFile(blob, fname);
+        } catch (err) {
+            console.error('Exact A5 PDF export error:', err);
+        } finally {
+            setDownloadingPdf(false);
         }
     };
 
@@ -642,6 +758,17 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                                 <span>{isPrinting ? 'آماده‌سازی چاپ...' : 'چاپ رسید (A5 افقی)'}</span>
                             </button>
                         )}
+
+                        <button
+                            type="button"
+                            onClick={handleDownloadExactA5Pdf}
+                            disabled={downloadingPdf}
+                            className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-600/30 transition-all active:scale-95 disabled:opacity-50"
+                            title="تولید فایل PDF استاندارد A5 افقی (۲۱۰×۱۴۸ میلی‌متر) برای چاپ دقیق در ویندوز و موبایل"
+                        >
+                            <Download className="w-4 h-4" />
+                            <span>{downloadingPdf ? 'در حال ساخت PDF...' : 'فایل PDF (A5 افقی)'}</span>
+                        </button>
 
                         {onRegisterNewNext && (
                             <button

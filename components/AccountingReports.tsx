@@ -1,5 +1,6 @@
 import ProductionReturnTab from './ProductionReturnTab';
 import SayanInvoicesReportTab from './SayanInvoicesReportTab';
+import SayanSalesInvoiceIssuer from './SayanSalesInvoiceIssuer';
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { PinchZoomContainer } from './PinchZoomContainer';
@@ -216,6 +217,7 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
             const saved = localStorage.getItem('sayan_reports_active_tab');
             if (saved === 'sales' && isSalesAllowed) return 'sales';
             if (saved === 'invoices' && isInvoicesAllowed) return 'invoices';
+            if (saved === 'salesInvoiceIssuer' && isInvoicesAllowed) return 'salesInvoiceIssuer';
             if (saved === 'traz' && isTrazAllowed) return 'traz';
             if (saved === 'production' && isProductionAllowed) return 'production';
             if (saved === 'cheques' && isChequesAllowed) return 'cheques';
@@ -6292,6 +6294,18 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         <span>گزارش فاکتور فروش و خرید</span>
                     </button>
                 )}
+                {isInvoicesAllowed && (
+                    <button 
+                        onClick={() => {
+                            setActiveTab('salesInvoiceIssuer');
+                            try { localStorage.setItem('sayan_reports_active_tab', 'salesInvoiceIssuer'); } catch (e) {}
+                        }} 
+                        className={`flex items-center justify-center gap-1.5 py-2 px-3 sm:px-4 rounded-lg text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${activeTab === 'salesInvoiceIssuer' ? 'bg-white dark:bg-zinc-900 shadow-sm text-emerald-600 dark:text-emerald-400' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-zinc-700/50 hover:text-slate-900'}`}
+                    >
+                        <Printer className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                        <span>ثبت و چاپ فاکتور فروش</span>
+                    </button>
+                )}
                 {isProductionAllowed && (
                     <button 
                         onClick={() => {
@@ -11119,6 +11133,14 @@ export default function AccountingReports({ currentUser, settings, onNavigateToC
                         dateTo={dateTo}
                         runSayanQuery={runSayanQuery}
                         initialTafsilis={tafsilis}
+                    />
+                )}
+
+                {/* 10. SAYAN SALES INVOICE ISSUER + 2-MODE PRINT + CUSTOMER BOT PDF TAB */}
+                {activeTab === 'salesInvoiceIssuer' && isInvoicesAllowed && (
+                    <SayanSalesInvoiceIssuer
+                        settings={settings}
+                        currentUser={currentUser}
                     />
                 )}
             </div>

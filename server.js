@@ -55,6 +55,7 @@ import * as sayanChequeService from './backend/sayan-cheque-service.js';
 import * as sayanPartsService from './backend/sayan-parts-service.js';
 import * as sayanAgingService from './backend/sayan-aging-service.js';
 import * as sayanRemittanceService from './backend/sayan-remittance-service.js';
+import * as sayanSalesInvoiceService from './backend/sayan-sales-invoice-service.js';
 import * as barcodeBridgeService from './backend/barcode-bridge-service.js';
 import { mergeFilesToPdf, enhanceDocumentImage } from './backend/pdf-merger.js';
 import { generateBenchmarkData } from './backend/sayanBenchmarkData.js';
@@ -6893,6 +6894,164 @@ app.get('/api/sayan/sales-remittances/archive', async (req, res) => {
         res.json({ success: true, archive });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message, archive: [] });
+    }
+});
+
+// ============================================================================
+// Sayan Sales Invoice Issuance (from Sales Remittance Basis) + 2-Mode Print/PDF + Customer Bot
+// ============================================================================
+
+app.get('/api/sayan/sales-invoices/pending-remittances', async (req, res) => {
+    try {
+        const fiscalYear = String(req.query.fiscalYear || '4').trim();
+        const search = String(req.query.search || '').trim();
+        const status = String(req.query.status || 'all').trim();
+        const limit = Number(req.query.limit) || 120;
+        const remittances = await sayanSalesInvoiceService.getPendingSalesRemittancesForInvoicing({
+            fiscalYear,
+            search,
+            status,
+            limit
+        });
+        res.json({ success: true, remittances });
+    } catch (err) {
+        console.error('Sayan Pending Remittances for Invoicing Error:', err);
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 502;
+        res.status(status).json({
+            success: false,
+            message: err.message || 'خطا در دریافت لیست حواله‌های فروش سایان',
+            remittances: []
+        });
+    }
+});
+
+app.get('/api/sayan/sales-invoices/remittance-lines/:archiveCode', async (req, res) => {
+    try {
+        const archiveCode = String(req.params.archiveCode || '').trim();
+        const fiscalYear = String(req.query.fiscalYear || '4').trim();
+        if (!/^\d+$/.test(archiveCode)) {
+            return res.status(400).json({ success: false, message: 'کد بایگانی حواله فروش معتبر نیست.' });
+        }
+        const result = await sayanSalesInvoiceService.getRemittanceLinesForInvoice(archiveCode, fiscalYear);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        console.error('Sayan Remittance Lines for Invoice Error:', err);
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 502;
+        res.status(status).json({
+            success: false,
+            message: err.message || 'خطا در دریافت اقلام حواله فروش از سایان'
+        });
+    }
+});
+
+app.post('/api/sayan/sales-invoices/register', async (req, res) => {
+    try {
+        const data = req.body || {};
+        const currentUser = data.currentUser || req.user || { fullName: 'کاربر سیستم' };
+        const result = await sayanSalesInvoiceService.registerSalesInvoiceInSayan(data, currentUser, {
+            dryRun: Boolean(data.dryRun)
+        });
+
+        let botDelivery = null;
+        if (result?.success && !result.dryRun && result.invoice?.id && data.notifyCustomerViaBot !== false && data.publishToBot !== false) {
+            try {
+                botDelivery = await sayanSalesInvoiceService.sendSalesInvoiceToCustomerBot(
+                    result.invoice.id,
+                    result.invoice.invoiceType
+                );
+            } catch (botErr) {
+                console.warn('[SayanSalesInvoice] Non-fatal bot auto-push error:', botErr.message);
+                botDelivery = {
+                    success: false,
+                    delivered: 0,
+                    message: 'فاکتور در ربات منتشر شد اما ارسال خودکار انجام نشد.'
+                };
+            }
+        }
+
+        res.json({ ...result, botDelivery });
+    } catch (err) {
+        console.error('Register Sayan Sales Invoice Error:', err);
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({
+            success: false,
+            message: err.message || 'خطا در ثبت فاکتور فروش در سایان'
+        });
+    }
+});
+
+app.get('/api/sayan/sales-invoices/archive', (req, res) => {
+    try {
+        const search = String(req.query.search || '').trim();
+        const customerCode = String(req.query.customerCode || '').trim();
+        const invoiceType = String(req.query.invoiceType || 'all').trim();
+        const limit = Number(req.query.limit) || 200;
+        const archive = sayanSalesInvoiceService.getSalesInvoicesArchive({
+            search,
+            customerCode,
+            invoiceType,
+            limit
+        });
+        res.json({ success: true, archive });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message, archive: [] });
+    }
+});
+
+app.get('/api/sayan/sales-invoices/:id/html', (req, res) => {
+    try {
+        const invoiceId = String(req.params.id || '').trim();
+        const invoice = sayanSalesInvoiceService.getSalesInvoiceById(invoiceId);
+        if (!invoice) {
+            return res.status(404).json({ success: false, message: 'فاکتور فروش مورد نظر یافت نشد.' });
+        }
+        const modeParam = String(req.query.mode || '').trim();
+        const overrideMode = modeParam === 'official' || modeParam === 'unofficial' ? modeParam : null;
+        const html = sayanSalesInvoiceService.buildSalesInvoicePrintHtml(invoice, overrideMode);
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message || 'خطا در ساخت نسخه چاپی فاکتور' });
+    }
+});
+
+app.get('/api/sayan/sales-invoices/:id/pdf', async (req, res) => {
+    try {
+        const invoiceId = String(req.params.id || '').trim();
+        const invoice = sayanSalesInvoiceService.getSalesInvoiceById(invoiceId);
+        if (!invoice) {
+            return res.status(404).json({ success: false, message: 'فاکتور فروش مورد نظر یافت نشد.' });
+        }
+        const modeParam = String(req.query.mode || '').trim();
+        const overrideMode = modeParam === 'official' || modeParam === 'unofficial' ? modeParam : null;
+        const effectiveMode = overrideMode || invoice.invoiceType || 'unofficial';
+        const pdfBuffer = await sayanSalesInvoiceService.generateSalesInvoicePdfBuffer(invoice, effectiveMode);
+        const safeNo = String(invoice.invoiceNo || invoice.archiveNo || 'Invoice').replace(/[^a-zA-Z0-9_-]/g, '');
+        const fileName = `Factor_${safeNo}_${effectiveMode === 'official' ? 'Official' : 'Unofficial'}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Length', String(pdfBuffer.length));
+        res.send(pdfBuffer);
+    } catch (err) {
+        console.error('Sayan Sales Invoice PDF Error:', err);
+        res.status(500).json({ success: false, message: err.message || 'خطا در تولید فایل PDF فاکتور' });
+    }
+});
+
+app.post('/api/sayan/sales-invoices/:id/send-bot', async (req, res) => {
+    try {
+        const invoiceId = String(req.params.id || '').trim();
+        const modeParam = String(req.body?.mode || '').trim();
+        const overrideMode = modeParam === 'official' || modeParam === 'unofficial' ? modeParam : null;
+        const result = await sayanSalesInvoiceService.sendSalesInvoiceToCustomerBot(invoiceId, overrideMode);
+        res.json(result);
+    } catch (err) {
+        console.error('Sayan Sales Invoice Send Bot Error:', err);
+        const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
+        res.status(status).json({
+            success: false,
+            message: err.message || 'خطا در ارسال فاکتور به ربات مشتری'
+        });
     }
 });
 
