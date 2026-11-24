@@ -25,7 +25,9 @@ import {
     Loader2,
     ShieldCheck,
     FileCheck2,
-    Coins
+    Coins,
+    Edit3,
+    RotateCcw
 } from 'lucide-react';
 import { getEffectiveApiUrl, getAuthToken } from '../services/apiService';
 import { saveBlobAndOpenFile } from '../services/fileService';
@@ -205,6 +207,26 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
 
     // Selected remittance (basis) & draft invoice state
     const [selectedRemittance, setSelectedRemittance] = useState<RemittanceHeaderDetail | null>(null);
+    const [originalRemittanceCustomer, setOriginalRemittanceCustomer] = useState<{
+        customerCode: string;
+        customerName: string;
+        customerNationalCode?: string;
+        customerMobile?: string;
+        customerAddress?: string;
+        customerTafsiliCode?: string;
+    } | null>(null);
+    const [isEditingCustomer, setIsEditingCustomer] = useState<boolean>(false);
+    const [customerSearchQuery, setCustomerSearchQuery] = useState<string>('');
+    const [customerSearchResults, setCustomerSearchResults] = useState<Array<{
+        personCode: string;
+        name: string;
+        nationalCode?: string;
+        mobile?: string;
+        address?: string;
+        tafsiliCode?: string;
+        accountingCode?: string;
+    }>>([]);
+    const [searchingCustomers, setSearchingCustomers] = useState<boolean>(false);
     const [loadingLines, setLoadingLines] = useState<boolean>(false);
     const [draftItems, setDraftItems] = useState<DraftInvoiceItem[]>([]);
     const [invoiceType, setInvoiceType] = useState<InvoiceMode | null>(null);
@@ -315,6 +337,17 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                 return;
             }
             setSelectedRemittance(data.remittance);
+            setOriginalRemittanceCustomer({
+                customerCode: String(data.remittance?.customerCode || ''),
+                customerName: String(data.remittance?.customerName || ''),
+                customerNationalCode: data.remittance?.customerNationalCode || '',
+                customerMobile: data.remittance?.customerMobile || '',
+                customerAddress: data.remittance?.customerAddress || '',
+                customerTafsiliCode: data.remittance?.customerTafsiliCode || ''
+            });
+            setIsEditingCustomer(false);
+            setCustomerSearchQuery('');
+            setCustomerSearchResults([]);
             const items: DraftInvoiceItem[] = (Array.isArray(data.groupedItems) ? data.groupedItems : []).map((it: any) => ({
                 itemCode: String(it.itemCode || ''),
                 itemName: String(it.itemName || it.itemCode || 'کالا'),
@@ -335,12 +368,93 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
             setDraftItems(items);
             setInvoiceType(null);
             setInvoiceDate(getTodayShamsi());
-            setNotes(data.remittance?.description || '');
+            // Strip auto-generated Sayan warehouse metadata from prefilled notes
+            const rawRemDesc = String(data.remittance?.description || '').trim();
+            const cleanedRemDesc = rawRemDesc
+                .split('|')
+                .map((p) => p.trim())
+                .filter((p) => p && !/^انبار\s*:/i.test(p) && !/^مشتری\s*:/i.test(p) && !/^کد\s*فرعی\s*:\s*$/i.test(p) && !/^توضیحات\s*:\s*$/i.test(p))
+                .map((p) => p.replace(/^توضیحات\s*:\s*/i, '').trim())
+                .filter(Boolean)
+                .join(' | ');
+            setNotes(cleanedRemDesc);
         } catch (err: any) {
             toast.error(err?.message || 'خطا در دریافت اطلاعات حواله فروش');
         } finally {
             setLoadingLines(false);
         }
+    };
+
+    // Debounced search for Sayan customers (GNR_TBL_001) when changing invoice buyer
+    useEffect(() => {
+        if (!isEditingCustomer) return;
+        const q = customerSearchQuery.trim();
+        if (q.length < 1) {
+            setCustomerSearchResults([]);
+            return;
+        }
+        const timer = setTimeout(async () => {
+            setSearchingCustomers(true);
+            try {
+                const resp = await fetch(
+                    getEffectiveApiUrl(`/sayan/search-persons?q=${encodeURIComponent(q)}`),
+                    { headers: buildApiHeaders(false) }
+                );
+                const data = await resp.json().catch(() => null);
+                if (resp.ok && data?.success && Array.isArray(data.persons)) {
+                    setCustomerSearchResults(data.persons);
+                } else {
+                    setCustomerSearchResults([]);
+                }
+            } catch {
+                setCustomerSearchResults([]);
+            } finally {
+                setSearchingCustomers(false);
+            }
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [customerSearchQuery, isEditingCustomer]);
+
+    const handleSelectOverrideCustomer = (person: {
+        personCode: string;
+        name: string;
+        nationalCode?: string;
+        mobile?: string;
+        address?: string;
+        tafsiliCode?: string;
+        accountingCode?: string;
+    }) => {
+        if (!selectedRemittance) return;
+        setSelectedRemittance({
+            ...selectedRemittance,
+            customerCode: String(person.personCode || '').trim(),
+            customerName: String(person.name || person.personCode || '').trim(),
+            customerNationalCode: person.nationalCode || '',
+            customerMobile: person.mobile || '',
+            customerAddress: person.address || '',
+            customerTafsiliCode: person.tafsiliCode || person.accountingCode || ''
+        });
+        setIsEditingCustomer(false);
+        setCustomerSearchQuery('');
+        setCustomerSearchResults([]);
+        toast.success(`خریدار فاکتور به «${person.name}» تغییر یافت.`);
+    };
+
+    const handleRestoreOriginalCustomer = () => {
+        if (!selectedRemittance || !originalRemittanceCustomer) return;
+        setSelectedRemittance({
+            ...selectedRemittance,
+            customerCode: originalRemittanceCustomer.customerCode,
+            customerName: originalRemittanceCustomer.customerName,
+            customerNationalCode: originalRemittanceCustomer.customerNationalCode,
+            customerMobile: originalRemittanceCustomer.customerMobile,
+            customerAddress: originalRemittanceCustomer.customerAddress,
+            customerTafsiliCode: originalRemittanceCustomer.customerTafsiliCode
+        });
+        setIsEditingCustomer(false);
+        setCustomerSearchQuery('');
+        setCustomerSearchResults([]);
+        toast('خریدار به مشتری اصلی حواله بازگردانده شد.', { icon: '↩️' });
     };
 
     const updateDraftItem = (idx: number, patch: Partial<DraftInvoiceItem>) => {
@@ -599,7 +713,7 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
             }
             const blob = await resp.blob();
             const safeNo = String(previewInvoice.invoiceNo || previewInvoice.archiveNo || 'Invoice').replace(/[^a-zA-Z0-9_-]/g, '');
-            const fileName = `Factor_${safeNo}_${previewMode === 'official' ? 'Official' : 'Unofficial'}.pdf`;
+            const fileName = `Factor_${safeNo}.pdf`;
             await saveBlobAndOpenFile(blob, fileName);
             toast.success('فایل PDF فاکتور آماده و ذخیره شد.');
         } catch (err: any) {
@@ -1082,18 +1196,105 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                     </button>
                                 </div>
 
-                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                                    <div className="bg-white dark:bg-zinc-900 rounded-xl p-2.5 border border-indigo-100 dark:border-zinc-800">
-                                        <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                                            <User className="w-3 h-3 text-indigo-500" />
-                                            خریدار (خودکار از حواله)
+                                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
+                                    <div className="bg-white dark:bg-zinc-900 rounded-xl p-2.5 border border-indigo-100 dark:border-zinc-800 relative col-span-2 sm:col-span-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-[10px] text-slate-500 flex items-center gap-1 flex-wrap">
+                                                <User className="w-3 h-3 text-indigo-500" />
+                                                <span>خریدار فاکتور</span>
+                                                {originalRemittanceCustomer && originalRemittanceCustomer.customerCode !== selectedRemittance.customerCode && (
+                                                    <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-bold text-[9px]">
+                                                        تغییر یافته
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                {originalRemittanceCustomer && originalRemittanceCustomer.customerCode !== selectedRemittance.customerCode && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleRestoreOriginalCustomer}
+                                                        className="px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 hover:bg-slate-200 text-[10px] font-bold flex items-center gap-1 transition-colors"
+                                                        title="بازگشت به مشتری اصلی حواله"
+                                                    >
+                                                        <RotateCcw className="w-3 h-3" />
+                                                        مشتری حواله
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setIsEditingCustomer((prev) => !prev);
+                                                        setCustomerSearchQuery('');
+                                                        setCustomerSearchResults([]);
+                                                    }}
+                                                    className="px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 text-[10px] font-bold flex items-center gap-1 transition-colors"
+                                                >
+                                                    <Edit3 className="w-3 h-3" />
+                                                    {isEditingCustomer ? 'انصراف' : 'تغییر خریدار'}
+                                                </button>
+                                            </div>
                                         </div>
-                                        <div className="font-black text-slate-900 dark:text-white mt-0.5 truncate">
+
+                                        <div className="font-black text-slate-900 dark:text-white mt-1 truncate">
                                             {selectedRemittance.customerName}
                                         </div>
                                         <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">
                                             کد مشتری: {toFaDigits(selectedRemittance.customerCode)}
+                                            {selectedRemittance.customerNationalCode ? ` • کدملی: ${toFaDigits(selectedRemittance.customerNationalCode)}` : ''}
                                         </div>
+
+                                        {isEditingCustomer && (
+                                            <div className="mt-2 pt-2 border-t border-indigo-100 dark:border-zinc-800 space-y-1.5">
+                                                <div className="relative">
+                                                    <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                                                    <input
+                                                        type="text"
+                                                        value={customerSearchQuery}
+                                                        onChange={(e) => setCustomerSearchQuery(e.target.value)}
+                                                        placeholder="جستجوی نام، کد مشتری یا کدملی در سایان..."
+                                                        autoFocus
+                                                        className="w-full pr-8 pl-2.5 py-2 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50/40 dark:bg-zinc-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                                    />
+                                                </div>
+                                                {searchingCustomers && (
+                                                    <div className="flex items-center gap-1.5 text-[11px] text-indigo-600 py-1 px-1">
+                                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                        در حال جستجو در اشخاص سایان...
+                                                    </div>
+                                                )}
+                                                {!searchingCustomers && customerSearchQuery.trim().length > 0 && customerSearchResults.length === 0 && (
+                                                    <div className="text-[11px] text-slate-500 py-1 px-1">
+                                                        شخصی با این مشخصات در سایان یافت نشد.
+                                                    </div>
+                                                )}
+                                                {customerSearchResults.length > 0 && (
+                                                    <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 dark:border-zinc-700 divide-y divide-slate-100 dark:divide-zinc-800 bg-white dark:bg-zinc-900 shadow-lg">
+                                                        {customerSearchResults.map((p) => (
+                                                            <button
+                                                                key={`${p.personCode}-${p.name}`}
+                                                                type="button"
+                                                                onClick={() => handleSelectOverrideCustomer(p)}
+                                                                className="w-full text-right px-2.5 py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition-colors flex items-center justify-between gap-2"
+                                                            >
+                                                                <div className="min-w-0">
+                                                                    <div className="font-bold text-slate-900 dark:text-white text-xs truncate">
+                                                                        {p.name}
+                                                                    </div>
+                                                                    <div className="text-[10px] text-slate-500 flex items-center gap-2 flex-wrap">
+                                                                        <span className="font-mono text-indigo-600 dark:text-indigo-400">کد: {toFaDigits(p.personCode)}</span>
+                                                                        {p.nationalCode && <span>کدملی: {toFaDigits(p.nationalCode)}</span>}
+                                                                        {p.mobile && <span>تلفن: {toFaDigits(p.mobile)}</span>}
+                                                                    </div>
+                                                                </div>
+                                                                <span className="shrink-0 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-900/40">
+                                                                    انتخاب
+                                                                </span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="bg-white dark:bg-zinc-900 rounded-xl p-2.5 border border-indigo-100 dark:border-zinc-800">
@@ -1763,9 +1964,7 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                     <div>
                                         <div className="text-lg sm:text-xl font-black">{companyTitle}</div>
                                         <div className="text-xs text-slate-200 mt-0.5">
-                                            {previewComputed.isOfficial
-                                                ? 'صورتحساب رسمی فروش کالا (مشمول ۱۰٪ مالیات بر ارزش افزوده)'
-                                                : 'فاکتور فروش کالا (غیر رسمی — بدون ۱۰٪ ارزش افزوده)'}
+                                            فاکتور فروش کالا
                                         </div>
                                     </div>
                                     <div className="bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-xs space-y-1">
@@ -1791,20 +1990,20 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                             <div className="text-[11px] font-bold text-slate-500">مشخصات خریدار</div>
                                             <div className="text-sm font-black text-slate-900">{previewInvoice.customerName}</div>
                                             <div className="text-slate-600">
-                                                کد مشتری (دریافت در ربات): <strong className="font-mono">{toFaDigits(previewInvoice.customerCode)}</strong>
+                                                کد مشتری: <strong className="font-mono">{toFaDigits(previewInvoice.customerCode)}</strong>
                                             </div>
                                             {previewInvoice.customerNationalCode && (
                                                 <div className="text-slate-600">کد ملی/اقتصادی: {toFaDigits(previewInvoice.customerNationalCode)}</div>
                                             )}
                                         </div>
                                         <div className="space-y-1 sm:border-r sm:border-slate-200 sm:pr-4">
-                                            <div className="text-[11px] font-bold text-slate-500">اطلاعات تحویل و انبار</div>
-                                            <div className="font-bold text-slate-800">
-                                                انبار خروجی: {previewInvoice.warehouseName || toFaDigits(previewInvoice.warehouseCode || '-')}
-                                            </div>
-                                            <div className="text-slate-600">
+                                            <div className="text-[11px] font-bold text-slate-500">اطلاعات ارسال و بار</div>
+                                            <div className="text-slate-700">
                                                 مجموع بار: <strong>{toFaDigits(previewComputed.totalCartons)} کارتن</strong> ({formatFaNumber(previewComputed.totalWeight, 2)} کیلوگرم)
                                             </div>
+                                            {previewInvoice.customerMobile && (
+                                                <div className="text-slate-600 text-[11px]">تلفن: {toFaDigits(previewInvoice.customerMobile)}</div>
+                                            )}
                                             {previewInvoice.customerAddress && (
                                                 <div className="text-slate-600 text-[11px]">نشانی: {previewInvoice.customerAddress}</div>
                                             )}
@@ -1814,21 +2013,13 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                     {/* Invoice Line Table */}
                                     <div className="overflow-x-auto rounded-xl border border-slate-200">
                                         <table className="w-full text-xs text-right">
-                                            <thead
-                                                className={
-                                                    previewComputed.isOfficial
-                                                        ? 'bg-indigo-950 text-white'
-                                                        : 'bg-emerald-900 text-white'
-                                                }
-                                            >
+                                            <thead className="bg-slate-900 text-white">
                                                 <tr>
                                                     <th className="py-2.5 px-2.5 text-center w-9">ردیف</th>
                                                     <th className="py-2.5 px-3">شرح کالا</th>
                                                     <th className="py-2.5 px-2.5 text-center">تعداد کارتن</th>
                                                     <th className="py-2.5 px-2.5 text-center">وزن خالص (kg)</th>
-                                                    <th className="py-2.5 px-2.5 text-center">
-                                                        {previewComputed.isOfficial ? 'فی رسمی (+۱۰٪)' : 'فی واحد (ریال)'}
-                                                    </th>
+                                                    <th className="py-2.5 px-2.5 text-center">فی واحد (ریال)</th>
                                                     <th className="py-2.5 px-2.5 text-center">مبلغ کل (ریال)</th>
                                                     {previewComputed.isOfficial && (
                                                         <th className="py-2.5 px-2.5 text-center">مالیات (۱۰٪)</th>
@@ -1900,11 +2091,20 @@ const SayanSalesInvoiceIssuer: React.FC<Props> = ({ settings, currentUser }) => 
                                                     })()}
                                                 </div>
                                             </div>
-                                            {previewInvoice.notes && (
-                                                <div className="pt-2 border-t border-slate-200 text-slate-700">
-                                                    <strong>توضیحات:</strong> {previewInvoice.notes}
-                                                </div>
-                                            )}
+                                            {(() => {
+                                                const cleanNotes = String(previewInvoice.notes || '')
+                                                    .split('|')
+                                                    .map((p) => p.trim())
+                                                    .filter((p) => p && !/^انبار\s*:/i.test(p) && !/^مشتری\s*:/i.test(p) && !/^کد\s*فرعی\s*:\s*$/i.test(p) && !/^توضیحات\s*:\s*$/i.test(p))
+                                                    .map((p) => p.replace(/^توضیحات\s*:\s*/i, '').trim())
+                                                    .filter(Boolean)
+                                                    .join(' | ');
+                                                return cleanNotes ? (
+                                                    <div className="pt-2 border-t border-slate-200 text-slate-700">
+                                                        <strong>توضیحات:</strong> {cleanNotes}
+                                                    </div>
+                                                ) : null;
+                                            })()}
                                         </div>
 
                                         <div className="sm:col-span-5 border border-slate-200 rounded-xl p-3.5 space-y-1.5 text-xs">

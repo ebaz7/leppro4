@@ -843,7 +843,8 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                             c.Field_006 as DueDate,
                             c.Field_009 as BankName,
                             c.Field_011 as InNameOf,
-                            c.Field_016 as PoshtNomreh
+                            c.Field_016 as PoshtNomreh,
+                            c.Field_018 as SayadId
                         FROM BUR_TBL_009 r WITH (NOLOCK)
                         LEFT JOIN BUR_TBL_012 c WITH (NOLOCK) ON c.Field_001 = r.Field_007
                         WHERE r.Field_004 IN (${archList})
@@ -875,6 +876,7 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                             chequeId: row.ChequeId,
                             rowId: row.RowId,
                             chequeNumber: row.ChequeNumber || '',
+                            sayadId: String(row.SayadId || '').trim(),
                             amount: Number(row.RowAmount) || 0,
                             dueDate: row.DueDate || '',
                             bankName: row.BankName || '',
@@ -952,8 +954,10 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                 (r.description && String(r.description).toLowerCase().includes(q)) ||
                 (r.cheques && r.cheques.some(c => 
                     (c.chequeNumber && String(c.chequeNumber).includes(q)) ||
+                    (c.sayadId && String(c.sayadId).includes(q)) ||
                     (c.bankName && String(c.bankName).includes(q)) ||
-                    (c.inNameOf && String(c.inNameOf).toLowerCase().includes(q))
+                    (c.inNameOf && String(c.inNameOf).toLowerCase().includes(q)) ||
+                    (c.registeredPersonName && String(c.registeredPersonName).toLowerCase().includes(q))
                 ))
             );
         });
@@ -973,6 +977,49 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
     return results;
 };
 
+const VALID_REGISTRATION_TYPES = new Set(['company', 'person', 'unregistered']);
+
+const normalizeSayadId = (val) => {
+    if (val === undefined || val === null) return '';
+    return String(val)
+        .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+        .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+        .replace(/[^0-9]/g, '')
+        .slice(0, 32);
+};
+
+const normalizeChequeItem = (ch, fallbackPersonName, fallbackPoshtNomreh, idx, prevCheque = null) => {
+    const rawRegType = ch.registrationType !== undefined ? String(ch.registrationType || '').trim() : (prevCheque?.registrationType || '');
+    const registrationType = VALID_REGISTRATION_TYPES.has(rawRegType) ? rawRegType : '';
+    const registeredPersonName =
+        registrationType === 'person'
+            ? String(ch.registeredPersonName !== undefined ? ch.registeredPersonName : (prevCheque?.registeredPersonName || '')).trim()
+            : '';
+    const isCustomerSelfIssuer =
+        ch.isCustomerSelfIssuer !== undefined
+            ? Boolean(ch.isCustomerSelfIssuer)
+            : prevCheque?.isCustomerSelfIssuer !== undefined
+                ? Boolean(prevCheque.isCustomerSelfIssuer)
+                : false;
+
+    return {
+        id: ch.id || prevCheque?.id || crypto.randomUUID(),
+        chequeNumber: String(ch.chequeNumber || '').trim(),
+        sayadId: normalizeSayadId(ch.sayadId !== undefined ? ch.sayadId : (prevCheque?.sayadId || '')),
+        amount: Number(ch.amount) || 0,
+        dueDate: ch.dueDate || '',
+        bankName: String(ch.bankName || '').trim(),
+        inNameOf: String(ch.inNameOf || fallbackPersonName || '').trim() || String(fallbackPersonName || '').trim(),
+        accountNo: String(ch.accountNo || '').trim(),
+        poshtNomreh: String(fallbackPoshtNomreh || ch.poshtNomreh || '').trim(),
+        description: String(ch.description || '').trim(),
+        registrationType,
+        registeredPersonName,
+        isCustomerSelfIssuer,
+        rowSeq: idx + 1
+    };
+};
+
 /**
  * Save or Update Cheque Receipt Draft (With internal App Receipt Number and Accounting/CEO workflow)
  */
@@ -983,22 +1030,26 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
     }
 
     const fy = String(receiptData.fiscalYear || '4');
-    const cleanCheques = (receiptData.cheques || []).map((ch, idx) => ({
-        id: ch.id || crypto.randomUUID(),
-        chequeNumber: String(ch.chequeNumber || '').trim(),
-        amount: Number(ch.amount) || 0,
-        dueDate: ch.dueDate || '',
-        bankName: String(ch.bankName || '').trim(),
-        inNameOf: String(ch.inNameOf || receiptData.personName || '').trim() || String(receiptData.personName || '').trim(),
-        accountNo: String(ch.accountNo || '').trim(),
-        poshtNomreh: String(receiptData.poshtNomreh || ch.poshtNomreh || '').trim(),
-        description: String(ch.description || '').trim(),
-        rowSeq: idx + 1
-    }));
+    const isEdit = Boolean(receiptData.id);
+    const existingRecord = isEdit ? db.sayan_cheque_receipts.find(r => r.id === receiptData.id) : null;
+    const cleanCheques = (receiptData.cheques || []).map((ch, idx) => {
+        const prev = existingRecord?.cheques?.[idx] || null;
+        return normalizeChequeItem(ch, receiptData.personName, receiptData.poshtNomreh, idx, prev);
+    });
+
+    // Validate required registration status on new receipts & person name whenever registrationType === 'person'
+    for (let i = 0; i < cleanCheques.length; i++) {
+        const ch = cleanCheques[i];
+        if (!isEdit && !ch.registrationType) {
+            throw new Error(`لطفاً وضعیت ثبت صیادی (به نام شرکت، به نام شخص یا ثبت نشده) را برای ردیف چک ${i + 1} انتخاب کنید.`);
+        }
+        if (ch.registrationType === 'person' && !ch.registeredPersonName) {
+            throw new Error(`لطفاً نام شخص ثبت‌شده را برای ردیف چک ${i + 1} وارد نمایید.`);
+        }
+    }
 
     const totalAmount = cleanCheques.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
 
-    const isEdit = Boolean(receiptData.id);
     const receiptId = receiptData.id || `RCPT_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     // Prevent duplicate draft creation on double-click / network retry
@@ -1134,18 +1185,16 @@ export const approveAccountingReceipt = async (receiptId, currentUser, note = ''
         if (updatePayload.poshtNomreh) record.poshtNomreh = String(updatePayload.poshtNomreh).trim();
         if (updatePayload.docDate) record.docDate = updatePayload.docDate;
         if (Array.isArray(updatePayload.cheques) && updatePayload.cheques.length > 0) {
-            record.cheques = updatePayload.cheques.map((ch, idx) => ({
-                id: ch.id || crypto.randomUUID(),
-                chequeNumber: String(ch.chequeNumber || '').trim(),
-                amount: Number(ch.amount) || 0,
-                dueDate: ch.dueDate || '',
-                bankName: String(ch.bankName || '').trim(),
-                inNameOf: String(ch.inNameOf || record.personName || '').trim() || String(record.personName || '').trim(),
-                accountNo: String(ch.accountNo || '').trim(),
-                poshtNomreh: String(record.poshtNomreh || ch.poshtNomreh || '').trim(),
-                description: String(ch.description || '').trim(),
-                rowSeq: idx + 1
-            }));
+            const normalizedCheques = updatePayload.cheques.map((ch, idx) => {
+                const prev = record.cheques?.find((old) => old.id && ch.id && old.id === ch.id) || record.cheques?.[idx] || null;
+                return normalizeChequeItem(ch, record.personName, record.poshtNomreh, idx, prev);
+            });
+            for (let i = 0; i < normalizedCheques.length; i++) {
+                if (normalizedCheques[i].registrationType === 'person' && !normalizedCheques[i].registeredPersonName) {
+                    throw new Error(`لطفاً نام شخص ثبت‌شده را برای ردیف چک ${i + 1} وارد نمایید.`);
+                }
+            }
+            record.cheques = normalizedCheques;
             record.totalAmount = record.cheques.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
         }
         if (Array.isArray(updatePayload.attachments)) {
@@ -1229,18 +1278,16 @@ export const updateChequeReceipt = async (receiptId, updatePayload, currentUser)
     if (updatePayload.poshtNomreh) record.poshtNomreh = String(updatePayload.poshtNomreh).trim();
     if (updatePayload.docDate) record.docDate = updatePayload.docDate;
     if (Array.isArray(updatePayload.cheques) && updatePayload.cheques.length > 0) {
-        record.cheques = updatePayload.cheques.map((ch, idx) => ({
-            id: ch.id || crypto.randomUUID(),
-            chequeNumber: String(ch.chequeNumber || '').trim(),
-            amount: Number(ch.amount) || 0,
-            dueDate: ch.dueDate || '',
-            bankName: String(ch.bankName || '').trim(),
-            inNameOf: String(ch.inNameOf || record.personName || '').trim() || String(record.personName || '').trim(),
-            accountNo: String(ch.accountNo || '').trim(),
-            poshtNomreh: String(record.poshtNomreh || ch.poshtNomreh || '').trim(),
-            description: String(ch.description || '').trim(),
-            rowSeq: idx + 1
-        }));
+        const normalizedCheques = updatePayload.cheques.map((ch, idx) => {
+            const prev = record.cheques?.find((old) => old.id && ch.id && old.id === ch.id) || record.cheques?.[idx] || null;
+            return normalizeChequeItem(ch, record.personName, record.poshtNomreh, idx, prev);
+        });
+        for (let i = 0; i < normalizedCheques.length; i++) {
+            if (normalizedCheques[i].registrationType === 'person' && !normalizedCheques[i].registeredPersonName) {
+                throw new Error(`لطفاً نام شخص ثبت‌شده را برای ردیف چک ${i + 1} وارد نمایید.`);
+            }
+        }
+        record.cheques = normalizedCheques;
         record.totalAmount = record.cheques.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
     }
     if (Array.isArray(updatePayload.attachments)) {
@@ -1879,6 +1926,7 @@ export const registerChequeReceiptInSayan = async (receiptId, currentUser, force
                 const ch = cheques[i];
                 const rowSeq = i + 1;
                 const chNumClean = String(ch.chequeNumber || '').replace(/[^0-9]/g, '') || '0';
+                const chSayadClean = normalizeSayadId(ch.sayadId || '');
                 const chAmount = Number(ch.amount) || 0;
                 const chBank = String(ch.bankName || '').replace(/'/g, "''");
                 const chInNameOf = String(ch.inNameOf || record.personName || '').replace(/'/g, "''");
@@ -1888,18 +1936,26 @@ export const registerChequeReceiptInSayan = async (receiptId, currentUser, force
                 const cleanRowDesc = rowDesc.replace(/'/g, "''");
 
                 createdChequesMeta.push({
+                    id: ch.id || crypto.randomUUID(),
                     chequeNumber: ch.chequeNumber,
+                    sayadId: chSayadClean,
                     amount: chAmount,
                     dueDate: chDueDate,
                     bankName: ch.bankName,
                     inNameOf: ch.inNameOf || record.personName,
-                    poshtNomreh
+                    accountNo: ch.accountNo || '',
+                    description: ch.description || '',
+                    registrationType: ch.registrationType || '',
+                    registeredPersonName: ch.registrationType === 'person' ? String(ch.registeredPersonName || '').trim() : '',
+                    isCustomerSelfIssuer: Boolean(ch.isCustomerSelfIssuer),
+                    poshtNomreh,
+                    rowSeq
                 });
 
-                // Treasury Cheque (BUR_TBL_012)
+                // Treasury Cheque (BUR_TBL_012) - Field_018 stores optional 16-digit Sayad ID in Sayan ERP
                 sqlChunks.push(
                     "N'IN' + N'SERT INTO BUR_TBL_012 (Field_004, Field_005, Field_006, Field_007, Field_008, Field_009, Field_010, Field_011, Field_012, Field_013, Field_014, Field_015, Field_016, Field_017, Field_018, Field_019) ' + ",
-                    `N'VALUES ('''', ${chNumClean}, ''${chDueDate} 00:00:00.000'', '''', 1, N''${chBank}'', '''', N''${chInNameOf}'', '''', ${chAmount}, 1, '''', ''${poshtNomreh}'', 0, '''', ''''); ' + `,
+                    `N'VALUES ('''', ${chNumClean}, ''${chDueDate} 00:00:00.000'', '''', 1, N''${chBank}'', '''', N''${chInNameOf}'', '''', ${chAmount}, 1, '''', ''${poshtNomreh}'', 0, N''${chSayadClean}'', ''''); ' + `,
                     `N'DECLARE @ChId_${i} BIGINT = SCOPE_IDENTITY(); ' + `,
 
                     // Treasury Row (BUR_TBL_009)

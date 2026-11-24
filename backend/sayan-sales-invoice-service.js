@@ -371,19 +371,20 @@ export const getPendingSalesRemittancesForInvoicing = async ({
             RTRIM(LTRIM(ISNULL(t10.Field_011, ''))) as WarehouseCode,
             ISNULL(t10.Field_029, '') as Description,
             COALESCE(
-                NULLIF(RTRIM(LTRIM(act.Field_006)), ''),
                 NULLIF(RTRIM(LTRIM(COALESCE(g01.Field_006, '') + ' ' + COALESCE(g01.Field_007, ''))), ''),
+                NULLIF(RTRIM(LTRIM(ISNULL(g01.Field_008, ''))), ''),
+                NULLIF(RTRIM(LTRIM(act.Field_006)), ''),
                 RTRIM(LTRIM(ISNULL(t10.Field_010, '')))
             ) as CustomerName,
             ISNULL(RTRIM(LTRIM(w.Field_004)), '') as WarehouseName
         FROM STR_TBL_010 t10 WITH (NOLOCK)
+        LEFT JOIN GNR_TBL_001 g01 WITH (NOLOCK) ON RTRIM(LTRIM(g01.Field_003)) = RTRIM(LTRIM(t10.Field_010))
         LEFT JOIN (
             SELECT Field_005, MIN(Field_006) as Field_006
             FROM ACT_TBL_007 WITH (NOLOCK)
             WHERE Field_005 IS NOT NULL AND Field_006 IS NOT NULL AND LEN(RTRIM(LTRIM(Field_006))) > 0
             GROUP BY Field_005
-        ) act ON RTRIM(LTRIM(act.Field_005)) = RTRIM(LTRIM(t10.Field_010))
-        LEFT JOIN GNR_TBL_001 g01 WITH (NOLOCK) ON RTRIM(LTRIM(g01.Field_003)) = RTRIM(LTRIM(t10.Field_010))
+        ) act ON RTRIM(LTRIM(act.Field_005)) = COALESCE(NULLIF(RTRIM(LTRIM(ISNULL(g01.Field_030, ''))), ''), RTRIM(LTRIM(t10.Field_010)))
         LEFT JOIN STR_TBL_001 w WITH (NOLOCK) ON RTRIM(LTRIM(w.Field_003)) = RTRIM(LTRIM(t10.Field_011))
         WHERE t10.Field_004 = ${fyNum}
           AND t10.Field_018 = 1
@@ -575,23 +576,28 @@ export const getRemittanceLinesForInvoice = async (archiveCode, fiscalYear = '4'
             RTRIM(LTRIM(ISNULL(t10.Field_011, ''))) as WarehouseCode,
             ISNULL(t10.Field_029, '') as Description,
             COALESCE(
-                NULLIF(RTRIM(LTRIM(act.Field_006)), ''),
                 NULLIF(RTRIM(LTRIM(COALESCE(g01.Field_006, '') + ' ' + COALESCE(g01.Field_007, ''))), ''),
+                NULLIF(RTRIM(LTRIM(ISNULL(g01.Field_008, ''))), ''),
+                NULLIF(RTRIM(LTRIM(act.Field_006)), ''),
                 RTRIM(LTRIM(ISNULL(t10.Field_010, '')))
             ) as CustomerName,
             RTRIM(LTRIM(ISNULL(g01.Field_009, ''))) as CustomerNationalCode,
             RTRIM(LTRIM(ISNULL(g01.Field_015, ''))) as CustomerMobile,
             RTRIM(LTRIM(ISNULL(g01.Field_013, ''))) as CustomerAddress,
-            RTRIM(LTRIM(ISNULL(act.Field_003, ''))) as CustomerTafsiliCode,
+            COALESCE(
+                NULLIF(RTRIM(LTRIM(ISNULL(g01.Field_030, ''))), ''),
+                NULLIF(RTRIM(LTRIM(ISNULL(g01.Field_021, ''))), ''),
+                RTRIM(LTRIM(ISNULL(act.Field_003, '')))
+            ) as CustomerTafsiliCode,
             ISNULL(RTRIM(LTRIM(w.Field_004)), '') as WarehouseName
         FROM STR_TBL_010 t10 WITH (NOLOCK)
+        LEFT JOIN GNR_TBL_001 g01 WITH (NOLOCK) ON RTRIM(LTRIM(g01.Field_003)) = RTRIM(LTRIM(t10.Field_010))
         LEFT JOIN (
             SELECT Field_005, MIN(Field_006) as Field_006, MIN(Field_003) as Field_003
             FROM ACT_TBL_007 WITH (NOLOCK)
             WHERE Field_005 IS NOT NULL AND Field_006 IS NOT NULL AND LEN(RTRIM(LTRIM(Field_006))) > 0
             GROUP BY Field_005
-        ) act ON RTRIM(LTRIM(act.Field_005)) = RTRIM(LTRIM(t10.Field_010))
-        LEFT JOIN GNR_TBL_001 g01 WITH (NOLOCK) ON RTRIM(LTRIM(g01.Field_003)) = RTRIM(LTRIM(t10.Field_010))
+        ) act ON RTRIM(LTRIM(act.Field_005)) = COALESCE(NULLIF(RTRIM(LTRIM(ISNULL(g01.Field_030, ''))), ''), RTRIM(LTRIM(t10.Field_010)))
         LEFT JOIN STR_TBL_001 w WITH (NOLOCK) ON RTRIM(LTRIM(w.Field_003)) = RTRIM(LTRIM(t10.Field_011))
         WHERE t10.Field_004 = ${fyNum}
           AND t10.Field_018 = 1
@@ -869,12 +875,31 @@ export const buildSalesInvoicePrintHtml = (invoice, overrideMode = null) => {
     const tomanWords = `${numberToPersianWords(Math.floor(grandTotal / 10))} تومان`;
 
     const sellerName = invoice.sellerName || 'شرکت تولیدی و صنعتی لپان بافت';
-    const sellerSubTitle = isOfficial ? 'صورتحساب رسمی فروش کالا و خدمات' : 'فاکتور فروش کالا';
-    const sellerBadge = isOfficial ? 'رسمی (با ۱۰٪ افزوده بر فی و ارزش افزوده)' : 'غیر رسمی (بدون ارزش افزوده)';
-    const accentPrimary = isOfficial ? '#0f172a' : '#1e3a5f';
-    const accentSoft = isOfficial ? '#eef2ff' : '#ecfdf5';
-    const accentBorder = isOfficial ? '#312e81' : '#047857';
-    const accentText = isOfficial ? '#1e1b4b' : '#065f46';
+    const sellerSubTitle = 'فاکتور فروش کالا';
+    const accentPrimary = '#0f172a';
+    const accentSoft = '#f1f5f9';
+    const accentBorder = '#1e3a5f';
+    const accentText = '#0f172a';
+
+    // Strip auto-generated warehouse metadata from printed notes
+    const cleanPrintNotes = (() => {
+        const raw = String(invoice.notes || '').trim();
+        if (!raw) return '';
+        const cleanedParts = raw
+            .split('|')
+            .map((part) => part.trim())
+            .filter((part) => {
+                if (!part) return false;
+                if (/^انبار\s*:/i.test(part)) return false;
+                if (/^مشتری\s*:/i.test(part)) return false;
+                if (/^کد\s*فرعی\s*:\s*$/i.test(part)) return false;
+                if (/^توضیحات\s*:\s*$/i.test(part)) return false;
+                return true;
+            })
+            .map((part) => part.replace(/^توضیحات\s*:\s*/i, '').trim())
+            .filter(Boolean);
+        return cleanedParts.join(' | ');
+    })();
 
     const rowsHtml = computedItems
         .map(
@@ -1205,7 +1230,6 @@ export const buildSalesInvoicePrintHtml = (invoice, overrideMode = null) => {
         </div>
         <div class="inv-title-box">
             <div class="main-title">${escapeHtml(sellerSubTitle)}</div>
-            <div class="sub-badge">${escapeHtml(sellerBadge)}</div>
         </div>
         <div class="inv-meta">
             <div>شماره فاکتور: <strong>#${invoiceNoDisplay}</strong></div>
@@ -1219,7 +1243,6 @@ export const buildSalesInvoicePrintHtml = (invoice, overrideMode = null) => {
         <div class="party-card">
             <div class="party-head">مشخصات فروشنده</div>
             <div class="party-row">نام شرکت: <strong>${escapeHtml(sellerName)}</strong></div>
-            <div class="party-row">انبار مبدا: <strong>${escapeHtml(invoice.warehouseName || invoice.warehouseCode || 'انبار کارخانه')}</strong></div>
             <div class="party-row">سال مالی سایان: <strong>${toPersianDigits(invoice.fiscalYearLabel || '۱۴۰۵')}</strong></div>
         </div>
         <div class="party-card">
@@ -1239,9 +1262,9 @@ export const buildSalesInvoicePrintHtml = (invoice, overrideMode = null) => {
                     <th>شرح کالا</th>
                     <th style="width: 66px;">تعداد کارتن</th>
                     <th style="width: 78px;">وزن خالص (kg)</th>
-                    <th style="width: 96px;">${isOfficial ? 'فی رسمی (+۱۰٪)' : 'فی واحد (ریال)'}</th>
+                    <th style="width: 96px;">فی واحد (ریال)</th>
                     ${totalDiscount > 0 ? '<th style="width: 76px;">تخفیف</th>' : ''}
-                    <th style="width: 102px;">${isOfficial ? 'مبلغ مشمول (ریال)' : 'مبلغ (ریال)'}</th>
+                    <th style="width: 102px;">مبلغ (ریال)</th>
                     ${isOfficial ? '<th style="width: 88px;">ارزش افزوده ۱۰٪</th>' : ''}
                     <th style="width: 108px;">جمع کل (ریال)</th>
                 </tr>
@@ -1288,7 +1311,7 @@ export const buildSalesInvoicePrintHtml = (invoice, overrideMode = null) => {
         </div>
     </div>
 
-    ${invoice.notes ? `<div class="notes-strip"><strong>توضیحات فاکتور:</strong> ${escapeHtml(invoice.notes)}</div>` : ''}
+    ${cleanPrintNotes ? `<div class="notes-strip"><strong>توضیحات فاکتور:</strong> ${escapeHtml(cleanPrintNotes)}</div>` : ''}
 
     <div class="signatures">
         <div class="sig-box">
@@ -1308,7 +1331,6 @@ export const buildSalesInvoicePrintHtml = (invoice, overrideMode = null) => {
     <div class="inv-footer">
         <span>سامانه یکپارچه فروش و حسابداری سایان • ${escapeHtml(sellerName)}</span>
         <span>کد پیگیری سند: ${escapeHtml(invoice.id || invoice.sayanDocId || '-')}</span>
-        <span>حالت چاپ: ${isOfficial ? 'رسمی (با کارتن + ۱۰٪)' : 'غیر رسمی (با کارتن، بدون ۱۰٪)'}</span>
     </div>
 </div>
 </body>
@@ -1611,6 +1633,37 @@ export const registerSalesInvoiceInSayan = async (payload, user = 'کاربر س
             ? String(invoiceDate).trim()
             : toShamsiDateStr(new Date().toISOString());
 
+        // Always resolve authoritative customer name/info directly from Sayan GNR_TBL_001 by cleanCustomerCode
+        // so the archived/printed/bot invoice always matches Sayan ERP's exact person name
+        let finalCustomerName = String(customerName || cleanCustomerCode).trim();
+        let finalCustomerNationalCode = String(customerNationalCode || '').trim();
+        let finalCustomerMobile = String(customerMobile || '').trim();
+        let finalCustomerAddress = String(customerAddress || '').trim();
+        let finalCustomerTafsiliCode = String(customerTafsiliCode || '').trim();
+        try {
+            const safeCodeSql = escapeSqlStr(cleanCustomerCode);
+            const g01Rows = await executeSayanQuery(`
+                SELECT TOP 1
+                    RTRIM(LTRIM(COALESCE(Field_006, '') + ' ' + COALESCE(Field_007, ''))) as FullName,
+                    RTRIM(LTRIM(ISNULL(Field_008, ''))) as DetailName,
+                    RTRIM(LTRIM(ISNULL(Field_009, ''))) as NationalCode,
+                    RTRIM(LTRIM(ISNULL(Field_015, ''))) as Mobile,
+                    RTRIM(LTRIM(ISNULL(Field_013, ''))) as Address,
+                    COALESCE(NULLIF(RTRIM(LTRIM(ISNULL(Field_030, ''))), ''), RTRIM(LTRIM(ISNULL(Field_021, '')))) as TafsiliCode
+                FROM GNR_TBL_001 WITH (NOLOCK)
+                WHERE RTRIM(LTRIM(Field_003)) = '${safeCodeSql}'
+            `, 10000).catch(() => []);
+            if (Array.isArray(g01Rows) && g01Rows.length > 0) {
+                const g = g01Rows[0];
+                const gName = String(g.FullName || '').trim() || String(g.DetailName || '').trim();
+                if (gName) finalCustomerName = gName;
+                if (g.NationalCode) finalCustomerNationalCode = String(g.NationalCode).trim();
+                if (g.Mobile) finalCustomerMobile = String(g.Mobile).trim();
+                if (g.Address) finalCustomerAddress = String(g.Address).trim();
+                if (g.TafsiliCode) finalCustomerTafsiliCode = String(g.TafsiliCode).trim();
+            }
+        } catch (_) {}
+
         const archiveRecord = {
             id: `SINV-${Date.now()}-${createdInvoiceNo}`,
             sayanDocId: createdDocId,
@@ -1624,11 +1677,11 @@ export const registerSalesInvoiceInSayan = async (payload, user = 'کاربر س
             baseRemittanceArchiveNo: String(baseArchNum),
             baseRemittanceNo: String(baseRemittanceNo || baseArchNum),
             customerCode: cleanCustomerCode,
-            customerTafsiliCode: String(customerTafsiliCode || '').trim(),
-            customerName: String(customerName || cleanCustomerCode).trim(),
-            customerNationalCode: String(customerNationalCode || '').trim(),
-            customerMobile: String(customerMobile || '').trim(),
-            customerAddress: String(customerAddress || '').trim(),
+            customerTafsiliCode: finalCustomerTafsiliCode,
+            customerName: finalCustomerName,
+            customerNationalCode: finalCustomerNationalCode,
+            customerMobile: finalCustomerMobile,
+            customerAddress: finalCustomerAddress,
             warehouseCode: String(warehouseCode || '11').trim(),
             warehouseName: String(warehouseName || '').trim(),
             invoiceType: normalizedType, // 'unofficial' | 'official'
@@ -1777,10 +1830,9 @@ export const sendSalesInvoiceToCustomerBot = async (invoiceId, overrideMode = nu
 
     const effectiveMode = overrideMode || invoice.invoiceType || 'unofficial';
     const pdfBuffer = await generateSalesInvoicePdfBuffer(invoice, effectiveMode);
-    const fileName = `Factor_${invoice.invoiceNo || invoice.archiveNo}_${effectiveMode === 'official' ? 'Official' : 'Unofficial'}.pdf`;
-    const typeLabel = effectiveMode === 'official' ? 'رسمی (با ۱۰٪ ارزش افزوده)' : 'غیر رسمی';
+    const fileName = `Factor_${invoice.invoiceNo || invoice.archiveNo}.pdf`;
     const caption =
-        `🧾 *فاکتور فروش ${typeLabel} شماره #${invoice.invoiceNo}*\n` +
+        `🧾 *فاکتور فروش شماره #${invoice.invoiceNo}*\n` +
         `👤 خریدار: ${invoice.customerName} (کد: ${invoice.customerCode})\n` +
         `📅 تاریخ: ${invoice.shamsiDate}\n` +
         `📦 تعداد کارتن: ${invoice.totalCartons} کارتن | وزن: ${invoice.totalNetWeight} کیلوگرم\n` +

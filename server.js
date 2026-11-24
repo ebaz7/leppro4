@@ -7027,7 +7027,7 @@ app.get('/api/sayan/sales-invoices/:id/pdf', async (req, res) => {
         const effectiveMode = overrideMode || invoice.invoiceType || 'unofficial';
         const pdfBuffer = await sayanSalesInvoiceService.generateSalesInvoicePdfBuffer(invoice, effectiveMode);
         const safeNo = String(invoice.invoiceNo || invoice.archiveNo || 'Invoice').replace(/[^a-zA-Z0-9_-]/g, '');
-        const fileName = `Factor_${safeNo}_${effectiveMode === 'official' ? 'Official' : 'Unofficial'}.pdf`;
+        const fileName = `Factor_${safeNo}.pdf`;
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Length', String(pdfBuffer.length));
@@ -8587,12 +8587,13 @@ app.post('/api/chat/read-batch', (req, res) => {
     if (!username || !Array.isArray(messageIds)) {
         return res.status(400).json({ error: 'Username and messageIds required' });
     }
+    const lowerU = String(username).toLowerCase();
     const idSet = new Set(messageIds);
     let changed = false;
     (db.messages || []).forEach(m => {
         if (idSet.has(m.id)) {
             if (!m.readBy) m.readBy = [];
-            if (!m.readBy.includes(username)) {
+            if (!m.readBy.some(u => String(u || '').toLowerCase() === lowerU)) {
                 m.readBy.push(username);
                 changed = true;
             }
@@ -8603,9 +8604,9 @@ app.post('/api/chat/read-batch', (req, res) => {
     if (!db.notifications) db.notifications = [];
     db.notifications.forEach(n => {
         if (!n.readBy) n.readBy = [];
-        if (!n.readBy.includes(username)) {
+        if (!n.readBy.some(u => String(u || '').toLowerCase() === lowerU)) {
             const isChatNotif = (n.url && (n.url === '/chat' || n.url.startsWith('/chat?') || n.url.startsWith('chat')));
-            if (isChatNotif && (idSet.has(n.id) || (n.targetUsernames && n.targetUsernames.includes(username)))) {
+            if (isChatNotif && (idSet.has(n.id) || (n.targetUsernames && n.targetUsernames.some(tu => String(tu || '').toLowerCase() === lowerU)))) {
                 n.readBy.push(username);
                 changed = true;
             }
@@ -8620,19 +8621,24 @@ app.post('/api/chat/read-all', (req, res) => {
     const db = getDb();
     const { username, channelId, type } = req.body;
     if (!username) return res.status(400).json({ error: 'Username required' });
+    const lowerU = String(username).toLowerCase();
     
     let changed = false;
     (db.messages || []).forEach(m => {
-        if (m.senderUsername?.toLowerCase() === username.toLowerCase()) return;
-        if (m.readBy?.includes(username)) return;
+        const senderLower = String(m.senderUsername || '').toLowerCase();
+        const isSystem = senderLower === 'system' || m.role === 'system' || m.sender === 'سیستم';
+        if (!isSystem && senderLower === lowerU) return;
+        if (m.readBy?.some(u => String(u || '').toLowerCase() === lowerU)) return;
 
         let shouldMark = false;
         if (!channelId || channelId === 'all') {
             shouldMark = true;
+        } else if (type === 'system' || channelId === 'system') {
+            shouldMark = isSystem && (!m.recipient || String(m.recipient).toLowerCase() === lowerU);
         } else if (type === 'public' || channelId === 'public') {
-            shouldMark = (!m.recipient && !m.groupId);
+            shouldMark = !isSystem && !m.recipient && !m.groupId;
         } else if (type === 'private') {
-            shouldMark = (m.senderUsername?.toLowerCase() === channelId?.toLowerCase() && m.recipient?.toLowerCase() === username.toLowerCase());
+            shouldMark = !isSystem && (senderLower === String(channelId || '').toLowerCase() && String(m.recipient || '').toLowerCase() === lowerU);
         } else if (type === 'group' || type === 'task_group') {
             shouldMark = (m.groupId === channelId);
         }
@@ -8648,13 +8654,13 @@ app.post('/api/chat/read-all', (req, res) => {
     if (!db.notifications) db.notifications = [];
     db.notifications.forEach(n => {
         if (!n.readBy) n.readBy = [];
-        if (!n.readBy.includes(username)) {
+        if (!n.readBy.some(u => String(u || '').toLowerCase() === lowerU)) {
             const isChatNotif = (n.url && (n.url === '/chat' || n.url.startsWith('/chat?') || n.url.startsWith('chat')));
             if (isChatNotif) {
                 if (!channelId || channelId === 'all') {
                     n.readBy.push(username);
                     changed = true;
-                } else if (n.url.includes(channelId)) {
+                } else if (n.url.toLowerCase().includes(String(channelId).toLowerCase())) {
                     n.readBy.push(username);
                     changed = true;
                 }

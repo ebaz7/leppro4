@@ -131,6 +131,27 @@ function connectSSE(currentUser: User) {
             resetWatchdog(currentUser);
         });
 
+        // Helper: check if the user is actively looking at a specific chat channel in foreground
+        const isViewingChatUrlInForeground = (url?: string): boolean => {
+            if (typeof document === 'undefined' || document.hidden || document.visibilityState !== 'visible') return false;
+            if (!url) return false;
+            const activeChat = typeof window !== 'undefined' ? (window as any).__dlkamActiveChat : null;
+            if (!activeChat) return false;
+            const clean = String(url).replace(/^\/+/, '').trim();
+            if (!clean.startsWith('chat')) return false;
+            const searchPart = clean.includes('?') ? clean.substring(clean.indexOf('?')) : '';
+            const params = new URLSearchParams(searchPart);
+            const pvParam = params.get('pv');
+            const groupParam = params.get('group');
+            if (pvParam) {
+                return activeChat.type === 'private' && String(activeChat.id || '').toLowerCase() === pvParam.toLowerCase();
+            }
+            if (groupParam) {
+                return (activeChat.type === 'group' || activeChat.type === 'task_group') && String(activeChat.id || '') === groupParam;
+            }
+            return activeChat.type === 'public';
+        };
+
         // Listen for standard notifications
         eventSourceInstance.addEventListener('notification', async (event: MessageEvent) => {
             resetWatchdog(currentUser);
@@ -143,26 +164,31 @@ function connectSSE(currentUser: User) {
                     return; // Avoid duplicate display
                 }
 
-                if (notifId) {
-                    markNotificationAsShown(notifId);
-                }
+                const isChatNotif = Boolean(data.type?.includes('chat') || (data.url && String(data.url).includes('chat')));
+                const isLooking = isChatNotif && isViewingChatUrlInForeground(data.url);
 
-                // Fire cross-platform native notification (Android top status bar / Windows Action Center / Web)
-                await sendNotification(data.title, data.body || '', {
-                    id: data.id,
-                    url: data.url,
-                    type: data.type,
-                    tab: (data.type?.includes('chat') || data.url?.includes('chat')) ? 'chat' : undefined,
-                    priority: data.priority
-                });
+                if (isLooking) {
+                    if (notifId) markNotificationAsShown(notifId);
+                } else {
+                    // IMPORTANT: Do NOT call markNotificationAsShown(notifId) before sendNotification!
+                    // sendNotification atomically checks hasNotificationBeenShown(id), dispatches OS notification, and marks shown.
+                    await sendNotification(data.title, data.body || '', {
+                        id: notifId || undefined,
+                        url: data.url,
+                        type: data.type,
+                        tab: isChatNotif ? 'chat' : undefined,
+                        priority: data.priority
+                    });
+                    if (notifId) markNotificationAsShown(notifId);
+                }
 
                 // Acknowledge receipt to the server queue per device
                 if (data.id) {
                     apiCall('/notifications/ack', 'POST', { id: data.id, username, device: getClientDeviceTag() }).catch(() => {});
                 }
 
-                // Dispatch custom DOM event for active UI components
-                if (typeof window !== 'undefined') {
+                // Dispatch custom DOM event for active UI components (in-app toast/bell)
+                if (typeof window !== 'undefined' && !isLooking) {
                     window.dispatchEvent(new CustomEvent('REALTIME_NOTIFICATION_RECEIVED', { detail: data }));
                 }
             } catch (err) {
@@ -188,23 +214,28 @@ function connectSSE(currentUser: User) {
                     window.dispatchEvent(new CustomEvent('CHAT_MESSAGE_REALTIME', { detail: msg }));
                 }
 
-                // If this is a direct private message (PV) to me
-                const isDirectPV = msg.recipient && msg.recipient.toLowerCase() === currentU;
-                if (isDirectPV) {
-                    const notifId = `chat_pv_${msg.id}`;
-                    if (!hasNotificationBeenShown(notifId)) {
-                        markNotificationAsShown(notifId);
-                        
-                        // Check if user is currently looking at this exact chat in foreground
-                        const activeChat = typeof window !== 'undefined' ? (window as any).__dlkamActiveChat : null;
-                        const isLooking = typeof document !== 'undefined' &&
-                            !document.hidden &&
-                            document.visibilityState === 'visible' &&
-                            activeChat?.type === 'private' &&
-                            String(activeChat?.id || '').toLowerCase() === String(msg.senderUsername || '').toLowerCase();
+                // Trigger native OS notification for direct PV (and fallback for group/public messages if not already shown)
+                const isDirectPV = Boolean(msg.recipient && msg.recipient.toLowerCase() === currentU);
+                const isGroupMsg = Boolean(msg.groupId);
+                const isPublicMsg = !msg.recipient && !msg.groupId;
 
-                        if (!isLooking) {
-                            const title = `پیام از ${msg.sender || msg.senderUsername}`;
+                if (isDirectPV || isGroupMsg || isPublicMsg) {
+                    const notifId = isDirectPV ? `chat_pv_${msg.id}` : `chat_msg_${msg.id}`;
+                    if (!hasNotificationBeenShown(notifId) && !hasNotificationBeenShown(msg.id)) {
+                        const activeChat = typeof window !== 'undefined' ? (window as any).__dlkamActiveChat : null;
+                        const isForeground = typeof document !== 'undefined' && !document.hidden && document.visibilityState === 'visible';
+                        const isLooking = isForeground && Boolean(activeChat) && (
+                            (isDirectPV && activeChat.type === 'private' && String(activeChat.id || '').toLowerCase() === String(msg.senderUsername || '').toLowerCase()) ||
+                            (isGroupMsg && (activeChat.type === 'group' || activeChat.type === 'task_group') && String(activeChat.id || '') === String(msg.groupId)) ||
+                            (isPublicMsg && activeChat.type === 'public')
+                        );
+
+                        if (isLooking) {
+                            markNotificationAsShown(notifId);
+                            markNotificationAsShown(msg.id);
+                        } else if (isDirectPV) {
+                            // For PV, fire immediately without pre-marking so sendNotification actually dispatches the OS notification!
+                            const title = `پیام جدید از ${msg.sender || msg.senderUsername}`;
                             const body = msg.message || (msg.audioUrl ? '🎤 پیام صوتی' : '📎 فایل ضمیمه');
                             await sendNotification(title, body, {
                                 id: notifId,
@@ -213,6 +244,7 @@ function connectSSE(currentUser: User) {
                                 type: 'chat_pv',
                                 priority: 1
                             });
+                            markNotificationAsShown(msg.id);
                         }
                     }
                 }
@@ -294,7 +326,6 @@ async function drainOfflineQueue(username: string) {
             console.log(`[SSE] Draining ${pendingItems.length} missed notifications from queue (${deviceTag})...`);
             for (const item of pendingItems) {
                 if (item.id && !hasNotificationBeenShown(item.id)) {
-                    markNotificationAsShown(item.id);
                     await sendNotification(item.title, item.body || '', {
                         id: item.id,
                         url: item.url,
@@ -302,6 +333,7 @@ async function drainOfflineQueue(username: string) {
                         tab: (item.type?.includes('chat') || item.url?.includes('chat')) ? 'chat' : undefined,
                         priority: item.priority
                     });
+                    markNotificationAsShown(item.id);
                     if (typeof window !== 'undefined') {
                         window.dispatchEvent(new CustomEvent('REALTIME_NOTIFICATION_RECEIVED', { detail: item }));
                     }

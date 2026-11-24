@@ -817,6 +817,10 @@ function App() {
   const [appTaskGroups, setAppTaskGroups] = useState<TaskGroup[]>(() => {
     try { const item = localStorage.getItem('app_data_task_groups'); return item ? JSON.parse(item) : []; } catch { return []; }
   });
+  const [appUsers, setAppUsers] = useState<User[]>(() => {
+    try { const item = localStorage.getItem('app_data_users'); return item ? JSON.parse(item) : []; } catch { return []; }
+  });
+  const locallyReadMessageIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
       appTaskGroupsRef.current = appTaskGroups;
   }, [appTaskGroups]);
@@ -1605,7 +1609,7 @@ function App() {
         }).catch(err => console.error("Settings load error", err));
 
         // Load Heavy Data & Notifications in Parallel
-        const [ordersData, messagesData, announcementsData, notifsData, groupsData, taskGroupsData] = await Promise.all([
+        const [ordersData, messagesData, announcementsData, notifsData, groupsData, taskGroupsData, usersData] = await Promise.all([
             getOrders(),
             getMessages(),
             getSystemAnnouncements(),
@@ -1622,11 +1626,13 @@ function App() {
                 }));
             }),
             getGroups().catch(() => []),
-            getTaskGroups().catch(() => [])
+            getTaskGroups().catch(() => []),
+            getUsers().catch(() => [])
         ]);
         
         if (Array.isArray(groupsData)) setAppGroups(groupsData);
         if (Array.isArray(taskGroupsData)) setAppTaskGroups(taskGroupsData);
+        if (Array.isArray(usersData) && usersData.length > 0) setAppUsers(usersData);
         
         // --- SAFE GUARD & DEEP SANITIZATION ---
         const safeOrders = Array.isArray(ordersData) ? ordersData.map(o => ({
@@ -1635,7 +1641,19 @@ function App() {
             attachments: Array.isArray(o.attachments) ? o.attachments : []
         })) : [];
 
-        const safeMessages = Array.isArray(messagesData) ? messagesData : [];
+        const currentULower = currentUser.username.toLowerCase();
+        const safeMessages = (Array.isArray(messagesData) ? messagesData : []).map(m => {
+            // Preserve optimistic local reads so an in-flight poll never reverts a read message back to unread
+            if (locallyReadMessageIdsRef.current.has(m.id)) {
+                const alreadyRead = m.readBy?.some((u: string) => u.toLowerCase() === currentULower);
+                if (alreadyRead) {
+                    locallyReadMessageIdsRef.current.delete(m.id);
+                    return m;
+                }
+                return { ...m, readBy: [...(m.readBy || []), currentUser.username] };
+            }
+            return m;
+        });
         const safeAnnouncements = Array.isArray(announcementsData) ? announcementsData : [];
         
         // --- OPTIMIZATION: ONLY SET IF CHANGED ---
@@ -1654,11 +1672,18 @@ function App() {
             for (let i = 0; i < checkCount; i++) {
                 const idx1 = arr1.length - 1 - i;
                 const idx2 = arr2.length - 1 - i;
-                if (arr1[idx1].id !== arr2[idx2].id || arr1[idx1].timestamp !== arr2[idx2].timestamp || arr1[idx1].isEdited !== arr2[idx2].isEdited || arr1[idx1].readBy?.length !== arr2[idx2].readBy?.length) {
+                if (arr1[idx1].id !== arr2[idx2].id || arr1[idx1].timestamp !== arr2[idx2].timestamp || arr1[idx1].isEdited !== arr2[idx2].isEdited || (arr1[idx1].readBy?.length || 0) !== (arr2[idx2].readBy?.length || 0)) {
                     return false;
                 }
             }
-            return true;
+            // Also compare total readBy counts across ALL messages so older messages marked read on another device sync immediately
+            let readSum1 = 0;
+            let readSum2 = 0;
+            for (let i = 0; i < arr1.length; i++) {
+                readSum1 += arr1[i].readBy?.length || 0;
+                readSum2 += arr2[i].readBy?.length || 0;
+            }
+            return readSum1 === readSum2;
         };
 
         setOrders(prev => areOrdersEqual(prev, safeOrders) ? prev : safeOrders);
@@ -1809,8 +1834,7 @@ function App() {
 
                 if (newUnreadChatMessages.length > 0) {
                     const latestChat = newUnreadChatMessages[newUnreadChatMessages.length - 1];
-                    markNotificationAsShown(latestChat.id);
-                    markNotificationAsShown(`chat_pv_${latestChat.id}`);
+                    const notifKey = `chat_pv_${latestChat.id}`;
                     const title = latestChat.sender ? `پیام از ${latestChat.sender}` : 'پیام جدید در گفتگو';
                     const body = latestChat.message || (latestChat.audioUrl ? '🎤 پیام صوتی' : '📎 فایل ضمیمه');
                     const targetUrl = latestChat.groupId
@@ -1823,7 +1847,9 @@ function App() {
                     setToast({ show: true, title, message: body, url: targetUrl });
                     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
                     toastTimeoutRef.current = setTimeout(() => setToast(null), 4000);
-                    sendNotification(title, body, { id: `chat_pv_${latestChat.id}`, url: targetUrl, tab: 'chat', type: latestChat.recipient ? 'chat_pv' : 'chat_group' });
+                    // IMPORTANT: Call sendNotification BEFORE marking notifKey as shown, otherwise sendNotification aborts immediately!
+                    sendNotification(title, body, { id: notifKey, url: targetUrl, tab: 'chat', type: latestChat.recipient ? 'chat_pv' : 'chat_group' });
+                    markNotificationAsShown(latestChat.id);
                 }
             }
 
@@ -2121,13 +2147,26 @@ function App() {
               isFetchingChat = true;
               try {
                   const messagesData = await getMessages();
-                  const safeMessages = Array.isArray(messagesData) ? messagesData : [];
+                  const currentULower = currentUser.username.toLowerCase();
+                  const safeMessages = (Array.isArray(messagesData) ? messagesData : []).map(m => {
+                      if (locallyReadMessageIdsRef.current.has(m.id)) {
+                          const alreadyRead = m.readBy?.some((u: string) => u.toLowerCase() === currentULower);
+                          if (alreadyRead) {
+                              locallyReadMessageIdsRef.current.delete(m.id);
+                              return m;
+                          }
+                          return { ...m, readBy: [...(m.readBy || []), currentUser.username] };
+                      }
+                      return m;
+                  });
                   setChatMessages(prev => {
                       if (prev.length !== safeMessages.length) return safeMessages;
                       if (prev.length > 0 && safeMessages.length > 0) {
                           const pLast = prev[prev.length - 1];
                           const sLast = safeMessages[safeMessages.length - 1];
-                          if (pLast.id !== sLast.id || pLast.timestamp !== sLast.timestamp || pLast.readBy?.length !== sLast.readBy?.length) {
+                          const pReadSum = prev.reduce((acc, m) => acc + (m.readBy?.length || 0), 0);
+                          const sReadSum = safeMessages.reduce((acc, m) => acc + (m.readBy?.length || 0), 0);
+                          if (pLast.id !== sLast.id || pLast.timestamp !== sLast.timestamp || pReadSum !== sReadSum) {
                               return safeMessages;
                           }
                       }
@@ -2293,27 +2332,60 @@ function App() {
     const [purchaseInitialTab, setPurchaseInitialTab] = useState<'DASHBOARD' | 'REQUESTS' | 'PARTS' | 'KARDEX' | 'ARCHIVE'>('REQUESTS');
   const handleGoToPurchaseApprovals = () => { setPurchaseInitialTab('REQUESTS'); setActiveTab('purchase'); };
 
+  const handleChatMessagesRead = (msgIds: string[]) => {
+      if (!currentUser || !Array.isArray(msgIds) || msgIds.length === 0) return;
+      const currentU = currentUser.username.toLowerCase();
+      const idsSet = new Set(msgIds);
+      msgIds.forEach(id => locallyReadMessageIdsRef.current.add(id));
+      setChatMessages(prev => prev.map(m => {
+          if (!idsSet.has(m.id)) return m;
+          if (m.readBy?.some(u => u.toLowerCase() === currentU)) return m;
+          return { ...m, readBy: [...(m.readBy || []), currentUser.username] };
+      }));
+  };
+
   const unreadChatCount = useMemo(() => {
       if (!currentUser || !currentUser.username) return 0;
       const currentU = currentUser.username.toLowerCase();
-      const isManager = [UserRole.ADMIN, UserRole.MANAGER, UserRole.CEO].includes(currentUser.role as UserRole);
+      const isAdmin = currentUser.role === UserRole.ADMIN;
+      const knownUsersSet = appUsers.length > 0
+          ? new Set(appUsers.map(u => String(u.username || '').toLowerCase()).filter(Boolean))
+          : null;
 
       return chatMessages.filter(m => {
-          if (!m.senderUsername || m.senderUsername.toLowerCase() === currentU) return false;
-          if (m.readBy?.some(u => u.toLowerCase() === currentU)) return false;
-          
-          if (m.recipient) {
-              return m.recipient.toLowerCase() === currentU;
+          if ((m as any).isDeleted) return false;
+          if (Array.isArray((m as any).deletedFor) && (m as any).deletedFor.some((u: string) => String(u).toLowerCase() === currentU)) return false;
+
+          const senderLower = String(m.senderUsername || '').toLowerCase();
+          const recipientLower = String(m.recipient || '').toLowerCase();
+          const isSystem = senderLower === 'system' || m.role === 'system' || m.sender === 'سیستم';
+
+          if (!isSystem && (!senderLower || senderLower === currentU)) return false;
+          if (m.readBy?.some(u => String(u || '').toLowerCase() === currentU)) return false;
+
+          // Match exact same channel precedence & visibility rules as ChatRoom.tsx:
+          // 1. System channel
+          if (isSystem) {
+              return !recipientLower || recipientLower === currentU;
           }
+          // 2. Group / Task Group channel
           if (m.groupId) {
               const grp = appGroups.find(g => g.id === m.groupId) || appTaskGroups.find(g => g.id === m.groupId);
-              if (!grp) return false; // Orphaned/deleted group messages are not counted as unread
-              return isManager || (Array.isArray(grp.members) && grp.members.some(mem => mem.toLowerCase() === currentU)) || grp.createdBy?.toLowerCase() === currentU;
+              if (!grp) return false; // Orphaned/deleted group messages are never visible in ChatRoom
+              return isAdmin || (Array.isArray(grp.members) && grp.members.some(mem => String(mem || '').toLowerCase() === currentU)) || grp.createdBy?.toLowerCase() === currentU;
           }
-          // Public message:
-          return true;
+          // 3. Public channel
+          if (!recipientLower) {
+              return true;
+          }
+          // 4. Private channel (only count senders who actually exist in the visible ChatRoom user list)
+          if (recipientLower === currentU) {
+              if (knownUsersSet && !knownUsersSet.has(senderLower)) return false;
+              return true;
+          }
+          return false;
       }).length;
-  }, [chatMessages, currentUser, appGroups, appTaskGroups]);
+  }, [chatMessages, currentUser, appGroups, appTaskGroups, appUsers]);
 
   const toastStyle = useMemo(() => {
      if (!toast || !toast.title) return null;
@@ -2466,11 +2538,7 @@ function App() {
                 onRefresh={() => loadData(true)} 
                 sharedData={sharedData}
                 onClearSharedData={() => setSharedData(null)}
-                onMessagesRead={(msgIds) => {
-                    if (!currentUser) return;
-                    const idsSet = new Set(msgIds);
-                    setChatMessages(prev => prev.map(m => idsSet.has(m.id) ? { ...m, readBy: [...(m.readBy || []), currentUser.username] } : m));
-                }}
+                onMessagesRead={handleChatMessagesRead}
                 directChatTarget={directChatTarget}
                 onClearDirectChatTarget={() => setDirectChatTarget(null)}
                 onActiveChannelChange={setActiveChatChannel}
@@ -2672,11 +2740,7 @@ function App() {
                             onRefresh={() => loadData(true)} 
                             sharedData={sharedData}
                             onClearSharedData={() => setSharedData(null)}
-                            onMessagesRead={(msgIds) => {
-                                if (!currentUser) return;
-                                const idsSet = new Set(msgIds);
-                                setChatMessages(prev => prev.map(m => idsSet.has(m.id) ? { ...m, readBy: [...(m.readBy || []), currentUser.username] } : m));
-                            }}
+                            onMessagesRead={handleChatMessagesRead}
                             directChatTarget={directChatTarget}
                             onClearDirectChatTarget={() => setDirectChatTarget(null)}
                             onActiveChannelChange={setActiveChatChannel}

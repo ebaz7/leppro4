@@ -211,7 +211,7 @@ export const clearAllActiveNotifications = async () => {
     // 3. Web & PWA (Service Worker)
     if (typeof navigator !== 'undefined' && "serviceWorker" in navigator) {
         try {
-            const reg = await navigator.serviceWorker.ready;
+            const reg = await navigator.serviceWorker.getRegistration();
             if (reg && reg.getNotifications) {
                 const activeNotifs = await reg.getNotifications();
                 activeNotifs.forEach(n => n.close());
@@ -227,7 +227,7 @@ export const unsubscribeFromPushNotifications = async (user?: any | null, passed
         // 1. Unsubscribe the browser push manager instance
         if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
             try {
-                const reg = await navigator.serviceWorker.ready;
+                const reg = await navigator.serviceWorker.getRegistration();
                 if (reg && reg.pushManager) {
                     const sub = await reg.pushManager.getSubscription();
                     if (sub) {
@@ -838,28 +838,38 @@ export const sendNotification = async (title: string, body: string, data?: any) 
               title,
               body
           };
-          // Check if SW is active to show via SW (more reliable)
+          // Use non-blocking getRegistration() (never hang on navigator.serviceWorker.ready when SW is not registered on Web)
           if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
               try {
-                  const registration = await navigator.serviceWorker.ready;
+                  const registration = await navigator.serviceWorker.getRegistration();
                   if (registration && registration.active && typeof registration.showNotification === 'function') {
                       await registration.showNotification(title, {
                           body,
                           icon: iconUrl,
+                          badge: iconUrl,
                           dir: 'rtl',
                           lang: 'fa',
                           vibrate: [200, 100, 200],
-                          tag: idValue || 'general',
+                          tag: idValue || `dlkam_${now}`,
                           renotify: true,
                           data: swPayload
                       } as any);
                       return;
                   }
-              } catch (_) {}
+              } catch (swNotifErr) {
+                  console.warn('[Notification] SW showNotification fallback to Notification API:', swNotifErr);
+              }
           }
           
           if (typeof Notification === 'function') {
-              const notif = new Notification(title, { body, icon: iconUrl, dir: 'rtl', lang: 'fa', data: swPayload });
+              const notif = new Notification(title, {
+                  body,
+                  icon: iconUrl,
+                  dir: 'rtl',
+                  lang: 'fa',
+                  tag: idValue || `dlkam_${now}`,
+                  data: swPayload
+              });
               notif.onclick = () => {
                   dispatchWebNotificationTap();
                   try { notif.close(); } catch (_) {}

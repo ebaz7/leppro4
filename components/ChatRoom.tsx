@@ -1156,10 +1156,12 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
                     if (prev.length === 0) return prev;
                     const lastPrev = prev[prev.length - 1];
                     const lastNew = preloadedMessages[preloadedMessages.length - 1];
+                    const prevReadSum = prev.reduce((acc, m) => acc + (m.readBy?.length || 0), 0);
+                    const newReadSum = preloadedMessages.reduce((acc, m) => acc + (m.readBy?.length || 0), 0);
                     if (
                         lastPrev.id === lastNew.id &&
                         lastPrev.timestamp === lastNew.timestamp &&
-                        (lastPrev.readBy?.length || 0) === (lastNew.readBy?.length || 0) &&
+                        prevReadSum === newReadSum &&
                         Boolean(lastPrev.isEdited) === Boolean(lastNew.isEdited)
                     ) {
                         return prev;
@@ -1206,13 +1208,13 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
             scrollToBottom('auto');
             const timer = setTimeout(() => scrollToBottom('smooth'), 150);
             
-            // Auto-mark as read ONLY when user is actively inside the open conversation in foreground
-            if (activeChannel.id && typeof document !== 'undefined' && !document.hidden) {
+            // Auto-mark as read ONLY when user is actively inside the Chat tab AND open conversation in foreground
+            if (isActiveTab && activeChannel.id && typeof document !== 'undefined' && !document.hidden) {
                 markAsRead(activeChannel.id, activeChannel.type);
             }
             return () => clearTimeout(timer);
         }
-    }, [activeChannel, messages.length]);
+    }, [activeChannel, messages.length, isActiveTab]);
 
     // Keep chat viewport pinned cleanly above soft keyboard on Android & Mobile Web
     useEffect(() => {
@@ -1253,7 +1255,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
     // Re-verify read status when user switches back to this tab/window while chat is open
     useEffect(() => {
         const handleVisibility = () => {
-            if (typeof document !== 'undefined' && !document.hidden && activeChannel && activeChannel.id) {
+            if (isActiveTab && typeof document !== 'undefined' && !document.hidden && activeChannel && activeChannel.id) {
                 markAsRead(activeChannel.id, activeChannel.type);
             }
         };
@@ -1263,7 +1265,7 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
             window.removeEventListener('focus', handleVisibility);
             document.removeEventListener('visibilitychange', handleVisibility);
         };
-    }, [activeChannel]);
+    }, [activeChannel, isActiveTab]);
 
     // Handle Mobile Back Button Logic (Browser History)
     useEffect(() => {
@@ -1500,15 +1502,17 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ currentUser, preloadedMessages, onR
         if (!currentUser || !currentUser.username) return;
         const currentU = currentUser.username.toLowerCase();
         const unreadMsgs = messages.filter(m => {
-            if (!m.senderUsername || (m.senderUsername.toLowerCase() === currentU && type !== 'system')) return false;
+            const senderLower = m.senderUsername?.toLowerCase() || '';
+            const isSystem = senderLower === 'system' || m.role === 'system' || m.sender === 'سیستم';
+            if (!isSystem && (!senderLower || senderLower === currentU)) return false;
             if (m.readBy?.some(u => u.toLowerCase() === currentU)) return false;
             
             if (type === 'system') {
-                return (m.senderUsername?.toLowerCase() === 'system' || m.role === 'system' || m.sender === 'سیستم') &&
-                       (!m.recipient || m.recipient.toLowerCase() === currentU);
+                return isSystem && (!m.recipient || m.recipient.toLowerCase() === currentU);
             }
+            if (isSystem) return false;
             if (type === 'public') return !m.recipient && !m.groupId;
-            if (type === 'private') return (m.senderUsername?.toLowerCase() === channelId?.toLowerCase() && m.recipient?.toLowerCase() === currentU);
+            if (type === 'private') return (senderLower === channelId?.toLowerCase() && m.recipient?.toLowerCase() === currentU);
             if (type === 'group' || type === 'task_group') return m.groupId === channelId;
             return false;
         });
