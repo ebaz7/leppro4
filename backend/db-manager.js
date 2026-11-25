@@ -15,6 +15,7 @@ try {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DB_FILE = path.join(__dirname, '..', 'database.json');
+const SMART_PG_SPOOL_FILE = path.join(__dirname, '..', 'smart_pg_emergency_spool.json');
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 
 // Persistent HTTP and HTTPS Connection Pools with TCP Keep-Alive and NoDelay
@@ -436,6 +437,104 @@ let saveTimeout = null;
 let isSaving = false;
 let CORE_STORAGE_MODE = 'uninitialized'; // 'postgresql' | 'json' | 'uninitialized'
 let MIGRATED_FROM_JSON_ON_BOOT = false;
+let HAS_PENDING_PG_SPOOL = fs.existsSync(SMART_PG_SPOOL_FILE);
+let LAST_PG_SPOOL_AT = null;
+let LAST_PG_SPOOL_ERROR = null;
+let spoolRetryTimer = null;
+
+const extractSmartOnlyStateForSpool = (dbObj) => {
+    const clean = {};
+    if (!dbObj || typeof dbObj !== 'object') return clean;
+    for (const [k, v] of Object.entries(dbObj)) {
+        if (corePg.SMART_EXCLUDED_ROOT_KEYS?.has(k) || v === undefined) continue;
+        clean[k] = v;
+    }
+    return clean;
+};
+
+const clearEmergencyPgSpool = () => {
+    try {
+        if (fs.existsSync(SMART_PG_SPOOL_FILE)) {
+            fs.unlinkSync(SMART_PG_SPOOL_FILE);
+        }
+    } catch (err) {
+        console.error('[Smart Core Failover] Failed clearing emergency PG spool:', err);
+    }
+    HAS_PENDING_PG_SPOOL = false;
+    LAST_PG_SPOOL_ERROR = null;
+    if (spoolRetryTimer) {
+        clearTimeout(spoolRetryTimer);
+        spoolRetryTimer = null;
+    }
+};
+
+const scheduleEmergencySpoolRecovery = () => {
+    if (spoolRetryTimer || !HAS_PENDING_PG_SPOOL) return;
+    spoolRetryTimer = setTimeout(async () => {
+        spoolRetryTimer = null;
+        if (!HAS_PENDING_PG_SPOOL || !MEMORY_DB_CACHE || !corePg.isPostgresConfigured()) return;
+        try {
+            const ready = await corePg.ensureCorePostgresSchemaReady(true);
+            if (!ready) {
+                scheduleEmergencySpoolRecovery();
+                return;
+            }
+            const res = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, { forceFullSync: true });
+            if (res?.ok) {
+                CORE_STORAGE_MODE = 'postgresql';
+                clearEmergencyPgSpool();
+                console.log('✅ [Smart Core Failover] PostgreSQL reconnected; emergency disk spool synced cleanly.');
+            } else {
+                scheduleEmergencySpoolRecovery();
+            }
+        } catch {
+            scheduleEmergencySpoolRecovery();
+        }
+    }, 15000);
+    if (typeof spoolRetryTimer.unref === 'function') spoolRetryTimer.unref();
+};
+
+const writeEmergencyPgSpool = (dbObj, reason = 'postgres_unavailable') => {
+    try {
+        if (!dbObj || typeof dbObj !== 'object') return false;
+        const payload = {
+            spoolVersion: 1,
+            spooledAtMs: Date.now(),
+            reason: String(reason || 'postgres_unavailable'),
+            data: extractSmartOnlyStateForSpool(dbObj),
+        };
+        const tmpPath = `${SMART_PG_SPOOL_FILE}.tmp_${process.pid}_${Date.now()}`;
+        fs.writeFileSync(tmpPath, JSON.stringify(payload), 'utf8');
+        fs.renameSync(tmpPath, SMART_PG_SPOOL_FILE);
+        HAS_PENDING_PG_SPOOL = true;
+        LAST_PG_SPOOL_AT = payload.spooledAtMs;
+        LAST_PG_SPOOL_ERROR = payload.reason;
+        scheduleEmergencySpoolRecovery();
+        return true;
+    } catch (err) {
+        console.error('[Smart Core Failover] Failed writing emergency PG spool:', err);
+        return false;
+    }
+};
+
+const readEmergencyPgSpool = () => {
+    try {
+        if (!fs.existsSync(SMART_PG_SPOOL_FILE)) return null;
+        const raw = fs.readFileSync(SMART_PG_SPOOL_FILE, 'utf8');
+        if (!raw || !raw.trim()) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.data && typeof parsed.data === 'object') {
+            return {
+                spooledAtMs: Number(parsed.spooledAtMs || 0) || fs.statSync(SMART_PG_SPOOL_FILE).mtimeMs,
+                reason: parsed.reason || null,
+                data: parsed.data,
+            };
+        }
+    } catch (err) {
+        console.error('[Smart Core Failover] Failed reading emergency PG spool:', err);
+    }
+    return null;
+};
 
 const createDefaultDb = () => ({
     settings: {
@@ -675,25 +774,45 @@ const normalizeSmartDbCache = (targetDb) => {
  */
 export async function initCoreStorage() {
     const defaultDb = createDefaultDb();
+    const pendingSpool = readEmergencyPgSpool();
+
+    let legacyErpInMemory = null;
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            const raw = fs.readFileSync(DB_FILE, 'utf8');
+            if (raw.trim()) {
+                const parsedLegacy = JSON.parse(raw);
+                if (parsedLegacy?.industrialErp) {
+                    legacyErpInMemory = parsedLegacy.industrialErp;
+                }
+            }
+        } catch {}
+    }
 
     if (corePg.isPostgresConfigured()) {
         const pgRes = await corePg.loadSmartDbFromPostgres();
         if (pgRes.ok) {
-            if (pgRes.hasData && pgRes.data) {
-                // Keep any legacy industrialErp only in memory if JSON exists for ERP boot compatibility
-                let legacyErpInMemory = null;
-                if (fs.existsSync(DB_FILE)) {
-                    try {
-                        const raw = fs.readFileSync(DB_FILE, 'utf8');
-                        if (raw.trim()) {
-                            const parsedLegacy = JSON.parse(raw);
-                            if (parsedLegacy?.industrialErp) {
-                                legacyErpInMemory = parsedLegacy.industrialErp;
-                            }
-                        }
-                    } catch {}
+            if (pendingSpool && pendingSpool.data) {
+                MEMORY_DB_CACHE = normalizeSmartDbCache({
+                    ...defaultDb,
+                    ...(pgRes.hasData && pgRes.data ? pgRes.data : {}),
+                    ...pendingSpool.data,
+                    ...(legacyErpInMemory ? { industrialErp: legacyErpInMemory } : {}),
+                });
+                try {
+                    sanitizeAndOffloadDb(MEMORY_DB_CACHE);
+                } catch {}
+                const spoolSync = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, { forceFullSync: true });
+                if (spoolSync.ok) {
+                    clearEmergencyPgSpool();
+                    CORE_STORAGE_MODE = 'postgresql';
+                    MIGRATED_FROM_JSON_ON_BOOT = false;
+                    console.log('✅ [Smart Core PostgreSQL] Recovered and synced emergency outage spool into PostgreSQL.');
+                    return { mode: CORE_STORAGE_MODE, migratedFromJson: false, recoveredFromSpool: true, stats: spoolSync };
                 }
+            }
 
+            if (pgRes.hasData && pgRes.data) {
                 MEMORY_DB_CACHE = normalizeSmartDbCache({
                     ...defaultDb,
                     ...pgRes.data,
@@ -755,6 +874,9 @@ export async function initCoreStorage() {
     // Fallback when SQL_HOST is not configured or PostgreSQL is offline
     CORE_STORAGE_MODE = 'json';
     getDb();
+    if (HAS_PENDING_PG_SPOOL && corePg.isPostgresConfigured()) {
+        scheduleEmergencySpoolRecovery();
+    }
     console.warn('⚠️ [Smart Core DB] PostgreSQL unavailable/unconfigured. Running in legacy database.json fallback mode.');
     return { mode: CORE_STORAGE_MODE, migratedFromJson: false };
 }
@@ -764,14 +886,37 @@ export const getCoreStorageStatus = () => ({
     migratedFromJsonOnBoot: MIGRATED_FROM_JSON_ON_BOOT,
     pgConfigured: corePg.isPostgresConfigured(),
     pgHealth: corePg.getCorePostgresHealth(),
+    emergencySpoolActive: HAS_PENDING_PG_SPOOL,
+    spoolFile: HAS_PENDING_PG_SPOOL ? path.basename(SMART_PG_SPOOL_FILE) : null,
+    lastSpooledAt: LAST_PG_SPOOL_AT,
+    lastSpoolError: LAST_PG_SPOOL_ERROR,
 });
 
 export const getDb = () => {
     if (MEMORY_DB_CACHE) return MEMORY_DB_CACHE;
     try {
         const defaultDb = createDefaultDb();
+        const pendingSpool = readEmergencyPgSpool();
+        const dbFileExists = fs.existsSync(DB_FILE);
+        const dbFileMtime = dbFileExists ? fs.statSync(DB_FILE).mtimeMs : 0;
 
-        if (fs.existsSync(DB_FILE)) {
+        if (pendingSpool && pendingSpool.data && pendingSpool.spooledAtMs >= dbFileMtime) {
+            let legacyErpInMemory = null;
+            if (dbFileExists) {
+                try {
+                    const parsedLegacy = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+                    if (parsedLegacy?.industrialErp) legacyErpInMemory = parsedLegacy.industrialErp;
+                } catch {}
+            }
+            MEMORY_DB_CACHE = normalizeSmartDbCache({
+                ...defaultDb,
+                ...pendingSpool.data,
+                ...(legacyErpInMemory ? { industrialErp: legacyErpInMemory } : {}),
+            });
+            return MEMORY_DB_CACHE;
+        }
+
+        if (dbFileExists) {
             const fileContent = fs.readFileSync(DB_FILE, 'utf8');
             if (fileContent.trim()) {
                 const data = JSON.parse(fileContent);
@@ -828,13 +973,36 @@ export const saveDb = (data) => {
                 }
 
                 if (CORE_STORAGE_MODE === 'postgresql') {
-                    await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE);
+                    const hadPendingSpool = HAS_PENDING_PG_SPOOL || fs.existsSync(SMART_PG_SPOOL_FILE);
+                    const syncRes = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, {
+                        forceFullSync: hadPendingSpool,
+                    });
+                    if (syncRes?.ok) {
+                        if (hadPendingSpool) {
+                            clearEmergencyPgSpool();
+                            console.log('✅ [Smart Core Failover] Emergency disk spool synced back to PostgreSQL.');
+                        }
+                    } else {
+                        const reason = syncRes?.error || syncRes?.reason || 'postgres_sync_failed';
+                        if (!hadPendingSpool) {
+                            console.warn(`⚠️ [Smart Core Failover] PostgreSQL unreachable during save (${reason}). Spooling Smart Management data to smart_pg_emergency_spool.json.`);
+                        }
+                        writeEmergencyPgSpool(MEMORY_DB_CACHE, reason);
+                    }
                 } else {
                     fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+                    if (corePg.isPostgresConfigured()) {
+                        writeEmergencyPgSpool(MEMORY_DB_CACHE, 'postgres_boot_offline');
+                    } else if (HAS_PENDING_PG_SPOOL) {
+                        clearEmergencyPgSpool();
+                    }
                 }
             }
         } catch (e) {
             console.error("DB Save Error:", e);
+            if (CORE_STORAGE_MODE === 'postgresql' && MEMORY_DB_CACHE) {
+                writeEmergencyPgSpool(MEMORY_DB_CACHE, e?.message || 'save_exception');
+            }
         } finally {
             saveTimeout = null;
             isSaving = false;
@@ -870,17 +1038,31 @@ export const saveDbImmediate = async (data, options = {}) => {
 
             if (CORE_STORAGE_MODE === 'postgresql' || (corePg.isPostgresConfigured() && await corePg.ensureCorePostgresSchemaReady())) {
                 CORE_STORAGE_MODE = 'postgresql';
+                const hadPendingSpool = HAS_PENDING_PG_SPOOL || fs.existsSync(SMART_PG_SPOOL_FILE);
                 const res = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, {
-                    forceFullSync: Boolean(options.forceFullSync),
+                    forceFullSync: Boolean(options.forceFullSync) || hadPendingSpool,
                 });
-                return Boolean(res?.ok);
+                if (res?.ok) {
+                    if (hadPendingSpool) clearEmergencyPgSpool();
+                    return true;
+                }
+                writeEmergencyPgSpool(MEMORY_DB_CACHE, res?.error || res?.reason || 'postgres_sync_failed');
+                return false;
             } else {
                 fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+                if (corePg.isPostgresConfigured()) {
+                    writeEmergencyPgSpool(MEMORY_DB_CACHE, 'postgres_boot_offline');
+                } else if (HAS_PENDING_PG_SPOOL) {
+                    clearEmergencyPgSpool();
+                }
             }
         }
         return true;
     } catch (e) {
         console.error("Immediate DB Save Error:", e);
+        if (CORE_STORAGE_MODE === 'postgresql' && MEMORY_DB_CACHE) {
+            writeEmergencyPgSpool(MEMORY_DB_CACHE, e?.message || 'save_immediate_exception');
+        }
         return false;
     }
 };
@@ -890,9 +1072,24 @@ export const flushPendingSaves = async () => {
         clearTimeout(saveTimeout);
         saveTimeout = null;
         if (MEMORY_DB_CACHE && CORE_STORAGE_MODE === 'postgresql') {
-            await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE);
+            const hadPendingSpool = HAS_PENDING_PG_SPOOL || fs.existsSync(SMART_PG_SPOOL_FILE);
+            const res = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, {
+                forceFullSync: hadPendingSpool,
+            });
+            if (res?.ok) {
+                if (hadPendingSpool) clearEmergencyPgSpool();
+            } else {
+                writeEmergencyPgSpool(MEMORY_DB_CACHE, res?.error || res?.reason || 'postgres_flush_failed');
+            }
         } else if (MEMORY_DB_CACHE && CORE_STORAGE_MODE === 'json') {
-            try { fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2)); } catch {}
+            try {
+                fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+                if (corePg.isPostgresConfigured()) {
+                    writeEmergencyPgSpool(MEMORY_DB_CACHE, 'postgres_boot_offline');
+                } else if (HAS_PENDING_PG_SPOOL) {
+                    clearEmergencyPgSpool();
+                }
+            } catch {}
         }
     }
     await corePg.waitForPendingCorePgSync();
