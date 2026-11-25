@@ -15,7 +15,7 @@ import {
     UserCheck,
     CheckCircle2
 } from 'lucide-react';
-import { ChequeItemInput, COMMON_IRANIAN_BANKS, toShamsiStr, fromShamsiStr, normalizeToAsciiDigits } from './ChequeItemRow';
+import { ChequeItemInput, ChequeRegistrationType, COMMON_IRANIAN_BANKS, toShamsiStr, fromShamsiStr, normalizeToAsciiDigits } from './ChequeItemRow';
 import { MobileAttachmentUploader, ReceiptAttachment } from './MobileAttachmentUploader';
 import { getEffectiveApiUrl, getAuthToken } from '../../services/apiService';
 import * as jalaali from 'jalaali-js';
@@ -262,6 +262,78 @@ const ChequeReviewRow: React.FC<ChequeRowProps> = ({
                     />
                 </div>
             </div>
+
+            {/* Extra Metadata: Sayad ID, Registration Status, Self-Issuer */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
+                <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        شناسه صیاد (۱۶ رقم)
+                    </label>
+                    <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={20}
+                        value={item.sayadId || ''}
+                        onChange={(e) => onChange(index, 'sayadId', normalizeToAsciiDigits(e.target.value).replace(/[^0-9]/g, '').slice(0, 16))}
+                        placeholder="شناسه صیاد (اختیاری)"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-2 text-xs font-mono font-bold outline-none focus:border-emerald-500 transition-colors"
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        وضعیت ثبت صیادی
+                    </label>
+                    <select
+                        value={item.registrationType || ''}
+                        onChange={(e) => {
+                            const val = e.target.value as ChequeRegistrationType | '';
+                            onChange(index, 'registrationType', val);
+                            if (val !== 'person') {
+                                onChange(index, 'registeredPersonName', '');
+                            }
+                        }}
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-2 text-xs font-bold outline-none focus:border-emerald-500 transition-colors"
+                    >
+                        <option value="">تعیین نشده</option>
+                        <option value="company">ثبت به نام شرکت</option>
+                        <option value="person">ثبت به نام شخص</option>
+                        <option value="unregistered">ثبت نشده</option>
+                    </select>
+                </div>
+
+                {item.registrationType === 'person' ? (
+                    <div>
+                        <label className="block text-[11px] font-bold text-purple-700 dark:text-purple-300 mb-1">
+                            نام شخص ثبت‌شده *
+                        </label>
+                        <input
+                            type="text"
+                            value={item.registeredPersonName || ''}
+                            onChange={(e) => onChange(index, 'registeredPersonName', e.target.value)}
+                            placeholder="نام شخص ثبت‌شده در صیاد..."
+                            className="w-full bg-white dark:bg-slate-900 border border-purple-300 dark:border-purple-700 rounded-xl px-2.5 py-2 text-xs font-bold outline-none focus:border-purple-500 transition-colors"
+                        />
+                    </div>
+                ) : null}
+
+                <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        نسبت صادرکننده چک
+                    </label>
+                    <button
+                        type="button"
+                        onClick={() => onChange(index, 'isCustomerSelfIssuer', !item.isCustomerSelfIssuer)}
+                        className={`w-full px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
+                            item.isCustomerSelfIssuer
+                                ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-400 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                        }`}
+                    >
+                        <span>{item.isCustomerSelfIssuer ? 'خود مشتری (صاحب چک)' : 'چک شخص ثالث (غیر)'}</span>
+                    </button>
+                </div>
+            </div>
         </div>
     );
 };
@@ -323,6 +395,8 @@ export const AccountingReviewModal: React.FC<Props> = ({
                 const headers: Record<string, string> = {};
                 if (token) headers['Authorization'] = `Bearer ${token}`;
                 const res = await fetch(getEffectiveApiUrl('/api/sayan/cheque-receipts/cashboxes'), { headers });
+                const ct = res.headers.get('content-type') || '';
+                if (!res.ok || !ct.includes('application/json')) return;
                 const data = await res.json();
                 if (data.success && Array.isArray(data.cashboxes) && data.cashboxes.length > 0) {
                     setCashboxes(data.cashboxes);
@@ -337,26 +411,34 @@ export const AccountingReviewModal: React.FC<Props> = ({
     const [editCheques, setEditCheques] = useState<ChequeItemInput[]>(() => {
         if (receipt.cheques && receipt.cheques.length > 0) {
             return receipt.cheques.map((c: any, idx: number) => ({
-                id: c.chequeId || c.rowId || String(idx + 1),
+                id: c.id || c.chequeId || c.rowId || String(idx + 1),
                 chequeNumber: c.chequeNumber || '',
+                sayadId: c.sayadId || '',
                 amount: c.amount || '',
                 dueDate: c.dueDate ? c.dueDate.slice(0, 10) : new Date().toISOString().slice(0, 10),
                 bankName: c.bankName || 'سامان',
                 inNameOf: c.inNameOf || receipt.personName || '',
                 accountNo: c.accountNo || '',
-                description: c.description || ''
+                description: c.description || '',
+                registrationType: c.registrationType || '',
+                registeredPersonName: c.registeredPersonName || '',
+                isCustomerSelfIssuer: c.isCustomerSelfIssuer
             }));
         }
         return [
             {
                 id: '1',
                 chequeNumber: '',
+                sayadId: '',
                 amount: receipt.totalAmount || '',
                 dueDate: new Date().toISOString().slice(0, 10),
                 bankName: 'سامان',
                 inNameOf: receipt.personName || '',
                 accountNo: '',
-                description: ''
+                description: '',
+                registrationType: '',
+                registeredPersonName: '',
+                isCustomerSelfIssuer: true
             }
         ];
     });
@@ -376,6 +458,8 @@ export const AccountingReviewModal: React.FC<Props> = ({
                     getEffectiveApiUrl(`/api/sayan/cheque-receipts/persons?query=${encodeURIComponent(editPersonQuery.trim())}&fiscalYear=${fiscalYear}`),
                     { headers }
                 );
+                const ct = res.headers.get('content-type') || '';
+                if (!res.ok || !ct.includes('application/json')) return;
                 const data = await res.json();
                 if (data.success && Array.isArray(data.persons)) {
                     setEditPersonResults(data.persons);
@@ -406,6 +490,10 @@ export const AccountingReviewModal: React.FC<Props> = ({
             return null;
         }
 
+        const sanitizedAttachments = (editAttachments || []).map(att =>
+            att?.url ? { ...att, fileData: undefined } : att
+        );
+
         return {
             receiptNo: editReceiptNo.trim(),
             personCode: finalPersonCode,
@@ -417,16 +505,22 @@ export const AccountingReviewModal: React.FC<Props> = ({
             description: editDescription,
             totalAmount: editTotalAmount,
             cheques: editCheques.map((ch, idx) => ({
+                id: ch.id,
                 chequeNumber: ch.chequeNumber,
+                sayadId: ch.sayadId || '',
                 amount: Number(ch.amount) || 0,
                 dueDate: ch.dueDate,
                 bankName: ch.bankName,
                 inNameOf: ch.inNameOf || finalPersonName,
+                accountNo: ch.accountNo || '',
                 poshtNomreh: editPoshtNomreh,
                 rowSeq: idx + 1,
-                description: ch.description
+                description: ch.description,
+                registrationType: ch.registrationType || '',
+                registeredPersonName: ch.registrationType === 'person' ? (ch.registeredPersonName || '').trim() : '',
+                isCustomerSelfIssuer: Boolean(ch.isCustomerSelfIssuer)
             })),
-            attachments: editAttachments,
+            attachments: sanitizedAttachments,
             accountingNote
         };
     };
@@ -684,12 +778,16 @@ export const AccountingReviewModal: React.FC<Props> = ({
                                         {
                                             id: String(Date.now()),
                                             chequeNumber: '',
+                                            sayadId: '',
                                             amount: '',
                                             dueDate: new Date().toISOString().slice(0, 10),
                                             bankName: 'سامان',
                                             inNameOf: editPerson ? editPerson.fullName : receipt.personName || '',
                                             accountNo: '',
-                                            description: ''
+                                            description: '',
+                                            registrationType: '',
+                                            registeredPersonName: '',
+                                            isCustomerSelfIssuer: true
                                         }
                                     ]);
                                 }}

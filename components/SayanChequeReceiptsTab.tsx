@@ -6,13 +6,14 @@ import {
     FileCheck, ArrowRight, ExternalLink, X, ChevronDown, Check, Sparkles,
     Hash, Layers, ShieldAlert, ArrowUpRight, Copy, Printer, Edit3, CornerUpLeft,
     CheckSquare, FileText, ArrowLeft, Settings2, Sliders, Zap, Loader2,
-    CalendarDays, ChevronRight, ChevronLeft
+    CalendarDays, ChevronRight, ChevronLeft, Filter, ArrowUpDown, ArrowUp, ArrowDown,
+    RotateCcw, UserCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as jalaali from 'jalaali-js';
 import { UserRole } from '../types';
 import { getRolePermissions } from '../services/authService';
-import { ChequeItemRow, ChequeItemInput, COMMON_IRANIAN_BANKS, normalizeToAsciiDigits, toShamsiStr, fromShamsiStr } from './sayan-cheques/ChequeItemRow';
+import { ChequeItemRow, ChequeItemInput, COMMON_IRANIAN_BANKS, normalizeToAsciiDigits, toShamsiStr, fromShamsiStr, getChequeRegistrationLabel, getChequeIssuerLabel } from './sayan-cheques/ChequeItemRow';
 // @ts-ignore
 import DatePicker from "react-multi-date-picker";
 // @ts-ignore
@@ -49,25 +50,37 @@ interface ChequeReceiptRecord {
     archiveCode: string | number;
     poshtNomreh: string;
     docDate: string;
+    docDateShamsi?: string;
     personCode: string;
     personName: string;
+    cashboxCode?: string;
+    cashboxTitle?: string;
     totalAmount: number;
     description: string;
     cheques: Array<{
+        id?: string;
         chequeId?: string;
         rowId?: string;
         chequeNumber: string;
+        sayadId?: string;
         amount: number;
         dueDate: string;
         bankName: string;
         inNameOf: string;
+        accountNo?: string;
         poshtNomreh?: string;
         description?: string;
+        registrationType?: 'company' | 'person' | 'unregistered' | '';
+        registeredPersonName?: string;
+        isCustomerSelfIssuer?: boolean;
+        rowSeq?: number;
     }>;
     attachments?: Array<{
         fileName: string;
-        fileData: string;
+        fileData?: string;
+        url?: string;
         fileType?: string;
+        fileSize?: number;
         uploadedAt?: string;
     }>;
     accountingReview?: {
@@ -86,6 +99,7 @@ interface ChequeReceiptRecord {
     sayanDocNo?: number;
     sayanArchiveCode?: number;
     sayanRegisteredAt?: string;
+    registeredAt?: string;
     createdAt?: string;
     createdByName?: string;
 }
@@ -169,11 +183,31 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         return fetch(url, { ...options, headers });
     };
 
+    const safeParseJson = async (res: Response): Promise<any> => {
+        const rawText = await res.text();
+        const trimmed = rawText.trim();
+        if (!trimmed) {
+            if (!res.ok) throw new Error(`خطای سرور (کد ${res.status})`);
+            return {};
+        }
+        if (trimmed.startsWith('<')) {
+            if (res.status === 413) {
+                throw new Error('حجم اطلاعات یا فایل‌های پیوست بیش از حد مجاز سرور است. لطفاً فایل با حجم کمتر انتخاب کنید.');
+            }
+            throw new Error(`سرور پاسخ نامعتبر برگرداند (کد وضعیت ${res.status || 500}). لطفاً دوباره تلاش کنید.`);
+        }
+        try {
+            return JSON.parse(trimmed);
+        } catch {
+            throw new Error(`پاسخ نامعتبر از سرور دریافت شد (کد وضعیت ${res.status}).`);
+        }
+    };
+
     const fetchWorkflowConfig = async () => {
         try {
             const res = await apiFetch('/api/sayan/cheque-receipts/workflow-config');
             if (res.ok) {
-                const data = await res.json();
+                const data = await safeParseJson(res);
                 if (data.success && data.config) {
                     setWorkflowConfig(data.config);
                     if (Array.isArray(data.users)) setSystemUsersList(data.users);
@@ -280,7 +314,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     const fetchCashboxes = async () => {
         try {
             const res = await apiFetch('/api/sayan/cheque-receipts/cashboxes');
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success && Array.isArray(data.cashboxes) && data.cashboxes.length > 0) {
                 setCashboxesList(data.cashboxes);
             }
@@ -294,12 +328,16 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         {
             id: '1',
             chequeNumber: '',
+            sayadId: '',
             amount: '',
             dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
             bankName: 'سامان',
             inNameOf: '',
             accountNo: '',
-            description: ''
+            description: '',
+            registrationType: '',
+            registeredPersonName: '',
+            isCustomerSelfIssuer: true
         }
     ]);
 
@@ -310,9 +348,31 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-    // Filters & Search in Archive
+    // Advanced Filters, Multi-Criteria Search & Sorting in Archive
     const [searchTerm, setSearchTerm] = useState('');
-    const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_ACCOUNTING' | 'PENDING_CEO' | 'REGISTERED_IN_SAYAN'>('ALL');
+    const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_ACCOUNTING' | 'PENDING_CEO' | 'REGISTERED_IN_SAYAN' | 'REJECTED'>('ALL');
+    const [sayanRegFilter, setSayanRegFilter] = useState<'ALL' | 'REGISTERED' | 'UNREGISTERED' | 'PROCESSING' | 'NEEDS_REREGISTER'>('ALL');
+    const [sayadiRegTypeFilter, setSayadiRegTypeFilter] = useState<'ALL' | 'company' | 'person' | 'unregistered' | 'unspecified'>('ALL');
+    const [registeredPersonFilter, setRegisteredPersonFilter] = useState('');
+    const [issuerRelationFilter, setIssuerRelationFilter] = useState<'ALL' | 'SELF' | 'THIRD_PARTY'>('ALL');
+    const [delivererFilter, setDelivererFilter] = useState('');
+    const [inNameOfFilter, setInNameOfFilter] = useState('');
+    const [bankFilter, setBankFilter] = useState('ALL');
+    const [cashboxFilter, setCashboxFilter] = useState('ALL');
+    const [dueDateFrom, setDueDateFrom] = useState('');
+    const [dueDateTo, setDueDateTo] = useState('');
+    const [docDateFrom, setDocDateFrom] = useState('');
+    const [docDateTo, setDocDateTo] = useState('');
+    const [minAmountFilter, setMinAmountFilter] = useState('');
+    const [maxAmountFilter, setMaxAmountFilter] = useState('');
+    const [sayadFilter, setSayadFilter] = useState<'ALL' | 'HAS_SAYAD' | 'NO_SAYAD'>('ALL');
+    const [attachmentFilter, setAttachmentFilter] = useState<'ALL' | 'HAS_ATTACHMENT' | 'NO_ATTACHMENT'>('ALL');
+    const [sourceFilter, setSourceFilter] = useState<'ALL' | 'APP_DRAFT' | 'SAYAN_DB'>('ALL');
+    const [sortBy, setSortBy] = useState<
+        'receiptNo' | 'poshtNomreh' | 'docDate' | 'nearestDueDate' | 'farthestDueDate' | 'totalAmount' | 'chequeCount' | 'personName' | 'inNameOf' | 'bankName' | 'sayadiRegType' | 'issuerRelation' | 'sayanStatus'
+    >('receiptNo');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
     // Modals
     const [inspectingArchiveCode, setInspectingArchiveCode] = useState<{ archiveCode: string | number; docNo?: string | number } | null>(null);
@@ -436,7 +496,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         const localMax = getArchiveLatestSequence(listToCheck);
         try {
             const res = await apiFetch(`/api/sayan/cheque-receipts/meta?fiscalYear=${fiscalYear}`);
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 const apiNextRaw = data.nextPoshtNomreh || data.nextReceiptNo || data.nextAppReceiptNo;
                 const apiNext = extractValidReceiptSequence(apiNextRaw);
@@ -470,7 +530,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     currentUser: { id: currentUser?.id, name: currentUser?.fullName || currentUser?.name }
                 })
             });
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success && data.receipt) {
                 setReceiptsList(prev => prev.map(r => r.id === receiptId ? data.receipt : r));
                 setEditingReceiptNoItem(null);
@@ -490,7 +550,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         if (!silent) setLoadingReceipts(true);
         try {
             const res = await apiFetch(`/api/sayan/cheque-receipts?fiscalYear=${fiscalYear}`);
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success && Array.isArray(data.data)) {
                 setReceiptsList(prev => {
                     if (prev.length === data.data.length && JSON.stringify(prev) === JSON.stringify(data.data)) {
@@ -575,7 +635,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         setSearchingPersons(true);
         try {
             const res = await apiFetch(`/api/sayan/cheque-receipts/persons?query=${encodeURIComponent(q)}&fiscalYear=${fiscalYear}${force ? '&force=true' : ''}`);
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success && Array.isArray(data.persons)) {
                 setPersonSearchResults(data.persons);
                 if (data.persons.length > 0) {
@@ -854,12 +914,16 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             {
                 id: newId,
                 chequeNumber: '',
+                sayadId: '',
                 amount: '',
                 dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
                 bankName: 'سامان',
                 inNameOf: selectedPerson ? selectedPerson.fullName : '',
                 accountNo: '',
-                description: ''
+                description: '',
+                registrationType: '',
+                registeredPersonName: '',
+                isCustomerSelfIssuer: true
             }
         ]);
         if (autoFocus) {
@@ -868,6 +932,41 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             }, 50);
         }
     };
+
+    const handleDuplicateChequeRow = (index: number) => {
+        const source = chequeRows[index];
+        if (!source) return;
+        const newId = String(Date.now()) + '_' + Math.random().toString(36).slice(2, 6);
+        setChequeRows(prev => {
+            const next = [...prev];
+            next.splice(index + 1, 0, {
+                ...source,
+                id: newId,
+                chequeNumber: '',
+                sayadId: ''
+            });
+            return next;
+        });
+        setTimeout(() => {
+            document.getElementById(`cheque-${index + 1}-number`)?.focus();
+        }, 50);
+    };
+
+    const registeredPersonSuggestions = useMemo(() => {
+        const names = new Set<string>();
+        chequeRows.forEach(r => {
+            if (r.registeredPersonName?.trim()) names.add(r.registeredPersonName.trim());
+        });
+        receiptsList.forEach(rec => {
+            (rec.cheques || []).forEach(c => {
+                if (c.registeredPersonName?.trim()) names.add(c.registeredPersonName.trim());
+            });
+        });
+        allPersonsCache.forEach(p => {
+            if (p.fullName?.trim()) names.add(p.fullName.trim());
+        });
+        return Array.from(names).slice(0, 60);
+    }, [chequeRows, receiptsList, allPersonsCache]);
 
     const handleDeleteChequeRow = (index: number) => {
         if (chequeRows.length <= 1) return;
@@ -897,7 +996,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         })
                     });
                     if (uploadRes.ok) {
-                        const json = await uploadRes.json();
+                        const json = await safeParseJson(uploadRes);
                         serverUrl = json.url || '';
                     }
                 } catch (err) {
@@ -932,34 +1031,61 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             return;
         }
 
-        if (chequeRows.some(r => !r.chequeNumber.trim() || !r.amount)) {
+        if (chequeRows.some(r => !String(r.chequeNumber || '').trim() || !r.amount)) {
             setErrorMessage('شماره چک و مبلغ برای تمامی ردیف‌های چک الزامی است.');
             return;
+        }
+
+        for (let i = 0; i < chequeRows.length; i++) {
+            const r = chequeRows[i];
+            if (!r.registrationType) {
+                setErrorMessage(`لطفاً وضعیت ثبت صیادی (به نام شرکت، به نام شخص یا ثبت نشده) را برای ردیف چک ${toPersianDigits(i + 1)} انتخاب نمایید.`);
+                document.getElementById(`cheque-${i}-number`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return;
+            }
+            if (r.registrationType === 'person' && !String(r.registeredPersonName || '').trim()) {
+                setErrorMessage(`لطفاً نام شخص ثبت‌شده در صیاد را برای ردیف چک ${toPersianDigits(i + 1)} وارد نمایید.`);
+                document.getElementById(`cheque-${i}-registeredPersonName`)?.focus();
+                return;
+            }
         }
 
         setActionLoading('submit_new');
 
         try {
+            const sanitizedAttachments = (attachments || []).map(att =>
+                att.url ? { ...att, fileData: undefined } : att
+            );
+            const resolvedDocDate = fromShamsiStr(docDateShamsi) || new Date().toISOString().slice(0, 10);
+
             const payload = {
                 fiscalYear,
                 receiptNo: receiptNoInput.trim() || undefined,
                 poshtNomreh: poshtNomreh.trim() || '1',
+                docDate: resolvedDocDate,
+                docDateShamsi: docDateShamsi.trim(),
                 personCode: selectedPerson ? selectedPerson.personCode : '101',
                 personName: selectedPerson ? selectedPerson.fullName : personQuery.trim(),
                 cashboxCode,
                 totalAmount: sumChequesAmount,
                 description: description.trim() || `رسید دریافت چک - ${selectedPerson?.fullName || personQuery}`,
                 cheques: chequeRows.map((r, idx) => ({
-                    chequeNumber: r.chequeNumber.trim(),
+                    id: r.id,
+                    chequeNumber: String(r.chequeNumber || '').trim(),
+                    sayadId: normalizeToAsciiDigits(r.sayadId || '').replace(/[^0-9]/g, '').slice(0, 16),
                     amount: Number(r.amount),
                     dueDate: r.dueDate,
                     bankName: r.bankName.trim() || 'سامان',
                     inNameOf: r.inNameOf.trim() || (selectedPerson?.fullName || personQuery.trim()),
+                    accountNo: String(r.accountNo || '').trim(),
                     poshtNomreh: poshtNomreh.trim() || '1',
                     rowSeq: idx + 1,
-                    description: r.description?.trim() || ''
+                    description: r.description?.trim() || '',
+                    registrationType: r.registrationType || '',
+                    registeredPersonName: r.registrationType === 'person' ? String(r.registeredPersonName || '').trim() : '',
+                    isCustomerSelfIssuer: Boolean(r.isCustomerSelfIssuer)
                 })),
-                attachments,
+                attachments: sanitizedAttachments,
                 createdByName: currentUser?.name || 'کاربر سیستم'
             };
 
@@ -969,7 +1095,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 body: JSON.stringify(payload)
             });
 
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 const createdReceipt = {
                     ...(data.receipt || {}),
@@ -982,9 +1108,10 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     cashboxTitle: cashboxesList.find(b => b.code === cashboxCode)?.title || 'صندوق چک',
                     totalAmount: payload.totalAmount,
                     description: payload.description,
+                    docDate: payload.docDate,
                     docDateShamsi: docDateShamsi,
                     createdAt: new Date().toISOString(),
-                    cheques: payload.cheques,
+                    cheques: data.receipt?.cheques || payload.cheques,
                     attachments: (data.receipt?.attachments && data.receipt.attachments.length > 0) ? data.receipt.attachments : payload.attachments,
                     status: data.receipt?.status || 'PENDING_ACCOUNTING',
                     createdByName: currentUser?.name || 'ثبت‌کننده'
@@ -1013,12 +1140,16 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     {
                         id: '1',
                         chequeNumber: '',
+                        sayadId: '',
                         amount: '',
                         dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
                         bankName: 'سامان',
                         inNameOf: '',
                         accountNo: '',
-                        description: ''
+                        description: '',
+                        registrationType: '',
+                        registeredPersonName: '',
+                        isCustomerSelfIssuer: true
                     }
                 ]);
                 fetchReceipts(true);
@@ -1052,7 +1183,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 })
             });
 
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 const isCeoRequired = workflowConfig?.requireCeoApproval !== false;
                 const isAutoRegistered = !isCeoRequired && workflowConfig?.autoRegisterAfterAccounting;
@@ -1089,7 +1220,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 })
             });
 
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 setSuccessMessage(`رسید تایید شد و سند سایان با شماره ${toPersianDigits(data.sayanDocNo || data.docNo)} و کد بایگانی ${toPersianDigits(data.sayanArchiveCode || data.archiveCode)} در ERP سایان صادر گردید.`);
                 setSelectedDetailReceipt(null);
@@ -1126,7 +1257,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 })
             });
 
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 setSuccessMessage('رسید چک عودت داده شد.');
                 setSelectedDetailReceipt(null);
@@ -1151,7 +1282,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 body: JSON.stringify({ receiptId })
             });
 
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 setSuccessMessage('رسید دریافت چک با موفقیت حذف گردید.');
                 setSelectedDetailReceipt(null);
@@ -1176,7 +1307,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ fiscalYear })
             });
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 setSuccessMessage(data.message || `${data.count} رسید اصلاح و آماده ثبت مجدد در سایان گردید.`);
                 fetchReceipts(true);
@@ -1199,7 +1330,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ receiptId, currentUser })
             });
-            const data = await res.json();
+            const data = await safeParseJson(res);
             if (data.success) {
                 setSuccessMessage(`رسید با موفقیت در سایان ثبت شد. شماره سند: ${toPersianDigits(data.docNo || '-')}، کد بایگانی: ${toPersianDigits(data.archiveCode || '-')}`);
                 setSelectedDetailReceipt(null);
@@ -1235,24 +1366,420 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         return () => clearInterval(interval);
     }, [receiptsList]);
 
-    const archiveList = useMemo(() => {
-        return receiptsList.filter(r => {
-            const matchSearch = !searchTerm ||
-                r.personName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                String(r.poshtNomreh || '').includes(searchTerm) ||
-                String(r.docNo || '').includes(searchTerm) ||
-                String(r.archiveCode || '').includes(searchTerm) ||
-                r.cheques?.some(c => c.chequeNumber?.includes(searchTerm));
+    // Archive Helpers: Shamsi normalization, self-issuer resolution, simultaneous filtering & multi-parameter sorting
+    const normalizeFilterShamsi = (val?: string | Date | null): string => {
+        if (!val) return '';
+        const shamsi = toShamsiStr(val);
+        const ascii = normalizeToAsciiDigits(shamsi).trim();
+        const match = ascii.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+        if (match) {
+            return `${match[1]}/${match[2].padStart(2, '0')}/${match[3].padStart(2, '0')}`;
+        }
+        return '';
+    };
 
-            if (!matchSearch) return false;
+    const resolveChequeSelfIssuer = (r: ChequeReceiptRecord, c: NonNullable<ChequeReceiptRecord['cheques']>[number]): boolean | null => {
+        if (c.isCustomerSelfIssuer === true) return true;
+        if (c.isCustomerSelfIssuer === false) return false;
+        const pName = normalizeSearchText(r.personName || '');
+        const inName = normalizeSearchText(c.inNameOf || '');
+        if (pName && inName) {
+            return pName === inName || pName.includes(inName) || inName.includes(pName);
+        }
+        return null;
+    };
 
-            if (statusFilter === 'ALL') return true;
-            if (statusFilter === 'REGISTERED_IN_SAYAN') {
-                return r.status === 'REGISTERED_IN_SAYAN' || r.status === 'PROCESSING_SAYAN';
-            }
-            return r.status === statusFilter;
+    const isNeedsSayanReregister = (r: ChequeReceiptRecord): boolean => {
+        return String(r.docNo) === '1' || String(r.archiveCode) === '1';
+    };
+
+    const isProcessingSayan = (r: ChequeReceiptRecord): boolean => {
+        return r.status === 'PROCESSING_SAYAN' || r.sayanSyncStatus === 'QUEUED' || r.sayanSyncStatus === 'PROCESSING';
+    };
+
+    const isRegisteredInSayan = (r: ChequeReceiptRecord): boolean => {
+        return !isNeedsSayanReregister(r) && !isProcessingSayan(r) && (r.status === 'REGISTERED_IN_SAYAN' || r.source === 'SAYAN_DB');
+    };
+
+    const availableArchiveBanks = useMemo(() => {
+        const set = new Set<string>(COMMON_IRANIAN_BANKS);
+        receiptsList.forEach(r => {
+            (r.cheques || []).forEach(c => {
+                if (c.bankName && c.bankName.trim()) set.add(c.bankName.trim());
+            });
         });
-    }, [receiptsList, searchTerm, statusFilter]);
+        return Array.from(set);
+    }, [receiptsList]);
+
+    const archivePersonSuggestions = useMemo(() => {
+        const set = new Set<string>();
+        receiptsList.forEach(r => {
+            if (r.personName?.trim()) set.add(r.personName.trim());
+        });
+        return Array.from(set).slice(0, 120);
+    }, [receiptsList]);
+
+    const archiveInNameOfSuggestions = useMemo(() => {
+        const set = new Set<string>();
+        receiptsList.forEach(r => {
+            (r.cheques || []).forEach(c => {
+                if (c.inNameOf?.trim()) set.add(c.inNameOf.trim());
+            });
+        });
+        return Array.from(set).slice(0, 120);
+    }, [receiptsList]);
+
+    const archiveRegisteredPersonSuggestions = useMemo(() => {
+        const set = new Set<string>();
+        receiptsList.forEach(r => {
+            (r.cheques || []).forEach(c => {
+                if (c.registeredPersonName?.trim()) set.add(c.registeredPersonName.trim());
+            });
+        });
+        return Array.from(set).slice(0, 120);
+    }, [receiptsList]);
+
+    const activeFilterCount = useMemo(() => {
+        let count = 0;
+        if (searchTerm.trim()) count++;
+        if (statusFilter !== 'ALL') count++;
+        if (sayanRegFilter !== 'ALL') count++;
+        if (sayadiRegTypeFilter !== 'ALL') count++;
+        if (registeredPersonFilter.trim()) count++;
+        if (issuerRelationFilter !== 'ALL') count++;
+        if (delivererFilter.trim()) count++;
+        if (inNameOfFilter.trim()) count++;
+        if (bankFilter !== 'ALL') count++;
+        if (cashboxFilter !== 'ALL') count++;
+        if (dueDateFrom.trim()) count++;
+        if (dueDateTo.trim()) count++;
+        if (docDateFrom.trim()) count++;
+        if (docDateTo.trim()) count++;
+        if (minAmountFilter.trim()) count++;
+        if (maxAmountFilter.trim()) count++;
+        if (sayadFilter !== 'ALL') count++;
+        if (attachmentFilter !== 'ALL') count++;
+        if (sourceFilter !== 'ALL') count++;
+        return count;
+    }, [
+        searchTerm, statusFilter, sayanRegFilter, sayadiRegTypeFilter, registeredPersonFilter,
+        issuerRelationFilter, delivererFilter, inNameOfFilter, bankFilter, cashboxFilter,
+        dueDateFrom, dueDateTo, docDateFrom, docDateTo, minAmountFilter, maxAmountFilter,
+        sayadFilter, attachmentFilter, sourceFilter
+    ]);
+
+    const resetArchiveFilters = () => {
+        setSearchTerm('');
+        setStatusFilter('ALL');
+        setSayanRegFilter('ALL');
+        setSayadiRegTypeFilter('ALL');
+        setRegisteredPersonFilter('');
+        setIssuerRelationFilter('ALL');
+        setDelivererFilter('');
+        setInNameOfFilter('');
+        setBankFilter('ALL');
+        setCashboxFilter('ALL');
+        setDueDateFrom('');
+        setDueDateTo('');
+        setDocDateFrom('');
+        setDocDateTo('');
+        setMinAmountFilter('');
+        setMaxAmountFilter('');
+        setSayadFilter('ALL');
+        setAttachmentFilter('ALL');
+        setSourceFilter('ALL');
+    };
+
+    const archiveList = useMemo(() => {
+        const qNorm = normalizeSearchText(searchTerm);
+        const qAscii = normalizeToAsciiDigits(searchTerm).trim().toLowerCase();
+        const delivNorm = normalizeSearchText(delivererFilter);
+        const delivAscii = normalizeToAsciiDigits(delivererFilter).trim().toLowerCase();
+        const inNameNorm = normalizeSearchText(inNameOfFilter);
+        const regPersonNorm = normalizeSearchText(registeredPersonFilter);
+        const normDueFrom = normalizeFilterShamsi(dueDateFrom);
+        const normDueTo = normalizeFilterShamsi(dueDateTo);
+        const normDocFrom = normalizeFilterShamsi(docDateFrom);
+        const normDocTo = normalizeFilterShamsi(docDateTo);
+        const minAmt = minAmountFilter.trim() ? Number(normalizeToAsciiDigits(minAmountFilter).replace(/[^\d]/g, '')) : null;
+        const maxAmt = maxAmountFilter.trim() ? Number(normalizeToAsciiDigits(maxAmountFilter).replace(/[^\d]/g, '')) : null;
+
+        const filtered = receiptsList.filter(r => {
+            const cheques = Array.isArray(r.cheques) ? r.cheques : [];
+
+            // 1. Global multi-field search
+            if (qAscii || qNorm) {
+                const matchHeader =
+                    normalizeSearchText(r.personName || '').includes(qNorm) ||
+                    String(r.personCode || '').toLowerCase().includes(qAscii) ||
+                    normalizeToAsciiDigits(String(r.receiptNo || '')).toLowerCase().includes(qAscii) ||
+                    normalizeToAsciiDigits(String(r.poshtNomreh || '')).toLowerCase().includes(qAscii) ||
+                    normalizeToAsciiDigits(String(r.docNo || '')).toLowerCase().includes(qAscii) ||
+                    normalizeToAsciiDigits(String(r.archiveCode || '')).toLowerCase().includes(qAscii) ||
+                    normalizeSearchText(r.description || '').includes(qNorm) ||
+                    normalizeSearchText(r.createdByName || '').includes(qNorm);
+
+                const matchCheques = cheques.some(c =>
+                    normalizeToAsciiDigits(String(c.chequeNumber || '')).toLowerCase().includes(qAscii) ||
+                    normalizeToAsciiDigits(String(c.sayadId || '')).toLowerCase().includes(qAscii) ||
+                    normalizeSearchText(c.bankName || '').includes(qNorm) ||
+                    normalizeSearchText(c.inNameOf || '').includes(qNorm) ||
+                    normalizeSearchText(c.registeredPersonName || '').includes(qNorm) ||
+                    normalizeSearchText(c.description || '').includes(qNorm)
+                );
+
+                if (!matchHeader && !matchCheques) return false;
+            }
+
+            // 2. Process status filter
+            if (statusFilter !== 'ALL') {
+                if (statusFilter === 'REGISTERED_IN_SAYAN') {
+                    if (r.status !== 'REGISTERED_IN_SAYAN' && r.status !== 'PROCESSING_SAYAN') return false;
+                } else if (r.status !== statusFilter) {
+                    return false;
+                }
+            }
+
+            // 3. Sayan registration status filter (ثبت شده / ثبت نشده در سایان)
+            if (sayanRegFilter !== 'ALL') {
+                if (sayanRegFilter === 'REGISTERED' && !isRegisteredInSayan(r)) return false;
+                if (sayanRegFilter === 'UNREGISTERED' && (isRegisteredInSayan(r) || isProcessingSayan(r))) return false;
+                if (sayanRegFilter === 'PROCESSING' && !isProcessingSayan(r)) return false;
+                if (sayanRegFilter === 'NEEDS_REREGISTER' && !isNeedsSayanReregister(r)) return false;
+            }
+
+            // 4. Sayadi registration type filter (به نام شرکت / شخص / ثبت نشده / نامشخص)
+            if (sayadiRegTypeFilter !== 'ALL') {
+                const matchType = cheques.some(c => {
+                    const rt = c.registrationType || '';
+                    if (sayadiRegTypeFilter === 'unspecified') return !rt;
+                    return rt === sayadiRegTypeFilter;
+                });
+                if (!matchType) return false;
+            }
+
+            // 5. Registered person name (نام شخص ثبت‌شده در صیاد)
+            if (regPersonNorm) {
+                const matchRegPerson = cheques.some(c =>
+                    normalizeSearchText(c.registeredPersonName || '').includes(regPersonNorm)
+                );
+                if (!matchRegPerson) return false;
+            }
+
+            // 6. Customer self-issuer vs third party (صاحب چک با تحویل‌دهنده یکی است؟)
+            if (issuerRelationFilter !== 'ALL') {
+                const matchIssuer = cheques.some(c => {
+                    const rel = resolveChequeSelfIssuer(r, c);
+                    if (issuerRelationFilter === 'SELF') return rel === true;
+                    if (issuerRelationFilter === 'THIRD_PARTY') return rel === false;
+                    return false;
+                });
+                if (!matchIssuer) return false;
+            }
+
+            // 7. Deliverer / Person name or code (نام تحویل‌دهنده چک / طرف حساب)
+            if (delivNorm || delivAscii) {
+                const matchDeliverer =
+                    normalizeSearchText(r.personName || '').includes(delivNorm) ||
+                    String(r.personCode || '').toLowerCase().includes(delivAscii);
+                if (!matchDeliverer) return false;
+            }
+
+            // 8. In Name Of (صاحب چک / در وجه / صادرکننده)
+            if (inNameNorm) {
+                const matchInName = cheques.some(c =>
+                    normalizeSearchText(c.inNameOf || '').includes(inNameNorm)
+                );
+                if (!matchInName) return false;
+            }
+
+            // 9. Bank filter
+            if (bankFilter !== 'ALL') {
+                const normTargetBank = normalizeSearchText(bankFilter);
+                const matchBank = cheques.some(c => normalizeSearchText(c.bankName || '') === normTargetBank || normalizeSearchText(c.bankName || '').includes(normTargetBank));
+                if (!matchBank) return false;
+            }
+
+            // 10. Cashbox filter
+            if (cashboxFilter !== 'ALL') {
+                if (String(r.cashboxCode || '').trim() !== cashboxFilter) return false;
+            }
+
+            // 11. Cheque Due Date range (Shamsi)
+            if (normDueFrom || normDueTo) {
+                const matchDue = cheques.some(c => {
+                    const cShamsi = normalizeFilterShamsi(c.dueDate);
+                    if (!cShamsi) return false;
+                    if (normDueFrom && cShamsi < normDueFrom) return false;
+                    if (normDueTo && cShamsi > normDueTo) return false;
+                    return true;
+                });
+                if (!matchDue) return false;
+            }
+
+            // 12. Receipt Doc Date range (Shamsi)
+            if (normDocFrom || normDocTo) {
+                const rShamsi = normalizeFilterShamsi(r.docDateShamsi || r.docDate || r.createdAt);
+                if (!rShamsi) return false;
+                if (normDocFrom && rShamsi < normDocFrom) return false;
+                if (normDocTo && rShamsi > normDocTo) return false;
+            }
+
+            // 13. Amount range (Rial)
+            const totalAmt = Number(r.totalAmount || 0);
+            if (minAmt !== null && !isNaN(minAmt) && totalAmt < minAmt) return false;
+            if (maxAmt !== null && !isNaN(maxAmt) && totalAmt > maxAmt) return false;
+
+            // 14. Sayad ID presence filter
+            if (sayadFilter !== 'ALL') {
+                const hasSayad = cheques.some(c => Boolean(c.sayadId && String(c.sayadId).trim().length > 0));
+                if (sayadFilter === 'HAS_SAYAD' && !hasSayad) return false;
+                if (sayadFilter === 'NO_SAYAD' && hasSayad) return false;
+            }
+
+            // 15. Attachments filter
+            if (attachmentFilter !== 'ALL') {
+                const hasAtt = Array.isArray(r.attachments) && r.attachments.length > 0;
+                if (attachmentFilter === 'HAS_ATTACHMENT' && !hasAtt) return false;
+                if (attachmentFilter === 'NO_ATTACHMENT' && hasAtt) return false;
+            }
+
+            // 16. Source filter (APP_DRAFT vs SAYAN_DB)
+            if (sourceFilter !== 'ALL') {
+                if (r.source !== sourceFilter) return false;
+            }
+
+            return true;
+        });
+
+        // Multi-parameter sorting
+        const regOrder: Record<string, number> = { company: 1, person: 2, unregistered: 3 };
+        const sayanStatusOrder = (rec: ChequeReceiptRecord): number => {
+            if (isRegisteredInSayan(rec)) return 4;
+            if (isProcessingSayan(rec)) return 3;
+            if (isNeedsSayanReregister(rec)) return 2;
+            if (rec.status === 'PENDING_CEO') return 1;
+            return 0;
+        };
+
+        const getNearestDue = (rec: ChequeReceiptRecord): string => {
+            const dates = (rec.cheques || []).map(c => normalizeFilterShamsi(c.dueDate)).filter(Boolean).sort();
+            return dates[0] || '';
+        };
+        const getFarthestDue = (rec: ChequeReceiptRecord): string => {
+            const dates = (rec.cheques || []).map(c => normalizeFilterShamsi(c.dueDate)).filter(Boolean).sort();
+            return dates[dates.length - 1] || '';
+        };
+        const getNumSeq = (val: any, fallback = 0): number => {
+            const clean = normalizeToAsciiDigits(String(val || '')).replace(/[^\d]/g, '');
+            return clean ? parseInt(clean, 10) : fallback;
+        };
+
+        const dirMult = sortDir === 'asc' ? 1 : -1;
+
+        return [...filtered].sort((a, b) => {
+            let cmp = 0;
+            switch (sortBy) {
+                case 'receiptNo': {
+                    const aVal = getNumSeq(a.receiptNo || a.docNo || a.archiveCode);
+                    const bVal = getNumSeq(b.receiptNo || b.docNo || b.archiveCode);
+                    cmp = aVal - bVal;
+                    break;
+                }
+                case 'poshtNomreh': {
+                    cmp = getNumSeq(a.poshtNomreh) - getNumSeq(b.poshtNomreh);
+                    break;
+                }
+                case 'docDate': {
+                    const aDate = normalizeFilterShamsi(a.docDateShamsi || a.docDate || a.createdAt);
+                    const bDate = normalizeFilterShamsi(b.docDateShamsi || b.docDate || b.createdAt);
+                    cmp = aDate.localeCompare(bDate);
+                    break;
+                }
+                case 'nearestDueDate': {
+                    const aDue = getNearestDue(a) || '9999/99/99';
+                    const bDue = getNearestDue(b) || '9999/99/99';
+                    cmp = aDue.localeCompare(bDue);
+                    break;
+                }
+                case 'farthestDueDate': {
+                    const aDue = getFarthestDue(a) || '0000/00/00';
+                    const bDue = getFarthestDue(b) || '0000/00/00';
+                    cmp = aDue.localeCompare(bDue);
+                    break;
+                }
+                case 'totalAmount': {
+                    cmp = Number(a.totalAmount || 0) - Number(b.totalAmount || 0);
+                    break;
+                }
+                case 'chequeCount': {
+                    cmp = (a.cheques?.length || 0) - (b.cheques?.length || 0);
+                    break;
+                }
+                case 'personName': {
+                    cmp = String(a.personName || '').localeCompare(String(b.personName || ''), 'fa');
+                    break;
+                }
+                case 'inNameOf': {
+                    const aIn = a.cheques?.[0]?.inNameOf || a.personName || '';
+                    const bIn = b.cheques?.[0]?.inNameOf || b.personName || '';
+                    cmp = String(aIn).localeCompare(String(bIn), 'fa');
+                    break;
+                }
+                case 'bankName': {
+                    const aBank = a.cheques?.[0]?.bankName || '';
+                    const bBank = b.cheques?.[0]?.bankName || '';
+                    cmp = String(aBank).localeCompare(String(bBank), 'fa');
+                    break;
+                }
+                case 'sayadiRegType': {
+                    const aReg = regOrder[a.cheques?.[0]?.registrationType || ''] || 99;
+                    const bReg = regOrder[b.cheques?.[0]?.registrationType || ''] || 99;
+                    cmp = aReg - bReg;
+                    break;
+                }
+                case 'issuerRelation': {
+                    const aRel = a.cheques?.[0] ? (resolveChequeSelfIssuer(a, a.cheques[0]) === true ? 1 : resolveChequeSelfIssuer(a, a.cheques[0]) === false ? 2 : 3) : 3;
+                    const bRel = b.cheques?.[0] ? (resolveChequeSelfIssuer(b, b.cheques[0]) === true ? 1 : resolveChequeSelfIssuer(b, b.cheques[0]) === false ? 2 : 3) : 3;
+                    cmp = aRel - bRel;
+                    break;
+                }
+                case 'sayanStatus': {
+                    cmp = sayanStatusOrder(a) - sayanStatusOrder(b);
+                    break;
+                }
+            }
+            if (cmp !== 0) return cmp * dirMult;
+            // Secondary tie-breaker: receiptNo desc
+            return (getNumSeq(b.receiptNo || b.docNo) - getNumSeq(a.receiptNo || a.docNo));
+        });
+    }, [
+        receiptsList, searchTerm, statusFilter, sayanRegFilter, sayadiRegTypeFilter,
+        registeredPersonFilter, issuerRelationFilter, delivererFilter, inNameOfFilter,
+        bankFilter, cashboxFilter, dueDateFrom, dueDateTo, docDateFrom, docDateTo,
+        minAmountFilter, maxAmountFilter, sayadFilter, attachmentFilter, sourceFilter,
+        sortBy, sortDir
+    ]);
+
+    const archiveStats = useMemo(() => {
+        let totalCheques = 0;
+        let totalAmount = 0;
+        let registeredCount = 0;
+        let unregisteredCount = 0;
+        archiveList.forEach(r => {
+            totalCheques += r.cheques?.length || 1;
+            totalAmount += Number(r.totalAmount || 0);
+            if (isRegisteredInSayan(r)) registeredCount++;
+            else unregisteredCount++;
+        });
+        return {
+            receiptsCount: archiveList.length,
+            totalCheques,
+            totalAmount,
+            registeredCount,
+            unregisteredCount
+        };
+    }, [archiveList]);
 
     return (
         <div className="space-y-6">
@@ -1867,6 +2394,9 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                     onDelete={handleDeleteChequeRow}
                                     onEnterNext={handleEnterNext}
                                     onArrowNavigate={handleArrowNavigate}
+                                    onDuplicateRow={handleDuplicateChequeRow}
+                                    onAddRowBelow={() => handleAddChequeRow(true)}
+                                    registeredPersonSuggestions={registeredPersonSuggestions}
                                 />
                             ))}
                         </div>
@@ -1933,9 +2463,10 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     {/* Submit Button */}
                     <div className="flex items-center justify-end gap-3 pt-2">
                         <button
+                            id="btn-submit-cheque-receipt"
                             type="submit"
                             disabled={actionLoading === 'submit_new'}
-                            className="px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-sm flex items-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
+                            className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
                         >
                             <ShieldCheck className="w-5 h-5" />
                             <span>
@@ -2408,70 +2939,102 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
             {/* Sub-tab 4: ARCHIVE & REAL SAYAN LIVE INSPECTOR */}
             {activeSubTab === 'ARCHIVE' && (
-                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs space-y-4">
-                    {/* Filter & Search Bar */}
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
-                        <div className="relative w-full sm:w-80">
-                            <input
-                                type="text"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                placeholder="جستجو در طرف حساب، شماره چک، سند، پشت نمره..."
-                                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl pr-9 pl-3 py-2 text-xs outline-none focus:border-emerald-500"
-                            />
-                            <Search className="w-4 h-4 absolute right-3 top-2.5 text-slate-400" />
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-xs space-y-4">
+                    {/* Top Row: Search + Sayan Registration Quick Filter + Advanced Filter Toggle + Sort Controls */}
+                    <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1">
+                            <div className="relative flex-1 min-w-[240px]">
+                                <input
+                                    type="text"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    placeholder="جستجوی جامع (تحویل‌دهنده، صاحب چک، شخص ثبت‌شده صیادی، شماره چک، صیاد، رسید، پشت‌نمره، سند)..."
+                                    className="w-full min-h-[42px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl pr-9 pl-8 py-2 text-xs font-medium outline-none focus:border-emerald-500 transition-colors"
+                                />
+                                <Search className="w-4 h-4 absolute right-3 top-3 text-slate-400" />
+                                {searchTerm && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setSearchTerm('')}
+                                        className="absolute left-2.5 top-3 text-slate-400 hover:text-slate-600 cursor-pointer"
+                                        title="پاک کردن جستجو"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                )}
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => setShowAdvancedFilters(v => !v)}
+                                className={`min-h-[42px] px-3.5 py-2 rounded-xl border text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0 ${
+                                    showAdvancedFilters || activeFilterCount > 0
+                                        ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-400 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300'
+                                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100'
+                                }`}
+                            >
+                                <Filter className="w-4 h-4" />
+                                <span>فیلترهای پیشرفته همزمان</span>
+                                {activeFilterCount > 0 && (
+                                    <span className="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white font-mono text-[10px]">
+                                        {toPersianDigits(activeFilterCount)}
+                                    </span>
+                                )}
+                                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {activeFilterCount > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={resetArchiveFilters}
+                                    className="min-h-[42px] px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                    <span>پاک کردن فیلترها</span>
+                                </button>
+                            )}
                         </div>
 
-                        <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto text-xs font-bold">
+                        {/* Multi-Parameter Sort Controls */}
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 min-h-[42px] flex-1 sm:flex-initial">
+                                <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                <span className="text-[11px] font-bold text-slate-500 shrink-0">مرتب‌سازی:</span>
+                                <select
+                                    value={sortBy}
+                                    onChange={(e) => setSortBy(e.target.value as any)}
+                                    className="bg-transparent text-xs font-black text-slate-800 dark:text-slate-100 outline-none cursor-pointer flex-1"
+                                >
+                                    <option value="receiptNo">شماره رسید</option>
+                                    <option value="poshtNomreh">شماره پشت‌نمره</option>
+                                    <option value="docDate">تاریخ ثبت رسید</option>
+                                    <option value="nearestDueDate">تاریخ سررسید (نزدیک‌ترین چک)</option>
+                                    <option value="farthestDueDate">تاریخ سررسید (دورترین چک)</option>
+                                    <option value="totalAmount">مبلغ کل رسید</option>
+                                    <option value="chequeCount">تعداد برگ چک</option>
+                                    <option value="personName">نام تحویل‌دهنده (طرف حساب)</option>
+                                    <option value="inNameOf">نام صاحب چک (در وجه)</option>
+                                    <option value="bankName">بانک صادرکننده</option>
+                                    <option value="sayadiRegType">وضعیت ثبت صیادی</option>
+                                    <option value="issuerRelation">صاحب چک = تحویل‌دهنده (خود/ثالث)</option>
+                                    <option value="sayanStatus">وضعیت ثبت سایان (ثبت‌شده/نشده)</option>
+                                </select>
+                            </div>
+
                             <button
                                 type="button"
-                                onClick={() => setStatusFilter('ALL')}
-                                className={`px-3 py-1.5 rounded-xl transition-colors ${
-                                    statusFilter === 'ALL'
-                                        ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
-                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600'
-                                }`}
+                                onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+                                className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+                                title={sortDir === 'asc' ? 'صعودی (تغییر به نزولی)' : 'نزولی (تغییر به صعودی)'}
                             >
-                                همه ({toPersianDigits(receiptsList.length)})
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setStatusFilter('REGISTERED_IN_SAYAN')}
-                                className={`px-3 py-1.5 rounded-xl transition-colors ${
-                                    statusFilter === 'REGISTERED_IN_SAYAN'
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600'
-                                }`}
-                            >
-                                ثبت شده در سایان
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setStatusFilter('PENDING_CEO')}
-                                className={`px-3 py-1.5 rounded-xl transition-colors ${
-                                    statusFilter === 'PENDING_CEO'
-                                        ? 'bg-amber-600 text-white'
-                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600'
-                                }`}
-                            >
-                                {workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت در سایان'}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setStatusFilter('PENDING_ACCOUNTING')}
-                                className={`px-3 py-1.5 rounded-xl transition-colors ${
-                                    statusFilter === 'PENDING_ACCOUNTING'
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600'
-                                }`}
-                            >
-                                منتظر تایید حسابداری
+                                {sortDir === 'asc' ? <ArrowUp className="w-4 h-4 text-emerald-600" /> : <ArrowDown className="w-4 h-4 text-blue-600" />}
+                                <span>{sortDir === 'asc' ? 'صعودی' : 'نزولی'}</span>
                             </button>
 
                             <button
                                 type="button"
                                 onClick={() => fetchReceipts(false)}
-                                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-600"
+                                className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer shrink-0 flex items-center justify-center"
                                 title="بروزرسانی لیست"
                             >
                                 <RefreshCw className={`w-4 h-4 ${loadingReceipts ? 'animate-spin' : ''}`} />
@@ -2479,138 +3042,861 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         </div>
                     </div>
 
-                    {/* Archive Table */}
-                    <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto">
-                        <table className="w-full text-right text-xs">
-                            <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
-                                <tr>
-                                    <th className="px-3 py-3">شماره رسید</th>
-                                    <th className="px-3 py-3">پشت‌نمره</th>
-                                    <th className="px-3 py-3">طرف حساب (شخص)</th>
-                                    <th className="px-3 py-3">مبلغ کل (ریال)</th>
-                                    <th className="px-3 py-3">تعداد چک</th>
-                                    <th className="px-3 py-3">سند / بایگانی سایان</th>
-                                    <th className="px-3 py-3">وضعیت فرآیند</th>
-                                    <th className="px-3 py-3 text-center">عملیات و استعلام</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                {archiveList.map(r => (
-                                    <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                        <td className="px-3 py-3 font-mono font-bold text-blue-600 dark:text-blue-400">
-                                            <div className="flex items-center gap-1.5">
-                                                <span>{r.receiptNo ? `#${toPersianDigits(r.receiptNo)}` : (r.docNo ? `سند ${toPersianDigits(r.docNo)}` : `#${toPersianDigits(r.id)}`)}</span>
-                                                {canEditReceipt && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            setEditingReceiptNoItem({ id: r.id, currentNo: String(r.receiptNo || r.id) });
-                                                            setTempQuickReceiptNo(String(r.receiptNo || r.id));
+                    {/* Quick Sayan Registration & Process Status Filter Strip */}
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+                        <button
+                            type="button"
+                            onClick={() => { setSayanRegFilter('ALL'); setStatusFilter('ALL'); }}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                sayanRegFilter === 'ALL' && statusFilter === 'ALL'
+                                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                        >
+                            همه ({toPersianDigits(receiptsList.length)})
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setSayanRegFilter(v => v === 'REGISTERED' ? 'ALL' : 'REGISTERED')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                sayanRegFilter === 'REGISTERED'
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60'
+                            }`}
+                        >
+                            ثبت شده در سایان
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setSayanRegFilter(v => v === 'UNREGISTERED' ? 'ALL' : 'UNREGISTERED')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                sayanRegFilter === 'UNREGISTERED'
+                                    ? 'bg-rose-600 text-white shadow-xs'
+                                    : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200/60 dark:border-rose-800/60'
+                            }`}
+                        >
+                            ثبت نشده در سایان
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter(v => v === 'PENDING_CEO' ? 'ALL' : 'PENDING_CEO')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                statusFilter === 'PENDING_CEO'
+                                    ? 'bg-amber-600 text-white shadow-xs'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                        >
+                            {workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت در سایان'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter(v => v === 'PENDING_ACCOUNTING' ? 'ALL' : 'PENDING_ACCOUNTING')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                statusFilter === 'PENDING_ACCOUNTING'
+                                    ? 'bg-blue-600 text-white shadow-xs'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                        >
+                            منتظر تایید حسابداری
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setIssuerRelationFilter(v => v === 'SELF' ? 'ALL' : 'SELF')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                issuerRelationFilter === 'SELF'
+                                    ? 'bg-teal-600 text-white shadow-xs'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                        >
+                            صاحب چک = تحویل‌دهنده
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setIssuerRelationFilter(v => v === 'THIRD_PARTY' ? 'ALL' : 'THIRD_PARTY')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                issuerRelationFilter === 'THIRD_PARTY'
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                        >
+                            چک شخص ثالث
+                        </button>
+                    </div>
+
+                    {/* Collapsible Advanced Simultaneous Multi-Filter Panel */}
+                    <AnimatePresence>
+                        {showAdvancedFilters && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="overflow-hidden"
+                            >
+                                <div className="p-4 rounded-2xl bg-slate-50/90 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-black text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                                            <Sliders className="w-4 h-4 text-emerald-600" />
+                                            <span>فیلترهای ترکیبی پیشرفته (امکان فعال‌سازی همزمان تمام فیلترها)</span>
+                                        </span>
+                                        <span className="text-[11px] text-slate-500">
+                                            نتایج مطابق با همه شروط انتخابی نمایش داده می‌شوند
+                                        </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                                        {/* 1. Sayan Registration Status */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                وضعیت ثبت در سایان
+                                            </label>
+                                            <select
+                                                value={sayanRegFilter}
+                                                onChange={(e) => setSayanRegFilter(e.target.value as any)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه وضعیت‌ها</option>
+                                                <option value="REGISTERED">ثبت شده در سایان</option>
+                                                <option value="UNREGISTERED">ثبت نشده در سایان</option>
+                                                <option value="PROCESSING">در حال ثبت پس‌زمینه</option>
+                                                <option value="NEEDS_REREGISTER">سند ۱ (نیازمند اصلاح و ثبت مجدد)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 2. Workflow Stage */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                مرحله کارتابل و تایید
+                                            </label>
+                                            <select
+                                                value={statusFilter}
+                                                onChange={(e) => setStatusFilter(e.target.value as any)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه مراحل</option>
+                                                <option value="PENDING_ACCOUNTING">منتظر تایید حسابداری</option>
+                                                <option value="PENDING_CEO">{workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت نهایی'}</option>
+                                                <option value="REGISTERED_IN_SAYAN">نهایی / ثبت‌شده</option>
+                                                <option value="REJECTED">عودت / رد شده</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 3. Sayadi Registration Status */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                وضعیت ثبت صیادی چک
+                                            </label>
+                                            <select
+                                                value={sayadiRegTypeFilter}
+                                                onChange={(e) => setSayadiRegTypeFilter(e.target.value as any)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه حالت‌های صیادی</option>
+                                                <option value="company">ثبت به نام شرکت</option>
+                                                <option value="person">ثبت به نام شخص</option>
+                                                <option value="unregistered">ثبت نشده</option>
+                                                <option value="unspecified">تعیین نشده (سوابق قدیمی)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 4. Registered Person Name in Sayadi */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                نام شخص ثبت‌شده (در صیاد)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                list="archive-registered-person-list"
+                                                value={registeredPersonFilter}
+                                                onChange={(e) => setRegisteredPersonFilter(e.target.value)}
+                                                placeholder="نام شخصی که به نام او ثبت شده..."
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-medium outline-none focus:border-emerald-500"
+                                            />
+                                            <datalist id="archive-registered-person-list">
+                                                {archiveRegisteredPersonSuggestions.map(n => <option key={n} value={n} />)}
+                                            </datalist>
+                                        </div>
+
+                                        {/* 5. Customer Self-Issuer vs Third Party */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                نسبت صاحب چک با تحویل‌دهنده
+                                            </label>
+                                            <select
+                                                value={issuerRelationFilter}
+                                                onChange={(e) => setIssuerRelationFilter(e.target.value as any)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه (خود مشتری و شخص ثالث)</option>
+                                                <option value="SELF">صاحب چک و تحویل‌دهنده یکی است (خود مشتری)</option>
+                                                <option value="THIRD_PARTY">چک شخص ثالث (صاحب چک فرد دیگر است)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 6. Deliverer Name / Counterparty */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                نام تحویل‌دهنده چک / طرف حساب
+                                            </label>
+                                            <input
+                                                type="text"
+                                                list="archive-deliverer-list"
+                                                value={delivererFilter}
+                                                onChange={(e) => setDelivererFilter(e.target.value)}
+                                                placeholder="نام یا کد طرف حساب تحویل‌دهنده..."
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-medium outline-none focus:border-emerald-500"
+                                            />
+                                            <datalist id="archive-deliverer-list">
+                                                {archivePersonSuggestions.map(n => <option key={n} value={n} />)}
+                                            </datalist>
+                                        </div>
+
+                                        {/* 7. Cheque Owner / In Name Of */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                صاحب چک / صادرکننده (در وجه)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                list="archive-innameof-list"
+                                                value={inNameOfFilter}
+                                                onChange={(e) => setInNameOfFilter(e.target.value)}
+                                                placeholder="نام صاحب حساب روی چک..."
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-medium outline-none focus:border-emerald-500"
+                                            />
+                                            <datalist id="archive-innameof-list">
+                                                {archiveInNameOfSuggestions.map(n => <option key={n} value={n} />)}
+                                            </datalist>
+                                        </div>
+
+                                        {/* 8. Bank */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                بانک صادرکننده چک
+                                            </label>
+                                            <select
+                                                value={bankFilter}
+                                                onChange={(e) => setBankFilter(e.target.value)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه بانک‌ها</option>
+                                                {availableArchiveBanks.map(b => (
+                                                    <option key={b} value={b}>بانک {b}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {/* 9. Cashbox */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                صندوق دریافت چک
+                                            </label>
+                                            <select
+                                                value={cashboxFilter}
+                                                onChange={(e) => setCashboxFilter(e.target.value)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه صندوق‌ها</option>
+                                                {cashboxesList.map(box => (
+                                                    <option key={box.code} value={box.code}>{box.title} ({toPersianDigits(box.code)})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {/* 10. Cheque Due Date From (Shamsi) */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                سررسید چک از تاریخ (شمسی)
+                                            </label>
+                                            <div className="relative flex items-center">
+                                                <input
+                                                    type="text"
+                                                    value={dueDateFrom}
+                                                    onChange={(e) => setDueDateFrom(normalizeToAsciiDigits(e.target.value))}
+                                                    placeholder="مثلاً 1405/01/01"
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl pr-2.5 pl-8 py-1.5 font-mono font-bold outline-none focus:border-emerald-500"
+                                                />
+                                                <div className="absolute left-1.5 top-1.5 z-10">
+                                                    <DatePicker
+                                                        calendar={persian}
+                                                        locale={persian_fa}
+                                                        value={dueDateFrom || undefined}
+                                                        onChange={(d: any) => {
+                                                            const v = normalizeToAsciiDigits(d?.format?.('YYYY/MM/DD'));
+                                                            if (v) setDueDateFrom(v);
                                                         }}
-                                                        className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/60 transition-colors cursor-pointer"
-                                                        title="ویرایش شماره رسید (مثلا: ۸۴۸)"
-                                                    >
-                                                        <Edit3 className="w-3.5 h-3.5" />
-                                                    </button>
+                                                        render={(_v: any, openCalendar: any) => (
+                                                            <button type="button" onClick={openCalendar} className="p-1 text-emerald-600 hover:bg-slate-100 rounded-lg" title="تقویم">
+                                                                <Calendar className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 11. Cheque Due Date To (Shamsi) */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                سررسید چک تا تاریخ (شمسی)
+                                            </label>
+                                            <div className="relative flex items-center">
+                                                <input
+                                                    type="text"
+                                                    value={dueDateTo}
+                                                    onChange={(e) => setDueDateTo(normalizeToAsciiDigits(e.target.value))}
+                                                    placeholder="مثلاً 1405/12/29"
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl pr-2.5 pl-8 py-1.5 font-mono font-bold outline-none focus:border-emerald-500"
+                                                />
+                                                <div className="absolute left-1.5 top-1.5 z-10">
+                                                    <DatePicker
+                                                        calendar={persian}
+                                                        locale={persian_fa}
+                                                        value={dueDateTo || undefined}
+                                                        onChange={(d: any) => {
+                                                            const v = normalizeToAsciiDigits(d?.format?.('YYYY/MM/DD'));
+                                                            if (v) setDueDateTo(v);
+                                                        }}
+                                                        render={(_v: any, openCalendar: any) => (
+                                                            <button type="button" onClick={openCalendar} className="p-1 text-emerald-600 hover:bg-slate-100 rounded-lg" title="تقویم">
+                                                                <Calendar className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 12. Doc Date From (Shamsi) */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                تاریخ ثبت رسید از (شمسی)
+                                            </label>
+                                            <div className="relative flex items-center">
+                                                <input
+                                                    type="text"
+                                                    value={docDateFrom}
+                                                    onChange={(e) => setDocDateFrom(normalizeToAsciiDigits(e.target.value))}
+                                                    placeholder="مثلاً 1405/01/01"
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl pr-2.5 pl-8 py-1.5 font-mono font-bold outline-none focus:border-emerald-500"
+                                                />
+                                                <div className="absolute left-1.5 top-1.5 z-10">
+                                                    <DatePicker
+                                                        calendar={persian}
+                                                        locale={persian_fa}
+                                                        value={docDateFrom || undefined}
+                                                        onChange={(d: any) => {
+                                                            const v = normalizeToAsciiDigits(d?.format?.('YYYY/MM/DD'));
+                                                            if (v) setDocDateFrom(v);
+                                                        }}
+                                                        render={(_v: any, openCalendar: any) => (
+                                                            <button type="button" onClick={openCalendar} className="p-1 text-blue-600 hover:bg-slate-100 rounded-lg" title="تقویم">
+                                                                <Calendar className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 13. Doc Date To (Shamsi) */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                تاریخ ثبت رسید تا (شمسی)
+                                            </label>
+                                            <div className="relative flex items-center">
+                                                <input
+                                                    type="text"
+                                                    value={docDateTo}
+                                                    onChange={(e) => setDocDateTo(normalizeToAsciiDigits(e.target.value))}
+                                                    placeholder="مثلاً 1405/12/29"
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl pr-2.5 pl-8 py-1.5 font-mono font-bold outline-none focus:border-emerald-500"
+                                                />
+                                                <div className="absolute left-1.5 top-1.5 z-10">
+                                                    <DatePicker
+                                                        calendar={persian}
+                                                        locale={persian_fa}
+                                                        value={docDateTo || undefined}
+                                                        onChange={(d: any) => {
+                                                            const v = normalizeToAsciiDigits(d?.format?.('YYYY/MM/DD'));
+                                                            if (v) setDocDateTo(v);
+                                                        }}
+                                                        render={(_v: any, openCalendar: any) => (
+                                                            <button type="button" onClick={openCalendar} className="p-1 text-blue-600 hover:bg-slate-100 rounded-lg" title="تقویم">
+                                                                <Calendar className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 14. Min Amount */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                حداقل مبلغ کل (ریال)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={minAmountFilter ? Number(normalizeToAsciiDigits(minAmountFilter).replace(/[^\d]/g, '') || 0).toLocaleString('en-US') : ''}
+                                                onChange={(e) => setMinAmountFilter(normalizeToAsciiDigits(e.target.value).replace(/[^\d]/g, ''))}
+                                                placeholder="از مبلغ..."
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-mono font-bold outline-none focus:border-emerald-500"
+                                            />
+                                        </div>
+
+                                        {/* 15. Max Amount */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                حداکثر مبلغ کل (ریال)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={maxAmountFilter ? Number(normalizeToAsciiDigits(maxAmountFilter).replace(/[^\d]/g, '') || 0).toLocaleString('en-US') : ''}
+                                                onChange={(e) => setMaxAmountFilter(normalizeToAsciiDigits(e.target.value).replace(/[^\d]/g, ''))}
+                                                placeholder="تا مبلغ..."
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-mono font-bold outline-none focus:border-emerald-500"
+                                            />
+                                        </div>
+
+                                        {/* 16. Sayad ID / Attachment / Source */}
+                                        <div className="grid grid-cols-3 gap-1.5 sm:col-span-2 lg:col-span-1">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-300 mb-1 truncate">
+                                                    شناسه صیاد
+                                                </label>
+                                                <select
+                                                    value={sayadFilter}
+                                                    onChange={(e) => setSayadFilter(e.target.value as any)}
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-1.5 py-1.5 text-[11px] font-bold outline-none"
+                                                >
+                                                    <option value="ALL">همه</option>
+                                                    <option value="HAS_SAYAD">دارای صیاد</option>
+                                                    <option value="NO_SAYAD">بدون صیاد</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-300 mb-1 truncate">
+                                                    پیوست تصویر
+                                                </label>
+                                                <select
+                                                    value={attachmentFilter}
+                                                    onChange={(e) => setAttachmentFilter(e.target.value as any)}
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-1.5 py-1.5 text-[11px] font-bold outline-none"
+                                                >
+                                                    <option value="ALL">همه</option>
+                                                    <option value="HAS_ATTACHMENT">دارد</option>
+                                                    <option value="NO_ATTACHMENT">ندارد</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-300 mb-1 truncate">
+                                                    منبع رکورد
+                                                </label>
+                                                <select
+                                                    value={sourceFilter}
+                                                    onChange={(e) => setSourceFilter(e.target.value as any)}
+                                                    className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-1.5 py-1.5 text-[11px] font-bold outline-none"
+                                                >
+                                                    <option value="ALL">همه</option>
+                                                    <option value="APP_DRAFT">سیستم</option>
+                                                    <option value="SAYAN_DB">سایان</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* Filtered Summary Strip */}
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                        <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between">
+                            <span className="text-slate-500 dark:text-slate-400 font-bold">رسیدهای یافت‌شده</span>
+                            <span className="font-mono font-black text-sm text-slate-900 dark:text-white">
+                                {toPersianDigits(archiveStats.receiptsCount)} رسید
+                            </span>
+                        </div>
+                        <div className="p-3 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/60 dark:border-blue-800/50 flex items-center justify-between">
+                            <span className="text-blue-700 dark:text-blue-300 font-bold">مجموع برگ چک‌ها</span>
+                            <span className="font-mono font-black text-sm text-blue-800 dark:text-blue-200">
+                                {toPersianDigits(archiveStats.totalCheques)} فقره
+                            </span>
+                        </div>
+                        <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-800/50 flex items-center justify-between col-span-2 lg:col-span-2">
+                            <span className="text-emerald-700 dark:text-emerald-300 font-bold">جمع کل مبلغ فیلترشده</span>
+                            <div className="flex items-baseline gap-2 flex-wrap justify-end">
+                                <span className="font-mono font-black text-sm text-emerald-700 dark:text-emerald-300">
+                                    {toPersianDigits(archiveStats.totalAmount.toLocaleString('fa-IR'))} ریال
+                                </span>
+                                <span className="text-[11px] font-mono text-emerald-600/80 dark:text-emerald-400/80">
+                                    ({toPersianDigits(Math.floor(archiveStats.totalAmount / 10).toLocaleString('fa-IR'))} تومان)
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Empty State */}
+                    {archiveList.length === 0 ? (
+                        <div className="py-12 text-center space-y-3 border border-dashed border-slate-200 dark:border-slate-700 rounded-2xl">
+                            <Search className="w-8 h-8 text-slate-300 mx-auto" />
+                            <p className="text-xs font-bold text-slate-500">
+                                با فیلترهای انتخابی فعلی هیچ رسید یا چکی یافت نشد.
+                            </p>
+                            {activeFilterCount > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={resetArchiveFilters}
+                                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                                >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                    <span>نمایش همه رسیدها</span>
+                                </button>
+                            )}
+                        </div>
+                    ) : (
+                        <>
+                            {/* Mobile & Android Responsive Card List */}
+                            <div className="md:hidden space-y-3">
+                                {archiveList.map(r => {
+                                    const cheques = r.cheques || [];
+                                    const firstCheque = cheques[0];
+                                    const selfRel = firstCheque ? resolveChequeSelfIssuer(r, firstCheque) : null;
+                                    const regNeedsFix = isNeedsSayanReregister(r);
+                                    const regProcessing = isProcessingSayan(r);
+                                    const regDone = isRegisteredInSayan(r);
+
+                                    return (
+                                        <div
+                                            key={r.id}
+                                            className="p-3.5 rounded-2xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 space-y-2.5"
+                                        >
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="font-mono font-black text-xs text-blue-600 dark:text-blue-400">
+                                                            {r.receiptNo ? `#${toPersianDigits(r.receiptNo)}` : (r.docNo ? `سند ${toPersianDigits(r.docNo)}` : `#${toPersianDigits(r.id)}`)}
+                                                        </span>
+                                                        <span className="font-mono text-[11px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.5 rounded">
+                                                            پشت‌نمره: {toPersianDigits(r.poshtNomreh || '-')}
+                                                        </span>
+                                                        <span className="font-mono text-[10px] text-slate-400">
+                                                            {toPersianDigits(normalizeFilterShamsi(r.docDateShamsi || r.docDate || r.createdAt) || '-')}
+                                                        </span>
+                                                    </div>
+                                                    <div className="font-black text-xs text-slate-900 dark:text-white mt-1 truncate">
+                                                        تحویل‌دهنده: {r.personName}
+                                                    </div>
+                                                </div>
+
+                                                <div className="text-left shrink-0">
+                                                    <div className="font-mono font-black text-xs text-emerald-600 dark:text-emerald-400">
+                                                        {toPersianDigits(Number(r.totalAmount || 0).toLocaleString('fa-IR'))} ریال
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-400 font-mono">
+                                                        {toPersianDigits(cheques.length || 1)} برگ چک
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Cheques Summary Badges */}
+                                            {cheques.length > 0 && (
+                                                <div className="space-y-1.5 bg-white dark:bg-slate-900/90 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 text-[11px]">
+                                                    {cheques.slice(0, 2).map((c, idx) => (
+                                                        <div key={idx} className="flex flex-wrap items-center justify-between gap-1.5">
+                                                            <span className="font-bold text-slate-700 dark:text-slate-200">
+                                                                {c.bankName || 'بانک'} • چک {toPersianDigits(c.chequeNumber || '-')}
+                                                            </span>
+                                                            <span className="font-mono text-slate-500">
+                                                                سررسید: {toPersianDigits(normalizeFilterShamsi(c.dueDate) || '-')}
+                                                            </span>
+                                                            {c.inNameOf && (
+                                                                <span className="text-[10px] text-slate-500 w-full truncate">
+                                                                    صاحب چک: {c.inNameOf}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                    {cheques.length > 2 && (
+                                                        <div className="text-[10px] text-blue-600 font-bold">
+                                                            + {toPersianDigits(cheques.length - 2)} برگ چک دیگر
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Status & Sayadi Badges */}
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                {regNeedsFix ? (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                                                        سند ۱ (نیازمند ثبت مجدد)
+                                                    </span>
+                                                ) : regDone ? (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300">
+                                                        ثبت شده در سایان {r.docNo ? `(سند ${toPersianDigits(r.docNo)})` : ''}
+                                                    </span>
+                                                ) : regProcessing ? (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-300">
+                                                        در حال ثبت در سایان
+                                                    </span>
+                                                ) : (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200">
+                                                        ثبت نشده در سایان ({r.status === 'PENDING_CEO' ? 'آماده ثبت' : 'منتظر حسابداری'})
+                                                    </span>
+                                                )}
+
+                                                {firstCheque?.registrationType && (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200">
+                                                        {getChequeRegistrationLabel(firstCheque.registrationType, firstCheque.registeredPersonName)}
+                                                    </span>
+                                                )}
+
+                                                {selfRel !== null && (
+                                                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                                                        selfRel
+                                                            ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300'
+                                                            : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                                                    }`}>
+                                                        {getChequeIssuerLabel(selfRel)}
+                                                    </span>
                                                 )}
                                             </div>
-                                        </td>
-                                        <td className="px-3 py-3 font-mono font-bold text-amber-600">
-                                            {toPersianDigits(r.poshtNomreh || '-')}
-                                        </td>
-                                        <td className="px-3 py-3 font-bold text-slate-800 dark:text-slate-200">
-                                            {r.personName}
-                                        </td>
-                                        <td className="px-3 py-3 font-mono font-black text-emerald-600 dark:text-emerald-400">
-                                            {toPersianDigits(Number(r.totalAmount || 0).toLocaleString('fa-IR'))}
-                                        </td>
-                                        <td className="px-3 py-3 font-mono text-slate-500">
-                                            {toPersianDigits(r.cheques?.length || 1)} برگ
-                                        </td>
-                                        <td className="px-3 py-3 font-mono">
-                                            {(String(r.docNo) === '1' || String(r.archiveCode) === '1') ? (
-                                                <span className="text-[10px] text-amber-700 dark:text-amber-400 font-black bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-300 dark:border-amber-700">
-                                                    سند ۱ (نیازمند ثبت مجدد)
-                                                </span>
-                                            ) : r.archiveCode ? (
-                                                <div className="flex items-center gap-1 text-purple-600 font-bold">
-                                                    <span>سند: {toPersianDigits(r.docNo || '-')}</span>
-                                                    <span className="text-[10px] text-slate-400">({toPersianDigits(r.archiveCode)})</span>
-                                                </div>
-                                            ) : (
-                                                <span className="text-slate-400">-</span>
-                                            )}
-                                        </td>
-                                        <td className="px-3 py-3">
-                                            {(String(r.docNo) === '1' || String(r.archiveCode) === '1') ? (
-                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 flex items-center gap-1">
-                                                    <AlertCircle className="w-3 h-3 text-amber-600" />
-                                                    <span>نیازمند ثبت مجدد در سایان</span>
-                                                </span>
-                                            ) : r.status === 'REGISTERED_IN_SAYAN' ? (
-                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300">
-                                                    ثبت شده در سایان
-                                                </span>
-                                            ) : r.status === 'PROCESSING_SAYAN' || r.sayanSyncStatus === 'QUEUED' || r.sayanSyncStatus === 'PROCESSING' ? (
-                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-300 flex items-center gap-1 animate-pulse">
-                                                    <Loader2 className="w-3 h-3 animate-spin text-indigo-600" />
-                                                    <span>در حال ثبت در سایان (پس‌زمینه)</span>
-                                                </span>
-                                            ) : r.status === 'PENDING_CEO' ? (
-                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300">
-                                                    {workflowConfig.requireCeoApproval ? 'منتظر مدیرعامل' : 'آماده ثبت در سایان'}
-                                                </span>
-                                            ) : r.status === 'PENDING_ACCOUNTING' ? (
-                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-300">
-                                                    منتظر حسابداری
-                                                </span>
-                                            ) : (
-                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800">
-                                                    {r.status}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="px-3 py-3 text-center">
-                                            <div className="flex items-center justify-center gap-1.5">
+
+                                            {/* Mobile Action Buttons */}
+                                            <div className="flex flex-wrap items-center gap-2 pt-1">
                                                 <button
                                                     type="button"
                                                     onClick={() => setSelectedDetailReceipt(r)}
-                                                    className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
-                                                    title="مشاهده جزئیات کامل رسید"
+                                                    className="flex-1 min-h-[38px] px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"
                                                 >
-                                                    <Eye className="w-4 h-4" />
+                                                    <Eye className="w-3.5 h-3.5" />
+                                                    <span>جزئیات</span>
                                                 </button>
-                                                {(String(r.docNo) === '1' || String(r.archiveCode) === '1' || r.status === 'PENDING_CEO') ? (
+                                                {(regNeedsFix || r.status === 'PENDING_CEO') && (
                                                     <button
                                                         type="button"
                                                         onClick={() => handleReRegisterInSayan(r.id)}
                                                         disabled={actionLoading === r.id}
-                                                        className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-bold text-[11px] border border-emerald-500 shadow-sm flex items-center gap-1 hover:from-emerald-700 hover:to-teal-800 transition-all shrink-0"
-                                                        title="ثبت مجدد و دریافت شماره سند و بایگانی واقعی سایان"
+                                                        className="flex-1 min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center justify-center gap-1"
                                                     >
                                                         {actionLoading === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                                                        <span>ثبت مجدد در سایان</span>
+                                                        <span>ثبت سایان</span>
                                                     </button>
-                                                ) : null}
-                                                {r.archiveCode && String(r.archiveCode) !== '1' ? (
+                                                )}
+                                                {r.archiveCode && String(r.archiveCode) !== '1' && (
                                                     <button
                                                         type="button"
                                                         onClick={() => setInspectingArchiveCode({ archiveCode: r.archiveCode, docNo: r.docNo })}
-                                                        className="px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-bold text-[11px] border border-purple-200 dark:border-purple-800 flex items-center gap-1 hover:bg-purple-100"
-                                                        title="استعلام زنده سند واقعی از جداول سایان"
+                                                        className="min-h-[38px] px-3 py-1.5 rounded-xl bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-200 text-xs font-bold flex items-center justify-center gap-1"
                                                     >
                                                         <Layers className="w-3.5 h-3.5" />
-                                                        <span>سند واقعی سایان</span>
+                                                        <span>سند سایان</span>
                                                     </button>
-                                                ) : null}
+                                                )}
                                             </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Desktop Web Enterprise Table */}
+                            <div className="hidden md:block border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto">
+                                <table className="w-full text-right text-xs">
+                                    <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
+                                        <tr>
+                                            <th className="px-3 py-3">شماره رسید / تاریخ</th>
+                                            <th className="px-3 py-3">پشت‌نمره</th>
+                                            <th className="px-3 py-3">تحویل‌دهنده (طرف حساب)</th>
+                                            <th className="px-3 py-3">مشخصات چک‌ها (بانک / سررسید / صاحب چک)</th>
+                                            <th className="px-3 py-3">ثبت صیادی و نسبت صادرکننده</th>
+                                            <th className="px-3 py-3">مبلغ کل (ریال)</th>
+                                            <th className="px-3 py-3">سند / وضعیت سایان</th>
+                                            <th className="px-3 py-3 text-center">عملیات و استعلام</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                        {archiveList.map(r => {
+                                            const cheques = r.cheques || [];
+                                            const firstCheque = cheques[0];
+                                            const selfRel = firstCheque ? resolveChequeSelfIssuer(r, firstCheque) : null;
+                                            return (
+                                                <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 align-top">
+                                                    <td className="px-3 py-3 font-mono font-bold text-blue-600 dark:text-blue-400">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span>{r.receiptNo ? `#${toPersianDigits(r.receiptNo)}` : (r.docNo ? `سند ${toPersianDigits(r.docNo)}` : `#${toPersianDigits(r.id)}`)}</span>
+                                                            {canEditReceipt && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setEditingReceiptNoItem({ id: r.id, currentNo: String(r.receiptNo || r.id) });
+                                                                        setTempQuickReceiptNo(String(r.receiptNo || r.id));
+                                                                    }}
+                                                                    className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/60 transition-colors cursor-pointer"
+                                                                    title="ویرایش شماره رسید (مثلا: ۸۴۸)"
+                                                                >
+                                                                    <Edit3 className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-[10px] text-slate-400 font-normal mt-0.5">
+                                                            {toPersianDigits(normalizeFilterShamsi(r.docDateShamsi || r.docDate || r.createdAt) || '-')}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-3 py-3 font-mono font-bold text-amber-600">
+                                                        {toPersianDigits(r.poshtNomreh || '-')}
+                                                    </td>
+                                                    <td className="px-3 py-3">
+                                                        <div className="font-bold text-slate-800 dark:text-slate-200">{r.personName}</div>
+                                                        {r.personCode && (
+                                                            <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                                                                کد: {toPersianDigits(r.personCode)}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-3 min-w-[210px]">
+                                                        {cheques.length > 0 ? (
+                                                            <div className="space-y-1">
+                                                                {cheques.slice(0, 2).map((c, cIdx) => (
+                                                                    <div key={cIdx} className="text-[11px] bg-slate-50 dark:bg-slate-800/70 px-2 py-1 rounded-lg border border-slate-200/70 dark:border-slate-700/70">
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            <span className="font-bold text-slate-700 dark:text-slate-200">
+                                                                                {c.bankName || '-'} • {toPersianDigits(c.chequeNumber || '-')}
+                                                                            </span>
+                                                                            <span className="font-mono text-emerald-700 dark:text-emerald-400 font-bold">
+                                                                                {toPersianDigits(normalizeFilterShamsi(c.dueDate) || '-')}
+                                                                            </span>
+                                                                        </div>
+                                                                        {c.inNameOf && (
+                                                                            <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                                                                                صاحب چک: {c.inNameOf}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                ))}
+                                                                {cheques.length > 2 && (
+                                                                    <div className="text-[10px] font-bold text-blue-600">
+                                                                        + {toPersianDigits(cheques.length - 2)} برگ چک دیگر ({toPersianDigits(cheques.length)} برگ)
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-slate-400">-</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-3">
+                                                        <div className="flex flex-col gap-1 items-start">
+                                                            {firstCheque?.registrationType ? (
+                                                                <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${
+                                                                    firstCheque.registrationType === 'company'
+                                                                        ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300'
+                                                                        : firstCheque.registrationType === 'person'
+                                                                        ? 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/60 dark:text-purple-300'
+                                                                        : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300'
+                                                                }`}>
+                                                                    {getChequeRegistrationLabel(firstCheque.registrationType, firstCheque.registeredPersonName)}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-[10px] text-slate-400">صیادی تعیین نشده</span>
+                                                            )}
+                                                            {selfRel !== null && (
+                                                                <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                                                    selfRel
+                                                                        ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/60 dark:text-teal-300'
+                                                                        : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                                                                }`}>
+                                                                    {getChequeIssuerLabel(selfRel)}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-3 py-3 font-mono font-black text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                                        {toPersianDigits(Number(r.totalAmount || 0).toLocaleString('fa-IR'))}
+                                                        <div className="text-[10px] font-normal text-slate-400">
+                                                            {toPersianDigits(cheques.length || 1)} برگ
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-3 py-3">
+                                                        <div className="space-y-1">
+                                                            {(String(r.docNo) === '1' || String(r.archiveCode) === '1') ? (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 inline-flex items-center gap-1">
+                                                                    <AlertCircle className="w-3 h-3 text-amber-600" />
+                                                                    <span>سند ۱ (نیازمند ثبت مجدد)</span>
+                                                                </span>
+                                                            ) : r.status === 'REGISTERED_IN_SAYAN' ? (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 inline-block">
+                                                                    ثبت شده در سایان
+                                                                </span>
+                                                            ) : r.status === 'PROCESSING_SAYAN' || r.sayanSyncStatus === 'QUEUED' || r.sayanSyncStatus === 'PROCESSING' ? (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-300 inline-flex items-center gap-1 animate-pulse">
+                                                                    <Loader2 className="w-3 h-3 animate-spin text-indigo-600" />
+                                                                    <span>در حال ثبت سایان</span>
+                                                                </span>
+                                                            ) : r.status === 'PENDING_CEO' ? (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 inline-block">
+                                                                    {workflowConfig.requireCeoApproval ? 'منتظر مدیرعامل' : 'آماده ثبت سایان'}
+                                                                </span>
+                                                            ) : r.status === 'PENDING_ACCOUNTING' ? (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-300 inline-block">
+                                                                    منتظر حسابداری
+                                                                </span>
+                                                            ) : (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 inline-block">
+                                                                    {r.status}
+                                                                </span>
+                                                            )}
+                                                            {r.archiveCode && String(r.archiveCode) !== '1' && (
+                                                                <div className="text-[10px] font-mono text-purple-600 font-bold">
+                                                                    سند: {toPersianDigits(r.docNo || '-')} ({toPersianDigits(r.archiveCode)})
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-3 py-3 text-center">
+                                                        <div className="flex items-center justify-center gap-1.5">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSelectedDetailReceipt(r)}
+                                                                className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 cursor-pointer"
+                                                                title="مشاهده جزئیات کامل رسید"
+                                                            >
+                                                                <Eye className="w-4 h-4" />
+                                                            </button>
+                                                            {(String(r.docNo) === '1' || String(r.archiveCode) === '1' || r.status === 'PENDING_CEO') ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleReRegisterInSayan(r.id)}
+                                                                    disabled={actionLoading === r.id}
+                                                                    className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-bold text-[11px] border border-emerald-500 shadow-sm flex items-center gap-1 hover:from-emerald-700 hover:to-teal-800 transition-all shrink-0 cursor-pointer"
+                                                                    title="ثبت مجدد و دریافت شماره سند و بایگانی واقعی سایان"
+                                                                >
+                                                                    {actionLoading === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                                                                    <span>ثبت سایان</span>
+                                                                </button>
+                                                            ) : null}
+                                                            {r.archiveCode && String(r.archiveCode) !== '1' ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setInspectingArchiveCode({ archiveCode: r.archiveCode, docNo: r.docNo })}
+                                                                    className="px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300 font-bold text-[11px] border border-purple-200 dark:border-purple-800 flex items-center gap-1 hover:bg-purple-100 cursor-pointer"
+                                                                    title="استعلام زنده سند واقعی از جداول سایان"
+                                                                >
+                                                                    <Layers className="w-3.5 h-3.5" />
+                                                                    <span>سند واقعی</span>
+                                                                </button>
+                                                            ) : null}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
                 </div>
             )}
 

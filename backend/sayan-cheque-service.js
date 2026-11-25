@@ -816,7 +816,10 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                 h.Field_010 as PersonCode,
                 h.Field_025 as TotalAmount,
                 h.Field_028 as Description,
-                RTRIM(LTRIM(CONCAT(COALESCE(g.Field_006, ''), ' ', COALESCE(g.Field_007, '')))) as PersonName
+                COALESCE(
+                    NULLIF(RTRIM(LTRIM(CONCAT(COALESCE(g.Field_006, ''), ' ', COALESCE(g.Field_007, '')))), ''),
+                    RTRIM(LTRIM(COALESCE(g.Field_008, '')))
+                ) as PersonName
             FROM BUR_TBL_008 h WITH (NOLOCK)
             LEFT JOIN GNR_TBL_001 g WITH (NOLOCK) ON RTRIM(LTRIM(g.Field_003)) = RTRIM(LTRIM(h.Field_010))
             WHERE h.Field_009 = '11'
@@ -838,6 +841,7 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                             r.Field_006 as RowAmount,
                             r.Field_007 as ChequeId,
                             r.Field_008 as RowNote,
+                            r.Field_011 as CashboxCode,
                             r.Field_025 as RowSeq,
                             c.Field_005 as ChequeNumber,
                             c.Field_006 as DueDate,
@@ -863,15 +867,35 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                 }
             }
 
+            const normComparePerson = (val) => String(val || '')
+                .replace(/^(آقای|خانم|شرکت|فروشگاه|کارخانه|مهندس|دکتر)\s+/gi, '')
+                .replace(/[\u200c\u00a0\-_\s]+/g, '')
+                .replace(/\u064A|\u0649/g, 'ی')
+                .replace(/\u0643/g, 'ک')
+                .replace(/[\u0622\u0623\u0625]/g, 'ا')
+                .replace(/\u0629/g, 'ه')
+                .trim()
+                .toLowerCase();
+
             for (const h of headers) {
                 const archKey = `${h.FiscalYear}_${h.ArchiveCode}`;
                 const rows = detailRowsMap.get(archKey) || [];
                 let poshtNomreh = '';
+                let cashboxCode = '';
                 const cheques = [];
+                const cleanHeaderPerson = String(h.PersonName || '').trim();
+                const normHeaderPerson = normComparePerson(cleanHeaderPerson);
 
                 for (const row of rows) {
                     if (!poshtNomreh && row.PoshtNomreh) poshtNomreh = row.PoshtNomreh;
+                    if (!cashboxCode && row.CashboxCode) cashboxCode = String(row.CashboxCode).trim();
                     if (row.ChequeId || row.ChequeNumber) {
+                        const cleanInNameOf = String(row.InNameOf || '').trim();
+                        const normInNameOf = normComparePerson(cleanInNameOf);
+                        let inferredSelfIssuer = undefined;
+                        if (normHeaderPerson && normInNameOf) {
+                            inferredSelfIssuer = normHeaderPerson === normInNameOf || normInNameOf.includes(normHeaderPerson) || normHeaderPerson.includes(normInNameOf);
+                        }
                         cheques.push({
                             chequeId: row.ChequeId,
                             rowId: row.RowId,
@@ -880,8 +904,9 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                             amount: Number(row.RowAmount) || 0,
                             dueDate: row.DueDate || '',
                             bankName: row.BankName || '',
-                            inNameOf: row.InNameOf || '',
+                            inNameOf: cleanInNameOf,
                             poshtNomreh: row.PoshtNomreh || poshtNomreh || '',
+                            isCustomerSelfIssuer: inferredSelfIssuer,
                             rowSeq: row.RowSeq
                         });
                     }
@@ -889,6 +914,7 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
 
                 sayanLiveReceipts.push({
                     id: `SAYAN_${h.HeaderId}`,
+                    headerId: h.HeaderId,
                     source: 'SAYAN_DB',
                     status: 'REGISTERED_IN_SAYAN',
                     fiscalYear: h.FiscalYear,
@@ -896,7 +922,8 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                     docNo: h.DocNo,
                     docDate: h.DocDate,
                     personCode: h.PersonCode,
-                    personName: h.PersonName || `شخص ${h.PersonCode}`,
+                    personName: cleanHeaderPerson || `شخص ${h.PersonCode}`,
+                    cashboxCode,
                     totalAmount: Number(h.TotalAmount) || 0,
                     description: h.Description || '',
                     poshtNomreh: poshtNomreh || String(h.ArchiveCode),
