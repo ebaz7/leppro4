@@ -63,6 +63,8 @@ import * as notificationQueue from './backend/notification-queue.js';
 import zlib from 'zlib';
 import * as erpPg from './backend/erp-pg-repository.js';
 import * as erpBackupMgr from './backend/erp-backup-manager.js';
+import * as corePg from './backend/core-pg-repository.js';
+import * as coreBackupMgr from './backend/core-backup-manager.js';
 
 const getDb = dbManager.getDb;
 const saveDb = dbManager.saveDb;
@@ -912,33 +914,39 @@ const syncPgStatesIntoLegacyDbSnapshot = async (db) => {
 };
 
 const createDbOnlyBackupZip = async (timestamp) => {
-    const filename = `Backup_DB_${timestamp}.zip`;
-    const filePath = path.join(BACKUPS_DIR, filename);
-    if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-
+    const smartDir = coreBackupMgr.getSmartBackupDir(BACKUPS_DIR);
+    const filename = `Smart_DB_Backup_${timestamp}.zip`;
+    const filePath = path.join(smartDir, filename);
     const db = getDb();
-    await syncPgStatesIntoLegacyDbSnapshot(db);
+    const smartData = coreBackupMgr.extractSmartManagementState(db);
 
-    return new Promise((resolve, reject) => {
-        const output = fs.createWriteStream(filePath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        output.on('close', () => {
-            resolve({ filePath, filename, size: archive.pointer() });
-        });
-
-        output.on('error', (err) => reject(err));
-        archive.on('error', (err) => reject(err));
-        archive.pipe(output);
-
-        if (fs.existsSync(DB_FILE)) {
-            archive.file(DB_FILE, { name: 'database.json' });
-        } else {
-            archive.append(JSON.stringify(db, null, 2), { name: 'database.json' });
-        }
-
-        archive.finalize();
+    const res = await coreBackupMgr.createSmartBackupZipFile({
+        targetFilePath: filePath,
+        smartData,
+        includeUploadsDir: false,
+        uploadsDir: UPLOADS_DIR,
+        compressionLevel: 9
     });
+
+    const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
+    if (corePg.isPostgresConfigured()) {
+        await corePg.recordSmartBackupMetadataInPg({
+            id: `smart_zip_${Date.now()}`,
+            fileName: filename,
+            format: 'zip',
+            backupKind: 'bot',
+            scope: 'smart_management',
+            sizeBytes: res.size,
+            compressedSizeBytes: res.size,
+            recordCounts: res.envelope.recordCounts,
+            checksumSha256: res.envelope.checksumSha256,
+            createdBy: 'system',
+            createdAtMs: res.envelope.exportedAtMs,
+            createdDateJalali: todayJalali
+        }).catch(() => {});
+    }
+
+    return { filePath, filename, size: res.size, envelope: res.envelope };
 };
 
 const dispatchSpecificBufferToBots = async (buffer, filename, captionText, force = false) => {
@@ -1021,7 +1029,7 @@ const dispatchSpecificBufferToBots = async (buffer, filename, captionText, force
     };
 };
 
-const sendBackupToBots = async (filePath, filename, reason = "بکاپ خودکار دیتابیس سیستم", force = false) => {
+const sendBackupToBots = async (filePath, filename, reason = "بکاپ خودکار بخش مدیریت هوشمند", force = false) => {
     try {
         const db = getDb();
         const settings = db.settings || {};
@@ -1034,7 +1042,8 @@ const sendBackupToBots = async (filePath, filename, reason = "بکاپ خودک�
             return { success: false, message: "فایل بکاپ یافت نشد" };
         }
         const buffer = fs.readFileSync(dbBackup.filePath);
-        const caption = `📁 نسخه پشتیبان دیتابیس کامل سامانه (${reason})\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 نام فایل: ${dbBackup.filename}\n✨ شامل کلیه اطلاعات مالی، حواله‌ها، کاربران، چت‌ها و تنظیمات`;
+        const counts = dbBackup.envelope?.recordCounts || {};
+        const caption = `📁 نسخه پشتیبان مجزای «مدیریت هوشمند» (PostgreSQL)\n📌 علت: ${reason}\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 فایل: ${dbBackup.filename}\n🗄️ محتوا: اسکریپت PostgreSQL (.sql) + اسنپ‌شات (.json)\n📊 دستورپرداخت: ${counts.orders || 0} | حواله: ${counts.exitPermits || 0} | چک صیادی: ${counts.sayanChequeReceipts || 0}\n🔒 بکاپ حسابداری شرکت‌ها کاملاً مجزا نگهداری می‌شود.`;
         return await dispatchSpecificBufferToBots(buffer, dbBackup.filename, caption, force);
     } catch (e) {
         console.error("Error in sendBackupToBots:", e);
@@ -1116,58 +1125,59 @@ const performAutoBackup = async () => {
     const settings = db.settings || {};
     const mode = settings.backupMode || 'full'; // 'full' or 'db-only'
 
-    console.log(`>>> Starting Automatic Backup (Mode: ${mode})...`);
+    console.log(`>>> Starting Isolated Smart Management Auto Backup (Mode: ${mode}, Engine: ${dbManager.getCoreStorageStatus().mode})...`);
     try {
-        if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-        await syncPgStatesIntoLegacyDbSnapshot(db);
-
+        const smartDir = coreBackupMgr.getSmartBackupDir(BACKUPS_DIR);
+        const smartData = coreBackupMgr.extractSmartManagementState(db);
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16);
-        const filename = `AutoBackup_${mode === 'full' ? 'Full' : 'DB'}_${timestamp}.zip`;
-        const filePath = path.join(BACKUPS_DIR, filename);
+        const filename = `AutoBackup_Smart_${mode === 'full' ? 'Full' : 'DB'}_${timestamp}.zip`;
+        const filePath = path.join(smartDir, filename);
 
-        await new Promise((resolve, reject) => {
-            const output = fs.createWriteStream(filePath);
-            const archive = archiver('zip', { zlib: { level: 9 } });
-
-            output.on('close', () => {
-                console.log(`✅ Auto Backup Created: ${filename} (${(archive.pointer() / 1024 / 1024).toFixed(2)} MB)`);
-                resolve(true);
-            });
-
-            output.on('error', reject);
-            archive.on('error', reject);
-            archive.pipe(output);
-
-            if (fs.existsSync(DB_FILE)) {
-                archive.file(DB_FILE, { name: 'database.json' });
-            } else {
-                archive.append(JSON.stringify(db, null, 2), { name: 'database.json' });
-            }
-
-            if (mode === 'full' && fs.existsSync(UPLOADS_DIR)) {
-                archive.directory(UPLOADS_DIR, 'uploads');
-            }
-
-            archive.finalize();
+        const zipRes = await coreBackupMgr.createSmartBackupZipFile({
+            targetFilePath: filePath,
+            smartData,
+            includeUploadsDir: mode === 'full',
+            uploadsDir: UPLOADS_DIR,
+            compressionLevel: 9
         });
 
-        sendBackupToBots(filePath, filename, "بکاپ خودکار دوره‌ای").catch(() => {});
+        console.log(`✅ Smart Auto Backup Created: ${filename} (${(zipRes.size / 1024 / 1024).toFixed(2)} MB)`);
+
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
+        if (corePg.isPostgresConfigured()) {
+            await corePg.recordSmartBackupMetadataInPg({
+                id: `smart_auto_${Date.now()}`,
+                fileName: filename,
+                format: 'zip',
+                backupKind: 'auto',
+                scope: 'smart_management',
+                sizeBytes: zipRes.size,
+                compressedSizeBytes: zipRes.size,
+                recordCounts: zipRes.envelope.recordCounts,
+                checksumSha256: zipRes.envelope.checksumSha256,
+                createdBy: 'auto-scheduler',
+                createdAtMs: zipRes.envelope.exportedAtMs,
+                createdDateJalali: todayJalali
+            }).catch(() => {});
+        }
+
+        sendBackupToBots(filePath, filename, "بکاپ خودکار دوره‌ای مدیریت هوشمند").catch(() => {});
         await performPerCompanyErpAutoBackups().catch(() => {});
 
-        // Cleanup old full backups (keep last 20)
+        // Cleanup old Smart Management auto backups (keep last 20)
         setTimeout(() => {
             try {
-                const files = fs.readdirSync(BACKUPS_DIR).filter(f => f.startsWith('AutoBackup_')).sort();
-                if (files.length > 20) {
-                    const toDelete = files.slice(0, files.length - 20);
-                    toDelete.forEach(f => { try { fs.unlinkSync(path.join(BACKUPS_DIR, f)); } catch {} });
-                    console.log(`🧹 Cleaned up ${toDelete.length} old backups.`);
+                const smartFiles = fs.readdirSync(smartDir).filter(f => f.startsWith('AutoBackup_Smart_')).sort();
+                if (smartFiles.length > 20) {
+                    const toDelete = smartFiles.slice(0, smartFiles.length - 20);
+                    toDelete.forEach(f => { try { fs.unlinkSync(path.join(smartDir, f)); } catch {} });
+                    console.log(`🧹 Cleaned up ${toDelete.length} old Smart Management backups.`);
                 }
             } catch (e) { console.error("Cleanup error", e); }
         }, 5000);
     } catch (e) {
-        console.error("❌ Automatic Backup Failed:", e?.message || e);
-        // Still attempt per-company ERP backup even if global full archive failed
+        console.error("❌ Automatic Smart Backup Failed:", e?.message || e);
+        // Still attempt per-company ERP backup even if Smart archive failed
         performPerCompanyErpAutoBackups().catch(() => {});
     }
 };
@@ -14979,26 +14989,26 @@ app.post(['/api/upload-finish', '/upload-finish'], async (req, res) => {
 });
 
 // Admin DB Optimization & Base64 Purge Endpoint
-app.post('/api/admin/optimize-db', (req, res) => {
+app.post('/api/admin/optimize-db', async (req, res) => {
     try {
-        const dbPath = path.join(ROOT_DIR, 'database.json');
-        const sizeBefore = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
-        
         const db = dbManager.getDb();
+        const smartBeforeBytes = Buffer.byteLength(JSON.stringify(coreBackupMgr.extractSmartManagementState(db)), 'utf8');
         const modified = dbManager.sanitizeAndOffloadDb(db);
-        
-        dbManager.saveDbImmediate(db);
-        
-        const sizeAfter = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
-        const savedBytes = Math.max(0, sizeBefore - sizeAfter);
+
+        await dbManager.saveDbImmediate(db);
+
+        const smartAfterBytes = Buffer.byteLength(JSON.stringify(coreBackupMgr.extractSmartManagementState(db)), 'utf8');
+        const savedBytes = Math.max(0, smartBeforeBytes - smartAfterBytes);
+        const coreStatus = dbManager.getCoreStorageStatus();
 
         res.json({
             success: true,
             modified,
-            sizeBeforeBytes: sizeBefore,
-            sizeAfterBytes: sizeAfter,
-            sizeBeforeMB: (sizeBefore / (1024 * 1024)).toFixed(2),
-            sizeAfterMB: (sizeAfter / (1024 * 1024)).toFixed(2),
+            storageEngine: coreStatus.mode,
+            sizeBeforeBytes: smartBeforeBytes,
+            sizeAfterBytes: smartAfterBytes,
+            sizeBeforeMB: (smartBeforeBytes / (1024 * 1024)).toFixed(2),
+            sizeAfterMB: (smartAfterBytes / (1024 * 1024)).toFixed(2),
             savedMB: (savedBytes / (1024 * 1024)).toFixed(2),
             message: `بهینه‌سازی پایگاه داده با موفقیت انجام شد.`
         });
@@ -15180,164 +15190,246 @@ app.post('/api/send-bot-message', async (req, res) => {
     }
 });
 
-// --- UPDATED BACKUP ENDPOINTS ---
+// --- SMART MANAGEMENT POSTGRESQL HEALTH & ISOLATED BACKUP ENDPOINTS ---
 
-app.get('/api/backups/list', (req, res) => {
+app.get(['/api/core-db/health', '/api/system/postgres-health'], async (req, res) => {
     try {
-        if (!fs.existsSync(BACKUPS_DIR)) return res.json([]);
-        const files = fs.readdirSync(BACKUPS_DIR)
-            .filter(f => f.startsWith('AutoBackup_') || f.startsWith('Full_Backup_') || f.endsWith('.zip'))
-            .map(f => {
-                const stat = fs.statSync(path.join(BACKUPS_DIR, f));
-                return { name: f, size: stat.size, date: stat.mtime };
-            })
-            .sort((a, b) => b.date - a.date);
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        const [coreHealth, erpHealth] = await Promise.all([
+            corePg.probeCorePostgresHealth().catch((err) => ({
+                configured: corePg.isPostgresConfigured(),
+                connected: false,
+                storageEngine: dbManager.getCoreStorageStatus().mode,
+                lastError: err?.message || 'Probe failed',
+            })),
+            erpPg.probeErpPostgresHealth().catch(() => erpPg.getErpPostgresHealth()),
+        ]);
+        const status = dbManager.getCoreStorageStatus();
+        const { host: _omitHost, port: _omitPort, ...safeCoreHealth } = coreHealth || {};
+        res.json({
+            ok: true,
+            storageEngine: status.mode === 'postgresql' || coreHealth.connected ? 'postgresql' : status.mode,
+            migratedFromJsonOnBoot: status.migratedFromJsonOnBoot,
+            smartManagement: safeCoreHealth,
+            companyAccounting: {
+                configured: erpHealth.configured,
+                connected: erpHealth.connected,
+                storageEngine: erpHealth.storageEngine,
+                tablesCount: erpHealth.tablesCount || 0,
+                companiesCount: erpHealth.companiesCount || 0,
+                backupsIsolated: true,
+            },
+            architecture: {
+                backendApiGateway: 'Node.js / Express',
+                directClientToPostgres5432: false,
+                backupsStrictlyIsolated: true,
+                smartBackupDir: 'backups/smart',
+                accountingBackupDir: 'backups/companies',
+            },
+            serverTime: Date.now(),
+        });
+    } catch (e) {
+        res.status(200).json({
+            ok: false,
+            storageEngine: dbManager.getCoreStorageStatus().mode,
+            lastError: e.message,
+            serverTime: Date.now(),
+        });
+    }
+});
+
+app.get('/api/backups/list', async (req, res) => {
+    try {
+        const files = await coreBackupMgr.listSmartBackups(BACKUPS_DIR);
         res.json(files);
-    } catch(e) { res.status(500).json({error: "Failed"}); }
+    } catch (e) {
+        res.status(500).json({ error: "Failed" });
+    }
 });
 
 app.get('/api/backups/download/:filename', (req, res) => {
-    const filename = req.params.filename;
-    if (filename.includes('/') || filename.includes('..')) return res.status(400).send("Invalid");
-    const filePath = path.join(BACKUPS_DIR, filename);
-    if (fs.existsSync(filePath)) res.download(filePath);
-    else res.status(404).send("Not found");
+    const filePath = coreBackupMgr.resolveSmartBackupFilePath(BACKUPS_DIR, req.params.filename);
+    if (!filePath) return res.status(404).send("Not found");
+    res.download(filePath);
 });
 
-// FULL BACKUP (ZIP with DB + UPLOADS) - MANUAL TRIGGER
+// ISOLATED SMART MANAGEMENT BACKUP (Strictly Smart Management PostgreSQL tables + optional uploads, NEVER company accounting erp_*)
 app.get('/api/full-backup', async (req, res) => {
     try {
         const db = getDb();
-        await syncPgStatesIntoLegacyDbSnapshot(db);
-        const archive = archiver('zip', { zlib: { level: 9 } });
+        const smartData = coreBackupMgr.extractSmartManagementState(db);
+        const format = String(req.query?.format || 'zip').toLowerCase();
+        const mode = String(req.query?.mode || 'full').toLowerCase();
+        const includeUploads = mode !== 'db-only';
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const filename = `Full_Backup_${timestamp}.zip`;
-        
-        res.attachment(filename);
+        const engine = dbManager.getCoreStorageStatus().mode === 'postgresql' ? 'postgresql' : 'json';
+
+        if (format === 'sql') {
+            const envelope = coreBackupMgr.buildSmartBackupEnvelope(smartData, engine);
+            const sqlText = coreBackupMgr.generateSmartPostgresSqlDump(envelope);
+            const sqlBuf = Buffer.from(sqlText, 'utf8');
+            const filename = `Smart_Management_Postgres_${timestamp}.sql`;
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.setHeader('Content-Type', 'application/sql; charset=utf-8');
+            res.setHeader('Content-Length', String(sqlBuf.length));
+            return res.send(sqlBuf);
+        }
+
+        if (format === 'gz') {
+            const envelope = coreBackupMgr.buildSmartBackupEnvelope(smartData, engine);
+            const gzBuf = zlib.gzipSync(Buffer.from(JSON.stringify(envelope), 'utf8'), { level: 9 });
+            const filename = `Smart_Management_Backup_${timestamp}.json.gz`;
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.setHeader('Content-Type', 'application/gzip');
+            res.setHeader('Content-Length', String(gzBuf.length));
+            return res.send(gzBuf);
+        }
+
+        if (format === 'json') {
+            const envelope = coreBackupMgr.buildSmartBackupEnvelope(smartData, engine);
+            const jsonBuf = Buffer.from(JSON.stringify(envelope, null, 2), 'utf8');
+            const filename = `Smart_Management_Backup_${timestamp}.json`;
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Content-Length', String(jsonBuf.length));
+            return res.send(jsonBuf);
+        }
+
+        // Default: ZIP containing Smart_Postgres_*.sql + Smart_Snapshot_*.json (+ uploads/ if full)
+        const zipFilename = includeUploads
+            ? `Smart_Management_Full_Backup_${timestamp}.zip`
+            : `Smart_Management_DB_Backup_${timestamp}.zip`;
+        const envelope = coreBackupMgr.buildSmartBackupEnvelope(smartData, engine);
+        const sqlDumpText = coreBackupMgr.generateSmartPostgresSqlDump(envelope);
+
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        res.attachment(zipFilename);
         archive.pipe(res);
-        
-        if (fs.existsSync(DB_FILE)) archive.file(DB_FILE, { name: 'database.json' });
-        else archive.append(JSON.stringify(db, null, 2), { name: 'database.json' });
-        if (fs.existsSync(UPLOADS_DIR)) archive.directory(UPLOADS_DIR, 'uploads');
-        
+
+        archive.append(sqlDumpText, { name: `Smart_Postgres_${timestamp}.sql` });
+        archive.append(JSON.stringify(envelope, null, 2), { name: `Smart_Snapshot_${timestamp}.json` });
+        if (includeUploads && fs.existsSync(UPLOADS_DIR)) {
+            archive.directory(UPLOADS_DIR, 'uploads');
+        }
+
         archive.finalize();
     } catch (e) {
-        console.error("Manual Backup Error:", e);
+        console.error("Manual Smart Backup Error:", e);
         if (!res.headersSent) res.status(500).send("Backup Generation Failed");
     }
 });
 
-// SEND BACKUP TO TELEGRAM/BALE BOTS
+// SEND ISOLATED SMART MANAGEMENT BACKUP TO TELEGRAM/BALE BOTS
 app.post('/api/backups/send-to-bot', async (req, res) => {
     try {
-        const reason = req.body?.reason || "پشتیبان ارسالی دستی از پنل مدیریت";
+        const reason = req.body?.reason || "پشتیبان دستی مجزای مدیریت هوشمند";
         const mode = req.body?.mode || "auto"; // 'db' | 'full' | 'auto'
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        
-        if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
 
-        // If mode is 'db' (or default fast bot backup mode):
         if (mode === 'db' || mode === 'auto') {
             const dbBackup = await createDbOnlyBackupZip(timestamp);
-            const sendResult = await sendBackupToBots(dbBackup.filePath, dbBackup.filename, reason, true);
+            const counts = dbBackup.envelope?.recordCounts || {};
+            const caption = `📁 نسخه پشتیبان مجزای «مدیریت هوشمند» (PostgreSQL)\n📌 علت: ${reason}\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 فایل: ${dbBackup.filename}\n🗄️ محتوا: اسکریپت PostgreSQL (.sql) + اسنپ‌شات (.json)\n📊 دستورپرداخت: ${counts.orders || 0} | حواله: ${counts.exitPermits || 0} | چک صیادی: ${counts.sayanChequeReceipts || 0}\n🔒 بکاپ حسابداری شرکت‌ها کاملاً مجزا نگهداری می‌شود.`;
+            const buffer = fs.readFileSync(dbBackup.filePath);
+            const sendResult = await dispatchSpecificBufferToBots(buffer, dbBackup.filename, caption, true);
             return res.json({
                 success: sendResult.success,
-                filename: dbBackup.filename,
+                filename: sendResult.filenameSent || dbBackup.filename,
                 size: dbBackup.size,
                 botSendResult: sendResult
             });
         }
 
-        // Full backup mode requested:
-        const filename = `Backup_Full_${timestamp}.zip`;
-        const filePath = path.join(BACKUPS_DIR, filename);
+        // Full backup mode (Smart DB SQL+JSON + uploads)
+        const smartDir = coreBackupMgr.getSmartBackupDir(BACKUPS_DIR);
+        const filename = `Smart_Full_Backup_${timestamp}.zip`;
+        const filePath = path.join(smartDir, filename);
+        const db = getDb();
+        const smartData = coreBackupMgr.extractSmartManagementState(db);
 
-        const output = fs.createWriteStream(filePath);
-        const archive = archiver('zip', { zlib: { level: 6 } }); // Fast compression level
-
-        output.on('close', async () => {
-            try {
-                const sendResult = await sendBackupToBots(filePath, filename, reason, true);
-                res.json({
-                    success: sendResult.success,
-                    filename: sendResult.filenameSent || filename,
-                    size: archive.pointer(),
-                    botSendResult: sendResult
-                });
-            } catch (sendErr) {
-                console.error("Bot dispatch error after archiving:", sendErr);
-                res.status(500).json({ success: false, error: sendErr.message });
-            }
+        const zipRes = await coreBackupMgr.createSmartBackupZipFile({
+            targetFilePath: filePath,
+            smartData,
+            includeUploadsDir: true,
+            uploadsDir: UPLOADS_DIR,
+            compressionLevel: 6
         });
 
-        archive.on('error', (err) => {
-            console.error("Archive error:", err);
-            res.status(500).json({ success: false, error: err.message });
+        const counts = zipRes.envelope?.recordCounts || {};
+        const caption = `📁 نسخه پشتیبان کامل و مجزای «مدیریت هوشمند» (PostgreSQL + فایل‌ها)\n📌 علت: ${reason}\n⏰ تاریخ: ${new Date().toLocaleString('fa-IR')}\n💾 فایل: ${filename}\n📊 دستورپرداخت: ${counts.orders || 0} | حواله: ${counts.exitPermits || 0} | چک صیادی: ${counts.sayanChequeReceipts || 0}\n🔒 بکاپ حسابداری شرکت‌ها کاملاً مجزا است.`;
+        const buffer = fs.readFileSync(filePath);
+        const sendResult = await dispatchSpecificBufferToBots(buffer, filename, caption, true);
+
+        res.json({
+            success: sendResult.success,
+            filename: sendResult.filenameSent || filename,
+            size: zipRes.size,
+            botSendResult: sendResult
         });
-
-        archive.pipe(output);
-
-        if (fs.existsSync(DB_FILE)) archive.file(DB_FILE, { name: 'database.json' });
-        if (fs.existsSync(UPLOADS_DIR)) archive.directory(UPLOADS_DIR, 'uploads');
-
-        archive.finalize();
     } catch (e) {
-        console.error("Failed to send backup to bot:", e);
+        console.error("Failed to send Smart backup to bot:", e);
         res.status(500).json({ success: false, error: e.message });
     }
 });
 
-// FULL RESTORE (ZIP OR JSON) - SMART HANDLING
-app.post('/api/emergency-restore', (req, res) => {
-    const { fileData } = req.body;
-    if (!fileData) return res.status(400).json({ success: false, error: 'No data' });
-    
+// ISOLATED SMART MANAGEMENT RESTORE (ZIP, SQL, JSON.GZ, JSON) -> PostgreSQL smart_* ONLY (erp_* untouched)
+app.post('/api/emergency-restore', async (req, res) => {
+    const { fileData } = req.body || {};
+    if (!fileData) return res.status(400).json({ success: false, error: 'داده‌ای برای بازیابی ارسال نشده است.' });
+
     try {
-        const base64Data = fileData.replace(/^data:.*,/, '');
+        const base64Data = String(fileData).replace(/^data:.*,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
-        
-        // 1. Check Magic Number to see if ZIP (PK..)
-        const isZip = buffer[0] === 0x50 && buffer[1] === 0x4B;
+        const currentDb = getDb();
+        const todayJalali = utils.toShamsiFull(new Date()).split(' ')[0] || '';
 
-        if (isZip) {
-            console.log(">>> Restoring from ZIP archive...");
-            const tempZip = path.join(ROOT_DIR, 'temp_restore.zip');
-            fs.writeFileSync(tempZip, buffer);
+        const result = await coreBackupMgr.restoreSmartBackup({
+            backupsRootDir: BACKUPS_DIR,
+            currentDb,
+            backupInput: buffer,
+            restoredBy: req.body?.restoredBy || 'admin',
+            createdDateJalali: todayJalali,
+            saveImmediateFn: async (restoredFullDb, opts) => {
+                await dbManager.saveDbImmediate(restoredFullDb, {
+                    ...opts,
+                    normalize: true,
+                    preserveIndustrialErp: true,
+                });
+            },
+            extractUploadsFn: (zip) => {
+                const resolvedUploadsRoot = path.resolve(UPLOADS_DIR);
+                if (!fs.existsSync(resolvedUploadsRoot)) {
+                    fs.mkdirSync(resolvedUploadsRoot, { recursive: true });
+                }
+                let extracted = false;
+                for (const entry of zip.getEntries()) {
+                    if (entry.isDirectory) continue;
+                    const normalizedEntry = String(entry.entryName || '').replace(/\\/g, '/');
+                    if (!normalizedEntry.startsWith('uploads/')) continue;
+                    const relPath = normalizedEntry.slice('uploads/'.length);
+                    if (!relPath) continue;
+                    const targetPath = path.resolve(resolvedUploadsRoot, relPath);
+                    if (!targetPath.startsWith(resolvedUploadsRoot + path.sep)) continue;
+                    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                    fs.writeFileSync(targetPath, entry.getData());
+                    extracted = true;
+                }
+                if (extracted) console.log("✅ Smart Management uploads restored securely.");
+                return extracted;
+            },
+        });
 
-            const zip = new AdmZip(tempZip);
-            
-            // Extract database.json
-            const dbEntry = zip.getEntry('database.json');
-            if (dbEntry) {
-                const dbContent = zip.readAsText(dbEntry);
-                fs.writeFileSync(DB_FILE, dbContent);
-                // UPDATE MEMORY
-                const parsed = JSON.parse(dbContent);
-                dbManager.saveDbImmediate(parsed); 
-                console.log("✅ Database restored.");
-            }
-            
-            // Extract Uploads
-            if (zip.getEntry('uploads/')) {
-                zip.extractEntryTo("uploads/", ROOT_DIR, true, true); 
-                console.log("✅ Uploads restored.");
-            }
-            
-            fs.unlinkSync(tempZip);
-            res.json({ success: true, mode: 'zip' });
-        } else {
-            console.log(">>> Restoring from JSON text...");
-            const jsonStr = buffer.toString('utf-8');
-            const parsed = JSON.parse(jsonStr);
-            if (!parsed.settings && !parsed.users) throw new Error("Invalid backup file");
-            
-            dbManager.saveDbImmediate(parsed);
-            
-            res.json({ success: true, mode: 'json' });
-        }
+        res.json({
+            success: true,
+            mode: result.mode,
+            uploadsRestored: result.uploadsRestored,
+            recordCounts: result.recordCounts,
+            storageEngine: dbManager.getCoreStorageStatus().mode,
+            message: 'بازیابی اطلاعات بخش «مدیریت هوشمند» روی PostgreSQL با موفقیت انجام شد (اطلاعات حسابداری شرکت‌ها دست‌نخورده باقی ماند).'
+        });
     } catch (e) {
-        console.error("Restore failed:", e);
-        res.status(500).json({ success: false, error: e.message });
+        console.error("Smart Restore failed:", e);
+        res.status(400).json({ success: false, error: e.message });
     }
 });
 
@@ -15520,7 +15612,7 @@ app.post('/api/version/publish', async (req, res) => {
         } catch (_) {}
 
         if (dbManager && typeof dbManager.saveDbImmediate === 'function') {
-            dbManager.saveDbImmediate(db);
+            await dbManager.saveDbImmediate(db);
         }
 
         let botDispatch = null;
@@ -18274,97 +18366,135 @@ if (isExplicitDev) {
     });
 }
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  VITE v5.4.21  ready in 120 ms\n`);
-    console.log(`  ➜  Local:   http://localhost:${PORT}/`);
-    console.log(`  ➜  Network: http://0.0.0.0:${PORT}/`);
-    console.log(`  ➜  press h + enter to show help\n`);
-    console.log(`Server running on http://localhost:${PORT}`);
-    setTimeout(async () => {
-        try {
-            const db = getDb(); // Initial load to memory
-            if(db.settings?.telegramBotToken) {
-                const tgModule = await safeImport('./backend/telegram.js');
-                if(tgModule) tgModule.initTelegram(db.settings.telegramBotToken);
-            }
-            if(db.settings?.baleBotToken) {
-                const baleModule = await safeImport('./backend/bale.js');
-                if(baleModule) baleModule.initBaleBot(db.settings.baleBotToken);
-            }
-            const waAuthPath = path.join(ROOT_DIR, 'wauth');
-            if (fs.existsSync(waAuthPath) && process.env.DISABLE_WHATSAPP_DEV !== 'true') {
-                const waModule = await safeImport('./backend/whatsapp.js');
-                if (waModule) waModule.initWhatsApp(waAuthPath);
-            }
-        } catch (err) {
-            console.error("Background services initialization error:", err);
+const startApplicationServer = async () => {
+    try {
+        await dbManager.initCoreStorage();
+    } catch (coreInitErr) {
+        console.error('[Startup] Smart Core PostgreSQL bootstrap warning:', coreInitErr?.message || coreInitErr);
+    }
+    try {
+        if (erpPg.isPostgresConfigured()) {
+            await erpPg.ensureErpPostgresSchemaReady();
         }
-        setupAutoBackup();
-        setupDailyReports();
-        setupLegacyDailyReports();
-        setupWarehouseInventoryDailySync();
-        setupTaskRecurringReminders();
-        sayanOrderAuto.initAutomationCron();
-    }, 1000);
-});
+    } catch (erpInitErr) {
+        console.error('[Startup] ERP PostgreSQL bootstrap warning:', erpInitErr?.message || erpInitErr);
+    }
 
-// Prevent Node 18+/20+ default 300s requestTimeout from cutting off large 185MB+ installer downloads or backups
-try {
-    server.requestTimeout = 0;
-} catch (_) {}
-
-// WebSocket proxy support for ONLYOFFICE coauthoring and docservice
-server.on('upgrade', (req, socket, head) => {
-    if (req.url && (req.url.startsWith('/onlyoffice-proxy') || req.url.startsWith('/docservice') || req.url.startsWith('/spellchecker') || req.url.startsWith('/coauthoring'))) {
-        const targetBase = process.env.ONLYOFFICE_DOC_SERVER_INTERNAL_URL || 'http://127.0.0.1:8088';
-        try {
-            const parsedTarget = new URL(targetBase);
-            const targetPath = req.url.replace(/^\/onlyoffice-proxy/, '') || '/';
-            const proxyReq = http.request({
-                hostname: parsedTarget.hostname,
-                port: parsedTarget.port || 80,
-                path: targetPath,
-                method: req.method,
-                headers: {
-                    ...req.headers,
-                    host: parsedTarget.host,
-                    'x-forwarded-host': req.headers.host,
-                    'x-forwarded-proto': req.headers['x-forwarded-proto'] || 'http',
+    const server = app.listen(PORT, '0.0.0.0', () => {
+        console.log(`\n  VITE v5.4.21  ready in 120 ms\n`);
+        console.log(`  ➜  Local:   http://localhost:${PORT}/`);
+        console.log(`  ➜  Network: http://0.0.0.0:${PORT}/`);
+        console.log(`  ➜  Storage: Smart Management=${dbManager.getCoreStorageStatus().mode} | Accounting=${erpPg.isPostgresConfigured() ? 'postgresql' : 'json'}`);
+        console.log(`  ➜  press h + enter to show help\n`);
+        console.log(`Server running on http://localhost:${PORT}`);
+        setTimeout(async () => {
+            try {
+                const db = getDb(); // Already hydrated from PostgreSQL
+                if (db.settings?.telegramBotToken) {
+                    const tgModule = await safeImport('./backend/telegram.js');
+                    if (tgModule) tgModule.initTelegram(db.settings.telegramBotToken);
                 }
-            });
-            proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
-                socket.write(
-                    `HTTP/1.1 101 Switching Protocols\r\n` +
-                    Object.keys(proxyRes.headers).map(key => `${key}: ${proxyRes.headers[key]}`).join('\r\n') +
-                    '\r\n\r\n'
-                );
-                proxySocket.pipe(socket);
-                socket.pipe(proxySocket);
-            });
-            proxyReq.on('error', () => {
-                socket.destroy();
-            });
-            proxyReq.end();
-        } catch (e) {
-            socket.destroy();
-        }
-    }
-});
+                if (db.settings?.baleBotToken) {
+                    const baleModule = await safeImport('./backend/bale.js');
+                    if (baleModule) baleModule.initBaleBot(db.settings.baleBotToken);
+                }
+                const waAuthPath = path.join(ROOT_DIR, 'wauth');
+                if (fs.existsSync(waAuthPath) && process.env.DISABLE_WHATSAPP_DEV !== 'true') {
+                    const waModule = await safeImport('./backend/whatsapp.js');
+                    if (waModule) waModule.initWhatsApp(waAuthPath);
+                }
+            } catch (err) {
+                console.error("Background services initialization error:", err);
+            }
+            setupAutoBackup();
+            setupDailyReports();
+            setupLegacyDailyReports();
+            setupWarehouseInventoryDailySync();
+            setupTaskRecurringReminders();
+            sayanOrderAuto.initAutomationCron();
+        }, 1000);
+    });
 
-server.on('error', (err) => {
-    if (err && err.code === 'EADDRINUSE') {
-        console.error(`\n=======================================================================`);
-        console.error(`[خطا / Port In Use] پورت ${PORT} در حال حاضر اشغال است!`);
-        console.error(`علت: سرویس ویندوز (از طریق manager.bat) یا یک نمونه دیگر از سرور در حال اجراست.`);
-        console.error(`1. اگر قبلاً با manager.bat سرویس را نصب کرده‌اید، برنامه در حال اجراست و کافیست`);
-        console.error(`   مرورگر را باز کنید و آدرس زیر را وارد نمایید:`);
-        console.error(`   --> http://localhost:${PORT}`);
-        console.error(`2. برای متوقف کردن سرویس پس‌زمینه، در CMD بزنید: net stop PaymentSystem`);
-        console.error(`=======================================================================\n`);
-    } else {
-        console.error(`[Server Error]:`, err);
-    }
-});
+    // Prevent Node 18+/20+ default 300s requestTimeout from cutting off large 185MB+ installer downloads or backups
+    try {
+        server.requestTimeout = 0;
+    } catch (_) {}
+
+    // WebSocket proxy support for ONLYOFFICE coauthoring and docservice
+    server.on('upgrade', (req, socket, head) => {
+        if (req.url && (req.url.startsWith('/onlyoffice-proxy') || req.url.startsWith('/docservice') || req.url.startsWith('/spellchecker') || req.url.startsWith('/coauthoring'))) {
+            const targetBase = process.env.ONLYOFFICE_DOC_SERVER_INTERNAL_URL || 'http://127.0.0.1:8088';
+            try {
+                const parsedTarget = new URL(targetBase);
+                const targetPath = req.url.replace(/^\/onlyoffice-proxy/, '') || '/';
+                const proxyReq = http.request({
+                    hostname: parsedTarget.hostname,
+                    port: parsedTarget.port || 80,
+                    path: targetPath,
+                    method: req.method,
+                    headers: {
+                        ...req.headers,
+                        host: parsedTarget.host,
+                        'x-forwarded-host': req.headers.host,
+                        'x-forwarded-proto': req.headers['x-forwarded-proto'] || 'http',
+                    }
+                });
+                proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+                    socket.write(
+                        `HTTP/1.1 101 Switching Protocols\r\n` +
+                        Object.keys(proxyRes.headers).map(key => `${key}: ${proxyRes.headers[key]}`).join('\r\n') +
+                        '\r\n\r\n'
+                    );
+                    proxySocket.pipe(socket);
+                    socket.pipe(proxySocket);
+                });
+                proxyReq.on('error', () => {
+                    socket.destroy();
+                });
+                proxyReq.end();
+            } catch (e) {
+                socket.destroy();
+            }
+        }
+    });
+
+    server.on('error', (err) => {
+        if (err && err.code === 'EADDRINUSE') {
+            console.error(`\n=======================================================================`);
+            console.error(`[خطا / Port In Use] پورت ${PORT} در حال حاضر اشغال است!`);
+            console.error(`علت: سرویس ویندوز (از طریق manager.bat) یا یک نمونه دیگر از سرور در حال اجراست.`);
+            console.error(`1. اگر قبلاً با manager.bat سرویس را نصب کرده‌اید، برنامه در حال اجراست و کافیست`);
+            console.error(`   مرورگر را باز کنید و آدرس زیر را وارد نمایید:`);
+            console.error(`   --> http://localhost:${PORT}`);
+            console.error(`2. برای متوقف کردن سرویس پس‌زمینه، در CMD بزنید: net stop PaymentSystem`);
+            console.error(`=======================================================================\n`);
+        } else {
+            console.error(`[Server Error]:`, err);
+        }
+    });
+
+    const gracefulShutdown = async (signal) => {
+        console.log(`\n[Shutdown] Received ${signal}. Flushing pending PostgreSQL writes...`);
+        try {
+            await dbManager.flushPendingSaves();
+            await corePg.closeCorePgPools();
+        } catch (err) {
+            console.error('[Shutdown] Flush warning:', err?.message || err);
+        }
+        try {
+            server.close(() => process.exit(0));
+            setTimeout(() => process.exit(0), 2000).unref();
+        } catch {
+            process.exit(0);
+        }
+    };
+
+    process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+    process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+};
+
+startApplicationServer();
+
 
 
 

@@ -323,14 +323,22 @@ const ChequeReviewRow: React.FC<ChequeRowProps> = ({
                     </label>
                     <button
                         type="button"
-                        onClick={() => onChange(index, 'isCustomerSelfIssuer', !item.isCustomerSelfIssuer)}
+                        onClick={() => onChange(index, 'isCustomerSelfIssuer', item.isCustomerSelfIssuer === true ? false : true)}
                         className={`w-full px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
-                            item.isCustomerSelfIssuer
+                            item.isCustomerSelfIssuer === true
                                 ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-400 text-emerald-700 dark:text-emerald-300'
-                                : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                : item.isCustomerSelfIssuer === false
+                                ? 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                : 'bg-slate-50 dark:bg-slate-800/60 border-dashed border-slate-300 dark:border-slate-700 text-slate-400'
                         }`}
                     >
-                        <span>{item.isCustomerSelfIssuer ? 'خود مشتری (صاحب چک)' : 'چک شخص ثالث (غیر)'}</span>
+                        <span>
+                            {item.isCustomerSelfIssuer === true
+                                ? 'خود مشتری (صاحب چک)'
+                                : item.isCustomerSelfIssuer === false
+                                ? 'چک شخص ثالث (غیر)'
+                                : 'تعیین نشده (سوابق قبلی)'}
+                        </span>
                     </button>
                 </div>
             </div>
@@ -438,7 +446,7 @@ export const AccountingReviewModal: React.FC<Props> = ({
                 description: '',
                 registrationType: '',
                 registeredPersonName: '',
-                isCustomerSelfIssuer: true
+                isCustomerSelfIssuer: false
             }
         ];
     });
@@ -518,7 +526,7 @@ export const AccountingReviewModal: React.FC<Props> = ({
                 description: ch.description,
                 registrationType: ch.registrationType || '',
                 registeredPersonName: ch.registrationType === 'person' ? (ch.registeredPersonName || '').trim() : '',
-                isCustomerSelfIssuer: Boolean(ch.isCustomerSelfIssuer)
+                ...(typeof ch.isCustomerSelfIssuer === 'boolean' ? { isCustomerSelfIssuer: ch.isCustomerSelfIssuer } : {})
             })),
             attachments: sanitizedAttachments,
             accountingNote
@@ -787,7 +795,7 @@ export const AccountingReviewModal: React.FC<Props> = ({
                                             description: '',
                                             registrationType: '',
                                             registeredPersonName: '',
-                                            isCustomerSelfIssuer: true
+                                            isCustomerSelfIssuer: false
                                         }
                                     ]);
                                 }}

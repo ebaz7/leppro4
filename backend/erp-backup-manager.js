@@ -518,9 +518,16 @@ export function parseAndValidateCompanyBackupPayload(input) {
     throw new Error('ساختار فایل پشتیبان نامعتبر است.');
   }
 
-  // Reject accidental full system database.json uploads to protect other companies
-  if (parsed.companiesData || parsed.exitPermits || parsed.paymentOrders || parsed.users) {
-    throw new Error('فایل انتخابی بکاپ کلی سامانه است. لطفاً فقط فایل بکاپ اختصاصی شرکت را انتخاب کنید.');
+  // Reject accidental Smart Management or full system database.json uploads to protect company accounting isolation
+  if (
+    parsed.scope === 'smart_management' ||
+    parsed.formatVersion === 'delkam-smart-core-backup-v2' ||
+    parsed.companiesData ||
+    parsed.exitPermits ||
+    parsed.paymentOrders ||
+    parsed.users
+  ) {
+    throw new Error('فایل انتخابی بکاپ بخش «مدیریت هوشمند» یا بکاپ کلی سامانه است. لطفاً فقط فایل بکاپ اختصاصی شرکت را انتخاب کنید.');
   }
 
   let extractedState = null;

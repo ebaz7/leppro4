@@ -372,9 +372,13 @@ export const ChequeItemRow: React.FC<Props> = ({
                             {getChequeRegistrationLabel(item.registrationType, item.registeredPersonName)}
                         </span>
                     ) : null}
-                    {item.isCustomerSelfIssuer ? (
+                    {item.isCustomerSelfIssuer === true ? (
                         <span className="text-[11px] font-black px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800">
                             به نام خود مشتری
+                        </span>
+                    ) : item.isCustomerSelfIssuer === false ? (
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+                            شخص ثالث
                         </span>
                     ) : null}
                 </div>
@@ -809,7 +813,7 @@ export const ChequeItemRow: React.FC<Props> = ({
                                 ? 'bg-emerald-600 text-white'
                                 : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                         }`}>
-                            {item.isCustomerSelfIssuer ? 'به نام خودش' : 'شخص ثالث'}
+                            {item.isCustomerSelfIssuer ? 'به نام خودش' : 'شخص ثالث (پیش‌فرض)'}
                         </span>
                     </button>
                 </div>

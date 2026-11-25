@@ -1146,11 +1146,11 @@ tfoot th {
   color: inherit !important;
 }
 
-.bg-indigo-950 td,
-.bg-slate-900 td,
-.bg-blue-900 td,
-.bg-emerald-900 td,
-.bg-sky-900 td {
+.bg-indigo-950 table:not(.bg-white) td,
+.bg-slate-900 table:not(.bg-white) td,
+.bg-blue-900 table:not(.bg-white) td,
+.bg-emerald-900 table:not(.bg-white) td,
+.bg-sky-900 table:not(.bg-white) td {
   color: #ffffff !important;
 }
 
@@ -1869,6 +1869,11 @@ tr.bg-indigo-950 td.text-sky-300 {
 */
 html .printable-content,
 html .printable-content .bg-white,
+html #a5-cheque-receipt-preview-card,
+html #a5-cheque-receipt-preview-card .bg-white,
+html #a5-cheque-receipt-preview-card table,
+html #a5-cheque-receipt-preview-card tbody,
+html #a5-cheque-receipt-preview-card tr,
 html [id*="print-content"],
 html [id*="print-content"] .bg-white,
 html [id*="-print-"],
@@ -1894,12 +1899,20 @@ html .printable-content h3,
 html .printable-content h4,
 html .printable-content h5,
 html .printable-content h6,
-html .printable-content span:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
-html .printable-content div:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
+html .printable-content span:not(.text-emerald-800):not(.text-emerald-700):not(.text-green-600):not(.text-rose-700):not(.text-red-500):not(.text-blue-700):not(.text-blue-600):not(.text-purple-700):not(.text-amber-800),
+html .printable-content div:not(.text-emerald-800):not(.text-emerald-700):not(.text-green-600):not(.text-rose-700):not(.text-red-500):not(.text-blue-700):not(.text-blue-600):not(.text-purple-700):not(.text-amber-800),
 html .printable-content td:not(.text-emerald-800):not(.text-green-600):not(.text-red-500):not(.text-blue-600),
 html .printable-content th,
 html .printable-content tr,
 html .printable-content table,
+html #a5-cheque-receipt-preview-card p,
+html #a5-cheque-receipt-preview-card h1,
+html #a5-cheque-receipt-preview-card h2,
+html #a5-cheque-receipt-preview-card h3,
+html #a5-cheque-receipt-preview-card td,
+html #a5-cheque-receipt-preview-card th,
+html #a5-cheque-receipt-preview-card tr,
+html #a5-cheque-receipt-preview-card table,
 html [id*="print-content"] p,
 html [id*="print-content"] h1,
 html [id*="print-content"] h2,
@@ -1940,17 +1953,20 @@ html [id*="print-section"] th {
 /* Style table borders inside printable templates explicitly */
 html .printable-content th,
 html .printable-content td,
+html #a5-cheque-receipt-preview-card th,
+html #a5-cheque-receipt-preview-card td,
 html [id*="print-content"] th,
 html [id*="print-content"] td,
 html [id*="print-area"] th,
 html [id*="print-area"] td,
 html [id*="print-section"] th,
 html [id*="print-section"] td {
-  border-color: #94a3b8 !important; /* more visible, high-contrast border */
+  border-color: #64748b !important; /* high-contrast crisp border */
 }
 
 /* Fix background for table headers inside print areas */
 html .printable-content th,
+html #a5-cheque-receipt-preview-card th,
 html [id*="print-content"] th,
 html [id*="print-area"] th,
 html [id*="print-section"] th {

@@ -884,18 +884,12 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                 let cashboxCode = '';
                 const cheques = [];
                 const cleanHeaderPerson = String(h.PersonName || '').trim();
-                const normHeaderPerson = normComparePerson(cleanHeaderPerson);
 
                 for (const row of rows) {
                     if (!poshtNomreh && row.PoshtNomreh) poshtNomreh = row.PoshtNomreh;
                     if (!cashboxCode && row.CashboxCode) cashboxCode = String(row.CashboxCode).trim();
                     if (row.ChequeId || row.ChequeNumber) {
                         const cleanInNameOf = String(row.InNameOf || '').trim();
-                        const normInNameOf = normComparePerson(cleanInNameOf);
-                        let inferredSelfIssuer = undefined;
-                        if (normHeaderPerson && normInNameOf) {
-                            inferredSelfIssuer = normHeaderPerson === normInNameOf || normInNameOf.includes(normHeaderPerson) || normHeaderPerson.includes(normInNameOf);
-                        }
                         cheques.push({
                             chequeId: row.ChequeId,
                             rowId: row.RowId,
@@ -906,7 +900,6 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
                             bankName: row.BankName || '',
                             inNameOf: cleanInNameOf,
                             poshtNomreh: row.PoshtNomreh || poshtNomreh || '',
-                            isCustomerSelfIssuer: inferredSelfIssuer,
                             rowSeq: row.RowSeq
                         });
                     }
@@ -1023,11 +1016,11 @@ const normalizeChequeItem = (ch, fallbackPersonName, fallbackPoshtNomreh, idx, p
             ? String(ch.registeredPersonName !== undefined ? ch.registeredPersonName : (prevCheque?.registeredPersonName || '')).trim()
             : '';
     const isCustomerSelfIssuer =
-        ch.isCustomerSelfIssuer !== undefined
-            ? Boolean(ch.isCustomerSelfIssuer)
-            : prevCheque?.isCustomerSelfIssuer !== undefined
-                ? Boolean(prevCheque.isCustomerSelfIssuer)
-                : false;
+        typeof ch.isCustomerSelfIssuer === 'boolean'
+            ? ch.isCustomerSelfIssuer
+            : typeof prevCheque?.isCustomerSelfIssuer === 'boolean'
+                ? prevCheque.isCustomerSelfIssuer
+                : undefined;
 
     return {
         id: ch.id || prevCheque?.id || crypto.randomUUID(),
@@ -1974,7 +1967,7 @@ export const registerChequeReceiptInSayan = async (receiptId, currentUser, force
                     description: ch.description || '',
                     registrationType: ch.registrationType || '',
                     registeredPersonName: ch.registrationType === 'person' ? String(ch.registeredPersonName || '').trim() : '',
-                    isCustomerSelfIssuer: Boolean(ch.isCustomerSelfIssuer),
+                    ...(typeof ch.isCustomerSelfIssuer === 'boolean' ? { isCustomerSelfIssuer: ch.isCustomerSelfIssuer } : {}),
                     poshtNomreh,
                     rowSeq
                 });

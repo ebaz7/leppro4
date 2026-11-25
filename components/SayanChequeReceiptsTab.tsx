@@ -28,6 +28,7 @@ import { MobileAttachmentUploader, ReceiptAttachment } from './sayan-cheques/Mob
 import { ChequeWorkflowSettingsModal, ChequeWorkflowConfig } from './ChequeWorkflowSettingsModal';
 import { getEffectiveApiUrl, getAuthToken, resolveImageUrl } from '../services/apiService';
 import { FileViewerModal } from './FileViewerModal';
+import { printChequeCartableReport, downloadChequeCartablePdfReport } from '../utils/chequeCartableReport';
 
 interface SayanPerson {
     personCode: string;
@@ -337,7 +338,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             description: '',
             registrationType: '',
             registeredPersonName: '',
-            isCustomerSelfIssuer: true
+            isCustomerSelfIssuer: false
         }
     ]);
 
@@ -354,7 +355,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     const [sayanRegFilter, setSayanRegFilter] = useState<'ALL' | 'REGISTERED' | 'UNREGISTERED' | 'PROCESSING' | 'NEEDS_REREGISTER'>('ALL');
     const [sayadiRegTypeFilter, setSayadiRegTypeFilter] = useState<'ALL' | 'company' | 'person' | 'unregistered' | 'unspecified'>('ALL');
     const [registeredPersonFilter, setRegisteredPersonFilter] = useState('');
-    const [issuerRelationFilter, setIssuerRelationFilter] = useState<'ALL' | 'SELF' | 'THIRD_PARTY'>('ALL');
+    const [issuerRelationFilter, setIssuerRelationFilter] = useState<'ALL' | 'SELF' | 'THIRD_PARTY' | 'UNSPECIFIED'>('ALL');
     const [delivererFilter, setDelivererFilter] = useState('');
     const [inNameOfFilter, setInNameOfFilter] = useState('');
     const [bankFilter, setBankFilter] = useState('ALL');
@@ -373,6 +374,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     >('receiptNo');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
     const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+    const [printingCartableReport, setPrintingCartableReport] = useState(false);
+    const [exportingCartablePdf, setExportingCartablePdf] = useState(false);
 
     // Modals
     const [inspectingArchiveCode, setInspectingArchiveCode] = useState<{ archiveCode: string | number; docNo?: string | number } | null>(null);
@@ -923,7 +926,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 description: '',
                 registrationType: '',
                 registeredPersonName: '',
-                isCustomerSelfIssuer: true
+                isCustomerSelfIssuer: false
             }
         ]);
         if (autoFocus) {
@@ -1149,7 +1152,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         description: '',
                         registrationType: '',
                         registeredPersonName: '',
-                        isCustomerSelfIssuer: true
+                        isCustomerSelfIssuer: false
                     }
                 ]);
                 fetchReceipts(true);
@@ -1378,14 +1381,9 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         return '';
     };
 
-    const resolveChequeSelfIssuer = (r: ChequeReceiptRecord, c: NonNullable<ChequeReceiptRecord['cheques']>[number]): boolean | null => {
+    const resolveChequeSelfIssuer = (_r: ChequeReceiptRecord, c: NonNullable<ChequeReceiptRecord['cheques']>[number]): boolean | null => {
         if (c.isCustomerSelfIssuer === true) return true;
         if (c.isCustomerSelfIssuer === false) return false;
-        const pName = normalizeSearchText(r.personName || '');
-        const inName = normalizeSearchText(c.inNameOf || '');
-        if (pName && inName) {
-            return pName === inName || pName.includes(inName) || inName.includes(pName);
-        }
         return null;
     };
 
@@ -1572,6 +1570,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     const rel = resolveChequeSelfIssuer(r, c);
                     if (issuerRelationFilter === 'SELF') return rel === true;
                     if (issuerRelationFilter === 'THIRD_PARTY') return rel === false;
+                    if (issuerRelationFilter === 'UNSPECIFIED') return rel === null;
                     return false;
                 });
                 if (!matchIssuer) return false;
@@ -1780,6 +1779,171 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             unregisteredCount
         };
     }, [archiveList]);
+
+    const activeFilterSummaryList = useMemo(() => {
+        const list: string[] = [];
+        if (searchTerm.trim()) list.push(`جستجو: «${searchTerm.trim()}»`);
+        if (sayanRegFilter !== 'ALL') {
+            const map: Record<string, string> = {
+                REGISTERED: 'ثبت شده در سایان',
+                UNREGISTERED: 'ثبت نشده در سایان',
+                PROCESSING: 'در حال ثبت پس‌زمینه',
+                NEEDS_REREGISTER: 'سند ۱ (نیازمند ثبت مجدد)',
+            };
+            list.push(`وضعیت سایان: ${map[sayanRegFilter] || sayanRegFilter}`);
+        }
+        if (statusFilter !== 'ALL') {
+            const map: Record<string, string> = {
+                PENDING_ACCOUNTING: 'منتظر تایید حسابداری',
+                PENDING_CEO: workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت سایان',
+                REGISTERED_IN_SAYAN: 'نهایی / ثبت‌شده',
+                REJECTED: 'عودت / رد شده',
+            };
+            list.push(`مرحله کارتابل: ${map[statusFilter] || statusFilter}`);
+        }
+        if (sayadiRegTypeFilter !== 'ALL') {
+            const map: Record<string, string> = {
+                company: 'ثبت به نام شرکت',
+                person: 'ثبت به نام شخص',
+                unregistered: 'ثبت نشده در صیاد',
+                unspecified: 'تعیین نشده (سوابق قبلی)',
+            };
+            list.push(`وضعیت صیادی: ${map[sayadiRegTypeFilter] || sayadiRegTypeFilter}`);
+        }
+        if (registeredPersonFilter.trim()) list.push(`شخص ثبت‌شده در صیاد: ${registeredPersonFilter.trim()}`);
+        if (issuerRelationFilter !== 'ALL') {
+            const map: Record<string, string> = {
+                SELF: 'خود مشتری',
+                THIRD_PARTY: 'چک شخص ثالث',
+                UNSPECIFIED: 'نسبت تعیین نشده (سوابق قبلی)',
+            };
+            list.push(`نسبت صادرکننده: ${map[issuerRelationFilter] || issuerRelationFilter}`);
+        }
+        if (delivererFilter.trim()) list.push(`تحویل‌دهنده: ${delivererFilter.trim()}`);
+        if (inNameOfFilter.trim()) list.push(`صاحب چک: ${inNameOfFilter.trim()}`);
+        if (bankFilter !== 'ALL') list.push(`بانک: ${bankFilter}`);
+        if (cashboxFilter !== 'ALL') {
+            const box = cashboxesList.find(b => b.code === cashboxFilter);
+            list.push(`صندوق: ${box ? box.title : cashboxFilter}`);
+        }
+        if (dueDateFrom.trim() || dueDateTo.trim()) {
+            list.push(`سررسید چک: ${dueDateFrom.trim() || 'ابتدا'} تا ${dueDateTo.trim() || 'انتها'}`);
+        }
+        if (docDateFrom.trim() || docDateTo.trim()) {
+            list.push(`تاریخ ثبت رسید: ${docDateFrom.trim() || 'ابتدا'} تا ${docDateTo.trim() || 'انتها'}`);
+        }
+        if (minAmountFilter.trim() || maxAmountFilter.trim()) {
+            const minFmt = minAmountFilter.trim() ? Number(normalizeToAsciiDigits(minAmountFilter).replace(/[^\d]/g, '')).toLocaleString('fa-IR') : '۰';
+            const maxFmt = maxAmountFilter.trim() ? Number(normalizeToAsciiDigits(maxAmountFilter).replace(/[^\d]/g, '')).toLocaleString('fa-IR') : 'نامحدود';
+            list.push(`مبلغ: از ${toPersianDigits(minFmt)} تا ${toPersianDigits(maxFmt)} ریال`);
+        }
+        if (sayadFilter !== 'ALL') list.push(sayadFilter === 'HAS_SAYAD' ? 'دارای شناسه صیاد' : 'بدون شناسه صیاد');
+        if (attachmentFilter !== 'ALL') list.push(attachmentFilter === 'HAS_ATTACHMENT' ? 'دارای پیوست' : 'بدون پیوست');
+        if (sourceFilter !== 'ALL') list.push(`منبع: ${sourceFilter === 'APP_DRAFT' ? 'ثبت سامانه' : 'سایان ERP'}`);
+        return list;
+    }, [
+        searchTerm, sayanRegFilter, statusFilter, workflowConfig.requireCeoApproval,
+        sayadiRegTypeFilter, registeredPersonFilter, issuerRelationFilter, delivererFilter,
+        inNameOfFilter, bankFilter, cashboxFilter, cashboxesList, dueDateFrom, dueDateTo,
+        docDateFrom, docDateTo, minAmountFilter, maxAmountFilter, sayadFilter,
+        attachmentFilter, sourceFilter
+    ]);
+
+    const buildCartableReportPayload = (scope: 'ARCHIVE' | 'CARTABLE') => {
+        const sortLabelMap: Record<string, string> = {
+            receiptNo: 'شماره رسید',
+            poshtNomreh: 'شماره پشت‌نمره',
+            docDate: 'تاریخ ثبت رسید',
+            nearestDueDate: 'نزدیک‌ترین سررسید چک',
+            farthestDueDate: 'دورترین سررسید چک',
+            totalAmount: 'مبلغ کل رسید',
+            chequeCount: 'تعداد برگ چک',
+            personName: 'نام تحویل‌دهنده',
+            inNameOf: 'صاحب چک (در وجه)',
+            bankName: 'بانک صادرکننده',
+            sayadiRegType: 'وضعیت ثبت صیادی',
+            issuerRelation: 'نسبت صادرکننده (خود/ثالث)',
+            sayanStatus: 'وضعیت ثبت سایان',
+        };
+        const cashboxMap: Record<string, string> = {};
+        cashboxesList.forEach(b => {
+            if (b.code) cashboxMap[String(b.code).trim()] = b.title;
+        });
+
+        if (scope === 'CARTABLE') {
+            const cartableReceipts = [...pendingAccountingList, ...pendingCeoList];
+            return {
+                reportTitle: 'گزارش مدیریتی کارتابل جاری رسیدهای چک',
+                reportSubtitle: 'شامل اسناد منتظر بررسی کارشناسی حسابداری و تایید نهایی مدیرعامل جهت ثبت در سایان',
+                receipts: cartableReceipts,
+                totalReceiptsInSystem: receiptsList.length,
+                activeFilters: [
+                    `مرحله ۱ (منتظر حسابداری): ${toPersianDigits(pendingAccountingList.length)} رسید`,
+                    `مرحله ۲ (${workflowConfig.requireCeoApproval ? 'منتظر مدیرعامل' : 'آماده ثبت سایان'}): ${toPersianDigits(pendingCeoList.length)} رسید`,
+                ],
+                sortLabel: 'اولویت کارتابل (حسابداری و مدیریت)',
+                sortDirLabel: 'جاری',
+                fiscalYear,
+                generatedByName: currentUser?.fullName || currentUser?.name || '',
+                cashboxTitleMap: cashboxMap,
+                requireCeoApproval: workflowConfig.requireCeoApproval,
+                companyName: 'شرکت لپان بافت',
+            };
+        }
+
+        return {
+            reportTitle: 'گزارش مدیریتی بایگانی و سوابق رسیدهای چک',
+            reportSubtitle: 'گزارش جامع و منطبق بر فیلترها و مرتب‌سازی انتخابی کاربر در کارتابل و بایگانی چک',
+            receipts: archiveList,
+            totalReceiptsInSystem: receiptsList.length,
+            activeFilters: activeFilterSummaryList,
+            sortLabel: sortLabelMap[sortBy] || 'شماره رسید',
+            sortDirLabel: sortDir === 'asc' ? 'صعودی' : 'نزولی',
+            fiscalYear,
+            generatedByName: currentUser?.fullName || currentUser?.name || '',
+            cashboxTitleMap: cashboxMap,
+            requireCeoApproval: workflowConfig.requireCeoApproval,
+            companyName: 'شرکت لپان بافت',
+        };
+    };
+
+    const handlePrintCartableReport = async (scope: 'ARCHIVE' | 'CARTABLE') => {
+        const payload = buildCartableReportPayload(scope);
+        if (!payload.receipts || payload.receipts.length === 0) {
+            setErrorMessage('هیچ رسید چکی برای چاپ در حالت فعلی وجود ندارد.');
+            return;
+        }
+        setPrintingCartableReport(true);
+        setErrorMessage(null);
+        try {
+            await printChequeCartableReport(payload);
+        } catch (err: any) {
+            setErrorMessage(err?.message || 'خطا در آماده‌سازی چاپ گزارش مدیریتی');
+        } finally {
+            setPrintingCartableReport(false);
+        }
+    };
+
+    const handleDownloadCartablePdf = async (scope: 'ARCHIVE' | 'CARTABLE') => {
+        const payload = buildCartableReportPayload(scope);
+        if (!payload.receipts || payload.receipts.length === 0) {
+            setErrorMessage('هیچ رسید چکی برای خروجی PDF در حالت فعلی وجود ندارد.');
+            return;
+        }
+        setExportingCartablePdf(true);
+        setErrorMessage(null);
+        try {
+            const ok = await downloadChequeCartablePdfReport(payload);
+            if (ok) {
+                setSuccessMessage(`فایل PDF گزارش مدیریتی (${toPersianDigits(payload.receipts.length)} رسید) با موفقیت آماده و دریافت شد.`);
+                setTimeout(() => setSuccessMessage(null), 4000);
+            }
+        } catch (err: any) {
+            setErrorMessage(err?.message || 'خطا در تولید فایل PDF گزارش مدیریتی');
+        } finally {
+            setExportingCartablePdf(false);
+        }
+    };
 
     return (
         <div className="space-y-6">
@@ -2482,6 +2646,36 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             {/* Sub-tab 2: CARTABLE (ACCOUNTING & CEO APPROVALS) */}
             {activeSubTab === 'CARTABLE' && (
                 <div className="space-y-6">
+                    {/* Cartable Management Export Bar */}
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 px-4 py-3 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="text-xs">
+                            <span className="font-black text-slate-900 dark:text-white">گزارش کامل کارتابل جاری جهت ارائه به مدیریت</span>
+                            <span className="text-slate-500 dark:text-slate-400 mr-2 font-mono">
+                                ({toPersianDigits(pendingAccountingList.length + pendingCeoList.length)} رسید در جریان)
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => handleDownloadCartablePdf('CARTABLE')}
+                                disabled={exportingCartablePdf || (pendingAccountingList.length + pendingCeoList.length === 0)}
+                                className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                            >
+                                {exportingCartablePdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                <span>فایل PDF کارتابل</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handlePrintCartableReport('CARTABLE')}
+                                disabled={printingCartableReport || (pendingAccountingList.length + pendingCeoList.length === 0)}
+                                className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                            >
+                                {printingCartableReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                                <span>چاپ گزارش کارتابل</span>
+                            </button>
+                        </div>
+                    </div>
+
                     {/* 1. Accounting Pending Items */}
                     <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs space-y-4">
                         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
@@ -3033,6 +3227,28 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
                             <button
                                 type="button"
+                                onClick={() => handleDownloadCartablePdf('ARCHIVE')}
+                                disabled={exportingCartablePdf || archiveList.length === 0}
+                                className="min-h-[42px] px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer shrink-0"
+                                title="خروجی فایل PDF دقیق مطابق با فیلترها و مرتب‌سازی فعلی"
+                            >
+                                {exportingCartablePdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                <span>فایل PDF گزارش</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => handlePrintCartableReport('ARCHIVE')}
+                                disabled={printingCartableReport || archiveList.length === 0}
+                                className="min-h-[42px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer shrink-0"
+                                title="چاپ مستقیم گزارش مدیریتی مطابق با فیلترها و مرتب‌سازی فعلی"
+                            >
+                                {printingCartableReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                                <span>چاپ گزارش</span>
+                            </button>
+
+                            <button
+                                type="button"
                                 onClick={() => fetchReceipts(false)}
                                 className="min-h-[42px] px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer shrink-0 flex items-center justify-center"
                                 title="بروزرسانی لیست"
@@ -3226,9 +3442,10 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                 onChange={(e) => setIssuerRelationFilter(e.target.value as any)}
                                                 className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
                                             >
-                                                <option value="ALL">همه (خود مشتری و شخص ثالث)</option>
+                                                <option value="ALL">همه (خود مشتری، شخص ثالث و قبلی‌ها)</option>
                                                 <option value="SELF">صاحب چک و تحویل‌دهنده یکی است (خود مشتری)</option>
                                                 <option value="THIRD_PARTY">چک شخص ثالث (صاحب چک فرد دیگر است)</option>
+                                                <option value="UNSPECIFIED">تعیین نشده (سوابق قبلی)</option>
                                             </select>
                                         </div>
 
@@ -3653,7 +3870,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     </span>
                                                 )}
 
-                                                {selfRel !== null && (
+                                                {selfRel !== null ? (
                                                     <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
                                                         selfRel
                                                             ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/50 dark:text-teal-300'
@@ -3661,6 +3878,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     }`}>
                                                         {getChequeIssuerLabel(selfRel)}
                                                     </span>
+                                                ) : (
+                                                    <span className="text-[10px] text-slate-400">نسبت صادرکننده تعیین نشده</span>
                                                 )}
                                             </div>
 
@@ -3801,7 +4020,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                             ) : (
                                                                 <span className="text-[10px] text-slate-400">صیادی تعیین نشده</span>
                                                             )}
-                                                            {selfRel !== null && (
+                                                            {selfRel !== null ? (
                                                                 <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
                                                                     selfRel
                                                                         ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/60 dark:text-teal-300'
@@ -3809,6 +4028,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                                 }`}>
                                                                     {getChequeIssuerLabel(selfRel)}
                                                                 </span>
+                                                            ) : (
+                                                                <span className="text-[10px] text-slate-400">نسبت صادرکننده تعیین نشده</span>
                                                             )}
                                                         </div>
                                                     </td>

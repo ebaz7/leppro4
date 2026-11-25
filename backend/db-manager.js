@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import http from 'http';
 import https from 'https';
 import dns from 'dns';
+import * as corePg from './core-pg-repository.js';
 
 // Ensure DNS lookups prefer IPv4 to prevent 2-5 second IPv6 (::1) lookup timeouts on Windows local networks
 try {
@@ -433,114 +434,121 @@ export const sanitizeAndOffloadDb = (db) => {
 let MEMORY_DB_CACHE = null;
 let saveTimeout = null;
 let isSaving = false;
+let CORE_STORAGE_MODE = 'uninitialized'; // 'postgresql' | 'json' | 'uninitialized'
+let MIGRATED_FROM_JSON_ON_BOOT = false;
 
-export const getDb = () => {
-    if (MEMORY_DB_CACHE) return MEMORY_DB_CACHE;
-    try {
-        const defaultDb = { 
-            settings: {
-                sayanApiUrl: process.env.SAYAN_API_URL || "",
-                sayanApiKey: process.env.SAYAN_API_KEY || "s_gate_live_73f08a91b2c"
-            }, 
-            users: [
-                { id: '1', username: 'admin', password: '123', fullName: 'مدیر سیستم', role: 'admin', roles: ['admin'], canManageTrade: true }
-            ],
-            orders: [], 
-            exitPermits: [], 
-            warehouseItems: [], 
-            warehouseTransactions: [], 
-            tradeRecords: [], 
-            chequeReceipts: [],
-            securityLogs: [], 
-            personnelDelays: [], 
-            securityIncidents: [],
-            messages: [], 
-            groups: [], 
-            tasks: [],
-            subscriptions: [],
-            botSubscribers: [],
-            customerBalances: [],
-            customerChatCodes: [],
-            fiscalYears: {},
-            sequences: {},
-            notes: [],
-            customCalendarEvents: [],
-            purchaseRequests: [],
-            partMasterData: []
-        };
+const createDefaultDb = () => ({
+    settings: {
+        sayanApiUrl: process.env.SAYAN_API_URL || "",
+        sayanApiKey: process.env.SAYAN_API_KEY || "s_gate_live_73f08a91b2c"
+    },
+    users: [
+        { id: '1', username: 'admin', password: '123', fullName: 'مدیر سیستم', role: 'admin', roles: ['admin'], canManageTrade: true }
+    ],
+    orders: [],
+    exitPermits: [],
+    warehouseItems: [],
+    warehouseTransactions: [],
+    tradeRecords: [],
+    chequeReceipts: [],
+    securityLogs: [],
+    personnelDelays: [],
+    securityIncidents: [],
+    messages: [],
+    groups: [],
+    tasks: [],
+    subscriptions: [],
+    botSubscribers: [],
+    customerBalances: [],
+    customerChatCodes: [],
+    fiscalYears: {},
+    sequences: {},
+    notes: [],
+    customCalendarEvents: [],
+    purchaseRequests: [],
+    partMasterData: []
+});
 
-        if (fs.existsSync(DB_FILE)) {
-            const fileContent = fs.readFileSync(DB_FILE, 'utf8');
-            if (fileContent.trim()) {
-                const data = JSON.parse(fileContent);
-                MEMORY_DB_CACHE = { ...defaultDb, ...data };
-                
-                // Populate default Sayan credentials if missing
-                if (!MEMORY_DB_CACHE.settings) MEMORY_DB_CACHE.settings = {};
-                if (!MEMORY_DB_CACHE.settings.sayanApiUrl && process.env.SAYAN_API_URL) {
-                    MEMORY_DB_CACHE.settings.sayanApiUrl = process.env.SAYAN_API_URL;
-                }
-                if (MEMORY_DB_CACHE.settings.sayanApiUrl) {
-                    MEMORY_DB_CACHE.settings.sayanApiUrl = sanitizeSayanUrl(MEMORY_DB_CACHE.settings.sayanApiUrl);
-                }
-                if (!MEMORY_DB_CACHE.settings.sayanApiKey) {
-                    MEMORY_DB_CACHE.settings.sayanApiKey = process.env.SAYAN_API_KEY || "s_gate_live_73f08a91b2c";
-                }
+const normalizeSmartDbCache = (targetDb) => {
+    const db = targetDb && typeof targetDb === 'object' ? targetDb : createDefaultDb();
 
-                // Ensure companies and fiscalYears exist in settings
-                if (!Array.isArray(MEMORY_DB_CACHE.settings.companies)) {
-                    MEMORY_DB_CACHE.settings.companies = [];
-                }
-                if (!Array.isArray(MEMORY_DB_CACHE.settings.companyNames)) {
-                    MEMORY_DB_CACHE.settings.companyNames = [];
-                }
+    if (!db.settings) db.settings = {};
+    if (!db.settings.sayanApiUrl && process.env.SAYAN_API_URL) {
+        db.settings.sayanApiUrl = process.env.SAYAN_API_URL;
+    }
+    if (db.settings.sayanApiUrl) {
+        db.settings.sayanApiUrl = sanitizeSayanUrl(db.settings.sayanApiUrl);
+    }
+    if (!db.settings.sayanApiKey) {
+        db.settings.sayanApiKey = process.env.SAYAN_API_KEY || "s_gate_live_73f08a91b2c";
+    }
 
-                // Helper to normalize Persian company names consistently
-                const normCompName = (s) => String(s || '')
-                    .replace(/ي/g, 'ی')
-                    .replace(/ك/g, 'ک')
-                    .replace(/\u200c/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim();
+    if (!Array.isArray(db.settings.companies)) {
+        db.settings.companies = [];
+    }
+    if (!Array.isArray(db.settings.companyNames)) {
+        db.settings.companyNames = [];
+    }
 
-                // Populate companyMap from settings.companies, settings.companyNames, and fiscalYears
-                const companyMap = new Map();
+    const normCompName = (s) => String(s || '')
+        .replace(/ي/g, 'ی')
+        .replace(/ك/g, 'ک')
+        .replace(/\u200c/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-                // 1. From settings.companies
-                (MEMORY_DB_CACHE.settings.companies || []).forEach((c, idx) => {
-                    const cName = typeof c === 'string' ? c.trim() : (c && c.name ? String(c.name).trim() : '');
-                    const key = normCompName(cName);
-                    if (key) {
-                        const existing = companyMap.get(key) || {};
-                        const obj = (typeof c === 'object' && c !== null) ? c : {};
-                        companyMap.set(key, {
-                            ...existing,
-                            ...obj,
-                            id: obj.id || existing.id || ('comp_' + idx + '_' + Date.now()),
-                            name: cName,
-                            showInWarehouse: obj.showInWarehouse !== undefined ? obj.showInWarehouse : (existing.showInWarehouse !== undefined ? existing.showInWarehouse : true),
-                            isAccountingEnabled: obj.isAccountingEnabled !== undefined ? obj.isAccountingEnabled : (existing.isAccountingEnabled !== undefined ? existing.isAccountingEnabled : true),
-                            banks: Array.isArray(obj.banks) ? obj.banks : (Array.isArray(existing.banks) ? existing.banks : []),
-                            logo: obj.logo || existing.logo || "",
-                            registrationNumber: obj.registrationNumber || existing.registrationNumber || "",
-                            nationalId: obj.nationalId || existing.nationalId || "",
-                            address: obj.address || existing.address || "",
-                            phone: obj.phone || existing.phone || "",
-                            fax: obj.fax || existing.fax || "",
-                            postalCode: obj.postalCode || existing.postalCode || "",
-                            economicCode: obj.economicCode || existing.economicCode || "",
-                            letterhead: obj.letterhead || existing.letterhead || ""
-                        });
-                    }
-                });
+    const companyMap = new Map();
 
-                // 2. From settings.companyNames if companyMap doesn't have it
-                (MEMORY_DB_CACHE.settings.companyNames || []).forEach((n, idx) => {
-                    const name = typeof n === 'string' ? n.trim() : '';
+    (db.settings.companies || []).forEach((c, idx) => {
+        const cName = typeof c === 'string' ? c.trim() : (c && c.name ? String(c.name).trim() : '');
+        const key = normCompName(cName);
+        if (key) {
+            const existing = companyMap.get(key) || {};
+            const obj = (typeof c === 'object' && c !== null) ? c : {};
+            companyMap.set(key, {
+                ...existing,
+                ...obj,
+                id: obj.id || existing.id || ('comp_' + idx + '_' + Date.now()),
+                name: cName,
+                showInWarehouse: obj.showInWarehouse !== undefined ? obj.showInWarehouse : (existing.showInWarehouse !== undefined ? existing.showInWarehouse : true),
+                isAccountingEnabled: obj.isAccountingEnabled !== undefined ? obj.isAccountingEnabled : (existing.isAccountingEnabled !== undefined ? existing.isAccountingEnabled : true),
+                banks: Array.isArray(obj.banks) ? obj.banks : (Array.isArray(existing.banks) ? existing.banks : []),
+                logo: obj.logo || existing.logo || "",
+                registrationNumber: obj.registrationNumber || existing.registrationNumber || "",
+                nationalId: obj.nationalId || existing.nationalId || "",
+                address: obj.address || existing.address || "",
+                phone: obj.phone || existing.phone || "",
+                fax: obj.fax || existing.fax || "",
+                postalCode: obj.postalCode || existing.postalCode || "",
+                economicCode: obj.economicCode || existing.economicCode || "",
+                letterhead: obj.letterhead || existing.letterhead || ""
+            });
+        }
+    });
+
+    (db.settings.companyNames || []).forEach((n, idx) => {
+        const name = typeof n === 'string' ? n.trim() : '';
+        const key = normCompName(name);
+        if (key && !companyMap.has(key)) {
+            companyMap.set(key, {
+                id: 'comp_name_' + idx + '_' + Date.now(),
+                name,
+                showInWarehouse: true,
+                isAccountingEnabled: true,
+                banks: []
+            });
+        }
+    });
+
+    if (Array.isArray(db.settings.fiscalYears)) {
+        db.settings.fiscalYears.forEach(fy => {
+            if (fy && fy.companySequences) {
+                Object.keys(fy.companySequences).forEach((k, idx) => {
+                    const name = k ? k.trim() : '';
                     const key = normCompName(name);
                     if (key && !companyMap.has(key)) {
                         companyMap.set(key, {
-                            id: 'comp_name_' + idx + '_' + Date.now(),
+                            id: 'comp_fy_' + idx + '_' + Date.now(),
                             name,
                             showInWarehouse: true,
                             isAccountingEnabled: true,
@@ -548,155 +556,242 @@ export const getDb = () => {
                         });
                     }
                 });
+            }
+        });
+    }
 
-                // 3. From fiscalYears sequences if any
-                if (Array.isArray(MEMORY_DB_CACHE.settings.fiscalYears)) {
-                    MEMORY_DB_CACHE.settings.fiscalYears.forEach(fy => {
-                        if (fy && fy.companySequences) {
-                            Object.keys(fy.companySequences).forEach((k, idx) => {
-                                const name = k ? k.trim() : '';
-                                const key = normCompName(name);
-                                if (key && !companyMap.has(key)) {
-                                    companyMap.set(key, {
-                                        id: 'comp_fy_' + idx + '_' + Date.now(),
-                                        name,
-                                        showInWarehouse: true,
-                                        isAccountingEnabled: true,
-                                        banks: []
-                                    });
-                                }
-                            });
-                        }
-                    });
+    let allCompanies = Array.from(companyMap.values());
+    allCompanies = allCompanies.filter(c =>
+        c.name !== 'شرکت اصلی' ||
+        c.logo ||
+        c.registrationNumber ||
+        c.nationalId ||
+        c.address ||
+        c.economicCode ||
+        (c.banks && c.banks.length > 0)
+    );
+
+    db.settings.companies = allCompanies;
+    db.settings.companyNames = allCompanies.map(c => c.name);
+
+    if (!Array.isArray(db.settings.operatingBankNames)) {
+        db.settings.operatingBankNames = [];
+    }
+    if (!Array.isArray(db.settings.bankNames)) {
+        db.settings.bankNames = [];
+    }
+
+    const extractedBanks = new Set();
+    (db.settings.operatingBankNames || []).forEach(b => { if (b && typeof b === 'string' && b.trim()) extractedBanks.add(b.trim()); });
+    (db.settings.bankNames || []).forEach(b => { if (b && typeof b === 'string' && b.trim()) extractedBanks.add(b.trim()); });
+    if (db.settings.companyBank && typeof db.settings.companyBank === 'string' && db.settings.companyBank.trim()) {
+        extractedBanks.add(db.settings.companyBank.trim());
+    }
+
+    (db.settings.companies || []).forEach(c => {
+        if (c && Array.isArray(c.banks)) {
+            c.banks.forEach(b => {
+                if (b) {
+                    const bName = typeof b === 'string' ? b : (b.bankName || '');
+                    if (bName && bName.trim()) extractedBanks.add(bName.trim());
                 }
+            });
+        }
+    });
 
-                let allCompanies = Array.from(companyMap.values());
-                allCompanies = allCompanies.filter(c => 
-                    c.name !== 'شرکت اصلی' || 
-                    c.logo || 
-                    c.registrationNumber || 
-                    c.nationalId || 
-                    c.address || 
-                    c.economicCode || 
-                    (c.banks && c.banks.length > 0)
-                );
+    (db.orders || []).forEach(o => {
+        if (Array.isArray(o.paymentDetails)) {
+            o.paymentDetails.forEach(p => {
+                if (p && p.bankName && p.bankName.trim()) extractedBanks.add(p.bankName.trim());
+                if (p && p.recipientBank && p.recipientBank.trim()) extractedBanks.add(p.recipientBank.trim());
+            });
+        }
+    });
 
-                MEMORY_DB_CACHE.settings.companies = allCompanies;
-                MEMORY_DB_CACHE.settings.companyNames = allCompanies.map(c => c.name);
+    (db.chequeReceipts || []).forEach(c => {
+        if (c && c.bankName && c.bankName.trim()) extractedBanks.add(c.bankName.trim());
+    });
 
-                // Scan and extract all bank names & bank account details across database collections
-                if (!Array.isArray(MEMORY_DB_CACHE.settings.operatingBankNames)) {
-                    MEMORY_DB_CACHE.settings.operatingBankNames = [];
-                }
-                if (!Array.isArray(MEMORY_DB_CACHE.settings.bankNames)) {
-                    MEMORY_DB_CACHE.settings.bankNames = [];
-                }
+    (db.tradeRecords || []).forEach(t => {
+        ['inspectionPayments', 'clearancePayments', 'shippingPayments', 'agentPayments', 'guarantees'].forEach(key => {
+            if (Array.isArray(t[key])) {
+                t[key].forEach(p => {
+                    if (p && p.bank && p.bank.trim()) extractedBanks.add(p.bank.trim());
+                });
+            }
+        });
+    });
 
-                const extractedBanks = new Set();
-                (MEMORY_DB_CACHE.settings.operatingBankNames || []).forEach(b => { if (b && typeof b === 'string' && b.trim()) extractedBanks.add(b.trim()); });
-                (MEMORY_DB_CACHE.settings.bankNames || []).forEach(b => { if (b && typeof b === 'string' && b.trim()) extractedBanks.add(b.trim()); });
-                if (MEMORY_DB_CACHE.settings.companyBank && typeof MEMORY_DB_CACHE.settings.companyBank === 'string' && MEMORY_DB_CACHE.settings.companyBank.trim()) {
-                    extractedBanks.add(MEMORY_DB_CACHE.settings.companyBank.trim());
-                }
+    const allExtractedBankList = Array.from(extractedBanks);
+    if (allExtractedBankList.length > 0) {
+        db.settings.operatingBankNames = Array.from(new Set([
+            ...db.settings.operatingBankNames,
+            ...allExtractedBankList
+        ]));
+        db.settings.bankNames = Array.from(new Set([
+            ...db.settings.bankNames,
+            ...allExtractedBankList
+        ]));
+    }
 
-                (MEMORY_DB_CACHE.settings.companies || []).forEach(c => {
-                    if (c && Array.isArray(c.banks)) {
-                        c.banks.forEach(b => {
-                            if (b) {
-                                const bName = typeof b === 'string' ? b : (b.bankName || '');
-                                if (bName && bName.trim()) extractedBanks.add(bName.trim());
+    if (db.fiscalYears && Array.isArray(db.fiscalYears) && db.fiscalYears.length > 0) {
+        if (!db.settings.fiscalYears || (Array.isArray(db.settings.fiscalYears) && db.settings.fiscalYears.length === 0)) {
+            db.settings.fiscalYears = db.fiscalYears;
+        }
+    } else if (db.settings.fiscalYears && !Array.isArray(db.settings.fiscalYears) && typeof db.settings.fiscalYears === 'object') {
+        db.settings.fiscalYears = Object.values(db.settings.fiscalYears);
+    }
+
+    if (!Array.isArray(db.settings.fiscalYears) || db.settings.fiscalYears.length === 0) {
+        db.settings.fiscalYears = [
+            { id: 'fy_1402', label: '1402', isClosed: false, companySequences: {}, createdAt: Date.now() },
+            { id: 'fy_1403', label: '1403', isClosed: false, companySequences: {}, createdAt: Date.now() },
+            { id: 'fy_1404', label: '1404', isClosed: false, companySequences: {}, createdAt: Date.now() },
+            { id: 'fy_1405', label: '1405', isClosed: false, companySequences: {}, createdAt: Date.now() }
+        ];
+    }
+    const activeFound = db.settings.activeFiscalYearId && db.settings.fiscalYears.some(fy => fy.id === db.settings.activeFiscalYearId);
+    if (!activeFound && db.settings.fiscalYears.length > 0) {
+        db.settings.activeFiscalYearId = db.settings.fiscalYears[0].id;
+    } else if (!db.settings.activeFiscalYearId) {
+        db.settings.activeFiscalYearId = 'fy_1404';
+    }
+
+    const arrays = ['users', 'botSubscribers', 'orders', 'exitPermits', 'warehouseTransactions', 'subscriptions', 'messages', 'groups', 'tasks', 'tradeRecords', 'notes', 'customerBalances', 'customerChatCodes', 'chequeReceipts', 'customCalendarEvents'];
+    arrays.forEach(arr => {
+        if (!Array.isArray(db[arr])) db[arr] = [];
+    });
+
+    if (db.users.length === 0) {
+        db.users.push({ id: '1', username: 'admin', password: '123', fullName: 'مدیر سیستم', role: 'admin', roles: ['admin'], canManageTrade: true });
+    }
+
+    return db;
+};
+
+/**
+ * Bootstraps Smart Management ("مدیریت هوشمند") database from PostgreSQL.
+ * Automatically migrates existing database.json into smart_* tables on first run if PostgreSQL smart_* is empty.
+ */
+export async function initCoreStorage() {
+    const defaultDb = createDefaultDb();
+
+    if (corePg.isPostgresConfigured()) {
+        const pgRes = await corePg.loadSmartDbFromPostgres();
+        if (pgRes.ok) {
+            if (pgRes.hasData && pgRes.data) {
+                // Keep any legacy industrialErp only in memory if JSON exists for ERP boot compatibility
+                let legacyErpInMemory = null;
+                if (fs.existsSync(DB_FILE)) {
+                    try {
+                        const raw = fs.readFileSync(DB_FILE, 'utf8');
+                        if (raw.trim()) {
+                            const parsedLegacy = JSON.parse(raw);
+                            if (parsedLegacy?.industrialErp) {
+                                legacyErpInMemory = parsedLegacy.industrialErp;
                             }
-                        });
-                    }
-                });
-
-                (MEMORY_DB_CACHE.orders || []).forEach(o => {
-                    if (Array.isArray(o.paymentDetails)) {
-                        o.paymentDetails.forEach(p => {
-                            if (p && p.bankName && p.bankName.trim()) extractedBanks.add(p.bankName.trim());
-                            if (p && p.recipientBank && p.recipientBank.trim()) extractedBanks.add(p.recipientBank.trim());
-                        });
-                    }
-                });
-
-                (MEMORY_DB_CACHE.chequeReceipts || []).forEach(c => {
-                    if (c && c.bankName && c.bankName.trim()) extractedBanks.add(c.bankName.trim());
-                });
-
-                (MEMORY_DB_CACHE.tradeRecords || []).forEach(t => {
-                    ['inspectionPayments', 'clearancePayments', 'shippingPayments', 'agentPayments', 'guarantees'].forEach(key => {
-                        if (Array.isArray(t[key])) {
-                            t[key].forEach(p => {
-                                if (p && p.bank && p.bank.trim()) extractedBanks.add(p.bank.trim());
-                            });
                         }
-                    });
+                    } catch {}
+                }
+
+                MEMORY_DB_CACHE = normalizeSmartDbCache({
+                    ...defaultDb,
+                    ...pgRes.data,
+                    ...(legacyErpInMemory ? { industrialErp: legacyErpInMemory } : {}),
                 });
 
-                const allExtractedBankList = Array.from(extractedBanks);
-                if (allExtractedBankList.length > 0) {
-                    MEMORY_DB_CACHE.settings.operatingBankNames = Array.from(new Set([
-                        ...MEMORY_DB_CACHE.settings.operatingBankNames,
-                        ...allExtractedBankList
-                    ]));
-                    MEMORY_DB_CACHE.settings.bankNames = Array.from(new Set([
-                        ...MEMORY_DB_CACHE.settings.bankNames,
-                        ...allExtractedBankList
-                    ]));
-                }
-
-                // Migrate fiscal years if they are stored at the root or as an object
-                if (MEMORY_DB_CACHE.fiscalYears && Array.isArray(MEMORY_DB_CACHE.fiscalYears) && MEMORY_DB_CACHE.fiscalYears.length > 0) {
-                    if (!MEMORY_DB_CACHE.settings.fiscalYears || (Array.isArray(MEMORY_DB_CACHE.settings.fiscalYears) && MEMORY_DB_CACHE.settings.fiscalYears.length === 0)) {
-                        MEMORY_DB_CACHE.settings.fiscalYears = MEMORY_DB_CACHE.fiscalYears;
-                    }
-                } else if (MEMORY_DB_CACHE.settings.fiscalYears && !Array.isArray(MEMORY_DB_CACHE.settings.fiscalYears) && typeof MEMORY_DB_CACHE.settings.fiscalYears === 'object') {
-                    // Convert object to array
-                    MEMORY_DB_CACHE.settings.fiscalYears = Object.values(MEMORY_DB_CACHE.settings.fiscalYears);
-                }
-
-                if (!Array.isArray(MEMORY_DB_CACHE.settings.fiscalYears) || MEMORY_DB_CACHE.settings.fiscalYears.length === 0) {
-                    MEMORY_DB_CACHE.settings.fiscalYears = [
-                        { id: 'fy_1402', label: '1402', isClosed: false, companySequences: {}, createdAt: Date.now() },
-                        { id: 'fy_1403', label: '1403', isClosed: false, companySequences: {}, createdAt: Date.now() },
-                        { id: 'fy_1404', label: '1404', isClosed: false, companySequences: {}, createdAt: Date.now() },
-                        { id: 'fy_1405', label: '1405', isClosed: false, companySequences: {}, createdAt: Date.now() }
-                    ];
-                }
-                let activeFound = MEMORY_DB_CACHE.settings.activeFiscalYearId && MEMORY_DB_CACHE.settings.fiscalYears.some(fy => fy.id === MEMORY_DB_CACHE.settings.activeFiscalYearId);
-                if (!activeFound && MEMORY_DB_CACHE.settings.fiscalYears.length > 0) {
-                    MEMORY_DB_CACHE.settings.activeFiscalYearId = MEMORY_DB_CACHE.settings.fiscalYears[0].id;
-                } else if (!MEMORY_DB_CACHE.settings.activeFiscalYearId) {
-                    MEMORY_DB_CACHE.settings.activeFiscalYearId = 'fy_1404';
-                }
-
-                // Ensure arrays exist
-                const arrays = ['users', 'botSubscribers', 'orders', 'exitPermits', 'warehouseTransactions', 'subscriptions', 'messages', 'groups', 'tasks', 'tradeRecords', 'notes', 'customerBalances', 'customerChatCodes', 'chequeReceipts', 'customCalendarEvents'];
-                arrays.forEach(arr => {
-                    if (!Array.isArray(MEMORY_DB_CACHE[arr])) MEMORY_DB_CACHE[arr] = [];
-                });
-                
-                // Ensure at least one admin user exists to prevent lockout
-                if (MEMORY_DB_CACHE.users.length === 0) {
-                    MEMORY_DB_CACHE.users.push({ id: '1', username: 'admin', password: '123', fullName: 'مدیر سیستم', role: 'admin', roles: ['admin'], canManageTrade: true });
-                }
-
-                // Automatic initial migration & DB shrinkage: offload any existing base64 to /uploads/
                 try {
                     const wasShrunk = sanitizeAndOffloadDb(MEMORY_DB_CACHE);
                     if (wasShrunk) {
+                        await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE);
+                    }
+                } catch (optErr) {
+                    console.error('[DB Optimizer] Startup PG offload check error:', optErr);
+                }
+
+                CORE_STORAGE_MODE = 'postgresql';
+                MIGRATED_FROM_JSON_ON_BOOT = false;
+                console.log(
+                    `✅ [Smart Core PostgreSQL] Loaded Smart Management DB from PostgreSQL (kv=${pgRes.stats?.kvKeys || 0}, users=${pgRes.stats?.users || 0}, items=${pgRes.stats?.collectionItems || 0}).`
+                );
+                return { mode: CORE_STORAGE_MODE, migratedFromJson: false, stats: pgRes.stats };
+            }
+
+            // PostgreSQL smart_* tables are empty -> auto-migrate from database.json if present, or seed defaults
+            let sourceData = defaultDb;
+            let migrated = false;
+            if (fs.existsSync(DB_FILE)) {
+                try {
+                    const fileContent = fs.readFileSync(DB_FILE, 'utf8');
+                    if (fileContent.trim()) {
+                        const parsed = JSON.parse(fileContent);
+                        sourceData = { ...defaultDb, ...parsed };
+                        migrated = true;
+                    }
+                } catch (readErr) {
+                    console.error('[Smart Core PostgreSQL] Failed reading database.json for migration:', readErr);
+                }
+            }
+
+            MEMORY_DB_CACHE = normalizeSmartDbCache(sourceData);
+            try {
+                sanitizeAndOffloadDb(MEMORY_DB_CACHE);
+            } catch {}
+
+            const syncRes = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, { forceFullSync: true });
+            if (syncRes.ok) {
+                CORE_STORAGE_MODE = 'postgresql';
+                MIGRATED_FROM_JSON_ON_BOOT = migrated;
+                console.log(
+                    migrated
+                        ? `✅ [Smart Core PostgreSQL] Auto-migrated existing database.json to PostgreSQL smart_* tables (kv=${syncRes.upsertedKv}, users=${syncRes.upsertedUsers}, items=${syncRes.upsertedItems}).`
+                        : `✅ [Smart Core PostgreSQL] Seeded initial Smart Management database into PostgreSQL.`
+                );
+                return { mode: CORE_STORAGE_MODE, migratedFromJson: migrated, stats: syncRes };
+            }
+        }
+    }
+
+    // Fallback when SQL_HOST is not configured or PostgreSQL is offline
+    CORE_STORAGE_MODE = 'json';
+    getDb();
+    console.warn('⚠️ [Smart Core DB] PostgreSQL unavailable/unconfigured. Running in legacy database.json fallback mode.');
+    return { mode: CORE_STORAGE_MODE, migratedFromJson: false };
+}
+
+export const getCoreStorageStatus = () => ({
+    mode: CORE_STORAGE_MODE,
+    migratedFromJsonOnBoot: MIGRATED_FROM_JSON_ON_BOOT,
+    pgConfigured: corePg.isPostgresConfigured(),
+    pgHealth: corePg.getCorePostgresHealth(),
+});
+
+export const getDb = () => {
+    if (MEMORY_DB_CACHE) return MEMORY_DB_CACHE;
+    try {
+        const defaultDb = createDefaultDb();
+
+        if (fs.existsSync(DB_FILE)) {
+            const fileContent = fs.readFileSync(DB_FILE, 'utf8');
+            if (fileContent.trim()) {
+                const data = JSON.parse(fileContent);
+                MEMORY_DB_CACHE = normalizeSmartDbCache({ ...defaultDb, ...data });
+
+                try {
+                    const wasShrunk = sanitizeAndOffloadDb(MEMORY_DB_CACHE);
+                    if (wasShrunk && CORE_STORAGE_MODE !== 'postgresql') {
                         console.log('[DB Optimizer] Successfully extracted base64 attachments into /uploads/. Saving lightened database.json...');
                         fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
                     }
                 } catch (shrinkErr) {
                     console.error('[DB Optimizer] Initial migration error:', shrinkErr);
                 }
-                
+
                 return MEMORY_DB_CACHE;
             }
         }
-        MEMORY_DB_CACHE = defaultDb;
-        return defaultDb;
+        MEMORY_DB_CACHE = normalizeSmartDbCache(defaultDb);
+        return MEMORY_DB_CACHE;
     } catch (e) {
         console.error("DB Read Error:", e);
         return {};
@@ -705,52 +800,65 @@ export const getDb = () => {
 
 export const saveDb = (data) => {
     if (data) {
+        const prevIndustrialErp = MEMORY_DB_CACHE?.industrialErp;
         MEMORY_DB_CACHE = data;
+        if (!MEMORY_DB_CACHE.industrialErp && prevIndustrialErp) {
+            MEMORY_DB_CACHE.industrialErp = prevIndustrialErp;
+        }
     }
     if (!MEMORY_DB_CACHE) return true;
-    
-    // Sanitize Sayan API URL if present
+
     if (MEMORY_DB_CACHE.settings && MEMORY_DB_CACHE.settings.sayanApiUrl) {
         MEMORY_DB_CACHE.settings.sayanApiUrl = sanitizeSayanUrl(MEMORY_DB_CACHE.settings.sayanApiUrl);
     }
-    
-    // Throttle disk writes to every 3 seconds to avoid event loop blockage
+
     if (saveTimeout) return true;
-    
-    saveTimeout = setTimeout(() => {
+
+    const debounceMs = CORE_STORAGE_MODE === 'postgresql' ? 250 : 3000;
+
+    saveTimeout = setTimeout(async () => {
         try {
             if (isSaving) return;
             isSaving = true;
             if (MEMORY_DB_CACHE) {
-                // Keep database.json completely lightweight by offloading base64 to /uploads
                 try {
                     sanitizeAndOffloadDb(MEMORY_DB_CACHE);
                 } catch (optErr) {
                     console.error('[DB Optimizer] Optimization on save error:', optErr);
                 }
-                fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+
+                if (CORE_STORAGE_MODE === 'postgresql') {
+                    await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE);
+                } else {
+                    fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+                }
             }
-            saveTimeout = null;
-            isSaving = false;
         } catch (e) {
             console.error("DB Save Error:", e);
+        } finally {
             saveTimeout = null;
             isSaving = false;
         }
-    }, 3000);
-    
+    }, debounceMs);
+
     return true;
 };
 
-// Immediate save for critical operations (e.g. backup, restore)
-export const saveDbImmediate = (data) => {
+// Immediate save for critical operations (e.g. restore, settings publish, shutdown flush)
+export const saveDbImmediate = async (data, options = {}) => {
     try {
         if (data) {
-            MEMORY_DB_CACHE = data;
+            const prevIndustrialErp = MEMORY_DB_CACHE?.industrialErp;
+            MEMORY_DB_CACHE = options.normalize ? normalizeSmartDbCache(data) : data;
+            if (options.preserveIndustrialErp !== false && !MEMORY_DB_CACHE.industrialErp && prevIndustrialErp) {
+                MEMORY_DB_CACHE.industrialErp = prevIndustrialErp;
+            }
         }
-        if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+            saveTimeout = null;
+        }
         if (MEMORY_DB_CACHE) {
-            // Sanitize Sayan API URL if present
             if (MEMORY_DB_CACHE.settings && MEMORY_DB_CACHE.settings.sayanApiUrl) {
                 MEMORY_DB_CACHE.settings.sayanApiUrl = sanitizeSayanUrl(MEMORY_DB_CACHE.settings.sayanApiUrl);
             }
@@ -759,7 +867,16 @@ export const saveDbImmediate = (data) => {
             } catch (optErr) {
                 console.error('[DB Optimizer] Optimization on saveImmediate error:', optErr);
             }
-            fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+
+            if (CORE_STORAGE_MODE === 'postgresql' || (corePg.isPostgresConfigured() && await corePg.ensureCorePostgresSchemaReady())) {
+                CORE_STORAGE_MODE = 'postgresql';
+                const res = await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE, {
+                    forceFullSync: Boolean(options.forceFullSync),
+                });
+                return Boolean(res?.ok);
+            } else {
+                fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2));
+            }
         }
         return true;
     } catch (e) {
@@ -768,7 +885,25 @@ export const saveDbImmediate = (data) => {
     }
 };
 
-export const refreshCache = () => {
+export const flushPendingSaves = async () => {
+    if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+        if (MEMORY_DB_CACHE && CORE_STORAGE_MODE === 'postgresql') {
+            await corePg.syncSmartDbToPostgres(MEMORY_DB_CACHE);
+        } else if (MEMORY_DB_CACHE && CORE_STORAGE_MODE === 'json') {
+            try { fs.writeFileSync(DB_FILE, JSON.stringify(MEMORY_DB_CACHE, null, 2)); } catch {}
+        }
+    }
+    await corePg.waitForPendingCorePgSync();
+};
+
+export const refreshCache = async () => {
     MEMORY_DB_CACHE = null;
+    if (CORE_STORAGE_MODE === 'postgresql') {
+        await initCoreStorage();
+        return getDb();
+    }
     return getDb();
 };
+

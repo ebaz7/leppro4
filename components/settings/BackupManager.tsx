@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Database, DownloadCloud, UploadCloud, Clock, Loader2, CheckCircle, ShieldCheck, FileJson, WifiOff, RefreshCw, FolderOpen, FileArchive, Save, Zap, Send } from 'lucide-react';
+import { Database, DownloadCloud, UploadCloud, Clock, Loader2, CheckCircle, ShieldCheck, FileJson, WifiOff, RefreshCw, FolderOpen, FileArchive, Save, Zap, Send, Server, Lock, FileCode } from 'lucide-react';
 import { apiCall, LS_KEYS, getServerHost, resolveImageUrl, getAuthToken } from '../../services/apiService';
 import { saveBlobAndOpenFile, downloadAndOpenFile } from '../../services/fileService';
 import { Capacitor } from '@capacitor/core';
@@ -9,13 +9,19 @@ const BackupManager: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [restoring, setRestoring] = useState(false);
     const [downloading, setDownloading] = useState(false);
+    const [downloadingSql, setDownloadingSql] = useState(false);
     const [message, setMessage] = useState('');
+    const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
     
     // Database Optimization States
     const [optimizing, setOptimizing] = useState(false);
     const [optProgress, setOptProgress] = useState({ current: 0, total: 0, savedBytes: 0, originalBytes: 0, updatedCount: 0 });
     const [optStatus, setOptStatus] = useState('');
     
+    // Core PostgreSQL Health State
+    const [coreDbHealth, setCoreDbHealth] = useState<any>(null);
+    const [loadingHealth, setLoadingHealth] = useState(false);
+
     // Auto Backup List
     const [autoBackups, setAutoBackups] = useState<any[]>([]);
     const [loadingBackups, setLoadingBackups] = useState(false);
@@ -30,9 +36,22 @@ const BackupManager: React.FC = () => {
     const [sendingToBots, setSendingToBots] = useState(false);
 
     useEffect(() => {
+        fetchCoreDbHealth();
         fetchAutoBackups();
         loadBackupSettings();
     }, []);
+
+    const fetchCoreDbHealth = async () => {
+        setLoadingHealth(true);
+        try {
+            const data = await apiCall<any>(`/core-db/health?_t=${Date.now()}`);
+            setCoreDbHealth(data);
+        } catch (e) {
+            console.error("Failed to load core DB health", e);
+        } finally {
+            setLoadingHealth(false);
+        }
+    };
 
     const handleSendToBots = async (mode: 'auto' | 'db' | 'full' = 'auto') => {
         setSendingToBots(true);
@@ -206,8 +225,36 @@ const BackupManager: React.FC = () => {
         }
     };
 
+    const handleDownloadSqlBackup = async () => {
+        setDownloadingSql(true);
+        setStatusBanner(null);
+        try {
+            const host = getServerHost() || '';
+            const baseUrl = host ? `${host}/api` : '/api';
+            const token = getAuthToken();
+            const response = await fetch(`${baseUrl}/full-backup?format=sql`, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!response.ok) throw new Error(`Server Download Failed (${response.status})`);
+            const blob = await response.blob();
+            const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            await saveBlobAndOpenFile(blob, `Smart_Management_Postgres_${dateStr}.sql`);
+            setStatusBanner({
+                type: 'success',
+                text: 'فایل اسکریپت PostgreSQL بخش «مدیریت هوشمند» (جدا از حسابداری شرکت‌ها) با موفقیت دانلود شد.'
+            });
+        } catch (err: any) {
+            setStatusBanner({
+                type: 'error',
+                text: 'خطا در دریافت فایل SQL از سرور: ' + (err?.message || 'خطای شبکه')
+            });
+        } finally {
+            setDownloadingSql(false);
+        }
+    };
+
     const handleRestoreClick = () => {
-        if (confirm('⚠️ هشدار بازگردانی:\n\nآیا مطمئن هستید؟ این عملیات تمام اطلاعات فعلی را جایگزین می‌کند.\n\nنکته: اگر فایل ZIP آپلود کنید، تمام فایل‌های چت، اسناد و تصاویر نیز بازیابی می‌شوند.\nفایل‌های JSON فقط دیتابیس را برمی‌گردانند.')) {
+        if (confirm('⚠️ هشدار بازگردانی بخش مدیریت هوشمند:\n\nاین عملیات داده‌های بخش مدیریت هوشمند (کارتابل، حواله‌ها، چک صیادی، بازرگانی، انبار، گفتگو، کاربران و تنظیمات) را جایگزین می‌کند و پیش از اجرا یک بکاپ ایمنی خودکار می‌گیرد.\n\nنکته مهم: اطلاعات «حسابداری شرکت‌ها» دست‌نخورده باقی می‌ماند.')) {
             fileInputRef.current?.click();
         }
     };
@@ -218,21 +265,22 @@ const BackupManager: React.FC = () => {
 
         setRestoring(true);
         setMessage('');
+        setStatusBanner(null);
 
         const reader = new FileReader();
         reader.onload = async (ev) => {
             const base64 = ev.target?.result as string;
             try {
-                const response = await apiCall<{success: boolean, mode: string}>('/emergency-restore', 'POST', { fileData: base64 });
+                const response = await apiCall<{ success: boolean; mode?: string; message?: string; error?: string }>('/emergency-restore', 'POST', { fileData: base64 });
                 if (response.success) {
-                    const modeMsg = response.mode === 'zip' ? '(کامل به همراه فایل‌ها)' : '(داده‌های متنی)';
-                    alert(`✅ بازگردانی هوشمند ${modeMsg} با موفقیت انجام شد.\nسیستم جهت اعمال تغییرات رفرش می‌شود.`);
+                    const modeMsg = response.mode === 'zip' ? '(کامل به همراه فایل‌ها)' : '(دیتابیس PostgreSQL)';
+                    alert(`✅ بازگردانی مجزای مدیریت هوشمند ${modeMsg} با موفقیت انجام شد.\nاطلاعات حسابداری شرکت‌ها کاملاً دست‌نخورده باقی ماند.\nسیستم جهت اعمال تغییرات رفرش می‌شود.`);
                     window.location.reload();
                 } else {
-                    throw new Error("Restore failed on server");
+                    throw new Error(response.error || "Restore failed on server");
                 }
-            } catch (error) {
-                setMessage('❌ خطا در بازگردانی. فایل نامعتبر است.');
+            } catch (error: any) {
+                setMessage('❌ خطا در بازگردانی: ' + (error?.message || 'فایل نامعتبر است.'));
                 setRestoring(false);
             }
         };
@@ -373,16 +421,116 @@ const BackupManager: React.FC = () => {
         }
     };
 
+    const isPgActive = coreDbHealth?.storageEngine === 'postgresql' || coreDbHealth?.smartManagement?.connected;
+    const smartStats = coreDbHealth?.smartManagement || {};
+    const erpStats = coreDbHealth?.companyAccounting || {};
+
     return (
-        <div className="glass-panel p-6 rounded-2xl border border-gray-200/50 dark:border-white/10 shadow-sm relative overflow-hidden animate-fade-in mb-6">
+        <div className="glass-panel p-4 sm:p-6 rounded-2xl border border-gray-200/50 dark:border-white/10 shadow-sm relative overflow-hidden animate-fade-in mb-6">
             <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
                 <Database size={100}/>
             </div>
             
-            <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2 relative z-10 text-lg border-b pb-2">
-                <Database size={24} className="text-blue-600"/> 
-                مدیریت پشتیبان‌گیری و بازیابی (فول سیستم)
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 border-b pb-3 relative z-10">
+                <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 text-base sm:text-lg">
+                    <Database size={22} className="text-blue-600 shrink-0"/> 
+                    مدیریت پایگاه‌داده PostgreSQL و پشتیبان‌گیری «مدیریت هوشمند»
+                </h3>
+                <button
+                    type="button"
+                    onClick={fetchCoreDbHealth}
+                    disabled={loadingHealth}
+                    className="self-start sm:self-auto min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                    <RefreshCw size={14} className={loadingHealth ? 'animate-spin' : ''} />
+                    <span>بروزرسانی وضعیت سرور</span>
+                </button>
+            </div>
+
+            {/* PostgreSQL Engine & Backend API Architecture Status Card */}
+            <div className={`rounded-2xl p-4 mb-5 border relative z-10 ${
+                isPgActive
+                    ? 'bg-emerald-50/80 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-800/70'
+                    : 'bg-amber-50/80 dark:bg-amber-950/25 border-amber-200 dark:border-amber-800/70'
+            }`}>
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                        <div className={`p-2.5 rounded-xl shrink-0 ${isPgActive ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-amber-100 text-amber-700'}`}>
+                            <Server size={20} />
+                        </div>
+                        <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs sm:text-sm font-black text-slate-800 dark:text-white">
+                                    موتور ذخیره‌سازی بخش «مدیریت هوشمند»:
+                                </span>
+                                <span className={`px-2.5 py-0.5 rounded-lg text-[11px] font-black ${
+                                    isPgActive
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-amber-600 text-white'
+                                }`}>
+                                    {isPgActive ? 'PostgreSQL فعال (سرور مرکزی)' : 'حالت پشتیبان JSON'}
+                                </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                                {isPgActive
+                                    ? `تمامی داده‌های مدیریت هوشمند در جداول اختصاصی smart_* روی همان سرور PostgreSQL (${smartStats.database || 'دیتابیس مرکزی'}) با همگام‌سازی افزایشی ردیفی ذخیره می‌شوند.`
+                                    : (smartStats.lastError ? `اتصال PostgreSQL برقرار نیست: ${smartStats.lastError}` : 'در حال استفاده از ذخیره محلی تا زمان برقراری اتصال PostgreSQL.')}
+                            </p>
+                        </div>
+                    </div>
+
+                    {isPgActive && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 shrink-0">
+                            <div className="bg-white/80 dark:bg-slate-900/60 border border-emerald-200/70 dark:border-emerald-800/50 rounded-xl px-3 py-2 text-center">
+                                <div className="text-[10px] text-slate-500">جداول هوشمند</div>
+                                <div className="text-xs font-black text-slate-800 dark:text-white" dir="ltr">{smartStats.smartTablesCount || 4}</div>
+                            </div>
+                            <div className="bg-white/80 dark:bg-slate-900/60 border border-emerald-200/70 dark:border-emerald-800/50 rounded-xl px-3 py-2 text-center">
+                                <div className="text-[10px] text-slate-500">کل رکوردها</div>
+                                <div className="text-xs font-black text-emerald-700 dark:text-emerald-300" dir="ltr">{(smartStats.collectionItemsCount || 0).toLocaleString()}</div>
+                            </div>
+                            <div className="bg-white/80 dark:bg-slate-900/60 border border-emerald-200/70 dark:border-emerald-800/50 rounded-xl px-3 py-2 text-center">
+                                <div className="text-[10px] text-slate-500">حجم دیتابیس</div>
+                                <div className="text-xs font-black text-slate-800 dark:text-white" dir="ltr">
+                                    {smartStats.databaseSizeBytes ? `${(smartStats.databaseSizeBytes / (1024 * 1024)).toFixed(1)} MB` : '—'}
+                                </div>
+                            </div>
+                            <div className="bg-white/80 dark:bg-slate-900/60 border border-emerald-200/70 dark:border-emerald-800/50 rounded-xl px-3 py-2 text-center">
+                                <div className="text-[10px] text-slate-500">جداول حسابداری</div>
+                                <div className="text-xs font-black text-indigo-700 dark:text-indigo-300" dir="ltr">{erpStats.tablesCount || 25} (مجزا)</div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Architecture & Backup Isolation Guarantees */}
+                <div className="mt-3 pt-3 border-t border-emerald-200/60 dark:border-emerald-800/40 grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px]">
+                    <div className="flex items-start gap-2 bg-white/70 dark:bg-slate-900/50 rounded-xl p-2.5 border border-slate-200/60 dark:border-slate-800">
+                        <Lock size={15} className="text-blue-600 shrink-0 mt-0.5" />
+                        <span className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                            <strong>امنیت لایه Backend API:</strong> کلاینت‌های وب، دسکتاپ و اندروید هرگز مستقیماً به پورت <span dir="ltr" className="font-mono font-bold">5432</span> دیتابیس متصل نمی‌شوند؛ تمام ارتباطات منحصراً از طریق لایه Backend API سرور مرکزی انجام می‌گیرد.
+                        </span>
+                    </div>
+                    <div className="flex items-start gap-2 bg-white/70 dark:bg-slate-900/50 rounded-xl p-2.5 border border-slate-200/60 dark:border-slate-800">
+                        <ShieldCheck size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                        <span className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                            <strong>تفکیک کامل بکاپ‌ها:</strong> بکاپ‌های این بخش فقط شامل <strong>مدیریت هوشمند</strong> هستند و هیچ‌گاه با بکاپ‌های اختصاصی <strong>حسابداری شرکت‌ها</strong> تداخل یا اختلاط ندارند.
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            {statusBanner && (
+                <div className={`mb-5 p-3 rounded-xl border text-xs font-bold relative z-10 ${
+                    statusBanner.type === 'success'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : statusBanner.type === 'error'
+                        ? 'bg-rose-50 border-rose-200 text-rose-800'
+                        : 'bg-blue-50 border-blue-200 text-blue-800'
+                }`}>
+                    {statusBanner.text}
+                </div>
+            )}
             
             {/* Auto-Backup Status */}
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6 relative z-10">
@@ -489,19 +637,34 @@ const BackupManager: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative z-10">
                 {/* Download Section */}
                 <div className="space-y-3">
-                    <h4 className="text-sm font-bold text-gray-700 mb-2">تهیه نسخه پشتیبان دستی</h4>
+                    <h4 className="text-sm font-bold text-gray-700 dark:text-slate-200 mb-2">تهیه نسخه پشتیبان مجزای «مدیریت هوشمند»</h4>
                     <button 
                         type="button" 
                         onClick={handleDownloadBackup} 
                         disabled={downloading}
-                        className="w-full flex items-center justify-between bg-blue-50 hover:bg-blue-100 text-blue-800 px-4 py-3.5 rounded-xl text-sm font-bold transition-colors border border-blue-200 shadow-sm cursor-pointer disabled:opacity-50"
+                        className="w-full min-h-[48px] flex items-center justify-between bg-blue-50 hover:bg-blue-100 text-blue-800 px-4 py-3.5 rounded-xl text-xs sm:text-sm font-bold transition-colors border border-blue-200 shadow-sm cursor-pointer disabled:opacity-50"
                     >
                         <span className="flex items-center gap-2">
                             {downloading ? <Loader2 size={20} className="animate-spin"/> : <DownloadCloud size={20}/>} 
-                            دانلود کامل (ZIP: دیتابیس + فایل‌ها)
+                            دانلود کامل (ZIP: اسکریپت SQL + اسنپ‌شات JSON + فایل‌ها)
                         </span>
-                        <span className="text-[10px] glass-panel px-2 py-1 rounded border border-blue-100 text-blue-600 flex items-center gap-1">
-                            <FileArchive size={12}/>
+                        <span className="text-[10px] glass-panel px-2 py-1 rounded border border-blue-100 text-blue-600 flex items-center gap-1 shrink-0">
+                            <FileArchive size={12}/> ZIP
+                        </span>
+                    </button>
+
+                    <button 
+                        type="button" 
+                        onClick={handleDownloadSqlBackup} 
+                        disabled={downloadingSql}
+                        className="w-full min-h-[46px] flex items-center justify-between bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 px-4 py-3 rounded-xl text-xs sm:text-sm font-bold transition-colors border border-slate-200 dark:border-slate-700 shadow-sm cursor-pointer disabled:opacity-50"
+                    >
+                        <span className="flex items-center gap-2">
+                            {downloadingSql ? <Loader2 size={18} className="animate-spin"/> : <FileCode size={18} className="text-indigo-600"/>} 
+                            دانلود اسکریپت خالص PostgreSQL (.SQL)
+                        </span>
+                        <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-200 font-mono shrink-0">
+                            .SQL
                         </span>
                     </button>
 
@@ -509,44 +672,44 @@ const BackupManager: React.FC = () => {
                         type="button" 
                         onClick={() => handleSendToBots('db')} 
                         disabled={sendingToBots}
-                        className="w-full flex items-center justify-between bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white px-4 py-3.5 rounded-xl text-sm font-bold transition-all shadow-sm shadow-indigo-500/20 cursor-pointer disabled:opacity-50"
+                        className="w-full min-h-[48px] flex items-center justify-between bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white px-4 py-3.5 rounded-xl text-xs sm:text-sm font-bold transition-all shadow-sm shadow-indigo-500/20 cursor-pointer disabled:opacity-50"
                     >
                         <span className="flex items-center gap-2">
                             {sendingToBots ? <Loader2 size={20} className="animate-spin"/> : <Send size={20}/>} 
-                            ارسال دیتابیس کامل به ربات‌های تلگرام و بله
+                            ارسال دیتابیس مدیریت هوشمند (PostgreSQL) به ربات‌ها
                         </span>
-                        <span className="text-[10px] bg-white/20 px-2 py-1 rounded text-white font-mono">
+                        <span className="text-[10px] bg-white/20 px-2 py-1 rounded text-white font-mono shrink-0">
                             DB BOT
                         </span>
                     </button>
                     
-                    <div className="text-[10px] text-gray-500 leading-relaxed bg-gray-50 p-3 rounded-lg border">
-                        <div className="flex items-center gap-1 font-bold text-gray-700 mb-1"><FileJson size={12}/> اطلاعات بکاپ‌ها:</div>
+                    <div className="text-[11px] text-gray-500 leading-relaxed bg-gray-50 dark:bg-slate-900/50 p-3 rounded-lg border dark:border-slate-800">
+                        <div className="flex items-center gap-1 font-bold text-gray-700 dark:text-slate-200 mb-1"><FileJson size={12}/> اطلاعات بکاپ‌های مدیریت هوشمند:</div>
                         <ul className="list-disc list-inside space-y-1">
-                            <li><strong className="text-gray-700">بکاپ ربات‌ها:</strong> دیتابیس کامل سیستم بدون فایل‌های ضمیمه (فوق‌سریع و پایدار).</li>
-                            <li><strong className="text-gray-700">دانلود مستقیم وب:</strong> شامل دیتابیس کامل به همراه کلیه فایل‌های پیوست و رسانه‌ها.</li>
+                            <li><strong className="text-gray-700 dark:text-slate-200">فایل‌های خروجی:</strong> شامل جداول <span className="font-mono">smart_*</span> (کارتابل، حواله‌ها، چک‌ها، بازرگانی، انبار، گفتگو، دبیرخانه، کاربران و تنظیمات) و کاملاً مجزا از حسابداری شرکت‌ها هستند.</li>
+                            <li><strong className="text-gray-700 dark:text-slate-200">بکاپ حسابداری شرکت‌ها:</strong> برای بکاپ اختصاصی هر شرکت، از منوی «مدیریت بکاپ» در ماژول حسابداری صنعتی همان شرکت استفاده کنید.</li>
                         </ul>
                     </div>
                 </div>
 
                 {/* Restore Section */}
-                <div className="border-r-0 md:border-r border-gray-100 md:pr-6">
-                    <h4 className="text-sm font-bold text-gray-700 mb-2">بازیابی اطلاعات (Smart Restore)</h4>
-                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} accept=".json,.txt,.zip" />
+                <div className="border-r-0 md:border-r border-gray-100 dark:border-slate-800 md:pr-6">
+                    <h4 className="text-sm font-bold text-gray-700 dark:text-slate-200 mb-2">بازیابی مجزای مدیریت هوشمند (PostgreSQL Restore)</h4>
+                    <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} accept=".json,.txt,.zip,.sql,.gz" />
                     
                     <button 
                         type="button" 
                         onClick={handleRestoreClick} 
                         disabled={restoring} 
-                        className="w-full h-[120px] flex flex-col items-center justify-center gap-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border-2 border-dashed border-amber-300 px-4 py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                        className="w-full min-h-[140px] flex flex-col items-center justify-center gap-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border-2 border-dashed border-amber-300 px-4 py-4 rounded-xl text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed group cursor-pointer"
                     >
                         {restoring ? <Loader2 size={36} className="animate-spin"/> : <UploadCloud size={36} className="group-hover:scale-110 transition-transform"/>}
-                        {restoring ? 'در حال بازگردانی و استخراج...' : 'آپلود فایل بکاپ (JSON یا ZIP)'}
-                        {!restoring && <span className="text-[10px] opacity-70 font-normal bg-white/50 px-2 py-0.5 rounded">پشتیبانی از فایل‌های حجیم</span>}
+                        {restoring ? 'در حال بازگردانی روی PostgreSQL...' : 'آپلود فایل بکاپ مدیریت هوشمند (ZIP، SQL، GZ یا JSON)'}
+                        {!restoring && <span className="text-[10px] opacity-80 font-normal bg-white/60 px-2.5 py-1 rounded">حفاظت‌شده با بکاپ ایمنی قبل از بازیابی • بدون تغییر در حسابداری شرکت‌ها</span>}
                     </button>
                     
                     {message && (
-                        <div className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded text-center font-bold border border-red-100">
+                        <div className="mt-2 text-xs text-red-600 bg-red-50 p-2.5 rounded-lg text-center font-bold border border-red-100">
                             {message}
                         </div>
                     )}

@@ -13,6 +13,7 @@ import { FileViewerModal } from '../FileViewerModal';
 import { MobileAttachmentUploader } from './MobileAttachmentUploader';
 import { getEffectiveApiUrl, getAuthToken, resolveImageUrl } from '../../services/apiService';
 import { downloadAndOpenFile } from '../../services/fileService';
+import { getChequeRegistrationLabel, getChequeIssuerLabel } from './ChequeItemRow';
 
 interface Props {
     receipt: any;
@@ -516,44 +517,89 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                 <thead className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold border-b border-slate-200 dark:border-slate-700">
                                     <tr>
                                         <th className="px-3 py-2.5">ردیف</th>
-                                        <th className="px-3 py-2.5">شماره چک (صیادی)</th>
+                                        <th className="px-3 py-2.5">شماره چک / شناسه صیاد</th>
                                         <th className="px-3 py-2.5">مبلغ چک (ریال)</th>
                                         <th className="px-3 py-2.5">سررسید</th>
                                         <th className="px-3 py-2.5">بانک عامل</th>
-                                        <th className="px-3 py-2.5">در وجه</th>
+                                        <th className="px-3 py-2.5">در وجه / نسبت صادرکننده</th>
+                                        <th className="px-3 py-2.5">وضعیت ثبت صیادی</th>
                                         <th className="px-3 py-2.5">شرح چک</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                                     {receipt.cheques && receipt.cheques.length > 0 ? (
-                                        receipt.cheques.map((c: any, idx: number) => (
-                                            <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                                <td className="px-3 py-2.5 font-mono text-slate-400">
-                                                    {toPersianDigits(idx + 1)}
-                                                </td>
-                                                <td className="px-3 py-2.5 font-mono font-bold text-blue-600 dark:text-blue-400">
-                                                    {toPersianDigits(c.chequeNumber || '-')}
-                                                </td>
-                                                <td className="px-3 py-2.5 font-mono font-black text-emerald-600 dark:text-emerald-400">
-                                                    {toPersianDigits(Number(c.amount || 0).toLocaleString('fa-IR'))}
-                                                </td>
-                                                <td className="px-3 py-2.5 font-mono text-slate-700 dark:text-slate-300">
-                                                    {toShamsiDateStr(c.dueDate)}
-                                                </td>
-                                                <td className="px-3 py-2.5 font-bold text-slate-800 dark:text-slate-200">
-                                                    {c.bankName || '-'}
-                                                </td>
-                                                <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300">
-                                                    {c.inNameOf || receipt.personName || '-'}
-                                                </td>
-                                                <td className="px-3 py-2.5 text-slate-500">
-                                                    {c.description || '-'}
-                                                </td>
-                                            </tr>
-                                        ))
+                                        receipt.cheques.map((c: any, idx: number) => {
+                                            const regType = c.registrationType || '';
+                                            const regLabel = getChequeRegistrationLabel(regType, c.registeredPersonName);
+                                            const regBadgeCls =
+                                                regType === 'company'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+                                                    : regType === 'person'
+                                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800'
+                                                    : regType === 'unregistered'
+                                                    ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800'
+                                                    : 'bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
+
+                                            const selfIssuer =
+                                                typeof c.isCustomerSelfIssuer === 'boolean'
+                                                    ? c.isCustomerSelfIssuer
+                                                    : null;
+
+                                            return (
+                                                <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 align-top">
+                                                    <td className="px-3 py-2.5 font-mono text-slate-400">
+                                                        {toPersianDigits(idx + 1)}
+                                                    </td>
+                                                    <td className="px-3 py-2.5">
+                                                        <div className="font-mono font-bold text-blue-600 dark:text-blue-400">
+                                                            {toPersianDigits(c.chequeNumber || '-')}
+                                                        </div>
+                                                        <div className="text-[10px] font-mono mt-0.5 text-slate-500 dark:text-slate-400">
+                                                            {c.sayadId && String(c.sayadId).trim()
+                                                                ? `صیاد: ${toPersianDigits(String(c.sayadId).trim())}`
+                                                                : 'صیاد: ثبت نشده'}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-3 py-2.5 font-mono font-black text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                                        {toPersianDigits(Number(c.amount || 0).toLocaleString('fa-IR'))}
+                                                    </td>
+                                                    <td className="px-3 py-2.5 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                                        {toShamsiDateStr(c.dueDate)}
+                                                    </td>
+                                                    <td className="px-3 py-2.5 font-bold text-slate-800 dark:text-slate-200">
+                                                        <div>{c.bankName || '-'}</div>
+                                                        {c.branch && (
+                                                            <div className="text-[10px] font-normal text-slate-400 mt-0.5">
+                                                                شعبه {c.branch}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300">
+                                                        <div className="font-bold">{c.inNameOf || receipt.personName || '-'}</div>
+                                                        {selfIssuer !== null && (
+                                                            <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                                                selfIssuer
+                                                                    ? 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-800'
+                                                                    : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                                                            }`}>
+                                                                {getChequeIssuerLabel(selfIssuer)}
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-2.5">
+                                                        <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-black border ${regBadgeCls}`}>
+                                                            {regLabel}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-2.5 text-slate-500">
+                                                        {c.description || '-'}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
                                     ) : (
                                         <tr>
-                                            <td colSpan={7} className="text-center py-6 text-slate-400">
+                                            <td colSpan={8} className="text-center py-6 text-slate-400">
                                                 اطلاعات چک ثبت نشده است.
                                             </td>
                                         </tr>

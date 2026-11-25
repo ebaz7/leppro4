@@ -649,3 +649,69 @@ export const erpCompanyBackups = pgTable(
     index('idx_erp_backups_company_time').on(table.companyId, table.createdAtMs),
   ]
 );
+
+// Dedicated Smart Management ("مدیریت هوشمند") PostgreSQL tables - isolated from erp_* company accounting tables
+export const smartKvStore = pgTable('smart_kv_store', {
+  key: text('key').primaryKey(),
+  valueJson: jsonb('value_json').$type<any>().notNull().default({}),
+  checksum: text('checksum').notNull().default(''),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const smartUsers = pgTable(
+  'smart_users',
+  {
+    id: text('id').primaryKey(),
+    username: text('username').notNull().default(''),
+    fullName: text('full_name').notNull().default(''),
+    role: text('role').notNull().default(''),
+    isActive: boolean('is_active').notNull().default(true),
+    recordHash: text('record_hash').notNull().default(''),
+    data: jsonb('data').$type<Record<string, any>>().notNull().default({}),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_smart_users_username').on(table.username),
+  ]
+);
+
+export const smartCollectionItems = pgTable(
+  'smart_collection_items',
+  {
+    collectionName: text('collection_name').notNull(),
+    itemId: text('item_id').notNull(),
+    itemIndex: integer('item_index').notNull().default(0),
+    recordHash: text('record_hash').notNull().default(''),
+    createdAtMs: bigint('created_at_ms', { mode: 'number' }).notNull().default(0),
+    updatedAtMs: bigint('updated_at_ms', { mode: 'number' }).notNull().default(0),
+    data: jsonb('data').$type<Record<string, any>>().notNull().default({}),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.collectionName, table.itemId] }),
+    index('idx_smart_col_order').on(table.collectionName, table.itemIndex),
+    index('idx_smart_col_updated').on(table.collectionName, table.updatedAtMs),
+  ]
+);
+
+export const smartBackups = pgTable(
+  'smart_backups',
+  {
+    id: text('id').primaryKey(),
+    fileName: text('file_name').notNull(),
+    format: text('format').notNull().default('zip'),
+    backupKind: text('backup_kind').notNull().default('manual'),
+    scope: text('scope').notNull().default('smart_management'),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
+    compressedSizeBytes: bigint('compressed_size_bytes', { mode: 'number' }).notNull().default(0),
+    recordCounts: jsonb('record_counts').$type<Record<string, number>>().notNull().default({}),
+    checksumSha256: text('checksum_sha256').notNull().default(''),
+    createdBy: text('created_by').notNull().default('system'),
+    createdAtMs: bigint('created_at_ms', { mode: 'number' }).notNull().default(0),
+    createdDateJalali: text('created_date_jalali').notNull().default(''),
+  },
+  (table) => [
+    index('idx_smart_backups_time').on(table.createdAtMs),
+  ]
+);
+

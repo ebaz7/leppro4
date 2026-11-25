@@ -543,11 +543,64 @@ export const ERP_SCHEMA_DDL_STATEMENTS = [
   `ALTER TABLE erp_items ADD COLUMN IF NOT EXISTS extra JSONB NOT NULL DEFAULT '{}'::jsonb;`,
 ];
 
-export async function applyIdempotentErpSchema(pool, appUser = process.env.SQL_USER) {
+// Dedicated PostgreSQL tables for Smart Management ("مدیریت هوشمند") - isolated by prefix from erp_* accounting tables
+export const SMART_SCHEMA_DDL_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS smart_kv_store (
+    key TEXT PRIMARY KEY,
+    value_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    checksum TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );`,
+
+  `CREATE TABLE IF NOT EXISTS smart_users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL DEFAULT '',
+    full_name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT '',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    record_hash TEXT NOT NULL DEFAULT '',
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+  );`,
+  `CREATE INDEX IF NOT EXISTS idx_smart_users_username ON smart_users (username);`,
+
+  `CREATE TABLE IF NOT EXISTS smart_collection_items (
+    collection_name TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    item_index INTEGER NOT NULL DEFAULT 0,
+    record_hash TEXT NOT NULL DEFAULT '',
+    created_at_ms BIGINT NOT NULL DEFAULT 0,
+    updated_at_ms BIGINT NOT NULL DEFAULT 0,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (collection_name, item_id)
+  );`,
+  `CREATE INDEX IF NOT EXISTS idx_smart_col_order ON smart_collection_items (collection_name, item_index);`,
+  `CREATE INDEX IF NOT EXISTS idx_smart_col_updated ON smart_collection_items (collection_name, updated_at_ms DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_smart_col_data_gin ON smart_collection_items USING GIN (data jsonb_path_ops);`,
+
+  `CREATE TABLE IF NOT EXISTS smart_backups (
+    id TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    format TEXT NOT NULL DEFAULT 'zip',
+    backup_kind TEXT NOT NULL DEFAULT 'manual',
+    scope TEXT NOT NULL DEFAULT 'smart_management',
+    size_bytes BIGINT NOT NULL DEFAULT 0,
+    compressed_size_bytes BIGINT NOT NULL DEFAULT 0,
+    record_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+    checksum_sha256 TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT 'system',
+    created_at_ms BIGINT NOT NULL DEFAULT 0,
+    created_date_jalali TEXT NOT NULL DEFAULT ''
+  );`,
+  `CREATE INDEX IF NOT EXISTS idx_smart_backups_time ON smart_backups (created_at_ms DESC);`,
+];
+
+export async function applyIdempotentSmartSchema(pool, appUser = process.env.SQL_USER) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const stmt of ERP_SCHEMA_DDL_STATEMENTS) {
+    for (const stmt of SMART_SCHEMA_DDL_STATEMENTS) {
       await client.query(stmt);
     }
     await client.query('COMMIT');
@@ -562,7 +615,40 @@ export async function applyIdempotentErpSchema(pool, appUser = process.env.SQL_U
       }
     }
 
-    return { appliedStatements: ERP_SCHEMA_DDL_STATEMENTS.length };
+    return { appliedStatements: SMART_SCHEMA_DDL_STATEMENTS.length };
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function applyIdempotentErpSchema(pool, appUser = process.env.SQL_USER) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const stmt of ERP_SCHEMA_DDL_STATEMENTS) {
+      await client.query(stmt);
+    }
+    for (const stmt of SMART_SCHEMA_DDL_STATEMENTS) {
+      await client.query(stmt);
+    }
+    await client.query('COMMIT');
+
+    if (appUser && /^[a-zA-Z0-9_]+$/.test(String(appUser))) {
+      try {
+        await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO "${appUser}";`);
+        await client.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "${appUser}";`);
+        await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "${appUser}";`);
+      } catch {
+        // Ignore privilege grant warnings if connected as non-superuser with existing table access
+      }
+    }
+
+    return { appliedStatements: ERP_SCHEMA_DDL_STATEMENTS.length + SMART_SCHEMA_DDL_STATEMENTS.length };
   } catch (err) {
     try {
       await client.query('ROLLBACK');

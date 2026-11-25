@@ -29,6 +29,12 @@ export interface A5ChequeData {
     id?: string | number;
     receiptNo?: string | number;
     poshtNomreh?: string;
+    docNo?: string | number;
+    archiveCode?: string | number;
+    sayanDocNo?: string | number;
+    sayanArchiveCode?: string | number;
+    status?: string;
+    source?: string;
     personCode?: string;
     personName?: string;
     cashboxCode?: string;
@@ -36,17 +42,35 @@ export interface A5ChequeData {
     fiscalYear?: string;
     totalAmount: number;
     docDateShamsi?: string;
+    docDate?: string;
     createdAt?: string;
     description?: string;
     createdByName?: string;
+    accountingReview?: {
+        approved?: boolean;
+        byName?: string;
+        date?: string;
+        note?: string;
+    };
+    ceoApproval?: {
+        approved?: boolean;
+        byName?: string;
+        date?: string;
+    };
     cheques: Array<{
         chequeNumber: string;
+        sayadId?: string;
         amount: number | string;
         dueDate: string;
         bankName: string;
+        branch?: string;
+        accountNo?: string;
         inNameOf?: string;
         description?: string;
         rowSeq?: number;
+        registrationType?: 'company' | 'person' | 'unregistered' | '';
+        registeredPersonName?: string;
+        isCustomerSelfIssuer?: boolean;
     }>;
     attachments?: Array<{
         id?: string;
@@ -97,6 +121,135 @@ function resolvePrintFontUrl(relPath: string): string {
     return relPath;
 }
 
+const escapeHtml = (val: unknown): string => {
+    if (val === undefined || val === null) return '';
+    return String(val)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+};
+
+const getSayadiRegistrationInfo = (ch: A5ChequeData['cheques'][number]) => {
+    const rt = ch?.registrationType || '';
+    const regName = (ch?.registeredPersonName || '').trim();
+    if (rt === 'company') {
+        return {
+            label: 'ثبت شده به نام شرکت',
+            shortLabel: 'به نام شرکت',
+            badgeBg: '#ecfdf5',
+            badgeBorder: '#047857',
+            badgeText: '#065f46',
+        };
+    }
+    if (rt === 'person') {
+        return {
+            label: regName ? `ثبت به نام: ${regName}` : 'ثبت به نام شخص',
+            shortLabel: regName ? `به نام ${regName}` : 'به نام شخص',
+            badgeBg: '#eef2ff',
+            badgeBorder: '#4338ca',
+            badgeText: '#312e81',
+        };
+    }
+    if (rt === 'unregistered') {
+        return {
+            label: 'ثبت نشده در صیاد',
+            shortLabel: 'ثبت نشده در صیاد',
+            badgeBg: '#fff1f2',
+            badgeBorder: '#be123c',
+            badgeText: '#9f1239',
+        };
+    }
+    return {
+        label: 'وضعیت صیاد نامشخص',
+        shortLabel: 'تعیین نشده',
+        badgeBg: '#f8fafc',
+        badgeBorder: '#64748b',
+        badgeText: '#334155',
+    };
+};
+
+const getIssuerRelationLabel = (ch: A5ChequeData['cheques'][number], _personName?: string): string => {
+    if (ch?.isCustomerSelfIssuer === true) return 'خود مشتری';
+    if (ch?.isCustomerSelfIssuer === false) return 'شخص ثالث';
+    return '';
+};
+
+const getSayanStatusInfo = (receipt: A5ChequeData) => {
+    const docNo = receipt.docNo || receipt.sayanDocNo;
+    const archiveCode = receipt.archiveCode || receipt.sayanArchiveCode;
+    const isSanadOne = String(docNo || '') === '1' || String(archiveCode || '') === '1';
+
+    if (isSanadOne) {
+        return {
+            isRegistered: false,
+            label: 'ثبت نشده (نیاز به ثبت مجدد در سایان)',
+            shortLabel: 'نیازمند ثبت مجدد',
+            subDetail: 'سند ۱ نامعتبر',
+            bg: '#fffbeb',
+            border: '#b45309',
+            text: '#78350f',
+        };
+    }
+    if (receipt.status === 'REGISTERED_IN_SAYAN' || receipt.source === 'SAYAN_DB') {
+        const docText = docNo ? `سند ${toPersianDigits(docNo)}` : '';
+        const archText = archiveCode ? `بایگانی ${toPersianDigits(archiveCode)}` : '';
+        const detail = [docText, archText].filter(Boolean).join(' • ');
+        return {
+            isRegistered: true,
+            label: 'ثبت شده در سایان',
+            shortLabel: 'ثبت شده در سایان',
+            subDetail: detail || 'سند تایید و بایگانی شده',
+            bg: '#ecfdf5',
+            border: '#047857',
+            text: '#065f46',
+        };
+    }
+    if (receipt.status === 'PROCESSING_SAYAN') {
+        return {
+            isRegistered: false,
+            label: 'در حال ثبت در سایان',
+            shortLabel: 'در حال ثبت سایان',
+            subDetail: 'در صف ارسال سرور',
+            bg: '#eef2ff',
+            border: '#4338ca',
+            text: '#312e81',
+        };
+    }
+    if (receipt.status === 'PENDING_CEO') {
+        return {
+            isRegistered: false,
+            label: 'ثبت نشده در سایان (تایید حسابداری / آماده ثبت)',
+            shortLabel: 'ثبت نشده (آماده ثبت)',
+            subDetail: 'در انتظار تایید و ثبت نهایی',
+            bg: '#fffbeb',
+            border: '#b45309',
+            text: '#78350f',
+        };
+    }
+    if (receipt.status === 'REJECTED') {
+        return {
+            isRegistered: false,
+            label: 'ثبت نشده در سایان (عودت / عدم تایید)',
+            shortLabel: 'عدم تایید',
+            subDetail: 'عودت داده شده',
+            bg: '#fff1f2',
+            border: '#be123c',
+            text: '#9f1239',
+        };
+    }
+    return {
+        isRegistered: false,
+        label: 'ثبت نشده در سایان (منتظر بررسی حسابداری)',
+        shortLabel: 'ثبت نشده (منتظر حسابداری)',
+        subDetail: 'پیش‌نویس کارتابل',
+        bg: '#fff1f2',
+        border: '#be123c',
+        text: '#9f1239',
+    };
+};
+
 /**
  * Builds standalone, isolated pure-white A5 Landscape HTML for direct printing.
  * This completely prevents dark mode, gray overlays, parent container backgrounds,
@@ -109,12 +262,15 @@ function buildA5ChequePrintHtml(
 ): string {
     const totalAmount = Number(receipt.totalAmount) || 0;
     const amountInWords = formatChequeAmountInWords(totalAmount);
-    const receiptDate = receipt.docDateShamsi || toShamsiStr(receipt.createdAt) || toShamsiStr(new Date().toISOString());
+    const receiptDate = receipt.docDateShamsi || toShamsiStr(receipt.docDate || receipt.createdAt) || toShamsiStr(new Date().toISOString());
     const attachments = Array.isArray(receipt.attachments) ? receipt.attachments : [];
     const hasAttachments = attachments.length > 0;
     const omitCssPageSizeLock = Boolean(options.omitCssPageSizeLock);
     const fontRegUrl = resolvePrintFontUrl('./fonts/Vazirmatn-Regular.woff2');
     const fontBoldUrl = resolvePrintFontUrl('./fonts/Vazirmatn-Bold.woff2');
+    const sayanStatus = getSayanStatusInfo(receipt);
+    const sayanDocNo = receipt.docNo || receipt.sayanDocNo;
+    const sayanArchiveCode = receipt.archiveCode || receipt.sayanArchiveCode;
 
     const includeReceipt = printTarget === 'all' || printTarget === 'receipt';
     const includeAttachments = hasAttachments && (printTarget === 'all' || printTarget === 'attachments');
@@ -123,31 +279,47 @@ function buildA5ChequePrintHtml(
 
     // PAGE 1: A5 Landscape Receipt
     if (includeReceipt) {
-        const rowsHtml = receipt.cheques.map((ch, idx) => `
-            <tr style="border-bottom: 1px solid #94a3b8;">
-                <td style="padding: 3px 4px; border-left: 1px solid #94a3b8; text-align: center; font-weight: 900; font-family: monospace; font-size: 11px;">
+        const rowsHtml = receipt.cheques.map((ch, idx) => {
+            const sayadiInfo = getSayadiRegistrationInfo(ch);
+            const issuerRel = getIssuerRelationLabel(ch, receipt.personName);
+            const bankParts = [ch.bankName || '-', ch.branch ? `شعبه ${ch.branch}` : ''].filter(Boolean).join(' / ');
+            const sayadDigits = String(ch.sayadId || '').trim();
+            return `
+            <tr style="border-bottom: 1px solid #64748b; background-color: #ffffff; color: #0f172a;">
+                <td style="padding: 3px 3px; border-left: 1px solid #64748b; text-align: center; font-weight: 900; font-family: monospace; font-size: 10px; color: #0f172a;">
                     ${toPersianDigits(ch.rowSeq || (idx + 1))}
                 </td>
-                <td style="padding: 3px 6px; border-left: 1px solid #94a3b8; text-align: right; direction: ltr; font-weight: 900; font-family: monospace; font-size: 12px; letter-spacing: 0.5px;">
-                    ${toPersianDigits(ch.chequeNumber)}
+                <td style="padding: 3px 5px; border-left: 1px solid #64748b; text-align: right; color: #0f172a;">
+                    <div style="direction: ltr; text-align: right; font-weight: 900; font-family: monospace; font-size: 11px; color: #0f172a;">${escapeHtml(toPersianDigits(ch.chequeNumber || '-'))}</div>
+                    <div style="direction: ltr; text-align: right; font-family: monospace; font-size: 9px; font-weight: 700; color: ${sayadDigits ? '#1e3a8a' : '#9f1239'}; margin-top: 1px;">
+                        ${sayadDigits ? `صیاد: ${escapeHtml(toPersianDigits(sayadDigits))}` : 'بدون شناسه صیاد'}
+                    </div>
                 </td>
-                <td style="padding: 3px 6px; border-left: 1px solid #94a3b8; text-align: center; font-weight: 800; font-family: monospace; font-size: 11.5px;">
-                    ${toPersianDigits(toShamsiStr(ch.dueDate))}
+                <td style="padding: 3px 4px; border-left: 1px solid #64748b; text-align: center; font-weight: 800; font-family: monospace; font-size: 10.5px; color: #0f172a;">
+                    ${escapeHtml(toPersianDigits(toShamsiStr(ch.dueDate)))}
                 </td>
-                <td style="padding: 3px 6px; border-left: 1px solid #94a3b8; text-align: left; direction: ltr; font-weight: 900; font-family: monospace; font-size: 12.5px;">
-                    ${toPersianDigits(Number(ch.amount).toLocaleString('fa-IR'))}
+                <td style="padding: 3px 5px; border-left: 1px solid #64748b; text-align: left; direction: ltr; font-weight: 900; font-family: monospace; font-size: 11px; color: #0f172a;">
+                    ${escapeHtml(toPersianDigits(Number(ch.amount || 0).toLocaleString('fa-IR')))}
                 </td>
-                <td style="padding: 3px 6px; border-left: 1px solid #94a3b8; text-align: center; font-weight: 800; font-size: 11.5px;">
-                    ${ch.bankName || '-'}
+                <td style="padding: 3px 4px; border-left: 1px solid #64748b; text-align: center; font-weight: 800; font-size: 10px; color: #0f172a;">
+                    <div>${escapeHtml(bankParts)}</div>
+                    ${ch.accountNo ? `<div style="font-family: monospace; font-size: 8.5px; color: #334155;">حساب: ${escapeHtml(toPersianDigits(ch.accountNo))}</div>` : ''}
                 </td>
-                <td style="padding: 3px 6px; border-left: 1px solid #94a3b8; text-align: right; font-weight: 700; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;">
-                    ${ch.inNameOf || receipt.personName || '-'}
+                <td style="padding: 3px 5px; border-left: 1px solid #64748b; text-align: right; font-size: 10px; color: #0f172a;">
+                    <div style="font-weight: 700; color: #0f172a;">${escapeHtml(ch.inNameOf || receipt.personName || '-')}</div>
+                    ${issuerRel ? `<div style="font-size: 8.5px; font-weight: 800; color: #0f766e; margin-top: 1px;">نسبت: ${escapeHtml(issuerRel)}</div>` : ''}
                 </td>
-                <td style="padding: 3px 6px; text-align: right; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;">
-                    ${ch.description || '-'}
+                <td style="padding: 3px 5px; border-left: 1px solid #64748b; text-align: right; font-size: 9.5px; color: #0f172a;">
+                    <span style="display: inline-block; padding: 1px 4px; border: 1px solid ${sayadiInfo.badgeBorder}; border-radius: 4px; background: ${sayadiInfo.badgeBg}; color: ${sayadiInfo.badgeText}; font-weight: 800;">
+                        ${escapeHtml(sayadiInfo.label)}
+                    </span>
+                </td>
+                <td style="padding: 3px 5px; text-align: right; font-size: 9.5px; color: #0f172a;">
+                    ${escapeHtml(ch.description || '-')}
                 </td>
             </tr>
-        `).join('');
+        `;
+        }).join('');
 
         pagesHtml += `
         <div class="print-page a5-landscape">
@@ -157,53 +329,58 @@ function buildA5ChequePrintHtml(
                     <tr>
                         <td style="width: 33%; text-align: right; vertical-align: top; border: none; padding: 0;">
                             <div style="font-size: 15px; font-weight: 900; color: #000000; line-height: 1.2;">شرکت لپان بافت</div>
-                            <div style="font-size: 11px; font-weight: bold; color: #334155; margin-top: 1px;">سیستم مدیریت مالی و خزانه‌داری</div>
-                            <div style="font-size: 10px; color: #475569;">واحد اعتبارات و دریافت اسناد تجاری</div>
+                            <div style="font-size: 10.5px; font-weight: bold; color: #334155; margin-top: 1px;">سیستم مدیریت مالی و خزانه‌داری</div>
+                            <div style="font-size: 9.5px; color: #475569;">واحد اعتبارات و دریافت اسناد تجاری</div>
                         </td>
                         <td style="width: 34%; text-align: center; vertical-align: top; border: none; padding: 0;">
                             <div style="display: inline-block; padding: 3px 14px; border: 2px solid #000000; border-radius: 8px; background-color: #f1f5f9;">
-                                <div style="font-size: 14px; font-weight: 900; color: #000000;">رسید دریافت چک</div>
+                                <div style="font-size: 13.5px; font-weight: 900; color: #000000;">رسید دریافت چک</div>
                             </div>
-                            <div style="font-size: 10px; font-weight: bold; color: #475569; margin-top: 2px;">(اسناد دریافتنی نزد صندوق خزانه‌داری)</div>
+                            <div style="margin-top: 3px;">
+                                <span style="display: inline-block; padding: 1.5px 8px; border: 1.5px solid ${sayanStatus.border}; border-radius: 6px; background: ${sayanStatus.bg}; color: ${sayanStatus.text}; font-size: 9.5px; font-weight: 900;">
+                                    وضعیت سایان: ${escapeHtml(sayanStatus.label)}
+                                </span>
+                            </div>
                         </td>
-                        <td style="width: 33%; text-align: left; vertical-align: top; border: none; padding: 0; font-family: monospace; font-size: 11px;">
-                            <div style="margin-bottom: 2px;"><span style="font-family: inherit; font-size: 10.5px; color: #475569;">شماره رسید: </span><strong style="font-size: 13px; font-weight: 900; background: #f1f5f9; padding: 1px 4px; border: 1px solid #cbd5e1; border-radius: 4px;">#${toPersianDigits(receipt.receiptNo || receipt.id)}</strong></div>
-                            <div style="margin-bottom: 2px;"><span style="font-family: inherit; font-size: 10.5px; color: #475569;">شماره پشت‌نمره: </span><strong style="font-size: 12px; font-weight: 900;">${toPersianDigits(receipt.poshtNomreh || '-')}</strong></div>
-                            <div style="margin-bottom: 2px;"><span style="font-family: inherit; font-size: 10.5px; color: #475569;">تاریخ صدور: </span><strong style="font-size: 12px; font-weight: 900;">${toPersianDigits(receiptDate)}</strong></div>
-                            <div><span style="font-family: inherit; font-size: 10px; color: #64748b;">سال مالی: </span><strong style="font-size: 11px;">${toPersianDigits(receipt.fiscalYear || '۱۴۰۳')}</strong></div>
+                        <td style="width: 33%; text-align: left; vertical-align: top; border: none; padding: 0; font-family: monospace; font-size: 10.5px;">
+                            <div style="margin-bottom: 1.5px;"><span style="font-family: inherit; font-size: 10px; color: #475569;">شماره رسید: </span><strong style="font-size: 12.5px; font-weight: 900; background: #f1f5f9; padding: 1px 4px; border: 1px solid #cbd5e1; border-radius: 4px;">#${escapeHtml(toPersianDigits(receipt.receiptNo || receipt.id))}</strong></div>
+                            <div style="margin-bottom: 1.5px;"><span style="font-family: inherit; font-size: 10px; color: #475569;">شماره پشت‌نمره: </span><strong style="font-size: 11.5px; font-weight: 900;">${escapeHtml(toPersianDigits(receipt.poshtNomreh || '-'))}</strong></div>
+                            <div style="margin-bottom: 1.5px;"><span style="font-family: inherit; font-size: 10px; color: #475569;">تاریخ صدور: </span><strong style="font-size: 11px; font-weight: 900;">${escapeHtml(toPersianDigits(receiptDate))}</strong> <span style="font-family: inherit; font-size: 9.5px; color: #64748b;">(سال مالی: ${escapeHtml(toPersianDigits(receipt.fiscalYear || '۱۴۰۵'))})</span></div>
+                            ${sayanDocNo || sayanArchiveCode ? `<div><span style="font-family: inherit; font-size: 9.5px; color: #475569;">سند/بایگانی سایان: </span><strong style="font-size: 10.5px;">${escapeHtml(toPersianDigits(sayanDocNo || '-'))} / ${escapeHtml(toPersianDigits(sayanArchiveCode || '-'))}</strong></div>` : ''}
                         </td>
                     </tr>
                 </table>
 
-                <div style="margin-top: 5px; padding-top: 4px; border-top: 1px dashed #94a3b8; display: flex; justify-content: space-between; font-size: 11.5px;">
+                <div style="margin-top: 4px; padding-top: 4px; border-top: 1px dashed #94a3b8; display: flex; justify-content: space-between; font-size: 11px; gap: 8px;">
                     <div style="flex: 1;">
-                        <span style="color: #334155; font-weight: 900; font-size: 12px;">دریافت شد از: </span>
-                        <strong style="font-size: 14.5px; font-weight: 900; color: #000000; letter-spacing: -0.2px;">${receipt.personName || 'شخص نامشخص'}</strong>
-                        <span style="font-family: monospace; font-size: 11px; font-weight: bold; color: #1e293b; background: #e2e8f0; padding: 1px 6px; border-radius: 4px; border: 1px solid #94a3b8; margin-right: 4px;">(کد: ${toPersianDigits(receipt.personCode)})</span>
-                    </div>
-                    <div style="margin-left: 15px;">
-                        <span style="color: #475569; font-weight: bold;">صندوق: </span>
-                        <strong style="color: #000000;">${receipt.cashboxTitle || (receipt.cashboxCode === '11001' ? 'صندوق دفتر مرکزی' : `صندوق کد ${toPersianDigits(receipt.cashboxCode)}`)}</strong>
+                        <span style="color: #334155; font-weight: 900; font-size: 11px;">دریافت شد از: </span>
+                        <strong style="font-size: 13.5px; font-weight: 900; color: #000000; letter-spacing: -0.2px;">${escapeHtml(receipt.personName || 'شخص نامشخص')}</strong>
+                        <span style="font-family: monospace; font-size: 10px; font-weight: bold; color: #1e293b; background: #e2e8f0; padding: 1px 5px; border-radius: 4px; border: 1px solid #94a3b8; margin-right: 4px;">(کد: ${escapeHtml(toPersianDigits(receipt.personCode))})</span>
                     </div>
                     <div>
-                        <span style="color: #475569; font-weight: bold;">شرح / بابت: </span>
-                        <span style="color: #000000; font-weight: 500;">${receipt.description || 'تسویه حساب و واریز اسناد دریافتنی'}</span>
+                        <span style="color: #475569; font-weight: bold;">صندوق: </span>
+                        <strong style="color: #000000;">${escapeHtml(receipt.cashboxTitle || (receipt.cashboxCode === '11001' ? 'صندوق دفتر مرکزی' : `صندوق کد ${toPersianDigits(receipt.cashboxCode)}`))}</strong>
+                    </div>
+                    <div>
+                        <span style="color: #475569; font-weight: bold;">بابت: </span>
+                        <span style="color: #000000; font-weight: 600;">${escapeHtml(receipt.description || 'تسویه حساب و واریز اسناد دریافتنی')}</span>
                     </div>
                 </div>
             </div>
 
             <!-- Table of Cheques -->
             <div style="flex: 1; margin: 4px 0; display: flex; flex-direction: column; justify-content: center;">
-                <table style="width: 100%; border-collapse: collapse; border: 1.5px solid #000000; text-align: right; background-color: #ffffff;">
+                <table style="width: 100%; border-collapse: collapse; border: 1.5px solid #000000; text-align: right; background-color: #ffffff; color: #0f172a;">
                     <thead>
-                        <tr style="background-color: #f1f5f9; border-bottom: 1.5px solid #000000; font-size: 11px; font-weight: 900; color: #000000;">
-                            <th style="padding: 3px 4px; border-left: 1px solid #000000; text-align: center; width: 30px;">ردیف</th>
-                            <th style="padding: 3px 6px; border-left: 1px solid #000000; text-align: right;">شماره صیادی / چک</th>
-                            <th style="padding: 3px 6px; border-left: 1px solid #000000; text-align: center; width: 90px;">تاریخ سررسید</th>
-                            <th style="padding: 3px 6px; border-left: 1px solid #000000; text-align: left; width: 130px;">مبلغ چک (ریال)</th>
-                            <th style="padding: 3px 6px; border-left: 1px solid #000000; text-align: center; width: 100px;">نام بانک / شعبه</th>
-                            <th style="padding: 3px 6px; border-left: 1px solid #000000; text-align: right;">صاحب حساب / در وجه</th>
-                            <th style="padding: 3px 6px; text-align: right;">شرح / پشت‌نمره</th>
+                        <tr style="background-color: #f1f5f9; border-bottom: 1.5px solid #000000; font-size: 10px; font-weight: 900; color: #000000;">
+                            <th style="padding: 3px 3px; border-left: 1px solid #000000; text-align: center; width: 26px;">ردیف</th>
+                            <th style="padding: 3px 5px; border-left: 1px solid #000000; text-align: right; width: 118px;">شماره چک / شناسه صیاد</th>
+                            <th style="padding: 3px 4px; border-left: 1px solid #000000; text-align: center; width: 66px;">سررسید</th>
+                            <th style="padding: 3px 5px; border-left: 1px solid #000000; text-align: left; width: 88px;">مبلغ (ریال)</th>
+                            <th style="padding: 3px 4px; border-left: 1px solid #000000; text-align: center; width: 78px;">بانک / حساب</th>
+                            <th style="padding: 3px 5px; border-left: 1px solid #000000; text-align: right;">صاحب چک / نسبت</th>
+                            <th style="padding: 3px 5px; border-left: 1px solid #000000; text-align: right; width: 118px;">وضعیت ثبت صیادی</th>
+                            <th style="padding: 3px 5px; text-align: right;">شرح / پشت‌نمره</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -586,9 +763,17 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
         }
     };
 
+    const sayanStatusInfo = getSayanStatusInfo(receipt);
+    const sayanDocNo = receipt.docNo || receipt.sayanDocNo;
+    const sayanArchiveCode = receipt.archiveCode || receipt.sayanArchiveCode;
+
     const handleCopySummary = () => {
         if (!receipt) return;
-        const text = `رسید دریافت چک #${receipt.receiptNo || receipt.id}\nشرکت لپان بافت\nطرف حساب: ${receipt.personName} (کد: ${receipt.personCode})\nشماره پشت‌نمره: ${receipt.poshtNomreh || '-'}\nتعداد چک: ${receipt.cheques.length} فقره\nجمع کل: ${Number(receipt.totalAmount).toLocaleString('fa-IR')} ریال\nتعداد فایل‌های پیوست: ${attachments.length} مورد\nبابت: ${receipt.description || '-'}`;
+        const chequeLines = (receipt.cheques || []).map((c, i) => {
+            const sInfo = getSayadiRegistrationInfo(c);
+            return `${i + 1}) چک ${c.chequeNumber} | صیاد: ${c.sayadId || '-'} | سررسید: ${toShamsiStr(c.dueDate)} | مبلغ: ${Number(c.amount || 0).toLocaleString('fa-IR')} ریال | ${c.bankName} | ${sInfo.label}`;
+        }).join('\n');
+        const text = `رسید دریافت چک #${receipt.receiptNo || receipt.id}\nشرکت لپان بافت\nوضعیت سایان: ${sayanStatusInfo.label}${sayanDocNo ? ` (سند ${sayanDocNo})` : ''}\nطرف حساب: ${receipt.personName} (کد: ${receipt.personCode})\nشماره پشت‌نمره: ${receipt.poshtNomreh || '-'}\nتعداد چک: ${receipt.cheques.length} فقره\nجمع کل: ${Number(receipt.totalAmount).toLocaleString('fa-IR')} ریال\n${chequeLines}\nبابت: ${receipt.description || '-'}`;
         navigator.clipboard.writeText(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
@@ -599,7 +784,7 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
         setSharingToChat(true);
         try {
             const el = document.getElementById('a5-cheque-receipt-preview-card');
-            const summaryText = `📄 رسید دریافت چک #${receipt.receiptNo || receipt.id} - شرکت لپان بافت\n👤 طرف حساب: ${receipt.personName} (کد ${receipt.personCode})\n🏷️ شماره پشت‌نمره: ${receipt.poshtNomreh || '-'}\n💳 تعداد چک: ${receipt.cheques.length} فقره\n💰 جمع کل: ${Number(receipt.totalAmount).toLocaleString('fa-IR')} ریال\n📎 پیوست‌ها: ${attachments.length} فایل\n📝 بابت: ${receipt.description || '-'}`;
+            const summaryText = `📄 رسید دریافت چک #${receipt.receiptNo || receipt.id} - شرکت لپان بافت\n📌 وضعیت سایان: ${sayanStatusInfo.label}${sayanDocNo ? ` (سند ${sayanDocNo})` : ''}\n👤 طرف حساب: ${receipt.personName} (کد ${receipt.personCode})\n🏷️ شماره پشت‌نمره: ${receipt.poshtNomreh || '-'}\n💳 تعداد چک: ${receipt.cheques.length} فقره\n💰 جمع کل: ${Number(receipt.totalAmount).toLocaleString('fa-IR')} ریال\n📎 پیوست‌ها: ${attachments.length} فایل\n📝 بابت: ${receipt.description || '-'}`;
             if (el) {
                 await shareElementToChat(
                     el,
@@ -628,7 +813,7 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
 
     const totalAmount = Number(receipt.totalAmount) || 0;
     const amountInWords = formatChequeAmountInWords(totalAmount);
-    const receiptDate = receipt.docDateShamsi || toShamsiStr(receipt.createdAt) || toShamsiStr(new Date().toISOString());
+    const receiptDate = receipt.docDateShamsi || toShamsiStr(receipt.docDate || receipt.createdAt) || toShamsiStr(new Date().toISOString());
 
     const modalContent = (
         <div 
@@ -800,12 +985,12 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                     <div className="flex justify-center items-center">
                         <div
                             id="a5-cheque-receipt-preview-card"
-                            className="w-full max-w-[880px] aspect-[210/148] min-h-[560px] bg-white text-slate-900 rounded-xl shadow-2xl p-4 sm:p-5 border-2 border-slate-900 flex flex-col justify-between select-text"
-                            style={{ backgroundColor: '#ffffff', color: '#000000' }}
+                            className="printable-content w-full max-w-[920px] aspect-[210/148] min-h-[560px] bg-white text-slate-900 rounded-xl shadow-2xl p-4 sm:p-5 border-2 border-slate-900 flex flex-col justify-between select-text"
+                            style={{ backgroundColor: '#ffffff', color: '#0f172a' }}
                         >
                             {/* 1. Header Section */}
                             <div className="border-b-2 border-slate-900 pb-2">
-                                <div className="flex items-center justify-between">
+                                <div className="flex items-start justify-between gap-2">
                                     {/* Company Logo & Identity */}
                                     <div className="text-right w-1/3">
                                         <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight leading-tight">
@@ -819,20 +1004,27 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                                         </p>
                                     </div>
 
-                                    {/* Main Title Badge */}
+                                    {/* Main Title Badge + Sayan Registration Status */}
                                     <div className="text-center w-1/3 flex flex-col items-center">
                                         <div className="px-4 py-1 rounded-xl border-2 border-slate-900 bg-slate-100 shadow-xs">
                                             <h1 className="text-sm sm:text-base font-black text-slate-900">
                                                 رسید دریافت چک
                                             </h1>
                                         </div>
-                                        <span className="text-[10px] sm:text-[11px] text-slate-700 font-bold mt-1">
-                                            (اسناد دریافتنی نزد صندوق خزانه‌داری)
-                                        </span>
+                                        <div
+                                            className="mt-1.5 px-2.5 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-black border"
+                                            style={{
+                                                backgroundColor: sayanStatusInfo.bg,
+                                                borderColor: sayanStatusInfo.border,
+                                                color: sayanStatusInfo.text,
+                                            }}
+                                        >
+                                            وضعیت سایان: {sayanStatusInfo.label}
+                                        </div>
                                     </div>
 
                                     {/* Tracking & Date Metadata */}
-                                    <div className="text-left w-1/3 text-[11px] sm:text-xs font-mono space-y-1">
+                                    <div className="text-left w-1/3 text-[11px] sm:text-xs font-mono space-y-0.5">
                                         <div className="flex justify-end items-center gap-1.5 font-bold">
                                             <span className="text-slate-700 font-sans text-[11px]">شماره رسید:</span>
                                             <span className="text-slate-900 font-black text-xs sm:text-sm font-mono px-1.5 py-0.2 rounded bg-slate-100 border border-slate-400">
@@ -846,17 +1038,19 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                                             </span>
                                         </div>
                                         <div className="flex justify-end items-center gap-1.5">
-                                            <span className="text-slate-700 font-sans text-[11px] font-bold">تاریخ صدور:</span>
-                                            <span className="text-slate-900 font-black font-mono text-xs sm:text-[13px]">
-                                                {toPersianDigits(receiptDate)}
+                                            <span className="text-slate-700 font-sans text-[11px] font-bold">تاریخ / سال مالی:</span>
+                                            <span className="text-slate-900 font-black font-mono text-xs">
+                                                {toPersianDigits(receiptDate)} ({toPersianDigits(receipt.fiscalYear || '۱۴۰۵')})
                                             </span>
                                         </div>
-                                        <div className="flex justify-end items-center gap-1.5">
-                                            <span className="text-slate-700 font-sans text-[10.5px]">سال مالی:</span>
-                                            <span className="text-slate-900 font-bold font-mono text-[11px]">
-                                                {toPersianDigits(receipt.fiscalYear || '۱۴۰۳')}
-                                            </span>
-                                        </div>
+                                        {(sayanDocNo || sayanArchiveCode) && (
+                                            <div className="flex justify-end items-center gap-1.5">
+                                                <span className="text-slate-700 font-sans text-[10.5px] font-bold">سند / بایگانی سایان:</span>
+                                                <span className="text-slate-900 font-black font-mono text-[11px]">
+                                                    {toPersianDigits(sayanDocNo || '-')} / {toPersianDigits(sayanArchiveCode || '-')}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -890,44 +1084,90 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
 
                             {/* 2. Detailed Table of Cheques */}
                             <div className="my-1.5 flex-1 flex flex-col justify-center overflow-x-auto">
-                                <table className="w-full text-right border-2 border-slate-900 border-collapse bg-white">
+                                <table
+                                    className="w-full text-right border-2 border-slate-900 border-collapse bg-white"
+                                    style={{ backgroundColor: '#ffffff', color: '#0f172a' }}
+                                >
                                     <thead>
-                                        <tr className="bg-slate-100 border-b-2 border-slate-900 text-xs sm:text-[12px] font-black text-slate-900">
-                                            <th className="py-1 px-1.5 border-l border-slate-900 text-center w-8">ردیف</th>
-                                            <th className="py-1 px-2 border-l border-slate-900 text-right">شماره چک / صیادی</th>
-                                            <th className="py-1 px-2 border-l border-slate-900 text-center w-24">تاریخ سررسید</th>
-                                            <th className="py-1 px-2 border-l border-slate-900 text-left w-36">مبلغ چک (ریال)</th>
-                                            <th className="py-1 px-2 border-l border-slate-900 text-center w-28">نام بانک / شعبه</th>
-                                            <th className="py-1 px-2 border-l border-slate-900 text-right">صاحب حساب / در وجه</th>
-                                            <th className="py-1 px-2 text-right">شرح / پشت‌نمره</th>
+                                        <tr className="bg-slate-100 border-b-2 border-slate-900 text-[10.5px] sm:text-[11px] font-black text-slate-900" style={{ backgroundColor: '#f1f5f9', color: '#0f172a' }}>
+                                            <th className="py-1.5 px-1 border-l border-slate-900 text-center w-7" style={{ color: '#0f172a' }}>ردیف</th>
+                                            <th className="py-1.5 px-1.5 border-l border-slate-900 text-right" style={{ color: '#0f172a' }}>شماره چک / شناسه صیاد</th>
+                                            <th className="py-1.5 px-1.5 border-l border-slate-900 text-center w-20" style={{ color: '#0f172a' }}>سررسید</th>
+                                            <th className="py-1.5 px-1.5 border-l border-slate-900 text-left w-28" style={{ color: '#0f172a' }}>مبلغ (ریال)</th>
+                                            <th className="py-1.5 px-1.5 border-l border-slate-900 text-center w-24" style={{ color: '#0f172a' }}>بانک / حساب</th>
+                                            <th className="py-1.5 px-1.5 border-l border-slate-900 text-right" style={{ color: '#0f172a' }}>صاحب چک / نسبت</th>
+                                            <th className="py-1.5 px-1.5 border-l border-slate-900 text-right w-32" style={{ color: '#0f172a' }}>وضعیت ثبت صیادی</th>
+                                            <th className="py-1.5 px-1.5 text-right" style={{ color: '#0f172a' }}>شرح / پشت‌نمره</th>
                                         </tr>
                                     </thead>
-                                    <tbody>
-                                        {receipt.cheques.map((ch, idx) => (
-                                            <tr key={idx} className="border-b border-slate-300 hover:bg-slate-50 transition-colors text-xs sm:text-[13px]">
-                                                <td className="py-1 px-1.5 border-l border-slate-300 font-mono font-black text-slate-900 text-center">
-                                                    {toPersianDigits(ch.rowSeq || (idx + 1))}
-                                                </td>
-                                                <td className="py-1 px-2 border-l border-slate-300 font-mono font-black text-slate-900 text-right dir-ltr tracking-wider text-xs sm:text-[13px]">
-                                                    {toPersianDigits(ch.chequeNumber)}
-                                                </td>
-                                                <td className="py-1 px-2 border-l border-slate-300 font-mono font-bold text-slate-900 text-center text-xs sm:text-[12.5px]">
-                                                    {toPersianDigits(toShamsiStr(ch.dueDate))}
-                                                </td>
-                                                <td className="py-1 px-2 border-l border-slate-300 font-mono font-black text-slate-900 text-left dir-ltr text-xs sm:text-[13.5px]">
-                                                    {toPersianDigits(Number(ch.amount).toLocaleString('fa-IR'))}
-                                                </td>
-                                                <td className="py-1 px-2 border-l border-slate-300 font-bold text-slate-900 text-center text-xs sm:text-[12.5px]">
-                                                    {ch.bankName}
-                                                </td>
-                                                <td className="py-1 px-2 border-l border-slate-300 font-bold text-slate-900 text-right truncate max-w-[150px] text-xs sm:text-[12.5px]">
-                                                    {ch.inNameOf || receipt.personName || '-'}
-                                                </td>
-                                                <td className="py-1 px-2 text-slate-800 font-medium text-right truncate max-w-[140px] text-[11px] sm:text-xs">
-                                                    {ch.description || '-'}
-                                                </td>
-                                            </tr>
-                                        ))}
+                                    <tbody style={{ backgroundColor: '#ffffff', color: '#0f172a' }}>
+                                        {receipt.cheques.map((ch, idx) => {
+                                            const sayadiInfo = getSayadiRegistrationInfo(ch);
+                                            const issuerRel = getIssuerRelationLabel(ch, receipt.personName);
+                                            const bankParts = [ch.bankName || '-', ch.branch ? `شعبه ${ch.branch}` : ''].filter(Boolean).join(' / ');
+                                            const sayadDigits = String(ch.sayadId || '').trim();
+                                            return (
+                                                <tr
+                                                    key={idx}
+                                                    className="border-b border-slate-300 text-[11px] sm:text-xs"
+                                                    style={{ backgroundColor: '#ffffff', color: '#0f172a' }}
+                                                >
+                                                    <td className="py-1.5 px-1 border-l border-slate-300 font-mono font-black text-center" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        {toPersianDigits(ch.rowSeq || (idx + 1))}
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 border-l border-slate-300 text-right" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        <div className="font-mono font-black dir-ltr text-right text-xs" style={{ color: '#0f172a' }}>
+                                                            {toPersianDigits(ch.chequeNumber || '-')}
+                                                        </div>
+                                                        <div
+                                                            className="font-mono text-[10px] font-bold dir-ltr text-right mt-0.5"
+                                                            style={{ color: sayadDigits ? '#1e3a8a' : '#9f1239' }}
+                                                        >
+                                                            {sayadDigits ? `صیاد: ${toPersianDigits(sayadDigits)}` : 'بدون شناسه صیاد'}
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 border-l border-slate-300 font-mono font-bold text-center text-[11px]" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        {toPersianDigits(toShamsiStr(ch.dueDate))}
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 border-l border-slate-300 font-mono font-black text-left dir-ltr text-xs" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        {toPersianDigits(Number(ch.amount || 0).toLocaleString('fa-IR'))}
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 border-l border-slate-300 font-bold text-center text-[11px]" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        <div>{bankParts}</div>
+                                                        {ch.accountNo && (
+                                                            <div className="font-mono text-[9.5px] font-normal mt-0.5" style={{ color: '#334155' }}>
+                                                                حساب: {toPersianDigits(ch.accountNo)}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 border-l border-slate-300 text-right max-w-[140px]" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        <div className="font-bold truncate text-[11px]" style={{ color: '#0f172a' }}>
+                                                            {ch.inNameOf || receipt.personName || '-'}
+                                                        </div>
+                                                        {issuerRel && (
+                                                            <div className="text-[9.5px] font-black mt-0.5" style={{ color: '#0f766e' }}>
+                                                                نسبت: {issuerRel}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 border-l border-slate-300 text-right" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        <span
+                                                            className="inline-block px-1.5 py-0.5 rounded border text-[10px] font-black leading-tight"
+                                                            style={{
+                                                                backgroundColor: sayadiInfo.badgeBg,
+                                                                borderColor: sayadiInfo.badgeBorder,
+                                                                color: sayadiInfo.badgeText,
+                                                            }}
+                                                        >
+                                                            {sayadiInfo.label}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-1.5 px-1.5 font-medium text-right max-w-[120px] text-[10.5px]" style={{ color: '#0f172a', backgroundColor: '#ffffff' }}>
+                                                        {ch.description || '-'}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -1021,8 +1261,8 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                         return (
                             <div key={att.id || idx} className="flex justify-center items-center">
                                 <div 
-                                    className="w-full max-w-[880px] aspect-[210/148] min-h-[560px] bg-white text-slate-900 rounded-xl shadow-2xl p-4 sm:p-5 border-2 border-slate-900 flex flex-col justify-between select-text"
-                                    style={{ backgroundColor: '#ffffff', color: '#000000' }}
+                                    className="printable-content w-full max-w-[920px] aspect-[210/148] min-h-[560px] bg-white text-slate-900 rounded-xl shadow-2xl p-4 sm:p-5 border-2 border-slate-900 flex flex-col justify-between select-text"
+                                    style={{ backgroundColor: '#ffffff', color: '#0f172a' }}
                                 >
                                     <div className="border-b-2 border-slate-900 pb-2">
                                         <div className="flex items-center justify-between">
@@ -1097,7 +1337,7 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                                     <div className="border-t border-slate-300 pt-1.5 flex items-center justify-between text-[9px] sm:text-[10px] text-slate-600 font-mono">
                                         <span>سامانه هوشمند خزانه‌داری و چک لپان بافت</span>
                                         <span>ضمیمه معتبر سند حسابداری و بایگانی</span>
-                                        <span>چاپ: ${toPersianDigits(receiptDate)} - ${toPersianDigits(new Date().toLocaleTimeString('fa-IR'))}</span>
+                                        <span>چاپ: {toPersianDigits(receiptDate)} - {toPersianDigits(new Date().toLocaleTimeString('fa-IR'))}</span>
                                     </div>
                                 </div>
                             </div>
