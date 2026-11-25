@@ -2716,3 +2716,20 @@ export async function listCompanyBackupsFromPg(companyId) {
     return [];
   }
 }
+
+export async function closeErpPgPools() {
+  try {
+    if (globalThis._erpPostgresPool) {
+      await globalThis._erpPostgresPool.end();
+      globalThis._erpPostgresPool = null;
+      globalThis._erpDrizzleDb = null;
+    }
+  } catch {}
+  try {
+    if (globalThis._erpPostgresAdminPool) {
+      await globalThis._erpPostgresAdminPool.end();
+      globalThis._erpPostgresAdminPool = null;
+    }
+  } catch {}
+}
+
