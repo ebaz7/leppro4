@@ -419,6 +419,16 @@ function App() {
           dispatchTimedDeepLinkEvent('OPEN_TRADE_RECORD', payload);
       }
 
+      // 8. Support Ticket (تیکت) item deep-link
+      if (parsed.ticketId) {
+          const payload = {
+              ticketId: parsed.ticketId,
+              at: now
+          };
+          try { sessionStorage.setItem('pending_ticket_deep_link', JSON.stringify(payload)); } catch {}
+          dispatchTimedDeepLinkEvent('OPEN_TICKET_RECORD', payload);
+      }
+
       // Trigger background refresh so newly created server records are immediately available
       try { loadData(true); } catch (_) {}
   };
@@ -1191,7 +1201,7 @@ function App() {
         window.history.replaceState({ path: urlWithoutParams, tab: 'chat' }, '', urlWithoutParams);
       } catch (e) {}
     } else {
-      const hasDeepLinkParam = ['pv', 'group', 'task', 'tab', 'permitId', 'permitNumber', 'orderId', 'trackingNumber', 'meetingId', 'meetingNumber', 'requestId', 'requestNumber', 'letterId', 'letterNumber', 'txId', 'txNumber', 'tradeId', 'chequeId'].some(k => params.has(k));
+      const hasDeepLinkParam = ['pv', 'group', 'task', 'tab', 'permitId', 'permitNumber', 'orderId', 'trackingNumber', 'meetingId', 'meetingNumber', 'requestId', 'requestNumber', 'letterId', 'letterNumber', 'txId', 'txNumber', 'tradeId', 'chequeId', 'ticketId'].some(k => params.has(k));
       const cleanPath = window.location.pathname.replace(/^\/+/, '');
       if (hasDeepLinkParam || (cleanPath && cleanPath !== 'index.html')) {
         const fullUrl = window.location.pathname + window.location.search + window.location.hash;
@@ -2222,12 +2232,17 @@ function App() {
               read: false,
               url: data.url
           };
-          setNotifications(prev => {
-              if (prev.some(n => n.id === notifId)) return prev;
-              const next = [newItem, ...prev];
+          const alreadyExists = notificationsRef.current.some(n => n.id === notifId);
+          if (!alreadyExists) {
+              const next = [newItem, ...notificationsRef.current];
               notificationsRef.current = next;
-              return next;
-          });
+              setNotifications(next);
+              if (data.title?.includes('یادآور') || data.title?.includes('تسک') || (data.url && String(data.url).includes('task='))) {
+                  playTaskAlarmSound();
+              } else {
+                  playNotificationSound();
+              }
+          }
           showToast(newItem.title, newItem.message, newItem.url);
       };
 

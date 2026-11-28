@@ -9,6 +9,25 @@ import { getCurrentUser } from './authService';
 
 const PREF_KEY = 'app_notification_pref';
 
+const invokeTauriCommand = async <T = any>(cmd: string, args?: Record<string, any>): Promise<T | null> => {
+    try {
+        const globalTauri = typeof window !== 'undefined' ? (window as any).__TAURI__ : null;
+        if (globalTauri?.tauri && typeof globalTauri.tauri.invoke === 'function') {
+            return await globalTauri.tauri.invoke(cmd, args);
+        }
+        if (typeof globalTauri?.invoke === 'function') {
+            return await globalTauri.invoke(cmd, args);
+        }
+        const mod = await import('@tauri-apps/api/tauri');
+        if (typeof mod?.invoke === 'function') {
+            return await mod.invoke(cmd, args);
+        }
+    } catch (e) {
+        console.warn(`[Tauri] invoke(${cmd}) failed:`, e);
+    }
+    return null;
+};
+
 export const isNotificationEnabledInApp = (): boolean => {
     return localStorage.getItem(PREF_KEY) !== 'false';
 };
@@ -105,34 +124,14 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
 
   // Tauri Desktop Windows/Mac/Linux Logic
   if (isTauriDesktop()) {
-      try {
-          if ((window as any).__TAURI__?.notification) {
-              const tauriNotif = (window as any).__TAURI__.notification;
-              let isGranted = await tauriNotif.isPermissionGranted();
-              if (!isGranted) {
-                  const perm = await tauriNotif.requestPermission();
-                  isGranted = perm === 'granted';
-              }
-              if (isGranted) return true;
-          }
-          const tauriMod = await import('@tauri-apps/api/notification');
-          let isGranted = await tauriMod.isPermissionGranted();
-          if (!isGranted) {
-              const perm = await tauriMod.requestPermission();
-              isGranted = perm === 'granted';
-          }
-          if (isGranted) return true;
-      } catch (e) {
-          console.warn('Tauri native notification check:', e);
-      }
       if (typeof window !== 'undefined' && 'Notification' in window && typeof Notification !== 'undefined') {
           try {
-              const perm = await Notification.requestPermission();
-              return perm === 'granted';
-          } catch (e) {
-              return true;
-          }
+              if (Notification.permission === 'default') {
+                  await Notification.requestPermission().catch(() => 'default');
+              }
+          } catch (_) {}
       }
+      // Always true: Tauri desktop falls back to native Rust WinRT Toast & taskbar attention when WebView2 permission is not granted
       return true;
   }
 
@@ -202,8 +201,8 @@ export const clearAllActiveNotifications = async () => {
     // 2. Windows Desktop (Tauri)
     if (isTauriDesktop()) {
         try {
-            if ((window as any).__TAURI__?.window?.appWindow) {
-                // Cancel flashing/attention on Windows taskbar
+            await invokeTauriCommand('clear_tauri_attention');
+            if ((window as any).__TAURI__?.window?.appWindow?.requestUserAttention) {
                 (window as any).__TAURI__.window.appWindow.requestUserAttention(null);
             }
         } catch (e) {}
@@ -785,45 +784,61 @@ export const sendNotification = async (title: string, body: string, data?: any) 
   };
 
   if (isTauriDesktop()) {
-      try {
-          if ((window as any).__TAURI__?.notification) {
-              const tauriNotif = (window as any).__TAURI__.notification;
-              const isGranted = await tauriNotif.isPermissionGranted();
-              if (isGranted) {
-                  tauriNotif.sendNotification({ title, body });
-                  return;
-              }
-          }
-          const tauriMod = await import('@tauri-apps/api/notification');
-          const isGranted = await tauriMod.isPermissionGranted();
-          if (isGranted) {
-              tauriMod.sendNotification({ title, body });
-              return;
-          }
-      } catch (e) {
-          console.warn('Tauri native notification dispatch error:', e);
-      }
+      const notifData = {
+          ...(data || {}),
+          id: idValue || undefined,
+          url: data?.url || data?.targetUrl || '',
+          tab: data?.tab,
+          type: data?.type,
+          title,
+          body
+      };
 
-      // Flash user attention on Windows taskbar if available
-      try {
-          if ((window as any).__TAURI__?.window?.appWindow) {
-              (window as any).__TAURI__.window.appWindow.requestUserAttention(1);
-          }
-      } catch {}
+      const webNotifPermitted =
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          typeof Notification === 'function' &&
+          Notification.permission === 'granted';
 
-      // Fallback to webview Notification if permitted
-      if (typeof window !== 'undefined' && 'Notification' in window && typeof Notification === 'function') {
+      // Always trigger Rust taskbar attention; also show native Windows WinRT Toast when WebView2 Notification is not granted
+      await invokeTauriCommand('show_native_notification', {
+          title: title || 'سامانه دلکام',
+          body: body || '',
+          url: notifData.url,
+          id: idValue || '',
+          tab: data?.tab || '',
+          notifType: data?.type || '',
+          showToast: !webNotifPermitted
+      });
+
+      if (webNotifPermitted) {
           try {
-              if (Notification.permission === 'granted') {
-                  const iconUrl = getPwaIconUrl();
-                  const notif = new Notification(title, { body, icon: iconUrl, dir: 'rtl', lang: 'fa', data: { ...(data || {}), title, body } });
-                  notif.onclick = () => {
-                      dispatchWebNotificationTap();
-                      try { notif.close(); } catch (_) {}
-                  };
-                  return;
-              }
-          } catch (e) {}
+              const iconUrl = getPwaIconUrl();
+              const notif = new Notification(title, {
+                  body,
+                  icon: iconUrl,
+                  dir: 'rtl',
+                  lang: 'fa',
+                  tag: idValue || undefined,
+                  data: notifData
+              });
+              notif.onclick = () => {
+                  void invokeTauriCommand('focus_main_window');
+                  dispatchWebNotificationTap();
+                  try { notif.close(); } catch (_) {}
+              };
+          } catch (e) {
+              // Fallback to native Windows WinRT Toast if WebView2 Notification construction throws
+              await invokeTauriCommand('show_native_notification', {
+                  title: title || 'سامانه دلکام',
+                  body: body || '',
+                  url: notifData.url,
+                  id: idValue || '',
+                  tab: data?.tab || '',
+                  notifType: data?.type || '',
+                  showToast: true
+              });
+          }
       }
       return;
   }

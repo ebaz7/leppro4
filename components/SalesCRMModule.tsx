@@ -14,7 +14,10 @@ export default function SalesCRMModule() {
     const [activeTab, setActiveTab] = useState<'contacts' | 'broadcast' | 'birthday' | 'bot_leads'>('contacts');
     const [template, setTemplate] = useState<BirthdayGreetingTemplate>({ text: 'تولدت مبارک عزیز!', isActive: true });
 
-    // Lead Merge States
+    // Lead Merge & Leads UI States
+    const [isLoadingLeads, setIsLoadingLeads] = useState(false);
+    const [confirmDeleteLeadId, setConfirmDeleteLeadId] = useState<string | null>(null);
+    const [leadsFeedback, setLeadsFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
     const [mergingLead, setMergingLead] = useState<any | null>(null);
     const [mergeMode, setMergeMode] = useState<'new' | 'existing'>('new');
     const [selectedContactId, setSelectedContactId] = useState<string>('');
@@ -91,7 +94,7 @@ export default function SalesCRMModule() {
         }
 
         setMergeForm({
-            name: lead.fullName || '',
+            name: lead.fullName || lead.messengerName || '',
             mobile: lead.mobile || '',
             telegramId: lead.platform === 'telegram' ? (lead.telegramChatId || lead.chatId || '') : '',
             baleId: lead.platform === 'bale' ? (lead.baleChatId || lead.chatId || '') : '',
@@ -146,20 +149,38 @@ export default function SalesCRMModule() {
         setMergingLead(null);
     };
     
+    const fetchBotSubscribers = async () => {
+        setIsLoadingLeads(true);
+        try {
+            const subs = await apiCall<any[]>('/bot-subscribers');
+            if (Array.isArray(subs)) {
+                setBotSubscribers(subs);
+            }
+        } catch (e: any) {
+            console.error('Failed to fetch bot subscribers:', e);
+            setLeadsFeedback({ type: 'error', text: 'خطا در دریافت لیست لیدهای ربات از سرور.' });
+        } finally {
+            setIsLoadingLeads(false);
+        }
+    };
+
     const fetchData = async () => {
         getSettings().then(s => {
             if (s.salesContacts) setContacts(s.salesContacts);
             if (s.birthdayGreetingTemplate) setTemplate(s.birthdayGreetingTemplate);
-        });
-        try {
-            const subs = await apiCall<any[]>('/bot-subscribers');
-            setBotSubscribers(subs);
-        } catch (e) {}
+        }).catch(() => {});
+        await fetchBotSubscribers();
     };
 
     useEffect(() => {
         fetchData();
     }, []);
+
+    useEffect(() => {
+        if (activeTab === 'bot_leads') {
+            fetchBotSubscribers();
+        }
+    }, [activeTab]);
 
     const updateContacts = async (newContacts: SalesContact[]) => {
         setContacts(newContacts);
@@ -168,12 +189,13 @@ export default function SalesCRMModule() {
     };
 
     const handleDeleteBotSub = async (id: string) => {
-        if (!confirm('آیا از حذف این عضو اطمینان دارید؟')) return;
         try {
-            await apiCall(`/bot-subscribers/${id}`, 'DELETE');
-            fetchData();
+            await apiCall(`/bot-subscribers/${encodeURIComponent(id)}`, 'DELETE');
+            setConfirmDeleteLeadId(null);
+            setBotSubscribers(prev => prev.filter(s => String(s.id) !== String(id)));
+            setLeadsFeedback({ type: 'success', text: 'لید با موفقیت حذف شد.' });
         } catch (e) {
-            alert('خطا در حذف عضو');
+            setLeadsFeedback({ type: 'error', text: 'خطا در حذف لید از سرور.' });
         }
     };
 
@@ -704,7 +726,11 @@ export default function SalesCRMModule() {
                                 </thead>
                                 <tbody>
                                     {contacts.map(c => {
-                                        const isLinked = botSubscribers.some(sub => sub.mobile?.includes(c.mobile.slice(-10)) || c.mobile.includes(sub.mobile?.slice(-10)));
+                                        const contactMob10 = (c.mobile || '').slice(-10);
+                                        const isLinked = Boolean(contactMob10) && botSubscribers.some(sub => {
+                                            const subMob10 = (sub.mobile || '').slice(-10);
+                                            return Boolean(subMob10) && (subMob10.includes(contactMob10) || contactMob10.includes(subMob10));
+                                        });
                                         const hasSayan = !!(c.sayanPersonCode || c.sayanTafsiliCode);
                                         return (
                                             <tr key={c.id} className="border-b hover:bg-gray-50 transition-colors">
@@ -846,12 +872,39 @@ export default function SalesCRMModule() {
             )}
 
             {activeTab === 'bot_leads' && (
-                <div className="glass-panel p-4 md:p-6 rounded-2xl border border-gray-200/80 dark:border-gray-800 bg-white/90 dark:bg-gray-900/90 shadow-sm animate-fade-in">
-                    <h3 className="font-bold text-lg mb-6">لیست لیدهای ربات (اعضای جدید)</h3>
-                    <div className="overflow-x-auto">
+                <div className="glass-panel p-4 md:p-6 rounded-2xl border border-gray-200/80 dark:border-gray-800 bg-white/90 dark:bg-gray-900/90 shadow-sm animate-fade-in space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100">لیست لیدهای ربات (اعضای جدید)</h3>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">کاربران و مشتریان جمع‌آوری‌شده از ربات تلگرام و بله</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={fetchBotSubscribers}
+                            disabled={isLoadingLeads}
+                            className="flex items-center gap-1.5 text-xs font-bold px-3.5 py-2 rounded-xl border border-sky-200 dark:border-sky-800/60 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-all cursor-pointer disabled:opacity-50"
+                        >
+                            <RefreshCw size={14} className={isLoadingLeads ? 'animate-spin' : ''} />
+                            <span>{isLoadingLeads ? 'در حال بروزرسانی...' : 'بروزرسانی لیست'}</span>
+                        </button>
+                    </div>
+
+                    {leadsFeedback && (
+                        <div className={`px-3.5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between ${
+                            leadsFeedback.type === 'error'
+                                ? 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800/50'
+                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50'
+                        }`}>
+                            <span>{leadsFeedback.text}</span>
+                            <button type="button" onClick={() => setLeadsFeedback(null)} className="px-2 text-xs opacity-70 hover:opacity-100">✕</button>
+                        </div>
+                    )}
+
+                    {/* Desktop Table */}
+                    <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-sm text-right">
                             <thead>
-                                <tr className="border-b bg-gray-50 text-gray-500">
+                                <tr className="border-b bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400">
                                     <th className="p-4 font-bold text-right">نام ثبت شده</th>
                                     <th className="p-4 font-bold text-center">شماره موبایل</th>
                                     <th className="p-4 font-bold text-center">تاریخ تولد</th>
@@ -862,45 +915,130 @@ export default function SalesCRMModule() {
                             </thead>
                             <tbody>
                                 {botSubscribers.map(sub => {
-                                    const linkedContact = contacts.find(c => sub.mobile?.includes(c.mobile.slice(-10)) || c.mobile.includes(sub.mobile?.slice(-10)));
+                                    const subMob10 = (sub.mobile || '').slice(-10);
+                                    const linkedContact = subMob10
+                                        ? contacts.find(c => {
+                                            const cMob10 = (c.mobile || '').slice(-10);
+                                            return Boolean(cMob10) && (subMob10.includes(cMob10) || cMob10.includes(subMob10));
+                                        })
+                                        : undefined;
+                                    const displayName = sub.fullName || sub.messengerName || (sub.messengerUsername ? `@${sub.messengerUsername}` : '(بدون نام)');
+                                    const isConfirming = confirmDeleteLeadId === sub.id;
                                     return (
-                                        <tr key={sub.id} className="border-b hover:bg-gray-50">
-                                            <td className="p-4 font-bold text-gray-800">
+                                        <tr key={sub.id} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
+                                            <td className="p-4 font-bold text-gray-800 dark:text-gray-100">
                                                 <div className="flex flex-col">
-                                                    <span>{sub.fullName || '(بدون نام)'}</span>
-                                                    {linkedContact && <span className="text-[8px] bg-emerald-100 text-emerald-600 px-1 rounded w-fit mt-1">لینک شده به مخاطب: {linkedContact.name}</span>}
+                                                    <span>{displayName}</span>
+                                                    {sub.messengerUsername && !sub.fullName && (
+                                                        <span className="text-[10px] text-gray-400 font-mono">@{sub.messengerUsername}</span>
+                                                    )}
+                                                    {linkedContact && <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 px-1.5 py-0.5 rounded w-fit mt-1">لینک شده به مخاطب: {linkedContact.name}</span>}
                                                 </div>
                                             </td>
-                                            <td className="p-4 text-center font-mono">{sub.mobile || '-'}</td>
-                                            <td className="p-4 text-center">{sub.birthday || '-'}</td>
+                                            <td className="p-4 text-center font-mono dark:text-gray-200">{sub.mobile || '-'}</td>
+                                            <td className="p-4 text-center dark:text-gray-200">{sub.birthday || '-'}</td>
                                             <td className="p-4 text-center">
                                                 {sub.platform === 'telegram' ? 
-                                                    <span className="text-blue-500 font-bold text-[10px]">تلگرام</span> : 
-                                                    <span className="text-emerald-500 font-bold text-[10px]">بله</span>
+                                                    <span className="text-blue-500 font-bold text-xs">تلگرام</span> : 
+                                                    <span className="text-emerald-500 font-bold text-xs">بله</span>
                                                 }
                                             </td>
-                                            <td className="p-4 text-center font-mono text-[10px] text-gray-400">
+                                            <td className="p-4 text-center font-mono text-xs text-gray-500 dark:text-gray-400 select-all">
                                                 {sub.telegramChatId || sub.baleChatId || sub.chatId}
                                             </td>
                                             <td className="p-4">
                                                 <div className="flex justify-center items-center gap-1.5 flex-wrap">
                                                     <button 
                                                         onClick={() => handleStartMerge(sub)} 
-                                                        className="py-1 px-2.5 bg-gradient-to-l from-blue-600 to-indigo-600 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-500/10 flex items-center gap-1 transition-all active:scale-95"
+                                                        className="py-1.5 px-3 bg-gradient-to-l from-blue-600 to-indigo-600 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-500/10 flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
                                                         title="انتقال و ادغام اطلاعات این لید با مخاطبان"
                                                     >
                                                         <UserPlus size={13}/>
                                                         <span>انتقال / ادغام</span>
                                                     </button>
-                                                    <button onClick={() => handleDeleteBotSub(sub.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-100" title="حذف لید"><Trash2 size={15}/></button>
+                                                    {isConfirming ? (
+                                                        <div className="flex items-center gap-1">
+                                                            <button onClick={() => handleDeleteBotSub(sub.id)} className="px-2.5 py-1 bg-red-600 text-white rounded-lg text-[11px] font-bold hover:bg-red-700 cursor-pointer">تایید حذف</button>
+                                                            <button onClick={() => setConfirmDeleteLeadId(null)} className="px-2 py-1 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg text-[11px] font-bold cursor-pointer">لغو</button>
+                                                        </div>
+                                                    ) : (
+                                                        <button onClick={() => setConfirmDeleteLeadId(sub.id)} className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors border border-transparent hover:border-red-100 cursor-pointer" title="حذف لید"><Trash2 size={15}/></button>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
                                     );
                                 })}
-                                {botSubscribers.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-gray-400 italic">هیچ لیدی هنوز از ربات جمع‌آوری نشده است.</td></tr>}
+                                {botSubscribers.length === 0 && (
+                                    <tr>
+                                        <td colSpan={6} className="p-8 text-center text-gray-400 italic">
+                                            {isLoadingLeads ? 'در حال بارگذاری لیدهای ربات...' : 'هیچ لیدی هنوز از ربات جمع‌آوری نشده است.'}
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
+                    </div>
+
+                    {/* Mobile / Android Card List */}
+                    <div className="md:hidden space-y-3">
+                        {botSubscribers.map(sub => {
+                            const subMob10 = (sub.mobile || '').slice(-10);
+                            const linkedContact = subMob10
+                                ? contacts.find(c => {
+                                    const cMob10 = (c.mobile || '').slice(-10);
+                                    return Boolean(cMob10) && (subMob10.includes(cMob10) || cMob10.includes(subMob10));
+                                })
+                                : undefined;
+                            const displayName = sub.fullName || sub.messengerName || (sub.messengerUsername ? `@${sub.messengerUsername}` : '(بدون نام)');
+                            const isConfirming = confirmDeleteLeadId === sub.id;
+                            return (
+                                <div key={sub.id} className="p-3.5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50/70 dark:bg-gray-800/40 space-y-2.5">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div>
+                                            <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{displayName}</div>
+                                            {linkedContact && (
+                                                <span className="inline-block text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded mt-1">
+                                                    مخاطب: {linkedContact.name}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${sub.platform === 'telegram' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'}`}>
+                                            {sub.platform === 'telegram' ? 'تلگرام' : 'بله'}
+                                        </span>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-300">
+                                        <div>موبایل: <span className="font-mono font-bold">{sub.mobile || '-'}</span></div>
+                                        <div>تولد: <span>{sub.birthday || '-'}</span></div>
+                                        <div className="col-span-2 truncate">شناسه چت: <span className="font-mono text-[11px]">{sub.telegramChatId || sub.baleChatId || sub.chatId}</span></div>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-gray-200/70 dark:border-gray-700/60">
+                                        <button
+                                            onClick={() => handleStartMerge(sub)}
+                                            className="flex-1 py-2 px-3 bg-gradient-to-l from-blue-600 to-indigo-600 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 active:scale-95"
+                                        >
+                                            <UserPlus size={14} />
+                                            <span>انتقال / ادغام</span>
+                                        </button>
+                                        {isConfirming ? (
+                                            <div className="flex items-center gap-1">
+                                                <button onClick={() => handleDeleteBotSub(sub.id)} className="px-3 py-2 bg-red-600 text-white rounded-xl text-xs font-bold">تایید</button>
+                                                <button onClick={() => setConfirmDeleteLeadId(null)} className="px-2.5 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl text-xs font-bold">لغو</button>
+                                            </div>
+                                        ) : (
+                                            <button onClick={() => setConfirmDeleteLeadId(sub.id)} className="p-2 text-red-600 bg-red-50 dark:bg-red-950/30 rounded-xl">
+                                                <Trash2 size={16} />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        {botSubscribers.length === 0 && (
+                            <div className="p-6 text-center text-sm text-gray-400 italic">
+                                {isLoadingLeads ? 'در حال بارگذاری لیدهای ربات...' : 'هیچ لیدی هنوز از ربات جمع‌آوری نشده است.'}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -1150,7 +1288,7 @@ export default function SalesCRMModule() {
                             <div className="bg-blue-50/50 dark:bg-zinc-800/40 p-4 rounded-2xl border border-blue-100/50 dark:border-zinc-800/80 flex items-center justify-between">
                                 <div className="space-y-1">
                                     <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 block">پروفایل لید ربات ({mergingLead.platform === 'telegram' ? 'تلگرام' : 'پیام‌رسان بله'})</span>
-                                    <div className="font-extrabold text-sm text-gray-800 dark:text-gray-100">{mergingLead.fullName || 'بدون نام'}</div>
+                                    <div className="font-extrabold text-sm text-gray-800 dark:text-gray-100">{mergingLead.fullName || mergingLead.messengerName || 'بدون نام'}</div>
                                     <div className="text-xs text-gray-500 font-mono select-all">{mergingLead.mobile || 'شماره ثبت نشده'}</div>
                                 </div>
                                 <div className="bg-blue-100/60 text-blue-800 font-bold px-3 py-1.5 rounded-xl text-xs">

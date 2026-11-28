@@ -756,7 +756,7 @@ const normalizeSmartDbCache = (targetDb) => {
         db.settings.activeFiscalYearId = 'fy_1404';
     }
 
-    const arrays = ['users', 'botSubscribers', 'orders', 'exitPermits', 'warehouseTransactions', 'subscriptions', 'messages', 'groups', 'tasks', 'tradeRecords', 'notes', 'customerBalances', 'customerChatCodes', 'chequeReceipts', 'customCalendarEvents'];
+    const arrays = ['users', 'botSubscribers', 'tickets', 'notifications', 'notificationQueue', 'customerOrders', 'orders', 'exitPermits', 'warehouseTransactions', 'subscriptions', 'messages', 'groups', 'tasks', 'tradeRecords', 'notes', 'customerBalances', 'customerChatCodes', 'chequeReceipts', 'customCalendarEvents'];
     arrays.forEach(arr => {
         if (!Array.isArray(db[arr])) db[arr] = [];
     });

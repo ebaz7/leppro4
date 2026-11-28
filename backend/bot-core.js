@@ -8,6 +8,7 @@ import * as Renderer from './renderer.js';
 import * as dbManager from './db-manager.js';
 import * as utils from './utils.js';
 import * as whatsapp from './whatsapp.js';
+import * as notificationQueue from './notification-queue.js';
 import { mergeFilesToPdf } from './pdf-merger.js';
 import {
     getCustomerBotInvoices,
@@ -25,6 +26,148 @@ const findNextGapNumber = utils.findNextGapNumber;
 const sanitizeGroupId = utils.sanitizeGroupId;
 const generateUUID = utils.generateUUID;
 const getTehranDateString = utils.getTehranDateString;
+
+const ensureBotSubscriber = (db, platform, chatId, rawMsg = null) => {
+    if (!db || !chatId) return null;
+    const chatStr = String(chatId).trim();
+    if (!chatStr || chatStr.startsWith('-')) return null;
+    if (!Array.isArray(db.botSubscribers)) db.botSubscribers = [];
+
+    const fromObj = rawMsg?.from || null;
+    const messengerName = [fromObj?.first_name, fromObj?.last_name].filter(Boolean).join(' ').trim();
+    const messengerUsername = fromObj?.username ? String(fromObj.username).trim() : '';
+
+    let sub = db.botSubscribers.find(s =>
+        s && (
+            (platform === 'telegram' && (String(s.telegramChatId || '') === chatStr || (s.platform === 'telegram' && String(s.chatId || '') === chatStr))) ||
+            (platform === 'bale' && (String(s.baleChatId || '') === chatStr || (s.platform === 'bale' && String(s.chatId || '') === chatStr)))
+        )
+    );
+
+    if (!sub) {
+        sub = {
+            id: generateUUID(),
+            platform,
+            chatId: chatStr,
+            ...(platform === 'telegram' ? { telegramChatId: chatId } : {}),
+            ...(platform === 'bale' ? { baleChatId: chatId } : {}),
+            ...(messengerName ? { messengerName } : {}),
+            ...(messengerUsername ? { messengerUsername } : {}),
+            joinedAt: new Date().toISOString(),
+            lastSeenAt: new Date().toISOString()
+        };
+        db.botSubscribers.push(sub);
+        saveDb(db);
+        return sub;
+    }
+
+    let changed = false;
+    if (!sub.id) { sub.id = generateUUID(); changed = true; }
+    if (!sub.platform) { sub.platform = platform; changed = true; }
+    if (!sub.chatId) { sub.chatId = chatStr; changed = true; }
+    if (platform === 'telegram' && !sub.telegramChatId) { sub.telegramChatId = chatId; changed = true; }
+    if (platform === 'bale' && !sub.baleChatId) { sub.baleChatId = chatId; changed = true; }
+    if (messengerName && !sub.messengerName) { sub.messengerName = messengerName; changed = true; }
+    if (messengerUsername && !sub.messengerUsername) { sub.messengerUsername = messengerUsername; changed = true; }
+    if (!sub.joinedAt) { sub.joinedAt = new Date().toISOString(); changed = true; }
+    if (changed) {
+        sub.lastSeenAt = new Date().toISOString();
+        saveDb(db);
+    }
+    return sub;
+};
+
+const resolveTicketManagerTargets = (db) => {
+    const targetRoles = ['admin', 'ceo', 'manager', 'sales_manager', 'sales'];
+    const lowerTargetRoles = new Set(targetRoles);
+    const settings = db?.settings || {};
+    const salesUserSet = new Set(
+        (Array.isArray(settings.salesNotificationUsers) ? settings.salesNotificationUsers : [])
+            .map(item => (typeof item === 'string' ? item : item?.username))
+            .filter(Boolean)
+            .map(u => String(u).toLowerCase().trim())
+    );
+
+    const targetUsernames = new Set();
+    for (const u of (db?.users || [])) {
+        if (!u || !u.username) continue;
+        const lowerU = String(u.username).toLowerCase().trim();
+        const uRoles = [u.role, ...(Array.isArray(u.roles) ? u.roles : [])]
+            .filter(Boolean)
+            .map(r => String(r).toLowerCase().trim());
+
+        const hasManagerRole = uRoles.some(r => lowerTargetRoles.has(r));
+        const hasSalesPerm =
+            u.canManageSales === true ||
+            uRoles.some(r => settings.rolePermissions?.[r]?.canManageSales === true || settings.rolePermissions?.[r]?.canViewAll === true);
+        const isListedInSales = salesUserSet.has(lowerU);
+
+        if (hasManagerRole || hasSalesPerm || isListedInSales) {
+            targetUsernames.add(u.username);
+        }
+    }
+
+    return {
+        targetRoles,
+        targetUsernames: Array.from(targetUsernames)
+    };
+};
+
+const notifyTicketOrSalesManagers = async (db, { title, body, url, type = 'ticket_new', tag = null, metadata = {} }) => {
+    try {
+        if (!db) return null;
+        if (!Array.isArray(db.notifications)) db.notifications = [];
+
+        const { targetRoles, targetUsernames } = resolveTicketManagerTargets(db);
+        const notif = {
+            id: generateUUID(),
+            type,
+            title,
+            body,
+            url,
+            targetRoles,
+            targetUsernames: targetUsernames.length > 0 ? targetUsernames : null,
+            excludeUsernames: null,
+            createdAt: Date.now(),
+            readBy: []
+        };
+
+        db.notifications.push(notif);
+        if (db.notifications.length > 1000) {
+            db.notifications = db.notifications.slice(-500);
+        }
+        saveDb(db);
+
+        await notificationQueue.enqueueNotification({
+            id: notif.id,
+            type,
+            title,
+            body,
+            url,
+            targetUsernames: targetUsernames.length > 0 ? targetUsernames : null,
+            targetRoles,
+            excludeUsernames: null,
+            priority: 1,
+            tag: tag || `${type}:${metadata?.ticketId || notif.id}`,
+            metadata: { ...metadata, createdAt: notif.createdAt }
+        }).catch(err => {
+            console.warn('[BotCore] Ticket notificationQueue enqueue warning:', err?.message);
+        });
+
+        try {
+            notificationQueue.dispatchSSEEvent(
+                'ticket_updated',
+                { ...metadata, type, updatedAt: Date.now() },
+                targetUsernames.length > 0 ? targetUsernames : null
+            );
+        } catch (_) {}
+
+        return notif;
+    } catch (e) {
+        console.error('[BotCore] notifyTicketOrSalesManagers error:', e);
+        return null;
+    }
+};
 
 const getRolePermissions = (userRole, settings, userObject) => {
     if (userRole === 'admin') {
@@ -1694,17 +1837,7 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
         session.data = {};
 
         // TRACK SUBSCRIBER
-        if (!db.botSubscribers) db.botSubscribers = [];
-        const existingSub = db.botSubscribers.find(s => (platform === 'telegram' && s.telegramChatId == chatId) || (platform === 'bale' && s.baleChatId == chatId));
-        if (!existingSub) {
-            const newSub = { id: generateUUID(), platform, joinedAt: new Date().toISOString() };
-            if (platform === 'telegram') newSub.telegramChatId = chatId;
-            if (platform === 'bale') newSub.baleChatId = chatId;
-            db.botSubscribers.push(newSub);
-            saveDb(db);
-        } else {
-            // Already sub, check if we should continue onboarding
-        }
+        ensureBotSubscriber(db, platform, chatId, rawMsg);
         
         // --- SALES REPLY HANDLER ---
         const isSalesUser = (settings.salesNotificationUsers || []).some(item => {
@@ -1902,9 +2035,10 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
         
         // --- GUEST REGISTRATION STATES ---
         if (session.state === 'GUEST_REG_NAME') {
-            const sub = db.botSubscribers.find(s => (platform === 'telegram' && s.telegramChatId == chatId) || (platform === 'bale' && s.baleChatId == chatId));
+            const sub = ensureBotSubscriber(db, platform, chatId, rawMsg);
             if (sub) {
                 sub.fullName = text;
+                sub.lastSeenAt = new Date().toISOString();
                 saveDb(db);
             }
             session.state = 'GUEST_REG_MOBILE';
@@ -1914,9 +2048,10 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
         }
 
         if (session.state === 'GUEST_REG_MOBILE') {
-            const sub = db.botSubscribers.find(s => (platform === 'telegram' && s.telegramChatId == chatId) || (platform === 'bale' && s.baleChatId == chatId));
+            const sub = ensureBotSubscriber(db, platform, chatId, rawMsg);
             if (sub) {
                 sub.mobile = text;
+                sub.lastSeenAt = new Date().toISOString();
                 saveDb(db);
             }
             session.state = 'GUEST_REG_BIRTHDAY';
@@ -1926,9 +2061,10 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
         }
 
         if (session.state === 'GUEST_REG_BIRTHDAY') {
-            const sub = db.botSubscribers.find(s => (platform === 'telegram' && s.telegramChatId == chatId) || (platform === 'bale' && s.baleChatId == chatId));
+            const sub = ensureBotSubscriber(db, platform, chatId, rawMsg);
             if (sub) {
                 sub.birthday = text;
+                sub.lastSeenAt = new Date().toISOString();
                 saveDb(db);
             }
             session.state = 'IDLE';
@@ -1939,6 +2075,8 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
 
         if (session.state === 'GUEST_WAIT_CONTACT_MSG') {
             const ticketId = Math.floor(10000 + Math.random() * 90000).toString();
+            const sub = ensureBotSubscriber(db, platform, chatId, rawMsg);
+            const rawFromName = [rawMsg?.from?.first_name, rawMsg?.from?.last_name].filter(Boolean).join(' ').trim();
             
             let messageText = text;
             if (!text && rawMsg) {
@@ -1951,7 +2089,8 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                 id: ticketId,
                 chatId: chatId,
                 platform: platform,
-                customerName: rawMsg?.from?.first_name || 'مشتری',
+                customerName: sub?.fullName || rawFromName || sub?.messengerName || 'مشتری',
+                ...(sub?.mobile ? { customerMobile: sub.mobile } : {}),
                 messages: [{
                     id: generateUUID(),
                     sender: 'customer',
@@ -1968,8 +2107,18 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
             saveDb(db);
             session.state = 'GUEST_ACTIVE_TICKET';
             session.data.ticketId = ticketId;
+
+            // Emit real-time in-app, SSE, WebPush, and Electron/Android notifications to managers & sales team
+            await notifyTicketOrSalesManagers(db, {
+                title: `🎫 تیکت جدید #${ticketId}`,
+                body: `${newTicket.customerName}: ${(messageText || 'پیام جدید').slice(0, 120)}`,
+                url: `/tickets?ticketId=${encodeURIComponent(ticketId)}`,
+                type: 'ticket_new',
+                tag: `ticket_new:${ticketId}`,
+                metadata: { ticketId, createdAt: newTicket.createdAt }
+            });
             
-            // Forward to sales notification users
+            // Forward to sales notification users (Telegram / Bale)
             if (settings.salesNotificationUsers && settings.salesNotificationUsers.length > 0) {
                  const forwardText = `📞 *تیکت جدید (کد پیگیری: ${ticketId})*\n👤 کاربر: ${newTicket.customerName}\n💬 متن:\n${messageText}`;
                  const baleModule = await import('./bale.js');
@@ -1979,8 +2128,8 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                      const username = typeof item === 'string' ? item : item.username;
                      const platforms = typeof item === 'string' ? ['telegram', 'bale'] : item.platforms;
                      
-                     // Try to find as system user
-                     const targetUser = db.users.find(u => u.username === username);
+                     // Try to find as system user (case-insensitive)
+                     const targetUser = (db.users || []).find(u => u.username && String(u.username).toLowerCase() === String(username || '').toLowerCase());
                      
                      if (targetUser) {
                          if (platforms.includes('telegram') && targetUser.telegramChatId) {
@@ -2028,6 +2177,16 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                 });
                 ticket.updatedAt = Date.now();
                 saveDb(db);
+
+                // Emit real-time in-app, SSE, WebPush, and Electron/Android notifications for customer reply
+                await notifyTicketOrSalesManagers(db, {
+                    title: `💬 پاسخ مشتری در تیکت #${ticket.id}`,
+                    body: `${ticket.customerName || 'مشتری'}: ${(messageText || '📎 مدیا').slice(0, 120)}`,
+                    url: `/tickets?ticketId=${encodeURIComponent(ticket.id)}`,
+                    type: 'ticket_reply',
+                    tag: `ticket_reply:${ticket.id}:${ticket.updatedAt}`,
+                    metadata: { ticketId: ticket.id, updatedAt: ticket.updatedAt }
+                });
                 
                 if (settings.salesNotificationUsers && settings.salesNotificationUsers.length > 0) {
                      const forwardText = `📞 *پاسخ کاربر در تیکت #${ticket.id}*\n👤 کاربر: ${ticket.customerName}\n💬 متن:\n${messageText}`;
@@ -2036,7 +2195,7 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                      for (const item of settings.salesNotificationUsers) {
                          const username = typeof item === 'string' ? item : item.username;
                          const platforms = typeof item === 'string' ? ['telegram', 'bale'] : item.platforms;
-                         const targetUser = db.users.find(u => u.username === username);
+                         const targetUser = (db.users || []).find(u => u.username && String(u.username).toLowerCase() === String(username || '').toLowerCase());
                          if (targetUser) {
                              if (platforms.includes('telegram') && targetUser.telegramChatId) tgModule.sendBotMessage(targetUser.telegramChatId, forwardText).catch(e => {});
                              if (platforms.includes('bale') && targetUser.baleChatId) baleModule.sendBotMessage(targetUser.baleChatId, forwardText).catch(e => {});
@@ -2108,6 +2267,7 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
         
 
         if (session.state === 'GUEST_WAIT_ORDER_DESC') {
+            const sub = ensureBotSubscriber(db, platform, chatId, rawMsg);
             const selectedProduct = session.data.selectedProduct;
             const orderDoc = {
                 id: generateUUID(),
@@ -2122,6 +2282,15 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
             db.customerOrders.push(orderDoc);
             saveDb(db);
             session.state = 'IDLE';
+
+            await notifyTicketOrSalesManagers(db, {
+                title: `🛒 درخواست خرید جدید از ربات`,
+                body: `${sub?.fullName || sub?.messengerName || chatId} — کالا: ${selectedProduct?.name || 'نامشخص'}`,
+                url: `/sales`,
+                type: 'sales_order',
+                tag: `sales_order:${orderDoc.id}`,
+                metadata: { orderId: orderDoc.id, createdAt: Date.now() }
+            });
             
              // Forward to sales notification users
             if (settings.salesNotificationUsers && settings.salesNotificationUsers.length > 0) {
@@ -2133,7 +2302,7 @@ export const handleMessage = async (platform, chatId, text, sendFn, sendPhotoFn,
                      const username = typeof item === 'string' ? item : item.username;
                      const platforms = typeof item === 'string' ? ['telegram', 'bale'] : item.platforms;
                      
-                     const targetUser = db.users.find(u => u.username === username);
+                     const targetUser = (db.users || []).find(u => u.username && String(u.username).toLowerCase() === String(username || '').toLowerCase());
                      if (targetUser) {
                          if (platforms.includes('telegram') && targetUser.telegramChatId) tgModule.sendBotMessage(targetUser.telegramChatId, forwardText).catch(e => {});
                          if (platforms.includes('bale') && targetUser.baleChatId) baleModule.sendBotMessage(targetUser.baleChatId, forwardText).catch(e => {});
@@ -4720,6 +4889,7 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
 
     // --- REGISTRATION BUTTONS ---
     if (data === 'GUEST_START_REG') {
+        ensureBotSubscriber(db, platform, userId || chatId);
         if (!sessions[chatId]) sessions[chatId] = { state: 'IDLE', data: {} };
         sessions[chatId].state = 'GUEST_REG_NAME';
         return sendFn(chatId, "👤 لطفاً نام و نام خانوادگی خود را وارد کنید (اختیاری):", {
@@ -4750,6 +4920,9 @@ export const handleCallback = async (platform, chatId, userId, data, sendFn, sen
 
     // Allow Guest callbacks even for registered users (Admin access to customer menus)
     if (data.startsWith('GUEST_') || data.startsWith('SALES_GROUP_') || data.startsWith('SALES_SUB')) {
+        if (!String(chatId || '').startsWith('-')) {
+            ensureBotSubscriber(db, platform, userId || chatId);
+        }
         if (data === 'GUEST_MAIN') {
             session.state = 'IDLE';
             const guestMenu = [

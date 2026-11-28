@@ -167,6 +167,114 @@ fn sanitize_desktop_filename(name: &str) -> String {
     }
 }
 
+fn escape_xml_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+#[tauri::command]
+fn focus_main_window(handle: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(win) = handle.get_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        let _ = win.request_user_attention(None);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[tauri::command]
+fn clear_tauri_attention(handle: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(win) = handle.get_window("main") {
+        let _ = win.request_user_attention(None);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[tauri::command]
+fn show_native_notification(
+    handle: tauri::AppHandle,
+    title: String,
+    body: String,
+    _url: Option<String>,
+    _id: Option<String>,
+    _tab: Option<String>,
+    _notif_type: Option<String>,
+    show_toast: Option<bool>,
+) -> Result<bool, String> {
+    if let Some(win) = handle.get_window("main") {
+        let is_focused = win.is_focused().unwrap_or(false);
+        let is_minimized = win.is_minimized().unwrap_or(false);
+        if !is_focused || is_minimized {
+            let _ = win.request_user_attention(Some(tauri::UserAttentionType::Informational));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if show_toast.unwrap_or(true) {
+            let safe_title = escape_xml_text(if title.trim().is_empty() { "سامانه دلکام" } else { title.trim() });
+            let safe_body = escape_xml_text(body.trim());
+            std::thread::spawn(move || {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                let ps_title = safe_title.replace('\'', "''");
+                let ps_body = safe_body.replace('\'', "''");
+                let ps_script = format!(
+                    "$ErrorActionPreference='SilentlyContinue'; \
+                     $aumid='ir.dlkam.desktop.app'; \
+                     $regPath='HKCU:\\Software\\Classes\\AppUserModelId\\' + $aumid; \
+                     if(-not (Test-Path $regPath)){{ New-Item -Path $regPath -Force | Out-Null; New-ItemProperty -Path $regPath -Name 'DisplayName' -Value 'Dlkam' -PropertyType String -Force | Out-Null }}; \
+                     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; \
+                     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null; \
+                     $xmlStr='<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>'; \
+                     $doc=New-Object Windows.Data.Xml.Dom.XmlDocument; \
+                     $doc.LoadXml($xmlStr); \
+                     $toast=[Windows.UI.Notifications.ToastNotification]::new($doc); \
+                     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid).Show($toast);",
+                    ps_title,
+                    ps_body
+                );
+                if let Ok(mut child) = std::process::Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-Command",
+                        &ps_script,
+                    ])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                {
+                    let _ = child.wait();
+                }
+            });
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (title, body, show_toast);
+    }
+
+    Ok(true)
+}
+
 #[tauri::command]
 fn get_app_version(handle: tauri::AppHandle) -> String {
     handle.package_info().version.to_string()
@@ -782,6 +890,9 @@ fn main() {
 
             let win_for_close = win.clone();
             win.on_window_event(move |event| {
+                if let tauri::WindowEvent::Focused(true) = event {
+                    let _ = win_for_close.request_user_attention(None);
+                }
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
                     let _ = win_for_close.eval(
                         "try { localStorage.removeItem('app_current_user'); localStorage.removeItem('app_auth_token'); localStorage.removeItem('app_refresh_token'); sessionStorage.removeItem('dlkam_desktop_session_active'); window.dispatchEvent(new CustomEvent('desktop-auto-logout')); } catch(e) {}",
@@ -822,7 +933,10 @@ fn main() {
             open_local_file_dir,
             save_and_open_local_file,
             get_barcode_wedge_support,
-            type_barcode_to_active_window
+            type_barcode_to_active_window,
+            focus_main_window,
+            clear_tauri_attention,
+            show_native_notification
         ])
         .run(tauri::generate_context!())
         .expect("error_running_tauri");

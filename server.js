@@ -8789,14 +8789,167 @@ app.post('/api/chat/read-all', (req, res) => {
     res.json({ success: true });
 });
 
+app.get(['/api/bot-subscribers', '/bot-subscribers'], (req, res) => {
+    try {
+        const db = getDb();
+        let mutated = false;
+        const rawList = Array.isArray(db.botSubscribers) ? db.botSubscribers : [];
+        const normalized = rawList
+            .filter(s => s && typeof s === 'object')
+            .map(s => {
+                const resolvedChatId = s.chatId || s.telegramChatId || s.baleChatId || '';
+                if (!s.id) {
+                    s.id = generateUUID();
+                    mutated = true;
+                }
+                if (!s.chatId && resolvedChatId) {
+                    s.chatId = String(resolvedChatId);
+                    mutated = true;
+                }
+                return {
+                    ...s,
+                    id: String(s.id),
+                    chatId: String(resolvedChatId)
+                };
+            })
+            .sort((a, b) => {
+                const tA = new Date(a.lastSeenAt || a.updatedAt || a.joinedAt || a.createdAt || 0).getTime() || 0;
+                const tB = new Date(b.lastSeenAt || b.updatedAt || b.joinedAt || b.createdAt || 0).getTime() || 0;
+                return tB - tA;
+            });
+
+        if (mutated) {
+            db.botSubscribers = rawList;
+            saveDb(db);
+        }
+
+        res.json(normalized);
+    } catch (e) {
+        console.error('GET /api/bot-subscribers error:', e);
+        res.status(500).json({ error: e.message || 'خطا در دریافت لیست لیدهای ربات' });
+    }
+});
+
+app.delete(['/api/bot-subscribers/:id', '/bot-subscribers/:id'], (req, res) => {
+    try {
+        const targetId = String(req.params.id || '').trim();
+        if (!targetId) {
+            return res.status(400).json({ success: false, error: 'شناسه لید نامعتبر است.' });
+        }
+        const db = getDb();
+        const existing = Array.isArray(db.botSubscribers) ? db.botSubscribers : [];
+        const filtered = existing.filter(s =>
+            s &&
+            String(s.id || '') !== targetId &&
+            String(s.chatId || '') !== targetId &&
+            String(s.telegramChatId || '') !== targetId &&
+            String(s.baleChatId || '') !== targetId
+        );
+        if (filtered.length === existing.length) {
+            return res.status(404).json({ success: false, error: 'لید مورد نظر یافت نشد.' });
+        }
+        db.botSubscribers = filtered;
+        saveDb(db);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('DELETE /api/bot-subscribers/:id error:', e);
+        res.status(500).json({ success: false, error: e.message || 'خطا در حذف لید' });
+    }
+});
+
+const resolveSalesAndManagerUsernames = (db) => {
+    const targetRoles = ['admin', 'ceo', 'manager', 'sales_manager', 'sales'];
+    const lowerTargetRoles = new Set(targetRoles);
+    const settings = db?.settings || {};
+    const salesUserSet = new Set(
+        (Array.isArray(settings.salesNotificationUsers) ? settings.salesNotificationUsers : [])
+            .map(item => (typeof item === 'string' ? item : item?.username))
+            .filter(Boolean)
+            .map(u => String(u).toLowerCase().trim())
+    );
+
+    const usernames = new Set();
+    for (const u of (db?.users || [])) {
+        if (!u || !u.username) continue;
+        const lowerU = String(u.username).toLowerCase().trim();
+        const uRoles = [u.role, ...(Array.isArray(u.roles) ? u.roles : [])]
+            .filter(Boolean)
+            .map(r => String(r).toLowerCase().trim());
+        const matchRole = uRoles.some(r => lowerTargetRoles.has(r));
+        const matchPerm =
+            u.canManageSales === true ||
+            uRoles.some(r => settings.rolePermissions?.[r]?.canManageSales === true || settings.rolePermissions?.[r]?.canViewAll === true);
+        if (matchRole || matchPerm || salesUserSet.has(lowerU)) {
+            usernames.add(u.username);
+        }
+    }
+    return { targetRoles, targetUsernames: Array.from(usernames) };
+};
+
 app.get('/api/tickets', (req, res) => {
-    res.json(getDb().tickets || []);
+    const list = Array.isArray(getDb().tickets) ? [...getDb().tickets] : [];
+    list.sort((a, b) => (Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)));
+    res.json(list);
+});
+
+app.post('/api/tickets', async (req, res) => {
+    try {
+        const db = getDb();
+        const { customerName, message, text, platform = 'web', chatId = '' } = req.body || {};
+        const bodyText = String(message || text || '').trim();
+        if (!bodyText) {
+            return res.status(400).json({ error: 'متن تیکت الزامی است.' });
+        }
+        const ticketId = Math.floor(10000 + Math.random() * 90000).toString();
+        const now = Date.now();
+        const newTicket = {
+            id: ticketId,
+            chatId: String(chatId || ''),
+            platform: String(platform || 'web'),
+            customerName: String(customerName || 'مشتری').trim(),
+            messages: [{
+                id: 'msg_' + generateUUID(),
+                sender: 'customer',
+                text: bodyText,
+                timestamp: new Date(now).toISOString()
+            }],
+            status: 'OPEN',
+            createdAt: now,
+            updatedAt: now
+        };
+        db.tickets = db.tickets || [];
+        db.tickets.push(newTicket);
+        saveDb(db);
+
+        const { targetRoles, targetUsernames } = resolveSalesAndManagerUsernames(db);
+        await broadcastNotification(
+            `🎫 تیکت جدید #${ticketId}`,
+            `${newTicket.customerName}: ${bodyText.slice(0, 120)}`,
+            `/tickets?ticketId=${encodeURIComponent(ticketId)}`,
+            targetRoles,
+            targetUsernames.length > 0 ? targetUsernames : null,
+            null,
+            1,
+            'ticket_new'
+        );
+        try {
+            notificationQueue.dispatchSSEEvent('ticket_updated', { ticketId, status: 'OPEN', updatedAt: now }, targetUsernames.length > 0 ? targetUsernames : null);
+        } catch (_) {}
+
+        res.json(newTicket);
+    } catch (e) {
+        console.error('POST /api/tickets error:', e);
+        res.status(500).json({ error: e.message || 'خطا در ثبت تیکت' });
+    }
 });
 
 app.post('/api/tickets/:id/reply', async (req, res) => {
     const db = getDb();
     const ticketId = req.params.id;
-    const { text, senderName } = req.body;
+    const { text, senderName } = req.body || {};
+    if (!text || !String(text).trim()) {
+        return res.status(400).json({ error: 'متن پاسخ الزامی است.' });
+    }
     
     db.tickets = db.tickets || [];
     const ticket = db.tickets.find(t => t.id === ticketId);
@@ -8806,13 +8959,18 @@ app.post('/api/tickets/:id/reply', async (req, res) => {
         id: "msg_" + Math.random().toString(36).substr(2, 9),
         sender: 'admin',
         senderName: senderName || 'پشتیبانی',
-        text: text,
+        text: String(text),
         timestamp: new Date().toISOString()
     };
     ticket.messages.push(newMsg);
     ticket.updatedAt = Date.now();
     ticket.status = 'OPEN';
     saveDb(db);
+
+    try {
+        const { targetUsernames } = resolveSalesAndManagerUsernames(db);
+        notificationQueue.dispatchSSEEvent('ticket_updated', { ticketId: ticket.id, status: ticket.status, updatedAt: ticket.updatedAt }, targetUsernames.length > 0 ? targetUsernames : null);
+    } catch (_) {}
 
     // Send to customer
     try {
@@ -8836,6 +8994,10 @@ app.put('/api/tickets/:id/status', (req, res) => {
     ticket.status = req.body.status;
     ticket.updatedAt = Date.now();
     saveDb(db);
+    try {
+        const { targetUsernames } = resolveSalesAndManagerUsernames(db);
+        notificationQueue.dispatchSSEEvent('ticket_updated', { ticketId: ticket.id, status: ticket.status, updatedAt: ticket.updatedAt }, targetUsernames.length > 0 ? targetUsernames : null);
+    } catch (_) {}
     res.json(ticket);
 });
 
@@ -8843,6 +9005,10 @@ app.delete('/api/tickets/:id', (req, res) => {
     const db = getDb();
     db.tickets = (db.tickets || []).filter(t => t.id !== req.params.id);
     saveDb(db);
+    try {
+        const { targetUsernames } = resolveSalesAndManagerUsernames(db);
+        notificationQueue.dispatchSSEEvent('ticket_updated', { ticketId: req.params.id, deleted: true, updatedAt: Date.now() }, targetUsernames.length > 0 ? targetUsernames : null);
+    } catch (_) {}
     res.json({ success: true });
 });
 

@@ -23,6 +23,7 @@ export interface ParsedNotificationDeepLink {
   txNumber?: string;
   tradeId?: string;
   chequeId?: string;
+  ticketId?: string;
   pv?: string;
   group?: string;
   task?: string;
@@ -70,6 +71,7 @@ export function mapNotificationUrlToTab(rawUrl?: string | null, fallbackText?: s
       if (params.get('txId') || params.get('txNumber') || params.get('bijakNumber')) return 'warehouse';
       if (params.get('tradeId') || params.get('dossierId')) return 'trade';
       if (params.get('chequeId') || params.get('receiptId')) return 'cheque-receipts';
+      if (params.get('ticketId') || params.get('ticket')) return 'tickets';
       if (params.get('pv') || params.get('group') || params.get('groupId') || params.get('task') || params.get('taskId')) return 'chat';
     } catch {}
   }
@@ -177,6 +179,9 @@ export function mapNotificationUrlToTab(rawUrl?: string | null, fallbackText?: s
   if (text.includes('بازرگانی') || text.includes('پرونده واردات') || text.includes('پرفرما')) {
     return 'trade';
   }
+  if (text.includes('تیکت') || text.includes('پشتیبانی')) {
+    return 'tickets';
+  }
   if (text.includes('تسک') || text.includes('پیام از') || text.includes('پیام جدید از') || text.includes('منشن جدید')) {
     return 'chat';
   }
@@ -246,6 +251,7 @@ export function parseNotificationDeepLink(
       result.txNumber = getParam('txNumber', 'bijakNumber');
       result.tradeId = getParam('tradeId', 'dossierId');
       result.chequeId = getParam('chequeId', 'receiptId');
+      result.ticketId = getParam('ticketId', 'ticket');
       result.pv = params.get('pv')?.trim() || undefined;
       result.group = params.get('group')?.trim() || params.get('groupId')?.trim() || undefined;
       result.task = params.get('task')?.trim() || params.get('taskId')?.trim() || undefined;
@@ -266,6 +272,7 @@ export function parseNotificationDeepLink(
         else if (tab === 'warehouse' && !result.txId) result.txId = genericId;
         else if (tab === 'trade' && !result.tradeId) result.tradeId = genericId;
         else if (tab === 'cheque-receipts' && !result.chequeId) result.chequeId = genericId;
+        else if (tab === 'tickets' && !result.ticketId) result.ticketId = genericId;
       }
     } catch {}
   }
@@ -286,6 +293,7 @@ export function parseNotificationDeepLink(
     if (extraData.txNumber && !result.txNumber) result.txNumber = normalizeDigitsToEnglish(String(extraData.txNumber));
     if (extraData.tradeId && !result.tradeId) result.tradeId = String(extraData.tradeId);
     if (extraData.chequeId && !result.chequeId) result.chequeId = String(extraData.chequeId);
+    if (extraData.ticketId && !result.ticketId) result.ticketId = String(extraData.ticketId);
     if (extraData.pv && !result.pv) result.pv = String(extraData.pv);
     if (extraData.group && !result.group) result.group = String(extraData.group);
     if (extraData.task && !result.task) result.task = String(extraData.task);
@@ -336,6 +344,13 @@ export function parseNotificationDeepLink(
         combinedText.match(/شماره\s*(\d+)/);
       if (wMatch && wMatch[1]) {
         result.txNumber = wMatch[1];
+      }
+    } else if (tab === 'tickets' && !result.ticketId) {
+      const tMatch =
+        combinedText.match(/تیکت\s*(?:جدید\s*)?#?([A-Za-z0-9\-_]+)/) ||
+        combinedText.match(/#([A-Za-z0-9\-_]+)/);
+      if (tMatch && tMatch[1]) {
+        result.ticketId = tMatch[1];
       }
     } else if (tab === 'chat' && !result.pv && !result.group && !result.task) {
       const senderMatch =

@@ -282,6 +282,19 @@ function connectSSE(currentUser: User) {
             }
         });
 
+        // Listen for real-time ticket updates across Electron, Web, and Android
+        eventSourceInstance.addEventListener('ticket_updated', (event: MessageEvent) => {
+            resetWatchdog(currentUser);
+            try {
+                const payload = JSON.parse(event.data || '{}');
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('TICKET_UPDATED_REALTIME', { detail: payload }));
+                }
+            } catch (err) {
+                console.warn('[SSE] Error handling ticket_updated event:', err);
+            }
+        });
+
         eventSourceInstance.onerror = (err) => {
             console.warn('[SSE] Stream disconnected or network interrupted:', err);
             reconnectSSE(currentUser);
