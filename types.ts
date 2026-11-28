@@ -640,6 +640,9 @@ export interface SystemSettings {
   sayanChequeEnableFinalApproval?: boolean; // فعال بودن مرحله تایید نهایی پس از ثبت
   sayanChequeFinalApprovalUserIds?: string[]; // شناسه‌های کاربرانی که دسترسی تایید نهایی و ثبت در سایان دارند
   sayanChequeDirectRegisterOnSubmit?: boolean; // ثبت مستقیم در سایان بلافاصله پس از تایید حسابداری / مرحله قبل
+  chequeReceiptRegistrationMode?: 'sayan' | 'dalkam' | 'both'; // محل ثبت رسید دریافت: فقط سایان (پیش‌فرض)، فقط دلکام، یا دلکام و سایان
+  defaultChequeCompanyId?: string; // شرکت پیش‌فرض جهت ثبت چک در حسابداری دلکام
+  defaultChequeCompanyName?: string; // نام شرکت پیش‌فرض جهت ثبت چک در حسابداری دلکام
 
   // MINI APPS
   miniAppCarPriceUrl?: string;

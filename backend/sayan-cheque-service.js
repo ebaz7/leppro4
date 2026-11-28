@@ -5,6 +5,54 @@ import * as jalaali from 'jalaali-js';
 import fs from 'fs';
 import path from 'path';
 
+export const VALID_REGISTRATION_TARGET_MODES = ['sayan', 'dalkam', 'both'];
+
+export const normalizeRegistrationTargetMode = (mode) => {
+    const clean = String(mode || '').trim().toLowerCase();
+    return VALID_REGISTRATION_TARGET_MODES.includes(clean) ? clean : 'sayan';
+};
+
+let dalkamChequeRegistrar = null;
+
+export const setDalkamChequeRegistrar = (fn) => {
+    dalkamChequeRegistrar = typeof fn === 'function' ? fn : null;
+};
+
+const getSystemCompaniesForCheques = (db) => {
+    const raw = Array.isArray(db?.settings?.companies) && db.settings.companies.length > 0
+        ? db.settings.companies
+        : [{ id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت', isAccountingEnabled: true }];
+    return raw.filter(c => c && c.id && c.isAccountingEnabled !== false);
+};
+
+const resolveCompanyInfoForReceipt = (db, requestedCompanyId = '', requestedCompanyName = '') => {
+    const companies = getSystemCompaniesForCheques(db);
+    const primary = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
+    const wf = db?.sayan_cheque_workflow_config || {};
+    const defId = String(wf.defaultCompanyId || db?.settings?.defaultChequeCompanyId || primary.id).trim();
+    const cleanReqId = String(requestedCompanyId || '').trim();
+    const cleanReqName = String(requestedCompanyName || '').trim();
+
+    let matched = null;
+    if (cleanReqId) {
+        matched = companies.find(c => c.id === cleanReqId || c.name === cleanReqId);
+    }
+    if (!matched && cleanReqName) {
+        matched = companies.find(c => c.name === cleanReqName);
+    }
+    if (!matched && defId) {
+        matched = companies.find(c => c.id === defId || c.name === defId);
+    }
+    if (!matched) {
+        matched = primary;
+    }
+
+    return {
+        companyId: matched.id,
+        companyName: matched.name || cleanReqName || 'شرکت تولیدی لپان بافت'
+    };
+};
+
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
     try {
@@ -948,7 +996,7 @@ export const getChequeReceiptsHistory = async (fiscalYear = '4', search = '') =>
     // Merge: If a local draft was registered into Sayan and matches ArchiveCode, attach local metadata (e.g. PDF preview)
     const combined = [...localReceipts];
     for (const live of sayanLiveReceipts) {
-        const existingLocal = combined.find(c => String(c.archiveCode) === String(live.archiveCode) && String(c.fiscalYear) === String(live.fiscalYear));
+        const existingLocal = combined.find(c => c.status !== 'CANCELLED' && String(c.archiveCode) === String(live.archiveCode) && String(c.fiscalYear) === String(live.fiscalYear));
         if (existingLocal) {
             existingLocal.status = 'REGISTERED_IN_SAYAN';
             existingLocal.headerId = live.headerId;
@@ -1052,6 +1100,20 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
     const fy = String(receiptData.fiscalYear || '4');
     const isEdit = Boolean(receiptData.id);
     const existingRecord = isEdit ? db.sayan_cheque_receipts.find(r => r.id === receiptData.id) : null;
+    const wfConfig = getChequeWorkflowConfig();
+    const targetMode = normalizeRegistrationTargetMode(
+        receiptData.registrationTargetMode || existingRecord?.registrationTargetMode || wfConfig.registrationTargetMode || 'sayan'
+    );
+    const companyInfo = resolveCompanyInfoForReceipt(
+        db,
+        receiptData.companyId || existingRecord?.companyId,
+        receiptData.companyName || existingRecord?.companyName
+    );
+
+    if (targetMode === 'dalkam' && !String(receiptData.personName || '').trim()) {
+        throw new Error('وارد کردن نام طرف حساب (تحویل‌دهنده چک) الزامی است.');
+    }
+
     const cleanCheques = (receiptData.cheques || []).map((ch, idx) => {
         const prev = existingRecord?.cheques?.[idx] || null;
         return normalizeChequeItem(ch, receiptData.personName, receiptData.poshtNomreh, idx, prev);
@@ -1075,13 +1137,18 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
     // Prevent duplicate draft creation on double-click / network retry
     if (!isEdit && cleanCheques.length > 0) {
         const cleanPerson = String(receiptData.personCode || '').trim();
+        const cleanPersonName = String(receiptData.personName || '').trim().toLowerCase();
         const sig = cleanCheques
             .map(c => `${c.chequeNumber}:${Number(c.amount) || 0}:${parseToGregorianSqlDate(c.dueDate)}`)
             .sort()
             .join('|');
         const dupDraft = db.sayan_cheque_receipts.find(existing => {
             if (!existing || existing.status === 'REJECTED') return false;
-            if (String(existing.personCode || '').trim() !== cleanPerson) return false;
+            if (cleanPerson) {
+                if (String(existing.personCode || '').trim() !== cleanPerson) return false;
+            } else {
+                if (String(existing.personName || '').trim().toLowerCase() !== cleanPersonName) return false;
+            }
             const exCheques = Array.isArray(existing.cheques) ? existing.cheques : [];
             if (exCheques.length !== cleanCheques.length) return false;
             const exSig = exCheques
@@ -1091,7 +1158,7 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
             return exSig === sig;
         });
         if (dupDraft) {
-            console.warn(`[Sayan Cheque Service] Duplicate draft submission blocked for person ${cleanPerson}; returning existing receipt ${dupDraft.id}`);
+            console.warn(`[Sayan Cheque Service] Duplicate draft submission blocked for person ${cleanPerson || cleanPersonName}; returning existing receipt ${dupDraft.id}`);
             return dupDraft;
         }
     }
@@ -1131,7 +1198,10 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
         id: receiptId,
         receiptNo: Number(receiptNo) || receiptNo,
         source: 'APP_DRAFT',
-        status, // PENDING_ACCOUNTING -> PENDING_CEO -> APPROVED -> REGISTERED_IN_SAYAN
+        status, // PENDING_ACCOUNTING -> PENDING_CEO -> PROCESSING_SAYAN -> REGISTERED_IN_SAYAN | REGISTERED_IN_DALKAM
+        registrationTargetMode: targetMode,
+        companyId: companyInfo.companyId,
+        companyName: companyInfo.companyName,
         fiscalYear: fy,
         docNo: receiptData.docNo || null,
         archiveCode: receiptData.archiveCode || null,
@@ -1161,7 +1231,19 @@ export const saveChequeReceiptDraft = async (receiptData, currentUser) => {
 
         // Sayan Registration tracking
         registeredAt: receiptData.registeredAt || null,
-        sayanHeaderId: receiptData.sayanHeaderId || null
+        sayanHeaderId: receiptData.sayanHeaderId || null,
+
+        // Dalkam Industrial ERP Accounting tracking
+        dalkamRegistered: Boolean(existingRecord?.dalkamRegistered),
+        dalkamCompanyId: existingRecord?.dalkamCompanyId || companyInfo.companyId,
+        dalkamCompanyName: existingRecord?.dalkamCompanyName || companyInfo.companyName,
+        dalkamVoucherNo: existingRecord?.dalkamVoucherNo || null,
+        dalkamVoucherId: existingRecord?.dalkamVoucherId || null,
+        dalkamTreasuryDocNos: existingRecord?.dalkamTreasuryDocNos || [],
+        dalkamTreasuryDocIds: existingRecord?.dalkamTreasuryDocIds || [],
+        dalkamRegisteredAt: existingRecord?.dalkamRegisteredAt || null,
+        dalkamError: existingRecord?.dalkamError || null,
+        erpVoucherNo: existingRecord?.erpVoucherNo || null
     };
 
     if (isEdit) {
@@ -1198,12 +1280,20 @@ export const approveAccountingReceipt = async (receiptId, currentUser, note = ''
             const cleanNo = String(updatePayload.receiptNo).trim();
             record.receiptNo = !isNaN(Number(cleanNo)) ? Number(cleanNo) : cleanNo;
         }
-        if (updatePayload.personCode) record.personCode = String(updatePayload.personCode).trim();
+        if (updatePayload.personCode !== undefined) record.personCode = String(updatePayload.personCode || '').trim();
         if (updatePayload.personName) record.personName = String(updatePayload.personName).trim();
         if (updatePayload.cashboxCode) record.cashboxCode = String(updatePayload.cashboxCode).trim();
         if (updatePayload.description !== undefined) record.description = String(updatePayload.description).trim();
         if (updatePayload.poshtNomreh) record.poshtNomreh = String(updatePayload.poshtNomreh).trim();
         if (updatePayload.docDate) record.docDate = updatePayload.docDate;
+        if (updatePayload.registrationTargetMode) {
+            record.registrationTargetMode = normalizeRegistrationTargetMode(updatePayload.registrationTargetMode);
+        }
+        if (updatePayload.companyId || updatePayload.companyName) {
+            const cInfo = resolveCompanyInfoForReceipt(db, updatePayload.companyId, updatePayload.companyName);
+            record.companyId = cInfo.companyId;
+            record.companyName = cInfo.companyName;
+        }
         if (Array.isArray(updatePayload.cheques) && updatePayload.cheques.length > 0) {
             const normalizedCheques = updatePayload.cheques.map((ch, idx) => {
                 const prev = record.cheques?.find((old) => old.id && ch.id && old.id === ch.id) || record.cheques?.[idx] || null;
@@ -1224,6 +1314,14 @@ export const approveAccountingReceipt = async (receiptId, currentUser, note = ''
 
     if (approveForCEO) {
         const wfConfig = getChequeWorkflowConfig();
+        const targetMode = normalizeRegistrationTargetMode(record.registrationTargetMode || wfConfig.registrationTargetMode || 'sayan');
+        record.registrationTargetMode = targetMode;
+        if (!record.companyId || !record.companyName) {
+            const cInfo = resolveCompanyInfoForReceipt(db, record.companyId, record.companyName);
+            record.companyId = cInfo.companyId;
+            record.companyName = cInfo.companyName;
+        }
+
         record.accountingReview = {
             id: currentUser?.id || 'ACCOUNTANT',
             name: currentUser?.fullName || currentUser?.name || 'کارشناس حسابداری',
@@ -1235,18 +1333,38 @@ export const approveAccountingReceipt = async (receiptId, currentUser, note = ''
         if (!wfConfig.requireCeoApproval) {
             // CEO approval is bypassed!
             if (wfConfig.autoRegisterAfterAccounting) {
-                // Automatically queue for Sayan background registration
-                record.status = 'PROCESSING_SAYAN';
-                record.sayanSyncStatus = 'QUEUED';
                 record.ceoApproval = {
                     id: currentUser?.id || 'DIRECT_APPROVAL',
                     name: currentUser?.fullName || currentUser?.name || 'تایید مستقیم حسابداری (بدون مدیرعامل)',
                     role: 'DIRECT_APPROVAL',
                     approvedAt: new Date().toISOString(),
-                    note: 'ثبت مستقیم در سایان طبق تنظیمات فرآیند بدون نیاز به تایید مدیرعامل'
+                    note: targetMode === 'dalkam'
+                        ? 'ثبت مستقیم در حسابداری دلکام بدون نیاز به تایید مدیرعامل'
+                        : targetMode === 'both'
+                            ? 'ثبت مستقیم همزمان در دلکام و سایان بدون نیاز به تایید مدیرعامل'
+                            : 'ثبت مستقیم در سایان طبق تنظیمات فرآیند بدون نیاز به تایید مدیرعامل'
                 };
+                record.approvedBy = record.ceoApproval;
+                record.approvedAt = record.ceoApproval.approvedAt;
                 record.rejectionReason = null;
                 record.updatedAt = new Date().toISOString();
+
+                if (targetMode === 'dalkam') {
+                    saveDb();
+                    await registerChequeReceiptInDalkam(record.id, currentUser);
+                    return getDb().sayan_cheque_receipts.find(r => r.id === record.id) || record;
+                }
+
+                if (targetMode === 'both') {
+                    saveDb();
+                    await registerChequeReceiptInDalkam(record.id, currentUser).catch(err => {
+                        console.error('[Dalkam Cheque Service] Auto Dalkam registration error in BOTH mode:', err);
+                    });
+                }
+
+                // Queue for Sayan background registration (for 'sayan' and 'both')
+                record.status = 'PROCESSING_SAYAN';
+                record.sayanSyncStatus = 'QUEUED';
                 saveDb();
                 queueChequeReceiptForSayanRegistration(record.id, currentUser, note).catch(err => {
                     console.error('[Sayan Cheque Service] Auto Sayan queue error:', err);
@@ -1291,12 +1409,20 @@ export const updateChequeReceipt = async (receiptId, updatePayload, currentUser)
         const cleanNo = String(updatePayload.receiptNo).trim();
         record.receiptNo = !isNaN(Number(cleanNo)) ? Number(cleanNo) : cleanNo;
     }
-    if (updatePayload.personCode) record.personCode = String(updatePayload.personCode).trim();
+    if (updatePayload.personCode !== undefined) record.personCode = String(updatePayload.personCode || '').trim();
     if (updatePayload.personName) record.personName = String(updatePayload.personName).trim();
     if (updatePayload.cashboxCode) record.cashboxCode = String(updatePayload.cashboxCode).trim();
     if (updatePayload.description !== undefined) record.description = String(updatePayload.description).trim();
     if (updatePayload.poshtNomreh) record.poshtNomreh = String(updatePayload.poshtNomreh).trim();
     if (updatePayload.docDate) record.docDate = updatePayload.docDate;
+    if (updatePayload.registrationTargetMode) {
+        record.registrationTargetMode = normalizeRegistrationTargetMode(updatePayload.registrationTargetMode);
+    }
+    if (updatePayload.companyId || updatePayload.companyName) {
+        const cInfo = resolveCompanyInfoForReceipt(db, updatePayload.companyId, updatePayload.companyName);
+        record.companyId = cInfo.companyId;
+        record.companyName = cInfo.companyName;
+    }
     if (Array.isArray(updatePayload.cheques) && updatePayload.cheques.length > 0) {
         const normalizedCheques = updatePayload.cheques.map((ch, idx) => {
             const prev = record.cheques?.find((old) => old.id && ch.id && old.id === ch.id) || record.cheques?.[idx] || null;
@@ -1477,10 +1603,125 @@ export const processSayanRegistrationQueue = async () => {
 };
 
 /**
+ * Register Cheque Receipt in Dalkam Industrial ERP Accounting (PostgreSQL + TreasuryDocs + Balanced Voucher)
+ * Idempotent: safe to call on retries or BOTH mode without creating duplicate vouchers/cheques.
+ */
+export const registerChequeReceiptInDalkam = async (receiptId, currentUser) => {
+    if (!dalkamChequeRegistrar) {
+        throw new Error('سرویس ثبت حسابداری دلکام روی سرور مقداردهی نشده است.');
+    }
+
+    const db = getDb();
+    if (!db.sayan_cheque_receipts) db.sayan_cheque_receipts = [];
+    const record = db.sayan_cheque_receipts.find(r => r.id === receiptId);
+    if (!record) {
+        throw new Error(`رسید با شناسه ${receiptId} یافت نشد.`);
+    }
+
+    const wfConfig = getChequeWorkflowConfig();
+    const targetMode = normalizeRegistrationTargetMode(record.registrationTargetMode || wfConfig.registrationTargetMode || 'sayan');
+    const cInfo = resolveCompanyInfoForReceipt(db, record.companyId || record.dalkamCompanyId, record.companyName || record.dalkamCompanyName);
+    record.companyId = cInfo.companyId;
+    record.companyName = cInfo.companyName;
+
+    try {
+        const res = await dalkamChequeRegistrar(record, currentUser);
+        if (!res || !res.success) {
+            throw new Error(res?.error || 'خطا در ثبت سند خزانه و حسابداری در سیستم دلکام.');
+        }
+
+        const latestDb = getDb();
+        const latestRec = latestDb.sayan_cheque_receipts?.find(r => r.id === receiptId) || record;
+
+        latestRec.dalkamRegistered = true;
+        latestRec.dalkamCompanyId = res.companyId || cInfo.companyId;
+        latestRec.dalkamCompanyName = res.companyName || cInfo.companyName;
+        latestRec.companyId = latestRec.dalkamCompanyId;
+        latestRec.companyName = latestRec.dalkamCompanyName;
+        latestRec.dalkamVoucherNo = res.voucherNo || latestRec.dalkamVoucherNo;
+        latestRec.dalkamVoucherId = res.voucherId || latestRec.dalkamVoucherId;
+        latestRec.dalkamTreasuryDocNos = Array.isArray(res.treasuryDocNos) ? res.treasuryDocNos : [];
+        latestRec.dalkamTreasuryDocIds = Array.isArray(res.treasuryDocIds) ? res.treasuryDocIds : [];
+        latestRec.dalkamRegisteredAt = latestRec.dalkamRegisteredAt || new Date().toISOString();
+        latestRec.dalkamError = null;
+        if (res.voucherNo) latestRec.erpVoucherNo = res.voucherNo;
+
+        if (targetMode === 'dalkam') {
+            latestRec.status = 'REGISTERED_IN_DALKAM';
+            latestRec.registeredAt = latestRec.registeredAt || latestRec.dalkamRegisteredAt;
+        }
+        latestRec.updatedAt = new Date().toISOString();
+        saveDb();
+
+        return {
+            success: true,
+            companyId: latestRec.dalkamCompanyId,
+            companyName: latestRec.dalkamCompanyName,
+            voucherNo: latestRec.dalkamVoucherNo,
+            voucherId: latestRec.dalkamVoucherId,
+            treasuryDocNos: latestRec.dalkamTreasuryDocNos,
+            treasuryDocIds: latestRec.dalkamTreasuryDocIds,
+            alreadyExisted: Boolean(res.alreadyExisted),
+            record: latestRec
+        };
+    } catch (err) {
+        const latestDb = getDb();
+        const latestRec = latestDb.sayan_cheque_receipts?.find(r => r.id === receiptId) || record;
+        latestRec.dalkamError = err?.message || 'خطا در ثبت حسابداری دلکام';
+        if (targetMode === 'dalkam' && latestRec.status !== 'REGISTERED_IN_DALKAM') {
+            latestRec.status = 'PENDING_CEO';
+        }
+        latestRec.updatedAt = new Date().toISOString();
+        saveDb();
+        throw err;
+    }
+};
+
+/**
  * Stage 2 Approval: CEO / Executive Approval
- * Moves status from PENDING_CEO to PROCESSING_SAYAN and registers in background queue
+ * Routes strictly according to registrationTargetMode:
+ *  - 'sayan': existing Sayan background registration queue (100% preserved)
+ *  - 'dalkam': Dalkam ERP PostgreSQL accounting registration ONLY (never calls Sayan SQL)
+ *  - 'both': Dalkam ERP accounting registration + Sayan background registration queue
  */
 export const approveCEOReceipt = async (receiptId, currentUser, note = '') => {
+    const db = getDb();
+    if (!db.sayan_cheque_receipts) db.sayan_cheque_receipts = [];
+    const record = db.sayan_cheque_receipts.find(r => r.id === receiptId);
+    if (!record) {
+        throw new Error(`رسید با شناسه ${receiptId} یافت نشد.`);
+    }
+
+    const wfConfig = getChequeWorkflowConfig();
+    const targetMode = normalizeRegistrationTargetMode(record.registrationTargetMode || wfConfig.registrationTargetMode || 'sayan');
+    record.registrationTargetMode = targetMode;
+
+    if (targetMode === 'dalkam') {
+        const ceoInfo = {
+            id: currentUser?.id || 'CEO',
+            name: currentUser?.fullName || currentUser?.name || 'مدیرعامل',
+            role: currentUser?.role || 'CEO',
+            note: note || 'تایید نهایی انجام شد و در حسابداری دلکام ثبت گردید.',
+            approvedAt: new Date().toISOString()
+        };
+        record.ceoApproval = ceoInfo;
+        record.approvedBy = ceoInfo;
+        record.approvedAt = ceoInfo.approvedAt;
+        record.rejectionReason = null;
+        record.updatedAt = new Date().toISOString();
+        saveDb();
+
+        const dalkamRes = await registerChequeReceiptInDalkam(receiptId, currentUser);
+        return dalkamRes.record;
+    }
+
+    if (targetMode === 'both') {
+        if (!record.dalkamRegistered) {
+            await registerChequeReceiptInDalkam(receiptId, currentUser);
+        }
+        return await queueChequeReceiptForSayanRegistration(receiptId, currentUser, note);
+    }
+
     return await queueChequeReceiptForSayanRegistration(receiptId, currentUser, note);
 };
 
@@ -1515,40 +1756,159 @@ export const rejectChequeReceipt = async (receiptId, currentUser, reason = '', r
     return record;
 };
 
+/**
+ * Void / Cancel a non-finalized Cheque Receipt and send it to Archive as CANCELLED.
+ * Keeps the record and its sequential receiptNo / poshtNomreh intact so numbering gaps are documented.
+ */
+export const cancelChequeReceipt = async (receiptId, currentUser, reason = '') => {
+    const db = getDb();
+    if (!db.sayan_cheque_receipts) db.sayan_cheque_receipts = db.chequeReceipts || [];
+    if (!db.chequeReceipts) db.chequeReceipts = db.sayan_cheque_receipts;
+
+    const cleanId = String(receiptId || '').trim();
+    if (!cleanId) {
+        const err = new Error('شناسه رسید الزامی است.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const record = db.sayan_cheque_receipts.find(r => r.id === cleanId);
+    if (!record) {
+        const err = new Error(`رسید با شناسه ${cleanId} یافت نشد.`);
+        err.statusCode = 404;
+        throw err;
+    }
+
+    const isFinalizedInSayan =
+        record.status === 'REGISTERED_IN_SAYAN' &&
+        String(record.docNo || '').trim() !== '1' &&
+        String(record.archiveCode || '').trim() !== '1' &&
+        Boolean(record.archiveCode);
+    if (isFinalizedInSayan) {
+        const err = new Error('این رسید قبلاً در سیستم سایان ثبت قطعی شده است و از کارتابل قابل ابطال نیست.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (record.status === 'REGISTERED_IN_DALKAM' || record.dalkamRegistered === true) {
+        const err = new Error('این رسید قبلاً در حسابداری دلکام ثبت سند شده است و از کارتابل قابل ابطال نیست.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (
+        record.status === 'PROCESSING_SAYAN' &&
+        (activeRegisteringReceiptIds.has(cleanId) || sayanRegistrationQueue.some(item => item.receiptId === cleanId))
+    ) {
+        const err = new Error('این رسید در حال ارسال به سرور سایان است و هم‌اکنون قابل ابطال نیست.');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const cleanReason = String(reason || '').trim().slice(0, 500) || 'ابطال رسید (خالی / رد شدن شماره) و ارسال به بایگانی جهت حفظ توالی شماره';
+
+    if (record.status === 'CANCELLED') {
+        if (reason && String(reason).trim()) {
+            record.cancellationInfo = {
+                ...(record.cancellationInfo || {}),
+                reason: cleanReason,
+                updatedAt: new Date().toISOString()
+            };
+            record.updatedAt = new Date().toISOString();
+            saveDb();
+        }
+        return record;
+    }
+
+    record.previousStatus = record.status;
+    record.status = 'CANCELLED';
+    record.sayanSyncStatus = null;
+    record.sayanError = null;
+    record.dalkamError = null;
+    record.cancellationInfo = {
+        id: currentUser?.id || '',
+        name: currentUser?.fullName || currentUser?.name || 'کاربر سیستم',
+        role: currentUser?.role || '',
+        reason: cleanReason,
+        cancelledAt: new Date().toISOString()
+    };
+    record.updatedAt = new Date().toISOString();
+
+    saveDb();
+    return record;
+};
+
 // Backward-compatible alias
 export const approveChequeReceipt = approveCEOReceipt;
 
 /**
- * Get workflow configuration for Sayan cheque receipts
+ * Get workflow configuration for Sayan & Dalkam cheque receipts
  */
 export const getChequeWorkflowConfig = () => {
     const db = getDb();
+    const companies = getSystemCompaniesForCheques(db);
+    const primary = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
+
     if (!db.sayan_cheque_workflow_config) {
+        const modeFromSettings = normalizeRegistrationTargetMode(db.settings?.chequeReceiptRegistrationMode || 'sayan');
+        const defComp = resolveCompanyInfoForReceipt(
+            db,
+            db.settings?.defaultChequeCompanyId || primary.id,
+            db.settings?.defaultChequeCompanyName || primary.name
+        );
         db.sayan_cheque_workflow_config = {
             requireCeoApproval: false, // Default to false so CEO approval is not required by default
-            autoRegisterAfterAccounting: true, // Automatically queue in Sayan after accounting review
+            autoRegisterAfterAccounting: true, // Automatically queue in Sayan / Dalkam after accounting review
             allowAccountingFinalApproval: true, // Accounting staff are authorized for final approval
             allowedFinalApproverUserIds: [],
             allowedFinalApproverRoles: ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT'],
+            registrationTargetMode: modeFromSettings, // 'sayan' (default) | 'dalkam' | 'both'
+            defaultCompanyId: defComp.companyId,
+            defaultCompanyName: defComp.companyName,
             updatedAt: new Date().toISOString()
         };
         saveDb();
+    } else {
+        let dirty = false;
+        const cfg = db.sayan_cheque_workflow_config;
+        const resolvedMode = normalizeRegistrationTargetMode(cfg.registrationTargetMode || db.settings?.chequeReceiptRegistrationMode || 'sayan');
+        if (cfg.registrationTargetMode !== resolvedMode) {
+            cfg.registrationTargetMode = resolvedMode;
+            dirty = true;
+        }
+        const defComp = resolveCompanyInfoForReceipt(
+            db,
+            cfg.defaultCompanyId || db.settings?.defaultChequeCompanyId || primary.id,
+            cfg.defaultCompanyName || db.settings?.defaultChequeCompanyName || primary.name
+        );
+        if (cfg.defaultCompanyId !== defComp.companyId || cfg.defaultCompanyName !== defComp.companyName) {
+            cfg.defaultCompanyId = defComp.companyId;
+            cfg.defaultCompanyName = defComp.companyName;
+            dirty = true;
+        }
+        if (dirty) saveDb();
     }
     return db.sayan_cheque_workflow_config;
 };
 
 /**
- * Update workflow configuration for Sayan cheque receipts
+ * Update workflow configuration for Sayan & Dalkam cheque receipts (bidirectional sync with db.settings)
  */
 export const updateChequeWorkflowConfig = (newConfig = {}) => {
     const db = getDb();
-    const current = db.sayan_cheque_workflow_config || {
-        requireCeoApproval: false,
-        autoRegisterAfterAccounting: true,
-        allowAccountingFinalApproval: true,
-        allowedFinalApproverUserIds: [],
-        allowedFinalApproverRoles: ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT']
-    };
+    const current = getChequeWorkflowConfig();
+    const companies = getSystemCompaniesForCheques(db);
+    const primary = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
+
+    const nextMode = newConfig.registrationTargetMode !== undefined
+        ? normalizeRegistrationTargetMode(newConfig.registrationTargetMode)
+        : normalizeRegistrationTargetMode(newConfig.chequeReceiptRegistrationMode !== undefined ? newConfig.chequeReceiptRegistrationMode : current.registrationTargetMode);
+
+    const nextCompany = resolveCompanyInfoForReceipt(
+        db,
+        newConfig.defaultCompanyId !== undefined ? newConfig.defaultCompanyId : (newConfig.defaultChequeCompanyId !== undefined ? newConfig.defaultChequeCompanyId : (current.defaultCompanyId || primary.id)),
+        newConfig.defaultCompanyName !== undefined ? newConfig.defaultCompanyName : (newConfig.defaultChequeCompanyName !== undefined ? newConfig.defaultChequeCompanyName : (current.defaultCompanyName || primary.name))
+    );
 
     const updated = {
         requireCeoApproval: typeof newConfig.requireCeoApproval === 'boolean' ? newConfig.requireCeoApproval : current.requireCeoApproval,
@@ -1556,10 +1916,18 @@ export const updateChequeWorkflowConfig = (newConfig = {}) => {
         allowAccountingFinalApproval: typeof newConfig.allowAccountingFinalApproval === 'boolean' ? newConfig.allowAccountingFinalApproval : current.allowAccountingFinalApproval,
         allowedFinalApproverUserIds: Array.isArray(newConfig.allowedFinalApproverUserIds) ? newConfig.allowedFinalApproverUserIds : (current.allowedFinalApproverUserIds || []),
         allowedFinalApproverRoles: Array.isArray(newConfig.allowedFinalApproverRoles) ? newConfig.allowedFinalApproverRoles : (current.allowedFinalApproverRoles || []),
+        registrationTargetMode: nextMode,
+        defaultCompanyId: nextCompany.companyId,
+        defaultCompanyName: nextCompany.companyName,
         updatedAt: new Date().toISOString()
     };
 
     db.sayan_cheque_workflow_config = updated;
+    if (!db.settings) db.settings = {};
+    db.settings.chequeReceiptRegistrationMode = nextMode;
+    db.settings.defaultChequeCompanyId = nextCompany.companyId;
+    db.settings.defaultChequeCompanyName = nextCompany.companyName;
+
     saveDb();
     console.log('[Sayan Cheque Service] Workflow config updated:', updated);
     return updated;
@@ -2771,6 +3139,7 @@ export const getPersonChequesAndRas = async (personCode, personName = '', option
         const db = getDb();
         if (Array.isArray(db.sayan_cheque_receipts)) {
             db.sayan_cheque_receipts.forEach(receipt => {
+                if (receipt.status === 'CANCELLED') return;
                 if (cleanCode && String(receipt.personCode).trim() !== cleanCode) return;
                 if (Array.isArray(receipt.cheques)) {
                     receipt.cheques.forEach((ch, idx) => {

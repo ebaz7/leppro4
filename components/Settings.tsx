@@ -8355,16 +8355,113 @@ const Settings: React.FC<SettingsProps> = ({
                       </div>
                     </div>
 
-                    {/* Cheque Workflow & Approval Settings in Sayan */}
+                    {/* Cheque Workflow & Approval Settings in Sayan / Dalkam */}
                     <div className="border-t border-indigo-100 pt-4 mt-2 space-y-4">
                         <div className="flex items-center gap-2">
                           <CheckSquare size={18} className="text-indigo-600" />
                           <h4 className="text-sm font-black text-gray-800">
-                            تنظیمات فرآیند تاییدات و ثبت رسید چک در سایان ERP
+                            تنظیمات فرآیند تاییدات و ثبت رسید چک (سایان ERP / حسابداری دلکام)
                           </h4>
                         </div>
 
                         <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                          {/* Registration Target Mode (Sayan / Dalkam / Both) & Default Company */}
+                          <div className="p-3.5 bg-white border border-indigo-200 rounded-xl shadow-xs space-y-3">
+                            <div>
+                              <div className="text-sm font-black text-gray-900">
+                                محل ثبت رسید دریافت چک (مسیر حسابداری)
+                              </div>
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                تعیین کنید رسیدهای دریافت چک پس از تایید در کدام سیستم مالی ثبت و سند حسابداری آن‌ها صادر شود:
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                              {[
+                                {
+                                  id: 'sayan' as const,
+                                  title: '۱. ثبت در سایان (پیش‌فرض)',
+                                  desc: 'روال فعلی بدون تغییر؛ ثبت چک و سند منحصراً در پایگاه‌داده سایان ERP.',
+                                  activeCls: 'border-indigo-600 bg-indigo-50/70 text-indigo-950 ring-2 ring-indigo-500/20'
+                                },
+                                {
+                                  id: 'dalkam' as const,
+                                  title: '۲. ثبت در دلکام',
+                                  desc: 'ثبت مستقیم چک و سند خزانه در سیستم حسابداری دلکام (شرکت منتخب) بدون ارسال به سایان.',
+                                  activeCls: 'border-emerald-600 bg-emerald-50/70 text-emerald-950 ring-2 ring-emerald-500/20'
+                                },
+                                {
+                                  id: 'both' as const,
+                                  title: '۳. ثبت در دلکام و سایان',
+                                  desc: 'ثبت همزمان سند حسابداری و چک در شرکت منتخب دلکام و همچنین ثبت در سایان ERP.',
+                                  activeCls: 'border-purple-600 bg-purple-50/70 text-purple-950 ring-2 ring-purple-500/20'
+                                }
+                              ].map((opt) => {
+                                const currentMode = settings.chequeReceiptRegistrationMode || 'sayan';
+                                const isActive = currentMode === opt.id;
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setSettings({ ...settings, chequeReceiptRegistrationMode: opt.id })}
+                                    className={`text-right p-3 rounded-xl border-2 transition-all cursor-pointer flex flex-col gap-1 ${
+                                      isActive
+                                        ? opt.activeCls
+                                        : 'border-gray-200 bg-gray-50/60 hover:border-gray-300 text-gray-700'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs font-black">{opt.title}</span>
+                                      <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                        isActive ? 'border-current bg-current' : 'border-gray-300'
+                                      }`}>
+                                        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                                      </span>
+                                    </div>
+                                    <span className="text-[11px] text-gray-600 leading-relaxed font-normal">
+                                      {opt.desc}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <div className="pt-2 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                              <div>
+                                <label className="text-xs font-black text-gray-800 block">
+                                  شرکت پیش‌فرض در بخش رسید دریافت چک:
+                                </label>
+                                <span className="text-[11px] text-gray-500">
+                                  این شرکت هنگام باز کردن فرم رسید دریافت به صورت پیش‌فرض انتخاب می‌شود و قابل تغییر روی هر رسید است.
+                                </span>
+                              </div>
+                              <select
+                                className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-xs font-bold text-gray-900 outline-none focus:border-indigo-500"
+                                value={settings.defaultChequeCompanyId || settings.companies?.[0]?.id || ''}
+                                onChange={(e) => {
+                                  const selectedId = e.target.value;
+                                  const compObj = (settings.companies || []).find((c) => c.id === selectedId);
+                                  setSettings({
+                                    ...settings,
+                                    defaultChequeCompanyId: selectedId,
+                                    defaultChequeCompanyName: compObj?.name || ''
+                                  });
+                                }}
+                              >
+                                {(settings.companies || [])
+                                  .filter((c) => c.isAccountingEnabled !== false)
+                                  .map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                      {c.name}
+                                    </option>
+                                  ))}
+                                {(!settings.companies || settings.companies.length === 0) && (
+                                  <option value="comp_lepan">شرکت تولیدی لپان بافت</option>
+                                )}
+                              </select>
+                            </div>
+                          </div>
+
                           {/* Option 1: Disable CEO approval */}
                           <label className="flex items-start gap-3 cursor-pointer p-3 bg-white border border-gray-200 rounded-xl shadow-xs hover:border-indigo-300 transition-colors">
                             <div className="relative mt-0.5">

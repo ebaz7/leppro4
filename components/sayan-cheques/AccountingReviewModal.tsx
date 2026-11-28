@@ -43,6 +43,7 @@ interface Props {
     currentUser?: any;
     isCeoOrAdmin?: boolean;
     isFinancialOrAdmin?: boolean;
+    companies?: Array<{ id: string; name: string; isAccountingEnabled?: boolean }>;
 }
 
 const toPersianDigits = (num: string | number | undefined | null): string => {
@@ -355,7 +356,8 @@ export const AccountingReviewModal: React.FC<Props> = ({
     onApproveByCeo,
     currentUser,
     isCeoOrAdmin,
-    isFinancialOrAdmin
+    isFinancialOrAdmin,
+    companies: propsCompanies
 }) => {
     // Lock body scrolling when modal is open to prevent mobile background jump and dual-scroll
     useEffect(() => {
@@ -366,11 +368,19 @@ export const AccountingReviewModal: React.FC<Props> = ({
         };
     }, []);
 
-    const [editPersonQuery, setEditPersonQuery] = useState(receipt.personName || '');
-    const [editPerson, setEditPerson] = useState<SayanPerson | null>({
-        personCode: String(receipt.personCode || ''),
-        fullName: receipt.personName || ''
+    const [companiesList, setCompaniesList] = useState<Array<{ id: string; name: string }>>(() => {
+        const filtered = (propsCompanies || []).filter(c => c.isAccountingEnabled !== false);
+        return filtered.length > 0 ? filtered : [{ id: receipt.companyId || 'comp_lepan', name: receipt.companyName || 'شرکت تولیدی لپان بافت' }];
     });
+    const [editCompanyId, setEditCompanyId] = useState<string>(receipt.companyId || receipt.dalkamCompanyId || companiesList[0]?.id || '');
+    const [formErrorMsg, setFormErrorMsg] = useState<string | null>(null);
+
+    const [editPersonQuery, setEditPersonQuery] = useState(receipt.personName || '');
+    const [editPerson, setEditPerson] = useState<SayanPerson | null>(
+        receipt.personCode
+            ? { personCode: String(receipt.personCode), fullName: receipt.personName || '' }
+            : null
+    );
     const [editPersonResults, setEditPersonResults] = useState<SayanPerson[]>([]);
     const [editReceiptNo, setEditReceiptNo] = useState(String(receipt.receiptNo || receipt.id || ''));
     const [editPoshtNomreh, setEditPoshtNomreh] = useState(String(receipt.poshtNomreh || ''));
@@ -380,6 +390,29 @@ export const AccountingReviewModal: React.FC<Props> = ({
     const [editDescription, setEditDescription] = useState(receipt.description || '');
     const [accountingNote, setAccountingNote] = useState(receipt.accountingReview?.note || '');
     const [editCashboxCode, setEditCashboxCode] = useState(receipt.cashboxCode || '11001');
+
+    useEffect(() => {
+        if (propsCompanies && propsCompanies.length > 0) {
+            const filtered = propsCompanies.filter(c => c.isAccountingEnabled !== false);
+            if (filtered.length > 0) {
+                setCompaniesList(filtered);
+                if (!editCompanyId) setEditCompanyId(receipt.companyId || filtered[0].id);
+            }
+        } else {
+            const token = getAuthToken();
+            const headers: Record<string, string> = {};
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            fetch(getEffectiveApiUrl('/api/industrial-erp/companies'), { headers })
+                .then(r => r.ok ? r.json() : null)
+                .then(list => {
+                    if (Array.isArray(list) && list.length > 0) {
+                        setCompaniesList(list.map((c: any) => ({ id: c.id, name: c.name })));
+                        if (!editCompanyId) setEditCompanyId(receipt.companyId || list[0].id);
+                    }
+                })
+                .catch(() => {});
+        }
+    }, [propsCompanies]);
     const [cashboxes, setCashboxes] = useState<Array<{ code: string; title: string }>>([
         { code: '11001', title: 'صندوق دفتر' },
         { code: '11002', title: 'صندوق سکه و کارت هدیه' },
@@ -490,20 +523,29 @@ export const AccountingReviewModal: React.FC<Props> = ({
     };
 
     const buildPayload = () => {
-        const finalPersonCode = editPerson ? editPerson.personCode : receipt.personCode;
-        const finalPersonName = editPerson ? editPerson.fullName : receipt.personName;
+        setFormErrorMsg(null);
+        const targetMode = String(receipt.registrationTargetMode || 'sayan').toLowerCase();
+        const finalPersonCode = editPerson ? editPerson.personCode : (receipt.personCode || '');
+        const finalPersonName = editPerson ? editPerson.fullName : (editPersonQuery.trim() || receipt.personName || '');
 
-        if (!finalPersonCode) {
-            alert('انتخاب طرف حساب معتبر از سیستم سایان الزامی است.');
+        if (targetMode !== 'dalkam' && !finalPersonCode) {
+            setFormErrorMsg('انتخاب طرف حساب معتبر از سیستم سایان الزامی است.');
+            return null;
+        }
+        if (targetMode === 'dalkam' && !finalPersonName) {
+            setFormErrorMsg('نام طرف حساب (تحویل‌دهنده چک) الزامی است.');
             return null;
         }
 
         const sanitizedAttachments = (editAttachments || []).map(att =>
             att?.url ? { ...att, fileData: undefined } : att
         );
+        const selectedCompObj = companiesList.find(c => c.id === editCompanyId);
 
         return {
             receiptNo: editReceiptNo.trim(),
+            companyId: editCompanyId || receipt.companyId || '',
+            companyName: selectedCompObj?.name || receipt.companyName || '',
             personCode: finalPersonCode,
             personName: finalPersonName,
             poshtNomreh: editPoshtNomreh,
@@ -611,13 +653,34 @@ export const AccountingReviewModal: React.FC<Props> = ({
                 {/* Body Form (Smooth Momentum Scrolling Isolated Container) */}
                 <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-auto touch-pan-y p-3.5 sm:p-6 space-y-4 sm:space-y-5 -webkit-overflow-scrolling-touch">
                     
+                    {formErrorMsg && (
+                        <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            <span>{formErrorMsg}</span>
+                        </div>
+                    )}
+
                     {/* General Receipt Metadata Panel */}
                     <div className="bg-slate-50/90 dark:bg-slate-800/40 p-3.5 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-700/80 space-y-3.5">
-                        <div className="flex items-center gap-2 pb-2 border-b border-slate-200 dark:border-slate-700/60">
-                            <Building2 className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
-                            <h4 className="text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200">
-                                مشخصات طرف حساب، صندوق و سربرگ رسید
-                            </h4>
+                        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-700/60">
+                            <div className="flex items-center gap-2">
+                                <Building2 className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
+                                <h4 className="text-xs sm:text-sm font-black text-slate-800 dark:text-slate-200">
+                                    مشخصات طرف حساب، شرکت، صندوق و سربرگ رسید
+                                </h4>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs">
+                                <span className="text-[11px] font-bold text-slate-500">شرکت حسابداری:</span>
+                                <select
+                                    value={editCompanyId}
+                                    onChange={(e) => setEditCompanyId(e.target.value)}
+                                    className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:border-amber-500"
+                                >
+                                    {companiesList.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">

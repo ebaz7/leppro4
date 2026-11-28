@@ -69,6 +69,7 @@ import * as coreBackupMgr from './backend/core-backup-manager.js';
 const getDb = dbManager.getDb;
 const saveDb = dbManager.saveDb;
 notificationQueue.initNotificationQueue(dbManager);
+sayanChequeService.setDalkamChequeRegistrar((...args) => registerChequeReceiptInDalkamErp(...args));
 const sanitizeSayanUrl = dbManager.sanitizeSayanUrl;
 const findNextGapNumber = utils.findNextGapNumber;
 const findNextMaxNumber = utils.findNextMaxNumber;
@@ -2994,66 +2995,79 @@ app.all(['/api/sayan/cheque-receipts/approve', '/api/sayan/cheque-receipts/:id/c
             return res.status(400).json({ success: false, error: 'شناسه رسید الزامی است.' });
         }
         
-        // Immediate non-blocking CEO/Final approval with background queue registration
+        // Immediate approval: routes according to registrationTargetMode ('sayan' | 'dalkam' | 'both')
         const approved = await sayanChequeService.approveCEOReceipt(receiptId, currentUser, note);
 
-        // Stage 3 Cutover Hook: Auto-generate Industrial Accounting Voucher upon final Cheque Receipt approval
+        // Stage 3 Cutover Hook: Legacy fallback only if not already handled by Dalkam Cheque Registrar
         try {
-            const db = getDb();
-            const erp = ensureIndustrialErpStructure(db, approved?.company || null);
-            if (erp.cutoverConfig?.stage3PaymentOrdersAutoVoucherActive && approved && !approved.erpVoucherNo) {
-                const totalChequeAmt = Array.isArray(approved.cheques)
-                    ? approved.cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0)
-                    : (Number(approved.totalAmount) || 0);
-                if (totalChequeAmt > 0) {
-                    const vNo = erp.nextVoucherNo || 1002;
-                    const todayShamsi = utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20';
-                    const personName = String(approved.personName || approved.customerName || 'مشتری خوش‌حساب');
-                    const chqVoucher = {
-                        id: `vch_chq_${Date.now()}`,
-                        voucherNo: vNo,
-                        dateJalali: todayShamsi,
-                        type: 'GENERAL',
-                        status: 'FINALIZED',
-                        description: `سند خودکار رسید دریافت چک تاییدشده شماره #${approved.receiptNo || approved.id} — پرداخت‌کننده: ${personName}`,
-                        createdBy: currentUser?.name || currentUser?.fullName || 'تایید نهایی رسید دریافت',
-                        createdAt: Date.now(),
-                        lines: [
-                            {
-                                id: `vl_c1_${Date.now()}`,
-                                accountCode: '1104',
-                                accountTitle: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)',
-                                tafziliName: String(approved.cashboxName || 'صندوق چک‌های دریافتی'),
-                                debit: Math.round(totalChequeAmt),
-                                credit: 0,
-                                description: `دریافت ${Array.isArray(approved.cheques) ? approved.cheques.length : 1} فقره چک از ${personName}`
-                            },
-                            {
-                                id: `vl_c2_${Date.now()}`,
-                                accountCode: '1103',
-                                accountTitle: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)',
-                                tafziliName: personName,
-                                debit: 0,
-                                credit: Math.round(totalChequeAmt),
-                                description: `بستانکاری طرف حساب بابت رسید دریافت چک #${approved.receiptNo || approved.id}`
-                            }
-                        ]
-                    };
-                    erp.vouchers.unshift(chqVoucher);
-                    erp.nextVoucherNo = vNo + 1;
-                    approved.erpVoucherNo = vNo;
-                    saveDb(db);
+            const targetMode = String(approved?.registrationTargetMode || 'sayan').toLowerCase();
+            if (targetMode === 'sayan' && approved && !approved.dalkamRegistered && !approved.dalkamVoucherNo && !approved.erpVoucherNo) {
+                const db = getDb();
+                const erp = ensureIndustrialErpStructure(db, approved?.companyId || approved?.company || null, approved?.companyName || null);
+                if (erp.cutoverConfig?.stage3PaymentOrdersAutoVoucherActive) {
+                    const totalChequeAmt = Array.isArray(approved.cheques)
+                        ? approved.cheques.reduce((s, c) => s + (Number(c.amount) || 0), 0)
+                        : (Number(approved.totalAmount) || 0);
+                    if (totalChequeAmt > 0) {
+                        const vNo = erp.nextVoucherNo || 1002;
+                        const todayShamsi = utils.toShamsiFull(new Date()).split(' ')[0] || '1405/08/20';
+                        const personName = String(approved.personName || approved.customerName || 'مشتری خوش‌حساب');
+                        const chqVoucher = {
+                            id: `vch_chq_${Date.now()}`,
+                            voucherNo: vNo,
+                            dateJalali: todayShamsi,
+                            type: 'GENERAL',
+                            status: 'FINALIZED',
+                            description: `سند خودکار رسید دریافت چک تاییدشده شماره #${approved.receiptNo || approved.id} — پرداخت‌کننده: ${personName}`,
+                            createdBy: currentUser?.name || currentUser?.fullName || 'تایید نهایی رسید دریافت',
+                            createdAt: Date.now(),
+                            lines: [
+                                {
+                                    id: `vl_c1_${Date.now()}`,
+                                    accountCode: '1104',
+                                    accountTitle: 'اسناد دریافتنی در جریان وصول (چک‌های دریافتی)',
+                                    tafziliName: String(approved.cashboxName || 'صندوق چک‌های دریافتی'),
+                                    debit: Math.round(totalChequeAmt),
+                                    credit: 0,
+                                    description: `دریافت ${Array.isArray(approved.cheques) ? approved.cheques.length : 1} فقره چک از ${personName}`
+                                },
+                                {
+                                    id: `vl_c2_${Date.now()}`,
+                                    accountCode: '1103',
+                                    accountTitle: 'حساب‌های و اسناد دریافتنی تجاری (مشتریان)',
+                                    tafziliName: personName,
+                                    debit: 0,
+                                    credit: Math.round(totalChequeAmt),
+                                    description: `بستانکاری طرف حساب بابت رسید دریافت چک #${approved.receiptNo || approved.id}`
+                                }
+                            ]
+                        };
+                        erp.vouchers.unshift(chqVoucher);
+                        erp.nextVoucherNo = vNo + 1;
+                        approved.erpVoucherNo = vNo;
+                        saveDb(db);
+                    }
                 }
             }
         } catch (erpHookErr) {
             console.warn('[Industrial ERP] Cheque receipt auto-voucher hook warning:', erpHookErr.message);
         }
 
+        const effectiveTargetMode = String(approved?.registrationTargetMode || 'sayan').toLowerCase();
+        const responseMsg = effectiveTargetMode === 'dalkam'
+            ? `رسید در حسابداری دلکام (${approved?.dalkamCompanyName || approved?.companyName || 'شرکت منتخب'}) با شماره سند #${approved?.dalkamVoucherNo || '-'} ثبت شد.`
+            : effectiveTargetMode === 'both'
+                ? `رسید در حسابداری دلکام (سند #${approved?.dalkamVoucherNo || '-'}) ثبت شد و در صف صدور سند سایان نیز قرار گرفت.`
+                : 'رسید با موفقیت تایید شد و در صف صدور سند سایان قرار گرفت.';
+
         res.json({ 
             success: true, 
-            queued: true,
+            queued: effectiveTargetMode !== 'dalkam',
+            targetMode: effectiveTargetMode,
+            dalkamVoucherNo: approved?.dalkamVoucherNo || null,
+            dalkamCompanyName: approved?.dalkamCompanyName || approved?.companyName || null,
             receipt: approved,
-            message: 'رسید با موفقیت تایید شد و در صف صدور سند سایان قرار گرفت.'
+            message: responseMsg
         });
     } catch (err) {
         console.error("Error approving cheque receipt:", err);
@@ -3061,7 +3075,7 @@ app.all(['/api/sayan/cheque-receipts/approve', '/api/sayan/cheque-receipts/:id/c
     }
 });
 
-// 7. Workflow Configuration for Cheque Receipts & Sayan Registration
+// 7. Workflow Configuration for Cheque Receipts & Sayan/Dalkam Registration
 app.get('/api/sayan/cheque-receipts/workflow-config', (req, res) => {
     try {
         const config = sayanChequeService.getChequeWorkflowConfig();
@@ -3073,7 +3087,10 @@ app.get('/api/sayan/cheque-receipts/workflow-config', (req, res) => {
             role: u.role,
             roles: u.roles || []
         }));
-        res.json({ success: true, config, users });
+        const companies = getErpCompaniesList(db)
+            .filter(c => c.isAccountingEnabled !== false)
+            .map(c => ({ id: c.id, name: c.name }));
+        res.json({ success: true, config, users, companies });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -3083,7 +3100,7 @@ app.post('/api/sayan/cheque-receipts/workflow-config', (req, res) => {
     try {
         const newConfig = req.body || {};
         const saved = sayanChequeService.updateChequeWorkflowConfig(newConfig);
-        res.json({ success: true, config: saved, message: 'تنظیمات فرآیند تایید و ثبت سایان با موفقیت ذخیره شد.' });
+        res.json({ success: true, config: saved, message: 'تنظیمات فرآیند تایید و محل ثبت رسید چک با موفقیت ذخیره شد.' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -3131,6 +3148,22 @@ app.post(['/api/sayan/cheque-receipts/register-in-sayan', '/api/sayan/cheque-rec
         res.json({ success: true, ...result });
     } catch (err) {
         console.error("Error registering cheque receipt in Sayan:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 10.0. Register / Retry Cheque Receipt in Dalkam Industrial ERP Accounting (PostgreSQL)
+app.post('/api/sayan/cheque-receipts/:id/register-dalkam', async (req, res) => {
+    try {
+        const receiptId = req.params.id || req.body?.receiptId;
+        const currentUser = req.body?.currentUser || req.user || { name: 'مدیر سیستم' };
+        if (!receiptId) {
+            return res.status(400).json({ success: false, error: 'شناسه رسید الزامی است.' });
+        }
+        const result = await sayanChequeService.registerChequeReceiptInDalkam(receiptId, currentUser);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        console.error("Error registering cheque receipt in Dalkam ERP:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -3190,6 +3223,78 @@ app.post('/api/sayan/cheque-receipts/delete-draft', async (req, res) => {
     }
 });
 
+// 11.5. Void / Cancel Cheque Receipt & Send to Archive (Preserves sequential receipt number)
+app.post(['/api/sayan/cheque-receipts/:id/cancel', '/api/sayan/cheque-receipts/:id/void', '/api/sayan/cheque-receipts/cancel'], async (req, res) => {
+    try {
+        const receiptId = String(req.params.id || req.body?.receiptId || '').trim();
+        if (!receiptId) {
+            return res.status(400).json({ success: false, error: 'شناسه رسید الزامی است.' });
+        }
+
+        const db = getDb();
+        const rawUser = req.body?.currentUser || req.user || {};
+        let verifiedUser = {
+            id: rawUser?.id || '',
+            name: rawUser?.fullName || rawUser?.name || req.body?.cancelledBy || 'کاربر سیستم',
+            role: rawUser?.role || ''
+        };
+
+        if (Array.isArray(db.users) && db.users.length > 0 && (rawUser?.id || rawUser?.username)) {
+            const foundUser = db.users.find(u =>
+                (rawUser.id && String(u.id) === String(rawUser.id)) ||
+                (rawUser.username && String(u.username).toLowerCase() === String(rawUser.username).toLowerCase())
+            );
+            if (!foundUser) {
+                return res.status(403).json({ success: false, error: 'کاربر معتبر برای ابطال رسید یافت نشد.' });
+            }
+            const roleUpper = String(foundUser.role || '').toUpperCase();
+            const rolesLower = Array.isArray(foundUser.roles) ? foundUser.roles.map(r => String(r).toLowerCase()) : [];
+            const rolePerms = (db.settings?.rolePermissions && (db.settings.rolePermissions[foundUser.role] || db.settings.rolePermissions[roleUpper])) || {};
+            const hasPrivilege =
+                ['ADMIN', 'CEO', 'MANAGER', 'FINANCIAL', 'ACCOUNTANT', 'SALES', 'TREASURY'].includes(roleUpper) ||
+                rolesLower.some(r => ['admin', 'ceo', 'manager', 'financial', 'accountant', 'sales', 'treasury'].includes(r)) ||
+                foundUser.canSayanEditReceipt === true ||
+                foundUser.canSayanDeleteReceipt === true ||
+                foundUser.canSayanApproveAccounting === true ||
+                foundUser.canSayanApproveCeo === true ||
+                rolePerms.canSayanEditReceipt === true ||
+                rolePerms.canSayanDeleteReceipt === true ||
+                rolePerms.canSayanApproveAccounting === true ||
+                rolePerms.canSayanApproveCeo === true ||
+                rolePerms.canSayanRegisterCheque !== false ||
+                foundUser.isSuperAdmin === true;
+
+            // Also verify if the user created the receipt or has explicit permission
+            const targetRecord = (db.sayan_cheque_receipts || []).find(r => r.id === receiptId);
+            const isCreator = targetRecord?.createdBy?.id && String(targetRecord.createdBy.id) === String(foundUser.id);
+
+            if (!hasPrivilege && !isCreator) {
+                return res.status(403).json({ success: false, error: 'شما مجوز ابطال و بایگانی این رسید را ندارید.' });
+            }
+
+            verifiedUser = {
+                id: foundUser.id,
+                username: foundUser.username,
+                name: foundUser.fullName || foundUser.name || foundUser.username,
+                role: foundUser.role
+            };
+        }
+
+        const reason = typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 500) : '';
+        const cancelled = await sayanChequeService.cancelChequeReceipt(receiptId, verifiedUser, reason);
+
+        res.json({
+            success: true,
+            receipt: cancelled,
+            message: `رسید #${cancelled.receiptNo || cancelled.id} ابطال شد و به بایگانی منتقل گردید.`
+        });
+    } catch (err) {
+        console.error("Error cancelling cheque receipt:", err);
+        const status = err.statusCode || (err.message?.includes('یافت نشد') ? 404 : 400);
+        res.status(status).json({ success: false, error: err.message });
+    }
+});
+
 // 12. Inspect Real Sayan Document Details (BUR_TBL_008, 009, 012, 016)
 app.get('/api/sayan/cheque-receipts/real-document/:archiveCode', async (req, res) => {
     try {
@@ -3216,7 +3321,8 @@ app.get('/api/sayan/cheque-receipts/pending-counts', (req, res) => {
         const pendingAccounting = list.filter(r => r.status === 'PENDING_ACCOUNTING' || r.status === 'PENDING_APPROVAL').length;
         const pendingCeo = list.filter(r => r.status === 'PENDING_CEO').length;
         const processingSayan = list.filter(r => r.status === 'PROCESSING_SAYAN' || r.sayanSyncStatus === 'QUEUED' || r.sayanSyncStatus === 'PROCESSING').length;
-        const approved = list.filter(r => r.status === 'REGISTERED_IN_SAYAN' || r.status === 'APPROVED').length;
+        const approved = list.filter(r => r.status === 'REGISTERED_IN_SAYAN' || r.status === 'REGISTERED_IN_DALKAM' || r.status === 'APPROVED').length;
+        const cancelled = list.filter(r => r.status === 'CANCELLED').length;
         res.json({
             success: true,
             pendingAccounting,
@@ -3224,6 +3330,7 @@ app.get('/api/sayan/cheque-receipts/pending-counts', (req, res) => {
             pendingCEO: pendingCeo, // Backwards-compatible
             processingSayan,
             approved,
+            cancelled,
             totalPending: pendingAccounting + pendingCeo,
             config
         });
@@ -9832,6 +9939,245 @@ function broadcastErpStateUpdated(companyId, companyName, revision) {
     }
 }
 
+/**
+ * Atomic & Idempotent Dalkam Industrial ERP Cheque Receipt Posting (PostgreSQL + TreasuryDocs + Balanced Voucher)
+ */
+async function registerChequeReceiptInDalkamErp(receipt, currentUser) {
+    if (!receipt || !receipt.id) {
+        throw new Error('اطلاعات رسید چک برای ثبت در حسابداری دلکام معتبر نیست.');
+    }
+
+    const db = getDb();
+    const companies = getErpCompaniesList(db).filter(c => c.isAccountingEnabled !== false);
+    const primaryCompany = companies[0] || { id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' };
+
+    const reqCompId = String(receipt.companyId || receipt.dalkamCompanyId || db.settings?.defaultChequeCompanyId || '').trim();
+    const reqCompName = String(receipt.companyName || receipt.dalkamCompanyName || db.settings?.defaultChequeCompanyName || '').trim();
+    const comp =
+        companies.find(c => reqCompId && (c.id === reqCompId || c.name === reqCompId)) ||
+        companies.find(c => reqCompName && c.name === reqCompName) ||
+        primaryCompany;
+
+    const legacyState = ensureIndustrialErpStructure(db, comp.id, comp.name);
+    const cheques = Array.isArray(receipt.cheques) ? receipt.cheques : [];
+    if (cheques.length === 0) {
+        throw new Error('حداقل یک برگ چک برای ثبت در حسابداری دلکام الزامی است.');
+    }
+
+    const totalChequeAmt = cheques.reduce((sum, ch) => sum + Math.round(Number(ch.amount) || 0), 0);
+    if (totalChequeAmt <= 0) {
+        throw new Error('مبلغ کل چک‌های رسید برای ثبت در حسابداری دلکام باید بیشتر از صفر باشد.');
+    }
+
+    const toShamsiYmd = (dateInput) => {
+        if (!dateInput) return utils.toShamsiFull(new Date()).split(' ')[0] || '1405/09/01';
+        const ascii = String(dateInput)
+            .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+            .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+            .trim();
+        const m = ascii.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+        if (m && parseInt(m[1], 10) >= 1300 && parseInt(m[1], 10) <= 1550) {
+            return `${m[1]}/${m[2].padStart(2, '0')}/${m[3].padStart(2, '0')}`;
+        }
+        const parsed = new Date(ascii);
+        if (!isNaN(parsed.getTime())) {
+            const j = jalaali.toJalaali(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
+            return `${j.jy}/${String(j.jm).padStart(2, '0')}/${String(j.jd).padStart(2, '0')}`;
+        }
+        return utils.toShamsiFull(new Date()).split(' ')[0] || '1405/09/01';
+    };
+
+    const docDateJalali = toShamsiYmd(receipt.docDateShamsi || receipt.docDate || receipt.createdAt);
+    const personName = String(receipt.personName || 'طرف حساب چک').trim();
+    const personCode = String(receipt.personCode || '').trim() || '110201';
+    const receiptNoDisplay = String(receipt.receiptNo || receipt.poshtNomreh || receipt.id).trim();
+    const cashboxTitle = receipt.cashboxTitle || (receipt.cashboxCode === '11001' ? 'صندوق دفتر' : `صندوق کد ${receipt.cashboxCode || '11001'}`);
+    const actorName = currentUser?.fullName || currentUser?.name || receipt.createdByName || 'سیستم خزانه‌داری';
+
+    const applyToCompanyState = async (currState) => {
+        if (!Array.isArray(currState.treasuryDocs)) currState.treasuryDocs = [];
+        if (!Array.isArray(currState.vouchers)) currState.vouchers = [];
+        if (!Array.isArray(currState.chartOfAccounts)) currState.chartOfAccounts = [];
+
+        // Idempotency guard: prevent duplicate treasury docs & vouchers on retries
+        const existingVoucher = currState.vouchers.find(v => v && String(v.referenceId || '') === String(receipt.id));
+        const existingDocs = currState.treasuryDocs.filter(d => d && d.extra && String(d.extra.sayanReceiptId || '') === String(receipt.id));
+        if (existingVoucher || existingDocs.length > 0) {
+            return {
+                state: currState,
+                alreadyExisted: true,
+                voucherNo: existingVoucher?.voucherNo || existingDocs[0]?.voucherNo || receipt.dalkamVoucherNo || null,
+                voucherId: existingVoucher?.id || null,
+                treasuryDocNos: existingDocs.map(d => d.docNo).filter(Boolean),
+                treasuryDocIds: existingDocs.map(d => d.id).filter(Boolean)
+            };
+        }
+
+        const coa = currState.chartOfAccounts;
+        const findAccount = (preferredCodes, keyword, fallbackCode, fallbackTitle) => {
+            for (const c of preferredCodes) {
+                if (!c) continue;
+                const hit = coa.find(a => a && String(a.code).trim() === String(c).trim());
+                if (hit) return { code: hit.code, title: hit.title };
+            }
+            if (keyword) {
+                const kwHit = coa.find(a => a && a.isPostable !== false && String(a.title || '').includes(keyword));
+                if (kwHit) return { code: kwHit.code, title: kwHit.title };
+            }
+            return { code: fallbackCode, title: fallbackTitle };
+        };
+
+        const debitAcct = findAccount(
+            ['110202', '1104', '1102'],
+            'اسناد دریافتنی',
+            '110202',
+            'اسناد دریافتنی (چک‌های نزد صندوق/بانک)'
+        );
+        const creditAcct = findAccount(
+            ['110201', currState.defaultAccounts?.receivable, '1103', '1102'],
+            'دریافتنی تجاری',
+            '110201',
+            'بدهکاران تجاری (مشتریان)'
+        );
+
+        const maxVNo = currState.vouchers.reduce((mx, v) => Math.max(mx, Number(v?.voucherNo) || 0), 0);
+        const voucherNo = Math.max(Number(currState.nextVoucherNo) || 1002, maxVNo + 1);
+        const baseTs = Date.now();
+        const existingDocNos = new Set(currState.treasuryDocs.map(d => String(d?.docNo || '')));
+
+        const newTreasuryDocs = [];
+        const debitLines = [];
+
+        cheques.forEach((ch, idx) => {
+            const amt = Math.round(Number(ch.amount) || 0);
+            if (amt <= 0) return;
+            const chSerial = String(ch.chequeNumber || '').trim() || String(idx + 1);
+            const dueJalali = toShamsiYmd(ch.dueDate || docDateJalali);
+            let candidateDocNo = `TRS-CHQ-${receiptNoDisplay}-${idx + 1}`;
+            if (existingDocNos.has(candidateDocNo)) {
+                candidateDocNo = `TRS-CHQ-${receiptNoDisplay}-${voucherNo}-${idx + 1}`;
+            }
+            existingDocNos.add(candidateDocNo);
+
+            const trsId = `trs_rcpt_${receipt.id}_${idx + 1}`;
+            newTreasuryDocs.push({
+                id: trsId,
+                docNo: candidateDocNo,
+                docType: 'RECEIPT_CHEQUE',
+                dateJalali: docDateJalali,
+                partyName: personName,
+                partyCode: personCode,
+                bankName: String(ch.bankName || 'نامشخص').trim(),
+                sayadiId: String(ch.sayadId || '').trim(),
+                chequeSerial: chSerial,
+                dueDateJalali: dueJalali,
+                amountRials: amt,
+                chequeStatus: 'IN_VAULT',
+                voucherNo,
+                description: `رسید دریافت چک #${receiptNoDisplay}${receipt.poshtNomreh ? ` (پشت‌نمره ${receipt.poshtNomreh})` : ''} — بانک ${ch.bankName || '-'}، سریال ${chSerial}${ch.description ? ` — ${ch.description}` : ''}`,
+                extra: {
+                    source: 'CHEQUE_RECEIPT',
+                    sayanReceiptId: String(receipt.id),
+                    receiptNo: receiptNoDisplay,
+                    poshtNomreh: String(receipt.poshtNomreh || ''),
+                    cashboxCode: String(receipt.cashboxCode || '11001'),
+                    cashboxTitle,
+                    inNameOf: String(ch.inNameOf || personName)
+                }
+            });
+
+            debitLines.push({
+                id: `vl_chq_${baseTs}_${idx + 1}`,
+                accountCode: debitAcct.code,
+                accountTitle: debitAcct.title,
+                tafziliName: `${cashboxTitle} (چک ${chSerial} - ${ch.bankName || 'بانک'})`,
+                debit: amt,
+                credit: 0,
+                description: `دریافت چک شماره ${chSerial}${ch.sayadId ? ` (صیاد ${ch.sayadId})` : ''} سررسید ${dueJalali} از ${personName} بابت رسید #${receiptNoDisplay}`
+            });
+        });
+
+        const totalComputedDebit = debitLines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
+        const creditLine = {
+            id: `vl_chq_${baseTs}_cr`,
+            accountCode: creditAcct.code,
+            accountTitle: creditAcct.title,
+            tafziliName: personName,
+            debit: 0,
+            credit: totalComputedDebit,
+            description: `بستانکاری ${personName} بابت ${newTreasuryDocs.length} فقره چک رسید دریافت #${receiptNoDisplay}${receipt.description ? ` — ${receipt.description}` : ''}`
+        };
+
+        const voucherId = `vch_rcpt_${receipt.id}`;
+        const newVoucher = {
+            id: voucherId,
+            voucherNo,
+            dateJalali: docDateJalali,
+            type: 'TREASURY',
+            status: 'FINALIZED',
+            description: `سند اتوماتیک رسید دریافت چک #${receiptNoDisplay} از ${personName}${receipt.poshtNomreh ? ` (پشت‌نمره ${receipt.poshtNomreh})` : ''}`,
+            referenceId: String(receipt.id),
+            createdBy: actorName,
+            createdAt: baseTs,
+            lines: [...debitLines, creditLine]
+        };
+
+        currState.treasuryDocs = [...newTreasuryDocs, ...currState.treasuryDocs];
+        currState.vouchers = [newVoucher, ...currState.vouchers];
+        currState.nextVoucherNo = voucherNo + 1;
+
+        return {
+            state: currState,
+            alreadyExisted: false,
+            voucherNo,
+            voucherId,
+            treasuryDocNos: newTreasuryDocs.map(d => d.docNo),
+            treasuryDocIds: newTreasuryDocs.map(d => d.id)
+        };
+    };
+
+    let resultMeta = null;
+    let finalState = null;
+
+    if (erpPg.isPostgresConfigured()) {
+        const pgOut = await erpPg.mutateCompanyErpTransactionally(
+            comp.id,
+            comp.name,
+            comp,
+            legacyState,
+            applyToCompanyState
+        );
+        if (pgOut && !pgOut.aborted && pgOut.state) {
+            resultMeta = pgOut;
+            finalState = pgOut.state;
+        }
+    }
+
+    // In-memory / JSON fallback only if PostgreSQL isn't configured or unavailable
+    if (!finalState) {
+        const fallbackOut = await applyToCompanyState(legacyState);
+        resultMeta = fallbackOut;
+        finalState = fallbackOut.state;
+        finalState._revision = (Number(finalState._revision) || 1) + 1;
+    }
+
+    const latestDb = getDb();
+    syncCompanyStateAcrossAliasesInDb(latestDb, comp.id, comp.name, finalState);
+    saveDb(latestDb);
+    broadcastErpStateUpdated(comp.id, comp.name, finalState._revision);
+
+    return {
+        success: true,
+        companyId: comp.id,
+        companyName: comp.name,
+        voucherNo: resultMeta?.voucherNo || null,
+        voucherId: resultMeta?.voucherId || null,
+        treasuryDocNos: resultMeta?.treasuryDocNos || [],
+        treasuryDocIds: resultMeta?.treasuryDocIds || [],
+        alreadyExisted: Boolean(resultMeta?.alreadyExisted)
+    };
+}
+
 // Health & storage engine diagnostics for Industrial Accounting ERP (PostgreSQL + Central Server)
 app.get('/api/industrial-erp/health', async (req, res) => {
     try {
@@ -11318,6 +11664,24 @@ app.post('/api/settings', async (req, res) => {
     const db = getDb();
     db.settings = { ...(db.settings || {}), ...req.body };
     saveDb(db);
+
+    // Sync cheque registration target mode & default company bidirectionally with Sayan Cheque workflow config
+    try {
+        if (
+            req.body &&
+            (req.body.chequeReceiptRegistrationMode !== undefined ||
+                req.body.defaultChequeCompanyId !== undefined ||
+                req.body.defaultChequeCompanyName !== undefined)
+        ) {
+            sayanChequeService.updateChequeWorkflowConfig({
+                ...(req.body.chequeReceiptRegistrationMode !== undefined ? { registrationTargetMode: req.body.chequeReceiptRegistrationMode } : {}),
+                ...(req.body.defaultChequeCompanyId !== undefined ? { defaultCompanyId: req.body.defaultChequeCompanyId } : {}),
+                ...(req.body.defaultChequeCompanyName !== undefined ? { defaultCompanyName: req.body.defaultChequeCompanyName } : {})
+            });
+        }
+    } catch (wfErr) {
+        console.warn('Failed to sync cheque workflow config from settings save:', wfErr?.message);
+    }
     
     // Automatically re-initialize bots and schedule cron jobs on settings save
     try {

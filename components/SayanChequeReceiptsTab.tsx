@@ -7,7 +7,7 @@ import {
     Hash, Layers, ShieldAlert, ArrowUpRight, Copy, Printer, Edit3, CornerUpLeft,
     CheckSquare, FileText, ArrowLeft, Settings2, Sliders, Zap, Loader2,
     CalendarDays, ChevronRight, ChevronLeft, Filter, ArrowUpDown, ArrowUp, ArrowDown,
-    RotateCcw, UserCheck
+    RotateCcw, UserCheck, Ban
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as jalaali from 'jalaali-js';
@@ -43,7 +43,21 @@ interface ChequeReceiptRecord {
     id: string;
     receiptNo?: number | string;
     source: 'APP_DRAFT' | 'SAYAN_DB';
-    status: 'PENDING_ACCOUNTING' | 'PENDING_CEO' | 'APPROVED' | 'REGISTERED_IN_SAYAN' | 'REJECTED' | 'PENDING_APPROVAL' | 'PROCESSING_SAYAN';
+    status: 'PENDING_ACCOUNTING' | 'PENDING_CEO' | 'APPROVED' | 'REGISTERED_IN_SAYAN' | 'REGISTERED_IN_DALKAM' | 'REJECTED' | 'PENDING_APPROVAL' | 'PROCESSING_SAYAN' | 'CANCELLED';
+    previousStatus?: string;
+    registrationTargetMode?: 'sayan' | 'dalkam' | 'both';
+    companyId?: string;
+    companyName?: string;
+    dalkamRegistered?: boolean;
+    dalkamCompanyId?: string;
+    dalkamCompanyName?: string;
+    dalkamVoucherNo?: number | string;
+    dalkamVoucherId?: string;
+    dalkamTreasuryDocNos?: string[];
+    dalkamTreasuryDocIds?: string[];
+    dalkamRegisteredAt?: string;
+    dalkamError?: string;
+    erpVoucherNo?: number | string;
     sayanSyncStatus?: 'QUEUED' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
     sayanError?: string;
     fiscalYear: string;
@@ -103,6 +117,18 @@ interface ChequeReceiptRecord {
     registeredAt?: string;
     createdAt?: string;
     createdByName?: string;
+    createdBy?: {
+        id?: string;
+        name?: string;
+        role?: string;
+    } | null;
+    cancellationInfo?: {
+        id?: string;
+        name?: string;
+        role?: string;
+        reason?: string;
+        cancelledAt?: string;
+    } | null;
 }
 
 interface Props {
@@ -158,14 +184,24 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     });
     const [sayanSelectedDayModal, setSayanSelectedDayModal] = useState<{ day: number; dateStr: string; items: any[] } | null>(null);
 
-    // Workflow Configuration State & System Users List
+    // Workflow Configuration State, Companies & System Users List
     const [workflowConfig, setWorkflowConfig] = useState<ChequeWorkflowConfig>({
         requireCeoApproval: false,
         autoRegisterAfterAccounting: true,
         allowAccountingFinalApproval: true,
         allowedFinalApproverUserIds: [],
-        allowedFinalApproverRoles: ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT']
+        allowedFinalApproverRoles: ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT'],
+        registrationTargetMode: settings?.chequeReceiptRegistrationMode || 'sayan',
+        defaultCompanyId: settings?.defaultChequeCompanyId || '',
+        defaultCompanyName: settings?.defaultChequeCompanyName || ''
     });
+    const [companiesList, setCompaniesList] = useState<Array<{ id: string; name: string; isAccountingEnabled?: boolean }>>(() => {
+        const fromSettings = Array.isArray(settings?.companies)
+            ? settings.companies.filter((c: any) => c && c.isAccountingEnabled !== false)
+            : [];
+        return fromSettings.length > 0 ? fromSettings : [{ id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت', isAccountingEnabled: true }];
+    });
+    const [selectedCompanyId, setSelectedCompanyId] = useState<string>(() => settings?.defaultChequeCompanyId || '');
     const [systemUsersList, setSystemUsersList] = useState<Array<{ id: string; name: string; username: string; role: string; roles?: string[] }>>([]);
     const [isWorkflowModalOpen, setIsWorkflowModalOpen] = useState(false);
 
@@ -212,6 +248,21 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 if (data.success && data.config) {
                     setWorkflowConfig(data.config);
                     if (Array.isArray(data.users)) setSystemUsersList(data.users);
+                    if (Array.isArray(data.companies) && data.companies.length > 0) {
+                        setCompaniesList(data.companies.filter((c: any) => c.isAccountingEnabled !== false));
+                    }
+                    if (data.config.defaultCompanyId) {
+                        setSelectedCompanyId(prev => prev || data.config.defaultCompanyId);
+                    }
+                }
+            }
+            // Fallback company list load if not supplied above
+            const compRes = await apiFetch('/api/industrial-erp/companies');
+            if (compRes.ok) {
+                const compData = await safeParseJson(compRes);
+                if (Array.isArray(compData.companies) && compData.companies.length > 0) {
+                    const active = compData.companies.filter((c: any) => c.isAccountingEnabled !== false);
+                    if (active.length > 0) setCompaniesList(active);
                 }
             }
         } catch (e) {
@@ -222,6 +273,32 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     useEffect(() => {
         fetchWorkflowConfig();
     }, []);
+
+    useEffect(() => {
+        if (Array.isArray(settings?.companies) && settings.companies.length > 0) {
+            const active = settings.companies.filter((c: any) => c && c.isAccountingEnabled !== false);
+            if (active.length > 0) setCompaniesList(active);
+        }
+    }, [settings?.companies]);
+
+    const effectiveTargetMode: 'sayan' | 'dalkam' | 'both' = (
+        workflowConfig.registrationTargetMode ||
+        settings?.chequeReceiptRegistrationMode ||
+        'sayan'
+    ) as 'sayan' | 'dalkam' | 'both';
+
+    const configuredDefaultCompanyId = workflowConfig.defaultCompanyId || settings?.defaultChequeCompanyId || companiesList[0]?.id || '';
+    const activeCompanyId = selectedCompanyId || configuredDefaultCompanyId || companiesList[0]?.id || 'comp_lepan';
+    const activeCompanyObj = companiesList.find(c => c.id === activeCompanyId) || companiesList[0] || {
+        id: activeCompanyId,
+        name: workflowConfig.defaultCompanyName || settings?.defaultChequeCompanyName || 'شرکت تولیدی لپان بافت'
+    };
+
+    useEffect(() => {
+        if (!selectedCompanyId && configuredDefaultCompanyId) {
+            setSelectedCompanyId(configuredDefaultCompanyId);
+        }
+    }, [configuredDefaultCompanyId, selectedCompanyId]);
 
     // Check if current user is allowed to perform final approval
     const isDirectFinalAllowed = useMemo(() => {
@@ -351,8 +428,9 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
     // Advanced Filters, Multi-Criteria Search & Sorting in Archive
     const [searchTerm, setSearchTerm] = useState('');
-    const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_ACCOUNTING' | 'PENDING_CEO' | 'REGISTERED_IN_SAYAN' | 'REJECTED'>('ALL');
-    const [sayanRegFilter, setSayanRegFilter] = useState<'ALL' | 'REGISTERED' | 'UNREGISTERED' | 'PROCESSING' | 'NEEDS_REREGISTER'>('ALL');
+    const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_ACCOUNTING' | 'PENDING_CEO' | 'REGISTERED_IN_SAYAN' | 'REGISTERED_IN_DALKAM' | 'REJECTED' | 'CANCELLED'>('ALL');
+    const [sayanRegFilter, setSayanRegFilter] = useState<'ALL' | 'REGISTERED' | 'DALKAM_REGISTERED' | 'UNREGISTERED' | 'PROCESSING' | 'NEEDS_REREGISTER'>('ALL');
+    const [companyFilter, setCompanyFilter] = useState<string>('ALL');
     const [sayadiRegTypeFilter, setSayadiRegTypeFilter] = useState<'ALL' | 'company' | 'person' | 'unregistered' | 'unspecified'>('ALL');
     const [registeredPersonFilter, setRegisteredPersonFilter] = useState('');
     const [issuerRelationFilter, setIssuerRelationFilter] = useState<'ALL' | 'SELF' | 'THIRD_PARTY' | 'UNSPECIFIED'>('ALL');
@@ -384,6 +462,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     const [printReceipt, setPrintReceipt] = useState<any>(null);
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
     const [highlightedPersonIdx, setHighlightedPersonIdx] = useState(0);
+    const [cancelModalReceipt, setCancelModalReceipt] = useState<{ receipt: ChequeReceiptRecord; reason: string } | null>(null);
 
     const sayanCalendarMonthData = useMemo(() => {
         const PERSIAN_MONTH_NAMES = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
@@ -410,6 +489,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         const todayStr = getTodayShamsi();
 
         receiptsList.forEach(rec => {
+            if (rec.status === 'CANCELLED') return;
             (rec.cheques || []).forEach(c => {
                 const dueDate = c.dueDate || rec.docDate;
                 if (!dueDate) return;
@@ -437,7 +517,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         totalMonthAmount += amt;
                         totalMonthChequesCount++;
 
-                        if (item.dueDateStr < todayStr && rec.status !== 'REGISTERED_IN_SAYAN') overdueChequesCount++;
+                        if (item.dueDateStr < todayStr && rec.status !== 'REGISTERED_IN_SAYAN' && rec.status !== 'REGISTERED_IN_DALKAM') overdueChequesCount++;
                         if (item.dueDateStr === todayStr) todayChequesCount++;
                     }
                 }
@@ -1028,8 +1108,14 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         setErrorMessage(null);
         setSuccessMessage(null);
 
-        if (!selectedPerson) {
+        if (effectiveTargetMode !== 'dalkam' && !selectedPerson) {
             setErrorMessage('انتخاب طرف حساب از بین اشخاص معتبر سیستم سایان اجباری است. لطفاً نام یا کد شخص را جستجو کرده و از لیست پیشنهادها انتخاب کنید.');
+            document.getElementById('input-person-name')?.focus();
+            return;
+        }
+
+        if (effectiveTargetMode === 'dalkam' && !selectedPerson && !personQuery.trim()) {
+            setErrorMessage('لطفاً نام طرف حساب / تحویل‌دهنده چک را وارد نمایید یا از لیست جستجو انتخاب کنید.');
             document.getElementById('input-person-name')?.focus();
             return;
         }
@@ -1060,6 +1146,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 att.url ? { ...att, fileData: undefined } : att
             );
             const resolvedDocDate = fromShamsiStr(docDateShamsi) || new Date().toISOString().slice(0, 10);
+            const resolvedPersonCode = selectedPerson ? selectedPerson.personCode : '';
+            const resolvedPersonName = selectedPerson ? selectedPerson.fullName : personQuery.trim();
 
             const payload = {
                 fiscalYear,
@@ -1067,11 +1155,14 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 poshtNomreh: poshtNomreh.trim() || '1',
                 docDate: resolvedDocDate,
                 docDateShamsi: docDateShamsi.trim(),
-                personCode: selectedPerson ? selectedPerson.personCode : '101',
-                personName: selectedPerson ? selectedPerson.fullName : personQuery.trim(),
+                personCode: resolvedPersonCode,
+                personName: resolvedPersonName,
                 cashboxCode,
+                companyId: activeCompanyObj.id,
+                companyName: activeCompanyObj.name,
+                registrationTargetMode: effectiveTargetMode,
                 totalAmount: sumChequesAmount,
-                description: description.trim() || `رسید دریافت چک - ${selectedPerson?.fullName || personQuery}`,
+                description: description.trim() || `رسید دریافت چک - ${resolvedPersonName}`,
                 cheques: chequeRows.map((r, idx) => ({
                     id: r.id,
                     chequeNumber: String(r.chequeNumber || '').trim(),
@@ -1079,7 +1170,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     amount: Number(r.amount),
                     dueDate: r.dueDate,
                     bankName: r.bankName.trim() || 'سامان',
-                    inNameOf: r.inNameOf.trim() || (selectedPerson?.fullName || personQuery.trim()),
+                    inNameOf: r.inNameOf.trim() || resolvedPersonName,
                     accountNo: String(r.accountNo || '').trim(),
                     poshtNomreh: poshtNomreh.trim() || '1',
                     rowSeq: idx + 1,
@@ -1109,6 +1200,9 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     personName: payload.personName,
                     cashboxCode: payload.cashboxCode,
                     cashboxTitle: cashboxesList.find(b => b.code === cashboxCode)?.title || 'صندوق چک',
+                    companyId: data.receipt?.companyId || payload.companyId,
+                    companyName: data.receipt?.companyName || payload.companyName,
+                    registrationTargetMode: data.receipt?.registrationTargetMode || payload.registrationTargetMode,
                     totalAmount: payload.totalAmount,
                     description: payload.description,
                     docDate: payload.docDate,
@@ -1120,7 +1214,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     createdByName: currentUser?.name || 'ثبت‌کننده'
                 };
 
-                setSuccessMessage(`رسید دریافت چک با شماره #${toPersianDigits(createdReceipt.receiptNo || createdReceipt.id)} ثبت شد و به همراه پیوست‌ها آماده چاپ گردید.`);
+                setSuccessMessage(`رسید دریافت چک با شماره #${toPersianDigits(createdReceipt.receiptNo || createdReceipt.id)} (${createdReceipt.companyName || activeCompanyObj.name}) ثبت شد و به همراه پیوست‌ها آماده چاپ گردید.`);
 
                 // Immediately open the A5 print & inspection modal with attachments
                 setPrintReceipt(createdReceipt);
@@ -1136,6 +1230,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 setPoshtNomreh(nextSeqNo);
                 setReceiptNoInput(nextSeqNo);
                 setCashboxCode('11001');
+                setSelectedCompanyId(configuredDefaultCompanyId || companiesList[0]?.id || '');
                 setTargetTotalAmount('');
                 setDescription('');
                 setAttachments([]);
@@ -1190,13 +1285,25 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             if (data.success) {
                 const isCeoRequired = workflowConfig?.requireCeoApproval !== false;
                 const isAutoRegistered = !isCeoRequired && workflowConfig?.autoRegisterAfterAccounting;
-                const msg = isApproveForCEO 
-                    ? (isAutoRegistered 
-                        ? 'رسید چک با موفقیت تایید و مستقیماً در صف صدور سند سایان قرار گرفت.'
-                        : (isCeoRequired 
-                            ? 'رسید چک با موفقیت تایید و جهت تایید نهایی به کارتابل مدیرعامل ارسال گردید.' 
-                            : 'رسید چک با موفقیت تایید شد و آماده ثبت نهایی در سایان گردید.'))
-                    : 'تغییرات رسید در همین مرحله با موفقیت ذخیره شد.';
+                const rMode = data.receipt?.registrationTargetMode || updatedData?.registrationTargetMode || effectiveTargetMode;
+                let msg = 'تغییرات رسید در همین مرحله با موفقیت ذخیره شد.';
+                if (isApproveForCEO) {
+                    if (isAutoRegistered) {
+                        if (rMode === 'dalkam') {
+                            msg = `رسید چک با موفقیت تایید و در حسابداری دلکام (${data.receipt?.dalkamCompanyName || data.receipt?.companyName || ''}) با سند #${toPersianDigits(data.receipt?.dalkamVoucherNo || '-')} ثبت شد.`;
+                        } else if (rMode === 'both') {
+                            msg = `رسید چک با موفقیت در دلکام (سند #${toPersianDigits(data.receipt?.dalkamVoucherNo || '-')}) ثبت و همزمان در صف صدور سند سایان قرار گرفت.`;
+                        } else {
+                            msg = 'رسید چک با موفقیت تایید و مستقیماً در صف صدور سند سایان قرار گرفت.';
+                        }
+                    } else if (isCeoRequired) {
+                        msg = 'رسید چک با موفقیت تایید و جهت تایید نهایی به کارتابل مدیرعامل ارسال گردید.';
+                    } else {
+                        msg = rMode === 'dalkam'
+                            ? 'رسید چک با موفقیت تایید شد و آماده ثبت نهایی در حسابداری دلکام گردید.'
+                            : 'رسید چک با موفقیت تایید شد و آماده ثبت نهایی گردید.';
+                    }
+                }
                 setSuccessMessage(msg);
                 setReviewingReceipt(null);
                 fetchReceipts(true);
@@ -1210,7 +1317,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         }
     };
 
-    // CEO Approval & Direct Sayan Registration
+    // CEO Approval & Target-Mode Registration (Sayan / Dalkam / Both)
     const handleApproveByCeo = async (receiptId: string) => {
         setActionLoading(receiptId);
         try {
@@ -1225,11 +1332,20 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
             const data = await safeParseJson(res);
             if (data.success) {
-                setSuccessMessage(`رسید تایید شد و سند سایان با شماره ${toPersianDigits(data.sayanDocNo || data.docNo)} و کد بایگانی ${toPersianDigits(data.sayanArchiveCode || data.archiveCode)} در ERP سایان صادر گردید.`);
+                const tMode = data.targetMode || data.receipt?.registrationTargetMode || 'sayan';
+                if (tMode === 'dalkam') {
+                    setSuccessMessage(`رسید تایید شد و در حسابداری دلکام (${data.dalkamCompanyName || data.receipt?.companyName || ''}) با سند #${toPersianDigits(data.dalkamVoucherNo || data.receipt?.dalkamVoucherNo || '-')} ثبت گردید.`);
+                } else if (tMode === 'both') {
+                    setSuccessMessage(`رسید در حسابداری دلکام (سند #${toPersianDigits(data.dalkamVoucherNo || data.receipt?.dalkamVoucherNo || '-')}) ثبت شد و در صف صدور سند سایان نیز قرار گرفت.`);
+                } else if (data.queued) {
+                    setSuccessMessage(data.message || 'رسید تایید شد و در صف صدور سند سایان قرار گرفت.');
+                } else {
+                    setSuccessMessage(`رسید تایید شد و سند سایان با شماره ${toPersianDigits(data.sayanDocNo || data.docNo)} و کد بایگانی ${toPersianDigits(data.sayanArchiveCode || data.archiveCode)} در ERP سایان صادر گردید.`);
+                }
                 setSelectedDetailReceipt(null);
                 fetchReceipts(true);
             } else {
-                setErrorMessage(data.error || 'خطا در ثبت سند در سایان');
+                setErrorMessage(data.error || 'خطا در ثبت نهایی رسید');
             }
         } catch (err: any) {
             setErrorMessage(err.message || 'خطا در ثبت نهایی');
@@ -1300,6 +1416,42 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         }
     };
 
+    // Void / Cancel Cheque Receipt & Send to Archive (Preserves sequential receipt number)
+    const handleCancelReceipt = async (receiptId: string, reason = '') => {
+        setActionLoading(receiptId);
+        setErrorMessage(null);
+        try {
+            const res = await apiFetch(`/api/sayan/cheque-receipts/${receiptId}/cancel`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    receiptId,
+                    reason,
+                    currentUser: {
+                        id: currentUser?.id,
+                        username: currentUser?.username,
+                        name: currentUser?.fullName || currentUser?.name || currentUser?.username,
+                        role: currentUser?.role
+                    }
+                })
+            });
+
+            const data = await safeParseJson(res);
+            if (data.success) {
+                setSuccessMessage(data.message || 'رسید با موفقیت ابطال و به بایگانی منتقل شد.');
+                setCancelModalReceipt(null);
+                setSelectedDetailReceipt((prev: any) => (prev && prev.id === receiptId ? data.receipt : prev));
+                await fetchReceipts(true);
+            } else {
+                setErrorMessage(data.error || 'خطا در ابطال رسید');
+            }
+        } catch (err: any) {
+            setErrorMessage(err.message || 'خطا در برقراری ارتباط جهت ابطال رسید');
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
     // Fix invalid Sanad 1 receipts
     const [fixingSanadOne, setFixingSanadOne] = useState(false);
     const handleFixSanadOneReceipts = async () => {
@@ -1348,6 +1500,32 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         }
     };
 
+    // Register / Retry a receipt directly in Dalkam Industrial ERP Accounting (PostgreSQL)
+    const handleRegisterInDalkam = async (receiptId: string) => {
+        setActionLoading(receiptId);
+        try {
+            const res = await apiFetch(`/api/sayan/cheque-receipts/${receiptId}/register-dalkam`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ receiptId, currentUser })
+            });
+            const data = await safeParseJson(res);
+            if (data.success) {
+                setSuccessMessage(`رسید با موفقیت در حسابداری دلکام (${data.companyName || 'شرکت منتخب'}) ثبت گردید. شماره سند دلکام: #${toPersianDigits(data.voucherNo || '-')}`);
+                if (data.record) {
+                    setSelectedDetailReceipt((prev: any) => (prev && prev.id === receiptId ? data.record : prev));
+                }
+                fetchReceipts(true);
+            } else {
+                setErrorMessage(data.error || 'خطا در ثبت رسید در حسابداری دلکام');
+            }
+        } catch (err: any) {
+            setErrorMessage(err.message || 'خطا در برقراری ارتباط جهت ثبت در دلکام');
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
     // Filtered lists
     const pendingAccountingList = useMemo(() => {
         return receiptsList.filter(r => r.status === 'PENDING_ACCOUNTING');
@@ -1388,15 +1566,23 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
     };
 
     const isNeedsSayanReregister = (r: ChequeReceiptRecord): boolean => {
-        return String(r.docNo) === '1' || String(r.archiveCode) === '1';
+        if (r.status === 'CANCELLED') return false;
+        return r.registrationTargetMode !== 'dalkam' && (String(r.docNo) === '1' || String(r.archiveCode) === '1');
     };
 
     const isProcessingSayan = (r: ChequeReceiptRecord): boolean => {
+        if (r.status === 'CANCELLED') return false;
         return r.status === 'PROCESSING_SAYAN' || r.sayanSyncStatus === 'QUEUED' || r.sayanSyncStatus === 'PROCESSING';
     };
 
     const isRegisteredInSayan = (r: ChequeReceiptRecord): boolean => {
+        if (r.status === 'CANCELLED') return false;
         return !isNeedsSayanReregister(r) && !isProcessingSayan(r) && (r.status === 'REGISTERED_IN_SAYAN' || r.source === 'SAYAN_DB');
+    };
+
+    const isRegisteredInDalkam = (r: ChequeReceiptRecord): boolean => {
+        if (r.status === 'CANCELLED') return false;
+        return r.status === 'REGISTERED_IN_DALKAM' || Boolean(r.dalkamRegistered);
     };
 
     const availableArchiveBanks = useMemo(() => {
@@ -1442,6 +1628,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         if (searchTerm.trim()) count++;
         if (statusFilter !== 'ALL') count++;
         if (sayanRegFilter !== 'ALL') count++;
+        if (companyFilter !== 'ALL') count++;
         if (sayadiRegTypeFilter !== 'ALL') count++;
         if (registeredPersonFilter.trim()) count++;
         if (issuerRelationFilter !== 'ALL') count++;
@@ -1460,7 +1647,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         if (sourceFilter !== 'ALL') count++;
         return count;
     }, [
-        searchTerm, statusFilter, sayanRegFilter, sayadiRegTypeFilter, registeredPersonFilter,
+        searchTerm, statusFilter, sayanRegFilter, companyFilter, sayadiRegTypeFilter, registeredPersonFilter,
         issuerRelationFilter, delivererFilter, inNameOfFilter, bankFilter, cashboxFilter,
         dueDateFrom, dueDateTo, docDateFrom, docDateTo, minAmountFilter, maxAmountFilter,
         sayadFilter, attachmentFilter, sourceFilter
@@ -1470,6 +1657,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         setSearchTerm('');
         setStatusFilter('ALL');
         setSayanRegFilter('ALL');
+        setCompanyFilter('ALL');
         setSayadiRegTypeFilter('ALL');
         setRegisteredPersonFilter('');
         setIssuerRelationFilter('ALL');
@@ -1509,10 +1697,12 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             if (qAscii || qNorm) {
                 const matchHeader =
                     normalizeSearchText(r.personName || '').includes(qNorm) ||
+                    normalizeSearchText(r.companyName || r.dalkamCompanyName || '').includes(qNorm) ||
                     String(r.personCode || '').toLowerCase().includes(qAscii) ||
                     normalizeToAsciiDigits(String(r.receiptNo || '')).toLowerCase().includes(qAscii) ||
                     normalizeToAsciiDigits(String(r.poshtNomreh || '')).toLowerCase().includes(qAscii) ||
                     normalizeToAsciiDigits(String(r.docNo || '')).toLowerCase().includes(qAscii) ||
+                    normalizeToAsciiDigits(String(r.dalkamVoucherNo || r.erpVoucherNo || '')).toLowerCase().includes(qAscii) ||
                     normalizeToAsciiDigits(String(r.archiveCode || '')).toLowerCase().includes(qAscii) ||
                     normalizeSearchText(r.description || '').includes(qNorm) ||
                     normalizeSearchText(r.createdByName || '').includes(qNorm);
@@ -1533,17 +1723,28 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             if (statusFilter !== 'ALL') {
                 if (statusFilter === 'REGISTERED_IN_SAYAN') {
                     if (r.status !== 'REGISTERED_IN_SAYAN' && r.status !== 'PROCESSING_SAYAN') return false;
+                } else if (statusFilter === 'REGISTERED_IN_DALKAM') {
+                    if (!isRegisteredInDalkam(r)) return false;
                 } else if (r.status !== statusFilter) {
                     return false;
                 }
             }
 
-            // 3. Sayan registration status filter (ثبت شده / ثبت نشده در سایان)
+            // 3. Sayan / Dalkam registration status filter
             if (sayanRegFilter !== 'ALL') {
                 if (sayanRegFilter === 'REGISTERED' && !isRegisteredInSayan(r)) return false;
-                if (sayanRegFilter === 'UNREGISTERED' && (isRegisteredInSayan(r) || isProcessingSayan(r))) return false;
+                if (sayanRegFilter === 'DALKAM_REGISTERED' && !isRegisteredInDalkam(r)) return false;
+                if (sayanRegFilter === 'UNREGISTERED' && (r.status === 'CANCELLED' || isRegisteredInSayan(r) || isRegisteredInDalkam(r) || isProcessingSayan(r))) return false;
                 if (sayanRegFilter === 'PROCESSING' && !isProcessingSayan(r)) return false;
                 if (sayanRegFilter === 'NEEDS_REREGISTER' && !isNeedsSayanReregister(r)) return false;
+            }
+
+            // 3b. Company filter
+            if (companyFilter !== 'ALL') {
+                const rCompId = String(r.dalkamCompanyId || r.companyId || '').trim();
+                const rCompName = String(r.dalkamCompanyName || r.companyName || '').trim();
+                const targetComp = companiesList.find(c => c.id === companyFilter);
+                if (rCompId !== companyFilter && (!targetComp || rCompName !== targetComp.name)) return false;
             }
 
             // 4. Sayadi registration type filter (به نام شرکت / شخص / ثبت نشده / نامشخص)
@@ -1654,7 +1855,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         // Multi-parameter sorting
         const regOrder: Record<string, number> = { company: 1, person: 2, unregistered: 3 };
         const sayanStatusOrder = (rec: ChequeReceiptRecord): number => {
-            if (isRegisteredInSayan(rec)) return 4;
+            if (rec.status === 'CANCELLED') return -1;
+            if (isRegisteredInSayan(rec) || isRegisteredInDalkam(rec)) return 4;
             if (isProcessingSayan(rec)) return 3;
             if (isNeedsSayanReregister(rec)) return 2;
             if (rec.status === 'PENDING_CEO') return 1;
@@ -1753,7 +1955,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             return (getNumSeq(b.receiptNo || b.docNo) - getNumSeq(a.receiptNo || a.docNo));
         });
     }, [
-        receiptsList, searchTerm, statusFilter, sayanRegFilter, sayadiRegTypeFilter,
+        receiptsList, searchTerm, statusFilter, sayanRegFilter, companyFilter, companiesList, sayadiRegTypeFilter,
         registeredPersonFilter, issuerRelationFilter, delivererFilter, inNameOfFilter,
         bankFilter, cashboxFilter, dueDateFrom, dueDateTo, docDateFrom, docDateTo,
         minAmountFilter, maxAmountFilter, sayadFilter, attachmentFilter, sourceFilter,
@@ -1765,10 +1967,12 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         let totalAmount = 0;
         let registeredCount = 0;
         let unregisteredCount = 0;
+        let cancelledCount = 0;
         archiveList.forEach(r => {
-            totalCheques += r.cheques?.length || 1;
+            totalCheques += r.cheques?.length || (r.status === 'CANCELLED' ? 0 : 1);
             totalAmount += Number(r.totalAmount || 0);
-            if (isRegisteredInSayan(r)) registeredCount++;
+            if (r.status === 'CANCELLED') cancelledCount++;
+            else if (isRegisteredInSayan(r) || isRegisteredInDalkam(r)) registeredCount++;
             else unregisteredCount++;
         });
         return {
@@ -1776,7 +1980,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             totalCheques,
             totalAmount,
             registeredCount,
-            unregisteredCount
+            unregisteredCount,
+            cancelledCount
         };
     }, [archiveList]);
 
@@ -1786,18 +1991,25 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         if (sayanRegFilter !== 'ALL') {
             const map: Record<string, string> = {
                 REGISTERED: 'ثبت شده در سایان',
-                UNREGISTERED: 'ثبت نشده در سایان',
+                DALKAM_REGISTERED: 'ثبت شده در دلکام',
+                UNREGISTERED: 'ثبت نشده',
                 PROCESSING: 'در حال ثبت پس‌زمینه',
                 NEEDS_REREGISTER: 'سند ۱ (نیازمند ثبت مجدد)',
             };
-            list.push(`وضعیت سایان: ${map[sayanRegFilter] || sayanRegFilter}`);
+            list.push(`وضعیت ثبت: ${map[sayanRegFilter] || sayanRegFilter}`);
+        }
+        if (companyFilter !== 'ALL') {
+            const compObj = companiesList.find(c => c.id === companyFilter);
+            list.push(`شرکت: ${compObj ? compObj.name : companyFilter}`);
         }
         if (statusFilter !== 'ALL') {
             const map: Record<string, string> = {
                 PENDING_ACCOUNTING: 'منتظر تایید حسابداری',
-                PENDING_CEO: workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت سایان',
-                REGISTERED_IN_SAYAN: 'نهایی / ثبت‌شده',
+                PENDING_CEO: workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت نهایی',
+                REGISTERED_IN_SAYAN: 'نهایی / ثبت‌شده در سایان',
+                REGISTERED_IN_DALKAM: 'نهایی / ثبت‌شده در دلکام',
                 REJECTED: 'عودت / رد شده',
+                CANCELLED: 'ابطال شده (بایگانی)',
             };
             list.push(`مرحله کارتابل: ${map[statusFilter] || statusFilter}`);
         }
@@ -1842,7 +2054,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
         if (sourceFilter !== 'ALL') list.push(`منبع: ${sourceFilter === 'APP_DRAFT' ? 'ثبت سامانه' : 'سایان ERP'}`);
         return list;
     }, [
-        searchTerm, sayanRegFilter, statusFilter, workflowConfig.requireCeoApproval,
+        searchTerm, sayanRegFilter, companyFilter, companiesList, statusFilter, workflowConfig.requireCeoApproval,
         sayadiRegTypeFilter, registeredPersonFilter, issuerRelationFilter, delivererFilter,
         inNameOfFilter, bankFilter, cashboxFilter, cashboxesList, dueDateFrom, dueDateTo,
         docDateFrom, docDateTo, minAmountFilter, maxAmountFilter, sayadFilter,
@@ -2091,12 +2303,12 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
             {/* Sub-tab 1: NEW CHEQUE RECEIPT FORM */}
             {activeSubTab === 'NEW_RECEIPT' && (
                 <form onSubmit={handleSubmitReceipt} className="space-y-5">
-                    {/* Sayan Operation & Cashbox Selector Dashboard Card */}
+                    {/* Operation, Company, Mode & Cashbox Selector Dashboard Card */}
                     <div className="bg-gradient-to-l from-slate-50 to-emerald-50/20 dark:from-slate-900/60 dark:to-slate-900/10 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800/80 shadow-xs space-y-4">
-                        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+                        <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4">
                             
-                            {/* Step Indicators */}
-                            <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                            {/* Step Indicators + Active Registration Target Mode */}
+                            <div className="flex flex-wrap items-center gap-2 text-xs">
                                 <div className="flex items-center gap-1.5 bg-emerald-100/80 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5 rounded-xl font-bold text-emerald-800 dark:text-emerald-300">
                                     <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center font-black text-[10px]">۱۱</span>
                                     <span>مرحله ۱: عملیات دریافت</span>
@@ -2113,28 +2325,78 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
                                 <div className="flex items-center gap-1.5 bg-purple-100/80 dark:bg-purple-950/60 border border-purple-200 dark:border-purple-800 px-3 py-1.5 rounded-xl font-bold text-purple-800 dark:text-purple-300">
                                     <span className="w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center font-black text-[10px]">۳</span>
-                                    <span>مرحله ۳: صندوق دریافت چک *</span>
+                                    <span>مرحله ۳: صندوق و شرکت مقصد *</span>
+                                </div>
+
+                                {/* Active Target Mode Status Strip */}
+                                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-black border ${
+                                    effectiveTargetMode === 'dalkam'
+                                        ? 'bg-teal-100/90 dark:bg-teal-950/60 border-teal-300 dark:border-teal-800 text-teal-900 dark:text-teal-200'
+                                        : effectiveTargetMode === 'both'
+                                        ? 'bg-indigo-100/90 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200'
+                                        : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200'
+                                }`}>
+                                    <Zap className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                        مقصد ثبت فعلی: {effectiveTargetMode === 'dalkam' ? 'ثبت در دلکام' : effectiveTargetMode === 'both' ? 'ثبت در دلکام و سایان' : 'ثبت در سایان (پیش‌فرض)'}
+                                    </span>
+                                    {canConfigureWorkflow && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsWorkflowModalOpen(true)}
+                                            className="mr-1 px-1.5 py-0.5 rounded-lg bg-white/80 dark:bg-slate-900/70 text-[10px] hover:bg-white cursor-pointer border border-current/20"
+                                            title="تغییر حالت ثبت و شرکت پیش‌فرض"
+                                        >
+                                            تغییر
+                                        </button>
+                                    )}
                                 </div>
                             </div>
 
-                            {/* Actual Dropdown Selection for Cashbox */}
-                            <div className="min-w-[240px] relative">
-                                <label className="block text-[11px] font-black text-purple-700 dark:text-purple-300 mb-1 flex items-center gap-1">
-                                    <span>صندوق دریافت (خزانه‌داری سایان) *</span>
-                                </label>
-                                <div className="relative font-sans">
-                                    <select
-                                        value={cashboxCode}
-                                        onChange={(e) => setCashboxCode(e.target.value)}
-                                        className="w-full bg-white dark:bg-slate-900 border-2 border-purple-200 dark:border-purple-900 rounded-xl px-3 py-2.5 text-xs font-black text-slate-800 dark:text-slate-100 outline-none focus:border-purple-500 transition-colors cursor-pointer appearance-none pr-8 text-right"
-                                    >
-                                        {cashboxesList.map(box => (
-                                            <option key={box.code} value={box.code}>
-                                                {box.title} (کد: {toPersianDigits(box.code)})
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <ChevronDown className="w-4 h-4 text-purple-500 absolute left-2.5 top-3.5 pointer-events-none" />
+                            {/* Company & Cashbox Dropdowns */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full xl:w-auto xl:min-w-[490px]">
+                                <div className="relative">
+                                    <label className="block text-[11px] font-black text-teal-700 dark:text-teal-300 mb-1 flex items-center justify-between gap-1">
+                                        <span>شرکت مقصد (ثبت در حسابداری) *</span>
+                                        {activeCompanyId === configuredDefaultCompanyId && (
+                                            <span className="text-[9px] font-bold text-teal-600 dark:text-teal-400">پیش‌فرض</span>
+                                        )}
+                                    </label>
+                                    <div className="relative font-sans">
+                                        <select
+                                            id="select-receipt-company"
+                                            value={activeCompanyId}
+                                            onChange={(e) => setSelectedCompanyId(e.target.value)}
+                                            className="w-full min-h-[42px] bg-white dark:bg-slate-900 border-2 border-teal-200 dark:border-teal-900 rounded-xl px-3 py-2 text-xs font-black text-slate-800 dark:text-slate-100 outline-none focus:border-teal-500 transition-colors cursor-pointer appearance-none pr-8 text-right"
+                                        >
+                                            {companiesList.map(comp => (
+                                                <option key={comp.id} value={comp.id}>
+                                                    {comp.name}{comp.id === configuredDefaultCompanyId ? ' (پیش‌فرض)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown className="w-4 h-4 text-teal-500 absolute left-2.5 top-3 pointer-events-none" />
+                                    </div>
+                                </div>
+
+                                <div className="relative">
+                                    <label className="block text-[11px] font-black text-purple-700 dark:text-purple-300 mb-1 flex items-center gap-1">
+                                        <span>صندوق دریافت (خزانه‌داری) *</span>
+                                    </label>
+                                    <div className="relative font-sans">
+                                        <select
+                                            value={cashboxCode}
+                                            onChange={(e) => setCashboxCode(e.target.value)}
+                                            className="w-full min-h-[42px] bg-white dark:bg-slate-900 border-2 border-purple-200 dark:border-purple-900 rounded-xl px-3 py-2 text-xs font-black text-slate-800 dark:text-slate-100 outline-none focus:border-purple-500 transition-colors cursor-pointer appearance-none pr-8 text-right"
+                                        >
+                                            {cashboxesList.map(box => (
+                                                <option key={box.code} value={box.code}>
+                                                    {box.title} (کد: {toPersianDigits(box.code)})
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown className="w-4 h-4 text-purple-500 absolute left-2.5 top-3 pointer-events-none" />
+                                    </div>
                                 </div>
                             </div>
 
@@ -2160,7 +2422,11 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                             <div ref={personContainerRef} className="relative">
                                 <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
                                     <span className="flex items-center gap-1">
-                                        <span>طرف حساب (انتخاب اجباری از سایان)</span>
+                                        <span>
+                                            {effectiveTargetMode === 'dalkam'
+                                                ? 'طرف حساب / تحویل‌دهنده (دلکام)'
+                                                : 'طرف حساب (انتخاب اجباری از سایان)'}
+                                        </span>
                                         <span className="text-red-500">*</span>
                                     </span>
                                     <button
@@ -2204,7 +2470,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                 setPersonDropdownOpen(false);
                                             } else if (e.key === 'Enter') {
                                                 e.preventDefault();
-                                                if (personDropdownOpen && displayedPersonResults.length > 0) {
+                                                if (personDropdownOpen && displayedPersonResults.length > 0 && effectiveTargetMode !== 'dalkam') {
                                                     const selected = displayedPersonResults[highlightedPersonIdx] || displayedPersonResults[0];
                                                     if (selected) {
                                                         setSelectedPerson(selected);
@@ -2214,12 +2480,23 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                         const nextEl = document.getElementById('input-posht-nomreh') || document.getElementById('input-receipt-no');
                                                         nextEl?.focus();
                                                     }
+                                                } else if (personDropdownOpen && displayedPersonResults.length > 0 && highlightedPersonIdx > 0) {
+                                                    const selected = displayedPersonResults[highlightedPersonIdx];
+                                                    if (selected) {
+                                                        setSelectedPerson(selected);
+                                                        setPersonQuery(selected.fullName);
+                                                        setPersonDropdownOpen(false);
+                                                        setChequeRows(prev => prev.map(r => ({ ...r, inNameOf: selected.fullName })));
+                                                        const nextEl = document.getElementById('input-posht-nomreh') || document.getElementById('input-receipt-no');
+                                                        nextEl?.focus();
+                                                    }
                                                 } else {
+                                                    setPersonDropdownOpen(false);
                                                     handleEnterNext(0, 'person');
                                                 }
                                             }
                                         }}
-                                        placeholder="نام یا کد تفصیلی (جستجوی زنده در کل پایگاه سایان)..."
+                                        placeholder={effectiveTargetMode === 'dalkam' ? 'نام تحویل‌دهنده یا انتخاب از لیست...' : 'نام یا کد تفصیلی (جستجوی زنده در کل پایگاه سایان)...'}
                                         className={`w-full border rounded-xl px-3 py-2.5 text-xs outline-none transition-colors ${
                                             selectedPerson
                                                 ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-500 text-emerald-900 dark:text-emerald-100 font-bold'
@@ -2233,8 +2510,12 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
                                 {selectedPerson ? (
                                     <div className="mt-1 flex items-center justify-between text-[10px] text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-100/70 dark:bg-emerald-950/60 px-2 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                                        <span>طرف حساب معتبر سایان</span>
+                                        <span>طرف حساب معتبر</span>
                                         <span className="font-mono">کد تفصیلی: {toPersianDigits(selectedPerson.tafsiliCode || selectedPerson.personCode)}</span>
+                                    </div>
+                                ) : effectiveTargetMode === 'dalkam' ? (
+                                    <div className="mt-1 text-[10px] text-teal-700 dark:text-teal-400">
+                                        در حالت دلکام می‌توانید از پیشنهادها انتخاب کنید یا نام مشتری را مستقیم بنویسید.
                                     </div>
                                 ) : (
                                     <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
@@ -2700,69 +2981,107 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {pendingAccountingList.map(rec => (
-                                    <div key={rec.id} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 space-y-3 hover:shadow-md transition-shadow">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <div className="flex items-center gap-1.5 flex-wrap">
-                                                    <span className="font-bold text-xs text-slate-900 dark:text-white">{rec.personName}</span>
-                                                    <div className="flex items-center gap-1">
-                                                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 font-bold">
-                                                            #{toPersianDigits(rec.receiptNo || rec.id)}
+                                {pendingAccountingList.map(rec => {
+                                    const rMode = rec.registrationTargetMode || 'sayan';
+                                    return (
+                                        <div key={rec.id} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 space-y-3 hover:shadow-md transition-shadow">
+                                            <div className="flex items-start justify-between">
+                                                <div>
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="font-bold text-xs text-slate-900 dark:text-white">{rec.personName}</span>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 font-bold">
+                                                                #{toPersianDigits(rec.receiptNo || rec.id)}
+                                                            </span>
+                                                            {canEditReceipt && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setEditingReceiptNoItem({ id: rec.id, currentNo: String(rec.receiptNo || rec.id) });
+                                                                        setTempQuickReceiptNo(String(rec.receiptNo || rec.id));
+                                                                    }}
+                                                                    className="p-0.5 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 rounded transition-colors cursor-pointer"
+                                                                    title="ویرایش شماره رسید"
+                                                                >
+                                                                    <Edit3 className="w-3 h-3" />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                                            rMode === 'dalkam'
+                                                                ? 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300'
+                                                                : rMode === 'both'
+                                                                ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
+                                                                : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                                                        }`}>
+                                                            {rMode === 'dalkam' ? 'دلکام' : rMode === 'both' ? 'دلکام + سایان' : 'سایان'}
                                                         </span>
-                                                        {canEditReceipt && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    setEditingReceiptNoItem({ id: rec.id, currentNo: String(rec.receiptNo || rec.id) });
-                                                                    setTempQuickReceiptNo(String(rec.receiptNo || rec.id));
-                                                                }}
-                                                                className="p-0.5 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 rounded transition-colors cursor-pointer"
-                                                                title="ویرایش شماره رسید"
-                                                            >
-                                                                <Edit3 className="w-3 h-3" />
-                                                            </button>
+                                                    </div>
+                                                    <div className="text-[11px] text-slate-400 mt-0.5 font-mono flex flex-wrap items-center gap-1.5">
+                                                        <span>پشت‌نمره: {toPersianDigits(rec.poshtNomreh || '-')}</span>
+                                                        <span>|</span>
+                                                        <span>تاریخ: {toPersianDigits(rec.docDate)}</span>
+                                                        {rec.companyName && (
+                                                            <>
+                                                                <span>|</span>
+                                                                <span className="font-sans font-bold text-teal-700 dark:text-teal-300">{rec.companyName}</span>
+                                                            </>
                                                         )}
                                                     </div>
                                                 </div>
-                                                <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                                                    پشت‌نمره: {toPersianDigits(rec.poshtNomreh || '-')} | تاریخ: {toPersianDigits(rec.docDate)}
-                                                </div>
+                                                <span className="font-mono font-black text-xs text-emerald-600 dark:text-emerald-400">
+                                                    {toPersianDigits(Number(rec.totalAmount || 0).toLocaleString('fa-IR'))} ریال
+                                                </span>
                                             </div>
-                                            <span className="font-mono font-black text-xs text-emerald-600 dark:text-emerald-400">
-                                                {toPersianDigits(Number(rec.totalAmount || 0).toLocaleString('fa-IR'))} ریال
-                                            </span>
-                                        </div>
 
-                                        <div className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-1 bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-100 dark:border-slate-800">
-                                            {rec.description || `${toPersianDigits(rec.cheques?.length || 1)} فقره چک`}
-                                        </div>
+                                            <div className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-1 bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-100 dark:border-slate-800">
+                                                {rec.description || `${toPersianDigits(rec.cheques?.length || 1)} فقره چک`}
+                                            </div>
 
-                                        <div className="flex items-center justify-between pt-1">
-                                            <button
-                                                type="button"
-                                                onClick={() => setSelectedDetailReceipt(rec)}
-                                                className="text-xs text-blue-600 font-bold hover:underline flex items-center gap-1"
-                                            >
-                                                <Eye className="w-3.5 h-3.5" />
-                                                <span>مشاهده جزئیات</span>
-                                            </button>
-
-                                            {canEditReceipt && (
+                                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                                                 <button
                                                     type="button"
-                                                    onClick={() => setReviewingReceipt(rec)}
-                                                    className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm shadow-amber-500/20 cursor-pointer"
-                                                    title="ویرایش مشخصات و پیوست‌های رسید در همین مرحله"
+                                                    onClick={() => setSelectedDetailReceipt(rec)}
+                                                    className="text-xs text-blue-600 font-bold hover:underline flex items-center gap-1 cursor-pointer"
                                                 >
-                                                    <Edit3 className="w-3.5 h-3.5" />
-                                                    <span>ویرایش اطلاعات و مدارک</span>
+                                                    <Eye className="w-3.5 h-3.5" />
+                                                    <span>مشاهده جزئیات</span>
                                                 </button>
-                                            )}
+
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    {(isFinancialOrAdmin || isCeoOrAdmin || canEditReceipt || canDeleteReceipt || (rec.createdBy?.id && rec.createdBy.id === currentUser?.id)) && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setCancelModalReceipt({
+                                                                receipt: rec,
+                                                                reason: (!rec.cheques || rec.cheques.length === 0) ? 'رسید خالی / رد شدن شماره رسید — ارسال به بایگانی' : ''
+                                                            })}
+                                                            disabled={actionLoading === rec.id}
+                                                            className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                                                            title="ابطال رسید بدون حذف شماره و ارسال به بایگانی"
+                                                        >
+                                                            <Ban className="w-3.5 h-3.5" />
+                                                            <span>ابطال و بایگانی</span>
+                                                        </button>
+                                                    )}
+
+                                                    {canEditReceipt && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setReviewingReceipt(rec)}
+                                                            className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm shadow-amber-500/20 cursor-pointer"
+                                                            title="ویرایش مشخصات و پیوست‌های رسید در همین مرحله"
+                                                        >
+                                                            <Edit3 className="w-3.5 h-3.5" />
+                                                            <span>ویرایش اطلاعات و مدارک</span>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -2777,13 +3096,13 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                 <div>
                                     <h3 className="text-sm font-black text-slate-900 dark:text-white">
                                         {workflowConfig.requireCeoApproval 
-                                            ? 'مرحله ۲: رسیدهای چک تایید حسابداری شده و منتظر تایید مدیرعامل و ثبت در سایان'
-                                            : 'مرحله ۲: رسیدهای چک تایید حسابداری شده و آماده ثبت در سایان (تایید مستقیم)'}
+                                            ? 'مرحله ۲: رسیدهای چک تایید حسابداری شده و منتظر تایید مدیرعامل و ثبت نهایی'
+                                            : 'مرحله ۲: رسیدهای چک تایید حسابداری شده و آماده ثبت نهایی (تایید مستقیم)'}
                                     </h3>
                                     <p className="text-[11px] text-slate-500">
                                         {workflowConfig.requireCeoApproval
-                                            ? 'پس از تایید مدیرعامل، سند بلافاصله در دیتابیس ERP سایان بدون خطا ثبت و بایگانی می‌گردد.'
-                                            : 'تایید مدیرعامل غیرفعال است؛ رسیدها با تایید حسابداری یا با فشردن دکمه ثبت زیر مستقیماً در سایان ثبت می‌شوند.'}
+                                            ? 'پس از تایید مدیرعامل، سند بلافاصله طبق تنظیمات (سایان، دلکام یا هردو) ثبت و بایگانی می‌گردد.'
+                                            : 'تایید مدیرعامل غیرفعال است؛ رسیدها با تایید حسابداری یا با فشردن دکمه ثبت زیر مستقیماً ثبت می‌شوند.'}
                                     </p>
                                 </div>
                             </div>
@@ -2798,7 +3117,17 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {pendingCeoList.map(rec => {
-                                    const hasError = !!rec.sayanError;
+                                    const rMode = rec.registrationTargetMode || 'sayan';
+                                    const hasSayanError = !!rec.sayanError && rMode !== 'dalkam';
+                                    const hasDalkamError = !!rec.dalkamError && rMode !== 'sayan';
+                                    const hasError = hasSayanError || hasDalkamError;
+                                    const approveLabel = actionLoading === rec.id
+                                        ? 'در حال ارسال...'
+                                        : rMode === 'dalkam'
+                                            ? (hasDalkamError ? 'تلاش مجدد ثبت دلکام' : 'تایید و ثبت در دلکام')
+                                            : rMode === 'both'
+                                                ? (hasError ? 'تلاش مجدد دلکام و سایان' : 'تایید و ثبت دلکام و سایان')
+                                                : (hasSayanError ? 'تلاش مجدد ثبت سایان' : 'تایید و ثبت سایان');
                                     return (
                                         <div 
                                             key={rec.id} 
@@ -2810,20 +3139,40 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                         >
                                             <div className="flex items-start justify-between">
                                                 <div>
-                                                    <div className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1.5">
+                                                    <div className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
                                                         <span>{rec.personName}</span>
                                                         <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${
                                                             hasError 
                                                                 ? 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-300' 
                                                                 : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                                                         }`}>
-                                                            {hasError ? 'خطای ثبت سایان' : 'تایید حسابداری شده'}
+                                                            {hasDalkamError ? 'خطای ثبت دلکام' : hasSayanError ? 'خطای ثبت سایان' : 'تایید حسابداری شده'}
                                                         </span>
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                                            rMode === 'dalkam'
+                                                                ? 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300'
+                                                                : rMode === 'both'
+                                                                ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
+                                                                : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                                                        }`}>
+                                                            {rMode === 'dalkam' ? 'دلکام' : rMode === 'both' ? 'دلکام + سایان' : 'سایان'}
+                                                        </span>
+                                                        {rec.dalkamRegistered && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-teal-600 text-white font-mono">
+                                                                دلکام: سند #{toPersianDigits(rec.dalkamVoucherNo || rec.erpVoucherNo || '-')}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div className="text-[11px] text-slate-400 mt-0.5 font-mono flex items-center gap-1.5 flex-wrap">
                                                         <span>پشت‌نمره: {toPersianDigits(rec.poshtNomreh || '-')}</span>
                                                         <span>|</span>
                                                         <span className="text-blue-600 dark:text-blue-400 font-bold">رسید: #{toPersianDigits(rec.receiptNo || rec.id)}</span>
+                                                        {rec.companyName && (
+                                                            <>
+                                                                <span>|</span>
+                                                                <span className="font-sans font-bold text-teal-700 dark:text-teal-300">{rec.companyName}</span>
+                                                            </>
+                                                        )}
                                                         {canEditReceipt && (
                                                             <button
                                                                 type="button"
@@ -2845,13 +3194,23 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                 </span>
                                             </div>
 
-                                            {hasError && (
+                                            {hasSayanError && (
                                                 <div className="text-[11px] text-rose-800 dark:text-rose-300 bg-rose-100/50 dark:bg-rose-900/30 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50 space-y-1">
                                                     <div className="font-bold flex items-center gap-1">
                                                         <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
                                                         <span>خطای بازگشتی از پایگاه‌داده ERP سایان:</span>
                                                     </div>
                                                     <p className="font-mono leading-relaxed break-all text-right select-all">{rec.sayanError}</p>
+                                                </div>
+                                            )}
+
+                                            {hasDalkamError && (
+                                                <div className="text-[11px] text-rose-800 dark:text-rose-300 bg-rose-100/50 dark:bg-rose-900/30 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50 space-y-1">
+                                                    <div className="font-bold flex items-center gap-1">
+                                                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                                                        <span>خطای ثبت در حسابداری دلکام:</span>
+                                                    </div>
+                                                    <p className="font-mono leading-relaxed break-all text-right select-all">{rec.dalkamError}</p>
                                                 </div>
                                             )}
 
@@ -2871,7 +3230,24 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     <span>مشاهده چک‌ها</span>
                                                 </button>
 
-                                                <div className="flex items-center gap-1.5">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    {/* Void / Cancel to Archive Option */}
+                                                    {(isFinancialOrAdmin || isCeoOrAdmin || canEditReceipt || canDeleteReceipt || (rec.createdBy?.id && rec.createdBy.id === currentUser?.id)) && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setCancelModalReceipt({
+                                                                receipt: rec,
+                                                                reason: (!rec.cheques || rec.cheques.length === 0) ? 'رسید خالی / رد شدن شماره رسید — ارسال به بایگانی' : ''
+                                                            })}
+                                                            disabled={actionLoading === rec.id}
+                                                            className="px-2.5 py-1.5 rounded-xl bg-amber-50 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                                                            title="ابطال رسید با حفظ شماره و ارسال به بایگانی"
+                                                        >
+                                                            <Ban className="w-3.5 h-3.5" />
+                                                            <span>ابطال</span>
+                                                        </button>
+                                                    )}
+
                                                     {/* Delete Draft Option if failed or pending */}
                                                     {canDeleteReceipt && (
                                                         <button
@@ -2911,14 +3287,14 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                                 type="button"
                                                                 onClick={() => handleApproveByCeo(rec.id)}
                                                                 disabled={actionLoading === rec.id}
-                                                                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1 shadow-md shadow-emerald-500/20"
+                                                                className={`px-3 py-1.5 rounded-xl text-white font-bold text-xs flex items-center gap-1 shadow-md ${
+                                                                    rMode === 'dalkam'
+                                                                        ? 'bg-teal-600 hover:bg-teal-700 shadow-teal-500/20'
+                                                                        : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'
+                                                                }`}
                                                             >
                                                                 <ShieldCheck className="w-3.5 h-3.5" />
-                                                                <span>
-                                                                    {actionLoading === rec.id 
-                                                                        ? 'در حال ارسال...' 
-                                                                        : hasError ? 'تلاش مجدد ثبت سایان' : 'تایید و ثبت سایان'}
-                                                                </span>
+                                                                <span>{approveLabel}</span>
                                                             </button>
                                                         </>
                                                     )}
@@ -3258,7 +3634,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         </div>
                     </div>
 
-                    {/* Quick Sayan Registration & Process Status Filter Strip */}
+                    {/* Quick Sayan / Dalkam Registration & Process Status Filter Strip */}
                     <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
                         <button
                             type="button"
@@ -3284,6 +3660,17 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         </button>
                         <button
                             type="button"
+                            onClick={() => setSayanRegFilter(v => v === 'DALKAM_REGISTERED' ? 'ALL' : 'DALKAM_REGISTERED')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                sayanRegFilter === 'DALKAM_REGISTERED'
+                                    ? 'bg-teal-600 text-white shadow-xs'
+                                    : 'bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60'
+                            }`}
+                        >
+                            ثبت شده در دلکام
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => setSayanRegFilter(v => v === 'UNREGISTERED' ? 'ALL' : 'UNREGISTERED')}
                             className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
                                 sayanRegFilter === 'UNREGISTERED'
@@ -3291,7 +3678,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                     : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200/60 dark:border-rose-800/60'
                             }`}
                         >
-                            ثبت نشده در سایان
+                            ثبت نشده
                         </button>
                         <button
                             type="button"
@@ -3302,7 +3689,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                             }`}
                         >
-                            {workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت در سایان'}
+                            {workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت نهایی'}
                         </button>
                         <button
                             type="button"
@@ -3314,6 +3701,17 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                             }`}
                         >
                             منتظر تایید حسابداری
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setStatusFilter(v => v === 'CANCELLED' ? 'ALL' : 'CANCELLED')}
+                            className={`px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                                statusFilter === 'CANCELLED'
+                                    ? 'bg-rose-700 text-white shadow-xs'
+                                    : 'bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200/70 dark:border-rose-800/60'
+                            }`}
+                        >
+                            ابطال شده (بایگانی)
                         </button>
                         <button
                             type="button"
@@ -3360,10 +3758,10 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                     </div>
 
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                                        {/* 1. Sayan Registration Status */}
+                                        {/* 1. Sayan / Dalkam Registration Status */}
                                         <div>
                                             <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
-                                                وضعیت ثبت در سایان
+                                                وضعیت ثبت در سایان / دلکام
                                             </label>
                                             <select
                                                 value={sayanRegFilter}
@@ -3372,7 +3770,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                             >
                                                 <option value="ALL">همه وضعیت‌ها</option>
                                                 <option value="REGISTERED">ثبت شده در سایان</option>
-                                                <option value="UNREGISTERED">ثبت نشده در سایان</option>
+                                                <option value="DALKAM_REGISTERED">ثبت شده در دلکام</option>
+                                                <option value="UNREGISTERED">ثبت نشده</option>
                                                 <option value="PROCESSING">در حال ثبت پس‌زمینه</option>
                                                 <option value="NEEDS_REREGISTER">سند ۱ (نیازمند اصلاح و ثبت مجدد)</option>
                                             </select>
@@ -3391,8 +3790,27 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                 <option value="ALL">همه مراحل</option>
                                                 <option value="PENDING_ACCOUNTING">منتظر تایید حسابداری</option>
                                                 <option value="PENDING_CEO">{workflowConfig.requireCeoApproval ? 'منتظر تایید مدیرعامل' : 'آماده ثبت نهایی'}</option>
-                                                <option value="REGISTERED_IN_SAYAN">نهایی / ثبت‌شده</option>
+                                                <option value="REGISTERED_IN_SAYAN">نهایی / ثبت‌شده در سایان</option>
+                                                <option value="REGISTERED_IN_DALKAM">نهایی / ثبت‌شده در دلکام</option>
                                                 <option value="REJECTED">عودت / رد شده</option>
+                                                <option value="CANCELLED">ابطال شده (بایگانی)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 2b. Company Filter */}
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                                                شرکت مقصد (حسابداری)
+                                            </label>
+                                            <select
+                                                value={companyFilter}
+                                                onChange={(e) => setCompanyFilter(e.target.value)}
+                                                className="w-full min-h-[38px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-bold outline-none focus:border-emerald-500"
+                                            >
+                                                <option value="ALL">همه شرکت‌ها</option>
+                                                {companiesList.map(c => (
+                                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                                ))}
                                             </select>
                                         </div>
 
@@ -3784,6 +4202,8 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                     const regNeedsFix = isNeedsSayanReregister(r);
                                     const regProcessing = isProcessingSayan(r);
                                     const regDone = isRegisteredInSayan(r);
+                                    const dalkamDone = isRegisteredInDalkam(r);
+                                    const rMode = r.registrationTargetMode || 'sayan';
 
                                     return (
                                         <div
@@ -3806,6 +4226,11 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     <div className="font-black text-xs text-slate-900 dark:text-white mt-1 truncate">
                                                         تحویل‌دهنده: {r.personName}
                                                     </div>
+                                                    {(r.dalkamCompanyName || r.companyName) && (
+                                                        <div className="text-[10px] font-bold text-teal-700 dark:text-teal-300 mt-0.5 truncate">
+                                                            شرکت: {r.dalkamCompanyName || r.companyName}
+                                                        </div>
+                                                    )}
                                                 </div>
 
                                                 <div className="text-left shrink-0">
@@ -3846,7 +4271,12 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
 
                                             {/* Status & Sayadi Badges */}
                                             <div className="flex flex-wrap items-center gap-1.5">
-                                                {regNeedsFix ? (
+                                                {r.status === 'CANCELLED' ? (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300 border border-rose-300 dark:border-rose-800 inline-flex items-center gap-1">
+                                                        <Ban className="w-3 h-3" />
+                                                        <span>ابطال شده (بایگانی)</span>
+                                                    </span>
+                                                ) : regNeedsFix ? (
                                                     <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
                                                         سند ۱ (نیازمند ثبت مجدد)
                                                     </span>
@@ -3854,13 +4284,29 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300">
                                                         ثبت شده در سایان {r.docNo ? `(سند ${toPersianDigits(r.docNo)})` : ''}
                                                     </span>
+                                                ) : dalkamDone && rMode === 'dalkam' ? (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 border border-teal-300">
+                                                        ثبت شده در دلکام (سند #{toPersianDigits(r.dalkamVoucherNo || r.erpVoucherNo || '-')})
+                                                    </span>
                                                 ) : regProcessing ? (
                                                     <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-300">
                                                         در حال ثبت در سایان
                                                     </span>
                                                 ) : (
                                                     <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200">
-                                                        ثبت نشده در سایان ({r.status === 'PENDING_CEO' ? 'آماده ثبت' : 'منتظر حسابداری'})
+                                                        {rMode === 'dalkam' ? 'ثبت نشده در دلکام' : 'ثبت نشده در سایان'} ({r.status === 'PENDING_CEO' ? 'آماده ثبت' : r.status === 'REJECTED' ? 'عودت / رد شده' : 'منتظر حسابداری'})
+                                                    </span>
+                                                )}
+
+                                                {r.status === 'CANCELLED' && r.cancellationInfo?.reason && (
+                                                    <span className="text-[10px] text-rose-700 dark:text-rose-300 font-medium w-full truncate">
+                                                        دلیل ابطال: {r.cancellationInfo.reason}
+                                                    </span>
+                                                )}
+
+                                                {dalkamDone && rMode !== 'dalkam' && (
+                                                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 border border-teal-300">
+                                                        دلکام: سند #{toPersianDigits(r.dalkamVoucherNo || r.erpVoucherNo || '-')}
                                                     </span>
                                                 )}
 
@@ -3893,7 +4339,21 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     <Eye className="w-3.5 h-3.5" />
                                                     <span>جزئیات</span>
                                                 </button>
-                                                {(regNeedsFix || r.status === 'PENDING_CEO') && (
+                                                {r.status !== 'CANCELLED' && r.status !== 'REGISTERED_IN_SAYAN' && r.status !== 'REGISTERED_IN_DALKAM' && r.status !== 'PROCESSING_SAYAN' && !regDone && !dalkamDone && (isFinancialOrAdmin || isCeoOrAdmin || canEditReceipt || canDeleteReceipt || (r.createdBy?.id && r.createdBy.id === currentUser?.id)) && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setCancelModalReceipt({
+                                                            receipt: r,
+                                                            reason: (!r.cheques || r.cheques.length === 0) ? 'رسید خالی / رد شدن شماره رسید — ارسال به بایگانی' : ''
+                                                        })}
+                                                        disabled={actionLoading === r.id}
+                                                        className="min-h-[38px] px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800 text-xs font-bold flex items-center justify-center gap-1"
+                                                    >
+                                                        <Ban className="w-3.5 h-3.5" />
+                                                        <span>ابطال</span>
+                                                    </button>
+                                                )}
+                                                {r.status !== 'CANCELLED' && rMode !== 'dalkam' && (regNeedsFix || r.status === 'PENDING_CEO') && (
                                                     <button
                                                         type="button"
                                                         onClick={() => handleReRegisterInSayan(r.id)}
@@ -3902,6 +4362,17 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     >
                                                         {actionLoading === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
                                                         <span>ثبت سایان</span>
+                                                    </button>
+                                                )}
+                                                {r.status !== 'CANCELLED' && (rMode !== 'sayan' && !dalkamDone && (r.status === 'PENDING_CEO' || !!r.dalkamError)) && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => r.status === 'PENDING_CEO' ? handleApproveByCeo(r.id) : handleRegisterInDalkam(r.id)}
+                                                        disabled={actionLoading === r.id}
+                                                        className="flex-1 min-h-[38px] px-3 py-1.5 rounded-xl bg-teal-600 text-white text-xs font-bold flex items-center justify-center gap-1"
+                                                    >
+                                                        {actionLoading === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                                                        <span>ثبت دلکام</span>
                                                     </button>
                                                 )}
                                                 {r.archiveCode && String(r.archiveCode) !== '1' && (
@@ -3927,11 +4398,11 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                         <tr>
                                             <th className="px-3 py-3">شماره رسید / تاریخ</th>
                                             <th className="px-3 py-3">پشت‌نمره</th>
-                                            <th className="px-3 py-3">تحویل‌دهنده (طرف حساب)</th>
+                                            <th className="px-3 py-3">تحویل‌دهنده (طرف حساب) / شرکت</th>
                                             <th className="px-3 py-3">مشخصات چک‌ها (بانک / سررسید / صاحب چک)</th>
                                             <th className="px-3 py-3">ثبت صیادی و نسبت صادرکننده</th>
                                             <th className="px-3 py-3">مبلغ کل (ریال)</th>
-                                            <th className="px-3 py-3">سند / وضعیت سایان</th>
+                                            <th className="px-3 py-3">سند / وضعیت ثبت</th>
                                             <th className="px-3 py-3 text-center">عملیات و استعلام</th>
                                         </tr>
                                     </thead>
@@ -3940,6 +4411,9 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                             const cheques = r.cheques || [];
                                             const firstCheque = cheques[0];
                                             const selfRel = firstCheque ? resolveChequeSelfIssuer(r, firstCheque) : null;
+                                            const rMode = r.registrationTargetMode || 'sayan';
+                                            const dalkamDone = isRegisteredInDalkam(r);
+                                            const regNeedsFix = isNeedsSayanReregister(r);
                                             return (
                                                 <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 align-top">
                                                     <td className="px-3 py-3 font-mono font-bold text-blue-600 dark:text-blue-400">
@@ -3972,6 +4446,11 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                         {r.personCode && (
                                                             <div className="text-[10px] font-mono text-slate-400 mt-0.5">
                                                                 کد: {toPersianDigits(r.personCode)}
+                                                            </div>
+                                                        )}
+                                                        {(r.dalkamCompanyName || r.companyName) && (
+                                                            <div className="text-[10px] font-bold text-teal-700 dark:text-teal-300 mt-0.5">
+                                                                {r.dalkamCompanyName || r.companyName}
                                                             </div>
                                                         )}
                                                     </td>
@@ -4041,7 +4520,19 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                     </td>
                                                     <td className="px-3 py-3">
                                                         <div className="space-y-1">
-                                                            {(String(r.docNo) === '1' || String(r.archiveCode) === '1') ? (
+                                                            {r.status === 'CANCELLED' ? (
+                                                                <>
+                                                                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 dark:border-rose-800 inline-flex items-center gap-1">
+                                                                        <Ban className="w-3 h-3" />
+                                                                        <span>ابطال شده (بایگانی)</span>
+                                                                    </span>
+                                                                    {r.cancellationInfo?.reason && (
+                                                                        <div className="text-[10px] text-rose-700 dark:text-rose-300 max-w-[190px] truncate" title={r.cancellationInfo.reason}>
+                                                                            {r.cancellationInfo.reason}
+                                                                        </div>
+                                                                    )}
+                                                                </>
+                                                            ) : regNeedsFix ? (
                                                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 inline-flex items-center gap-1">
                                                                     <AlertCircle className="w-3 h-3 text-amber-600" />
                                                                     <span>سند ۱ (نیازمند ثبت مجدد)</span>
@@ -4050,6 +4541,10 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 inline-block">
                                                                     ثبت شده در سایان
                                                                 </span>
+                                                            ) : dalkamDone && rMode === 'dalkam' ? (
+                                                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 border border-teal-300 inline-block">
+                                                                    ثبت شده در دلکام
+                                                                </span>
                                                             ) : r.status === 'PROCESSING_SAYAN' || r.sayanSyncStatus === 'QUEUED' || r.sayanSyncStatus === 'PROCESSING' ? (
                                                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-300 inline-flex items-center gap-1 animate-pulse">
                                                                     <Loader2 className="w-3 h-3 animate-spin text-indigo-600" />
@@ -4057,7 +4552,13 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                                 </span>
                                                             ) : r.status === 'PENDING_CEO' ? (
                                                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300 inline-block">
-                                                                    {workflowConfig.requireCeoApproval ? 'منتظر مدیرعامل' : 'آماده ثبت سایان'}
+                                                                    {workflowConfig.requireCeoApproval
+                                                                        ? 'منتظر مدیرعامل'
+                                                                        : rMode === 'dalkam'
+                                                                            ? 'آماده ثبت دلکام'
+                                                                            : rMode === 'both'
+                                                                                ? 'آماده ثبت دلکام و سایان'
+                                                                                : 'آماده ثبت سایان'}
                                                                 </span>
                                                             ) : r.status === 'PENDING_ACCOUNTING' ? (
                                                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-300 inline-block">
@@ -4065,12 +4566,17 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                                 </span>
                                                             ) : (
                                                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 inline-block">
-                                                                    {r.status}
+                                                                    {r.status === 'REJECTED' ? 'عودت / رد شده' : r.status}
                                                                 </span>
                                                             )}
                                                             {r.archiveCode && String(r.archiveCode) !== '1' && (
                                                                 <div className="text-[10px] font-mono text-purple-600 font-bold">
-                                                                    سند: {toPersianDigits(r.docNo || '-')} ({toPersianDigits(r.archiveCode)})
+                                                                    سند سایان: {toPersianDigits(r.docNo || '-')} ({toPersianDigits(r.archiveCode)})
+                                                                </div>
+                                                            )}
+                                                            {dalkamDone && (
+                                                                <div className="text-[10px] font-mono text-teal-700 dark:text-teal-300 font-bold">
+                                                                    سند دلکام: #{toPersianDigits(r.dalkamVoucherNo || r.erpVoucherNo || '-')}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -4085,7 +4591,22 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                             >
                                                                 <Eye className="w-4 h-4" />
                                                             </button>
-                                                            {(String(r.docNo) === '1' || String(r.archiveCode) === '1' || r.status === 'PENDING_CEO') ? (
+                                                            {r.status !== 'CANCELLED' && r.status !== 'REGISTERED_IN_SAYAN' && r.status !== 'REGISTERED_IN_DALKAM' && r.status !== 'PROCESSING_SAYAN' && !dalkamDone && (isFinancialOrAdmin || isCeoOrAdmin || canEditReceipt || canDeleteReceipt || (r.createdBy?.id && r.createdBy.id === currentUser?.id)) ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setCancelModalReceipt({
+                                                                        receipt: r,
+                                                                        reason: (!r.cheques || r.cheques.length === 0) ? 'رسید خالی / رد شدن شماره رسید — ارسال به بایگانی' : ''
+                                                                    })}
+                                                                    disabled={actionLoading === r.id}
+                                                                    className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 font-bold text-[11px] border border-rose-200 dark:border-rose-800 flex items-center gap-1 shrink-0 cursor-pointer"
+                                                                    title="ابطال رسید بدون حذف شماره و نگهداری در بایگانی"
+                                                                >
+                                                                    <Ban className="w-3.5 h-3.5" />
+                                                                    <span>ابطال</span>
+                                                                </button>
+                                                            ) : null}
+                                                            {r.status !== 'CANCELLED' && rMode !== 'dalkam' && (regNeedsFix || r.status === 'PENDING_CEO') ? (
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => handleReRegisterInSayan(r.id)}
@@ -4095,6 +4616,18 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                                                 >
                                                                     {actionLoading === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
                                                                     <span>ثبت سایان</span>
+                                                                </button>
+                                                            ) : null}
+                                                            {r.status !== 'CANCELLED' && (rMode !== 'sayan' && !dalkamDone && (r.status === 'PENDING_CEO' || !!r.dalkamError)) ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => r.status === 'PENDING_CEO' ? handleApproveByCeo(r.id) : handleRegisterInDalkam(r.id)}
+                                                                    disabled={actionLoading === r.id}
+                                                                    className="px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-[11px] shadow-sm flex items-center gap-1 transition-all shrink-0 cursor-pointer"
+                                                                    title="ثبت سند و دریافت چک در حسابداری دلکام"
+                                                                >
+                                                                    {actionLoading === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                                                                    <span>ثبت دلکام</span>
                                                                 </button>
                                                             ) : null}
                                                             {r.archiveCode && String(r.archiveCode) !== '1' ? (
@@ -4142,6 +4675,7 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                     currentUser={currentUser}
                     isCeoOrAdmin={isCeoOrAdmin}
                     isFinancialOrAdmin={isFinancialOrAdmin}
+                    companies={companiesList}
                 />
             )}
 
@@ -4164,7 +4698,9 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                         setIsPrintModalOpen(true);
                     }}
                     onApproveByCeo={handleApproveByCeo}
+                    onRegisterInDalkam={handleRegisterInDalkam}
                     onReject={handleReject}
+                    onCancel={handleCancelReceipt}
                     onDelete={handleDeleteReceipt}
                     actionLoading={actionLoading}
                     isFinancialOrAdmin={isFinancialOrAdmin}
@@ -4204,8 +4740,12 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                 onClose={() => setIsWorkflowModalOpen(false)}
                 currentConfig={workflowConfig}
                 systemUsers={systemUsersList}
+                companies={companiesList}
                 onSaveSuccess={(updated) => {
                     setWorkflowConfig(updated);
+                    if (updated.defaultCompanyId) {
+                        setSelectedCompanyId(updated.defaultCompanyId);
+                    }
                     fetchReceipts(true);
                 }}
             />
@@ -4293,6 +4833,113 @@ export const SayanChequeReceiptsTab: React.FC<Props> = ({
                                     <>
                                         <Check className="w-3.5 h-3.5" />
                                         <span>ثبت و ذخیره تغییرات</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>,
+                document.body
+            )}
+            {/* Void / Cancel Receipt to Archive Modal */}
+            {cancelModalReceipt && typeof document !== 'undefined' && createPortal(
+                <div
+                    className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-xs animate-fade-in"
+                    dir="rtl"
+                    onClick={() => {
+                        if (actionLoading !== cancelModalReceipt.receipt.id) setCancelModalReceipt(null);
+                    }}
+                >
+                    <div
+                        className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 animate-scale-in"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3.5">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                                    <Ban className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                                        ابطال رسید #{toPersianDigits(cancelModalReceipt.receipt.receiptNo || cancelModalReceipt.receipt.id)} و ارسال به بایگانی
+                                    </h3>
+                                    <p className="text-[11px] text-slate-500">
+                                        شماره رسید در توالی سیستم محفوظ می‌ماند و از کارتابل خارج می‌گردد
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setCancelModalReceipt(null)}
+                                disabled={actionLoading === cancelModalReceipt.receipt.id}
+                                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+                            <div>
+                                <b>طرف حساب:</b> {cancelModalReceipt.receipt.personName || '-'} | <b>مبلغ:</b> {toPersianDigits(Number(cancelModalReceipt.receipt.totalAmount || 0).toLocaleString('fa-IR'))} ریال
+                            </div>
+                            <div className="text-[11px] text-amber-700 dark:text-amber-300">
+                                با ابطال این رسید، شماره #{toPersianDigits(cancelModalReceipt.receipt.receiptNo || cancelModalReceipt.receipt.id)} حذف نمی‌شود و به عنوان رسید «ابطال شده» در بایگانی باقی می‌ماند تا خلأ شماره‌گذاری ایجاد نشود.
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <span className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                                دلیل ابطال (اختیاری):
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                                {['رسید خالی / ثبت اشتباه', 'رد شدن شماره رسید و ابطال جهت بایگانی', 'تکراری / عدم تحویل چک'].map((preset) => (
+                                    <button
+                                        key={preset}
+                                        type="button"
+                                        onClick={() => setCancelModalReceipt(prev => prev ? { ...prev, reason: preset } : null)}
+                                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors cursor-pointer ${
+                                            cancelModalReceipt.reason === preset
+                                                ? 'bg-rose-600 text-white border-rose-600'
+                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-rose-50'
+                                        }`}
+                                    >
+                                        {preset}
+                                    </button>
+                                ))}
+                            </div>
+                            <input
+                                type="text"
+                                value={cancelModalReceipt.reason}
+                                onChange={(e) => setCancelModalReceipt(prev => prev ? { ...prev, reason: e.target.value } : null)}
+                                placeholder="توضیحات دلیل ابطال رسید..."
+                                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-2xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-rose-500 text-slate-900 dark:text-slate-100"
+                            />
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                            <button
+                                type="button"
+                                onClick={() => setCancelModalReceipt(null)}
+                                disabled={actionLoading === cancelModalReceipt.receipt.id}
+                                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                            >
+                                انصراف
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleCancelReceipt(cancelModalReceipt.receipt.id, cancelModalReceipt.reason)}
+                                disabled={actionLoading === cancelModalReceipt.receipt.id}
+                                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-rose-500/20 cursor-pointer disabled:opacity-50"
+                            >
+                                {actionLoading === cancelModalReceipt.receipt.id ? (
+                                    <>
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        <span>در حال ابطال...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Ban className="w-3.5 h-3.5" />
+                                        <span>تایید ابطال و انتقال به بایگانی</span>
                                     </>
                                 )}
                             </button>

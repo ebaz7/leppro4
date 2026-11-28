@@ -12,10 +12,13 @@ import {
     Lock, 
     UserCheck,
     Save,
-    RotateCcw
+    RotateCcw,
+    Building2
 } from 'lucide-react';
 import { getEffectiveApiUrl, getAuthToken } from '../services/apiService';
 const toPersianDigits = (n: number | string) => String(n ?? '').replace(/[0-9]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[parseInt(d, 10)]);
+
+export type ChequeRegistrationTargetMode = 'sayan' | 'dalkam' | 'both';
 
 export interface ChequeWorkflowConfig {
     requireCeoApproval: boolean;
@@ -23,6 +26,9 @@ export interface ChequeWorkflowConfig {
     allowAccountingFinalApproval: boolean;
     allowedFinalApproverUserIds: string[];
     allowedFinalApproverRoles: string[];
+    registrationTargetMode?: ChequeRegistrationTargetMode;
+    defaultCompanyId?: string;
+    defaultCompanyName?: string;
 }
 
 interface ChequeWorkflowSettingsModalProps {
@@ -30,6 +36,7 @@ interface ChequeWorkflowSettingsModalProps {
     onClose: () => void;
     currentConfig: ChequeWorkflowConfig;
     systemUsers: Array<{ id: string; name: string; username: string; role: string; roles?: string[] }>;
+    companies?: Array<{ id: string; name: string; isAccountingEnabled?: boolean }>;
     onSaveSuccess: (updated: ChequeWorkflowConfig) => void;
 }
 
@@ -38,15 +45,48 @@ export const ChequeWorkflowSettingsModal: React.FC<ChequeWorkflowSettingsModalPr
     onClose,
     currentConfig,
     systemUsers,
+    companies: propsCompanies,
     onSaveSuccess
 }) => {
+    const [companiesList, setCompaniesList] = useState<Array<{ id: string; name: string }>>(() => {
+        const filtered = (propsCompanies || []).filter(c => c.isAccountingEnabled !== false);
+        return filtered.length > 0 ? filtered : [{ id: 'comp_lepan', name: 'شرکت تولیدی لپان بافت' }];
+    });
+
     const [config, setConfig] = useState<ChequeWorkflowConfig>({
         requireCeoApproval: currentConfig?.requireCeoApproval ?? false,
         autoRegisterAfterAccounting: currentConfig?.autoRegisterAfterAccounting ?? true,
         allowAccountingFinalApproval: currentConfig?.allowAccountingFinalApproval ?? true,
         allowedFinalApproverUserIds: currentConfig?.allowedFinalApproverUserIds || [],
-        allowedFinalApproverRoles: currentConfig?.allowedFinalApproverRoles || ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT']
+        allowedFinalApproverRoles: currentConfig?.allowedFinalApproverRoles || ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT'],
+        registrationTargetMode: currentConfig?.registrationTargetMode || 'sayan',
+        defaultCompanyId: currentConfig?.defaultCompanyId || companiesList[0]?.id || '',
+        defaultCompanyName: currentConfig?.defaultCompanyName || companiesList[0]?.name || ''
     });
+
+    useEffect(() => {
+        if (propsCompanies && propsCompanies.length > 0) {
+            const filtered = propsCompanies.filter(c => c.isAccountingEnabled !== false);
+            if (filtered.length > 0) setCompaniesList(filtered);
+        }
+    }, [propsCompanies]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        if (!propsCompanies || propsCompanies.length === 0) {
+            const token = getAuthToken();
+            const headers: Record<string, string> = {};
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            fetch(getEffectiveApiUrl('/api/industrial-erp/companies'), { headers })
+                .then(r => r.ok ? r.json() : null)
+                .then(list => {
+                    if (Array.isArray(list) && list.length > 0) {
+                        setCompaniesList(list.map((c: any) => ({ id: c.id, name: c.name })));
+                    }
+                })
+                .catch(() => {});
+        }
+    }, [isOpen, propsCompanies]);
 
     useEffect(() => {
         if (currentConfig) {
@@ -55,7 +95,10 @@ export const ChequeWorkflowSettingsModal: React.FC<ChequeWorkflowSettingsModalPr
                 autoRegisterAfterAccounting: currentConfig.autoRegisterAfterAccounting ?? true,
                 allowAccountingFinalApproval: currentConfig.allowAccountingFinalApproval ?? true,
                 allowedFinalApproverUserIds: currentConfig.allowedFinalApproverUserIds || [],
-                allowedFinalApproverRoles: currentConfig.allowedFinalApproverRoles || ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT']
+                allowedFinalApproverRoles: currentConfig.allowedFinalApproverRoles || ['ADMIN', 'CEO', 'FINANCIAL', 'ACCOUNTANT'],
+                registrationTargetMode: currentConfig.registrationTargetMode || 'sayan',
+                defaultCompanyId: currentConfig.defaultCompanyId || companiesList[0]?.id || '',
+                defaultCompanyName: currentConfig.defaultCompanyName || companiesList[0]?.name || ''
             });
         }
     }, [currentConfig, isOpen]);
@@ -179,11 +222,97 @@ export const ChequeWorkflowSettingsModal: React.FC<ChequeWorkflowSettingsModalPr
                         </div>
                     )}
 
+                    {/* Section 0: Accounting Registration Target Mode & Default Company */}
+                    <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3.5">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <label className="font-black text-slate-900 dark:text-slate-100 text-xs flex items-center gap-2">
+                                <Building2 className="w-4 h-4 text-indigo-600" />
+                                <span>محل ثبت رسید دریافت چک و شرکت پیش‌فرض حسابداری:</span>
+                            </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            {[
+                                {
+                                    id: 'sayan' as const,
+                                    title: '۱. ثبت در سایان (پیش‌فرض)',
+                                    desc: 'فقط در پایگاه‌داده سایان ERP (روال همیشگی)'
+                                },
+                                {
+                                    id: 'dalkam' as const,
+                                    title: '۲. ثبت در دلکام',
+                                    desc: 'فقط در حسابداری دلکام (شرکت منتخب)'
+                                },
+                                {
+                                    id: 'both' as const,
+                                    title: '۳. ثبت در دلکام و سایان',
+                                    desc: 'ثبت همزمان در حسابداری دلکام و سایان'
+                                }
+                            ].map(opt => {
+                                const active = (config.registrationTargetMode || 'sayan') === opt.id;
+                                return (
+                                    <button
+                                        key={opt.id}
+                                        type="button"
+                                        onClick={() => setConfig(prev => ({ ...prev, registrationTargetMode: opt.id }))}
+                                        className={`text-right p-3 rounded-xl border-2 cursor-pointer transition-all space-y-1 ${
+                                            active
+                                                ? opt.id === 'dalkam'
+                                                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-950 dark:text-emerald-200 shadow-xs'
+                                                    : opt.id === 'both'
+                                                        ? 'bg-purple-50 dark:bg-purple-950/40 border-purple-500 text-purple-950 dark:text-purple-200 shadow-xs'
+                                                        : 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-950 dark:text-indigo-200 shadow-xs'
+                                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300'
+                                        }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-1.5">
+                                            <span className="font-black text-xs">{opt.title}</span>
+                                            <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                                                active ? 'border-current bg-current' : 'border-slate-300'
+                                            }`}>
+                                                {active && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                                            </span>
+                                        </div>
+                                        <p className="text-[10.5px] opacity-80 leading-relaxed font-normal">{opt.desc}</p>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="pt-2 border-t border-indigo-200/60 dark:border-indigo-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                            <div>
+                                <div className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                                    شرکت پیش‌فرض هنگام ثبت رسید دریافت چک:
+                                </div>
+                                <div className="text-[10.5px] text-slate-500 dark:text-slate-400">
+                                    برای ثبت سند خزانه و حسابداری در سیستم دلکام استفاده می‌شود.
+                                </div>
+                            </div>
+                            <select
+                                value={config.defaultCompanyId || companiesList[0]?.id || ''}
+                                onChange={(e) => {
+                                    const nextId = e.target.value;
+                                    const found = companiesList.find(c => c.id === nextId);
+                                    setConfig(prev => ({
+                                        ...prev,
+                                        defaultCompanyId: nextId,
+                                        defaultCompanyName: found?.name || ''
+                                    }));
+                                }}
+                                className="sm:min-w-[230px] bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
+                            >
+                                {companiesList.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
                     {/* Section 1: Workflow Strategy Mode */}
                     <div className="space-y-3">
                         <label className="font-black text-slate-800 dark:text-slate-200 text-xs flex items-center gap-2">
                             <Layers className="w-4 h-4 text-indigo-500" />
-                            <span>مراحل تایید رسید و روال ثبت در سایان:</span>
+                            <span>مراحل تایید رسید و روال ثبت:</span>
                         </label>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -362,7 +491,10 @@ export const ChequeWorkflowSettingsModal: React.FC<ChequeWorkflowSettingsModalPr
                                 autoRegisterAfterAccounting: false,
                                 allowAccountingFinalApproval: false,
                                 allowedFinalApproverUserIds: [],
-                                allowedFinalApproverRoles: []
+                                allowedFinalApproverRoles: [],
+                                registrationTargetMode: 'sayan',
+                                defaultCompanyId: companiesList[0]?.id || '',
+                                defaultCompanyName: companiesList[0]?.name || ''
                             });
                         }}
                         className="px-3 py-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-bold flex items-center gap-1.5"

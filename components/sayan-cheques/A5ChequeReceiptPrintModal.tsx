@@ -37,6 +37,12 @@ export interface A5ChequeData {
     source?: string;
     personCode?: string;
     personName?: string;
+    companyId?: string;
+    companyName?: string;
+    registrationTargetMode?: 'sayan' | 'dalkam' | 'both' | string;
+    dalkamRegistered?: boolean;
+    dalkamCompanyName?: string;
+    dalkamVoucherNo?: number | string;
     cashboxCode?: string;
     cashboxTitle?: string;
     fiscalYear?: string;
@@ -57,6 +63,13 @@ export interface A5ChequeData {
         byName?: string;
         date?: string;
     };
+    cancellationInfo?: {
+        id?: string;
+        name?: string;
+        role?: string;
+        reason?: string;
+        cancelledAt?: string;
+    } | null;
     cheques: Array<{
         chequeNumber: string;
         sayadId?: string;
@@ -181,6 +194,18 @@ const getSayanStatusInfo = (receipt: A5ChequeData) => {
     const archiveCode = receipt.archiveCode || receipt.sayanArchiveCode;
     const isSanadOne = String(docNo || '') === '1' || String(archiveCode || '') === '1';
 
+    if (receipt.status === 'CANCELLED') {
+        return {
+            isRegistered: false,
+            label: 'ابطال شده (بایگانی)',
+            shortLabel: 'ابطال شده',
+            subDetail: receipt.cancellationInfo?.reason || 'حفظ شماره رسید در توالی',
+            bg: '#fff1f2',
+            border: '#be123c',
+            text: '#9f1239',
+        };
+    }
+
     if (isSanadOne) {
         return {
             isRegistered: false,
@@ -279,7 +304,7 @@ function buildA5ChequePrintHtml(
 
     // PAGE 1: A5 Landscape Receipt
     if (includeReceipt) {
-        const rowsHtml = receipt.cheques.map((ch, idx) => {
+        const rowsHtml = receipt.cheques && receipt.cheques.length > 0 ? receipt.cheques.map((ch, idx) => {
             const sayadiInfo = getSayadiRegistrationInfo(ch);
             const issuerRel = getIssuerRelationLabel(ch, receipt.personName);
             const bankParts = [ch.bankName || '-', ch.branch ? `شعبه ${ch.branch}` : ''].filter(Boolean).join(' / ');
@@ -319,7 +344,13 @@ function buildA5ChequePrintHtml(
                 </td>
             </tr>
         `;
-        }).join('');
+        }).join('') : `
+            <tr style="border-bottom: 1px solid #64748b; background-color: #ffffff; color: #64748b;">
+                <td colspan="8" style="padding: 10px; text-align: center; font-size: 11px; font-weight: bold;">
+                    ${receipt.status === 'CANCELLED' ? `رسید ابطال شده بدون ردیف چک${receipt.cancellationInfo?.reason ? ` — ${escapeHtml(receipt.cancellationInfo.reason)}` : ''}` : 'بدون ردیف چک'}
+                </td>
+            </tr>
+        `;
 
         pagesHtml += `
         <div class="print-page a5-landscape">
@@ -328,7 +359,7 @@ function buildA5ChequePrintHtml(
                 <table style="width: 100%; border-collapse: collapse; border: none;">
                     <tr>
                         <td style="width: 33%; text-align: right; vertical-align: top; border: none; padding: 0;">
-                            <div style="font-size: 15px; font-weight: 900; color: #000000; line-height: 1.2;">شرکت لپان بافت</div>
+                            <div style="font-size: 15px; font-weight: 900; color: #000000; line-height: 1.2;">${escapeHtml(receipt.dalkamCompanyName || receipt.companyName || 'شرکت لپان بافت')}</div>
                             <div style="font-size: 10.5px; font-weight: bold; color: #334155; margin-top: 1px;">سیستم مدیریت مالی و خزانه‌داری</div>
                             <div style="font-size: 9.5px; color: #475569;">واحد اعتبارات و دریافت اسناد تجاری</div>
                         </td>
@@ -337,8 +368,14 @@ function buildA5ChequePrintHtml(
                                 <div style="font-size: 13.5px; font-weight: 900; color: #000000;">رسید دریافت چک</div>
                             </div>
                             <div style="margin-top: 3px;">
-                                <span style="display: inline-block; padding: 1.5px 8px; border: 1.5px solid ${sayanStatus.border}; border-radius: 6px; background: ${sayanStatus.bg}; color: ${sayanStatus.text}; font-size: 9.5px; font-weight: 900;">
-                                    وضعیت سایان: ${escapeHtml(sayanStatus.label)}
+                                <span style="display: inline-block; padding: 1.5px 8px; border: 1.5px solid ${receipt.status === 'REGISTERED_IN_DALKAM' ? '#0d9488' : sayanStatus.border}; border-radius: 6px; background: ${receipt.status === 'REGISTERED_IN_DALKAM' ? '#f0fdfa' : sayanStatus.bg}; color: ${receipt.status === 'REGISTERED_IN_DALKAM' ? '#115e59' : sayanStatus.text}; font-size: 9.5px; font-weight: 900;">
+                                    ${receipt.status === 'CANCELLED'
+                                        ? `وضعیت رسید: ${escapeHtml(sayanStatus.label)}`
+                                        : receipt.status === 'REGISTERED_IN_DALKAM'
+                                            ? `ثبت در دلکام (سند #${escapeHtml(toPersianDigits(receipt.dalkamVoucherNo || '-'))})`
+                                            : receipt.dalkamRegistered
+                                                ? `${escapeHtml(sayanStatus.label)} • دلکام (#${escapeHtml(toPersianDigits(receipt.dalkamVoucherNo || '-'))})`
+                                                : `وضعیت سایان: ${escapeHtml(sayanStatus.label)}`}
                                 </span>
                             </div>
                         </td>
@@ -456,7 +493,7 @@ function buildA5ChequePrintHtml(
                     <table style="width: 100%; border-collapse: collapse; border: none;">
                         <tr>
                             <td style="width: 35%; text-align: right; vertical-align: top; border: none; padding: 0;">
-                                <div style="font-size: 14px; font-weight: 900; color: #000000;">شرکت لپان بافت</div>
+                                <div style="font-size: 14px; font-weight: 900; color: #000000;">${escapeHtml(receipt.dalkamCompanyName || receipt.companyName || 'شرکت لپان بافت')}</div>
                                 <div style="font-size: 10.5px; font-weight: bold; color: #334155; margin-top: 1px;">
                                     پیوست سند دریافت چک • برگه ${toPersianDigits(idx + 1)} از ${toPersianDigits(attachments.length)}
                                 </div>
@@ -1019,7 +1056,7 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                                                 color: sayanStatusInfo.text,
                                             }}
                                         >
-                                            وضعیت سایان: {sayanStatusInfo.label}
+                                            {receipt.status === 'CANCELLED' ? 'وضعیت رسید: ابطال شده (بایگانی)' : `وضعیت سایان: ${sayanStatusInfo.label}`}
                                         </div>
                                     </div>
 
@@ -1101,7 +1138,15 @@ export const A5ChequeReceiptPrintModal: React.FC<Props> = ({
                                         </tr>
                                     </thead>
                                     <tbody style={{ backgroundColor: '#ffffff', color: '#0f172a' }}>
-                                        {receipt.cheques.map((ch, idx) => {
+                                        {(!receipt.cheques || receipt.cheques.length === 0) ? (
+                                            <tr style={{ backgroundColor: '#ffffff', color: '#64748b' }}>
+                                                <td colSpan={8} className="py-4 px-3 text-center text-xs font-bold">
+                                                    {receipt.status === 'CANCELLED'
+                                                        ? `رسید ابطال شده بدون ردیف چک${receipt.cancellationInfo?.reason ? ` — ${receipt.cancellationInfo.reason}` : ''}`
+                                                        : 'بدون ردیف چک'}
+                                                </td>
+                                            </tr>
+                                        ) : receipt.cheques.map((ch, idx) => {
                                             const sayadiInfo = getSayadiRegistrationInfo(ch);
                                             const issuerRel = getIssuerRelationLabel(ch, receipt.personName);
                                             const bankParts = [ch.bankName || '-', ch.branch ? `شعبه ${ch.branch}` : ''].filter(Boolean).join(' / ');

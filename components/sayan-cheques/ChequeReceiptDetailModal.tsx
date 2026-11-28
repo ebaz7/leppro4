@@ -4,7 +4,7 @@ import {
     Zap, FileText, X, CheckCircle2, AlertCircle, Clock, ShieldCheck,
     CreditCard, Building2, User, Hash, Layers, Eye, Download, Printer,
     ArrowRight, Check, Sparkles, CornerUpLeft, Edit3, Trash2, MessageSquare, Send,
-    Upload, Plus, Loader2
+    Upload, Plus, Loader2, Ban
 } from 'lucide-react';
 import * as jalaali from 'jalaali-js';
 import { UserRole } from '../../types';
@@ -22,7 +22,9 @@ interface Props {
     onOpenRealSayanDoc: (archiveCode: string | number, docNo?: string | number) => void;
     onOpenAccountingReview: (receipt: any) => void;
     onApproveByCeo: (receiptId: string) => void;
+    onRegisterInDalkam?: (receiptId: string) => void;
     onReject: (receiptId: string) => void;
+    onCancel?: (receiptId: string, reason?: string) => void | Promise<void>;
     onDelete?: (receiptId: string) => void;
     onPrintA5?: (receipt: any) => void;
     onUpdateReceipt?: (updatedReceipt: any) => void;
@@ -59,7 +61,9 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
     onOpenRealSayanDoc,
     onOpenAccountingReview,
     onApproveByCeo,
+    onRegisterInDalkam,
     onReject,
+    onCancel,
     onDelete,
     onPrintA5,
     onUpdateReceipt,
@@ -75,11 +79,15 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
     const [isEditingReceiptNo, setIsEditingReceiptNo] = useState(false);
     const [tempReceiptNo, setTempReceiptNo] = useState(String(initialReceipt?.receiptNo || initialReceipt?.id || ''));
     const [savingReceiptNo, setSavingReceiptNo] = useState(false);
+    const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    const [cancelReason, setCancelReason] = useState('');
 
     // Keep internal receipt synced if prop updates
     React.useEffect(() => {
         setReceipt(initialReceipt);
         setTempReceiptNo(String(initialReceipt?.receiptNo || initialReceipt?.id || ''));
+        setShowCancelConfirm(false);
+        setCancelReason('');
     }, [initialReceipt]);
 
     const apiFetch = async (urlPath: string, options: RequestInit = {}) => {
@@ -210,7 +218,7 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
 🔢 پشت‌نمره: ${receipt.poshtNomreh || '-'}
 📅 تاریخ سند: ${toShamsiDateStr(receipt.docDate)}
 📑 تعداد چک‌ها: ${receipt.cheques?.length || 0} برگ
-📊 وضعیت: ${receipt.status === 'REGISTERED_IN_SAYAN' ? 'ثبت شده در سایان' : receipt.status === 'PENDING_CEO' ? 'در انتظار تایید مدیرعامل' : receipt.status === 'PENDING_ACCOUNTING' ? 'در انتظار تایید حسابداری' : receipt.status}`;
+📊 وضعیت: ${receipt.status === 'CANCELLED' ? 'ابطال شده (بایگانی)' : receipt.status === 'REGISTERED_IN_DALKAM' ? 'ثبت شده در دلکام' : receipt.status === 'REGISTERED_IN_SAYAN' ? 'ثبت شده در سایان' : receipt.status === 'PENDING_CEO' ? 'در انتظار تایید مدیرعامل' : receipt.status === 'PENDING_ACCOUNTING' ? 'در انتظار تایید حسابداری' : receipt.status}`;
 
         if (detailContentRef.current) {
             await shareElementToChat(
@@ -231,6 +239,20 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
 
     const statusBadge = () => {
         switch (receipt.status) {
+            case 'CANCELLED':
+                return (
+                    <span className="px-3 py-1 rounded-full text-xs font-black bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 dark:border-rose-800 flex items-center gap-1.5">
+                        <Ban className="w-3.5 h-3.5" />
+                        <span>ابطال شده (بایگانی)</span>
+                    </span>
+                );
+            case 'REGISTERED_IN_DALKAM':
+                return (
+                    <span className="px-3 py-1 rounded-full text-xs font-black bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 border border-teal-300 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>ثبت شده در دلکام</span>
+                    </span>
+                );
             case 'REGISTERED_IN_SAYAN':
                 return (
                     <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300 flex items-center gap-1.5">
@@ -391,7 +413,7 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                 {/* Body Details */}
                 <div ref={detailContentRef} className="flex-1 min-h-0 overflow-y-auto overscroll-y-auto touch-pan-y p-3.5 sm:p-5 space-y-4 sm:space-y-5 bg-white dark:bg-slate-900 -webkit-overflow-scrolling-touch">
                     {/* Top Info Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 text-xs">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 text-xs">
                         <div>
                             <span className="text-slate-400 block mb-1">طرف حساب (شخص):</span>
                             <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">
@@ -402,6 +424,20 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                     کد: {toPersianDigits(receipt.personCode)}
                                 </div>
                             )}
+                        </div>
+
+                        <div>
+                            <span className="text-slate-400 block mb-1">شرکت و مسیر ثبت:</span>
+                            <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                                {receipt.dalkamCompanyName || receipt.companyName || 'شرکت تولیدی لپان بافت'}
+                            </span>
+                            <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                {receipt.registrationTargetMode === 'dalkam'
+                                    ? 'ثبت در دلکام'
+                                    : receipt.registrationTargetMode === 'both'
+                                        ? 'ثبت در دلکام و سایان'
+                                        : 'ثبت در سایان'}
+                            </span>
                         </div>
 
                         <div>
@@ -437,6 +473,49 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                             </span>
                         </div>
                     </div>
+
+                    {/* Dalkam Accounting Registration Status Banner */}
+                    {receipt.dalkamRegistered && (
+                        <div className="p-4 rounded-2xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-xl bg-teal-600 text-white flex items-center justify-center font-black">
+                                    ✓
+                                </div>
+                                <div>
+                                    <div className="font-black text-teal-900 dark:text-teal-200 text-sm">
+                                        سند خزانه‌داری و حسابداری با موفقیت در سیستم دلکام ثبت گردیده است
+                                    </div>
+                                    <div className="text-slate-600 dark:text-slate-300 font-mono mt-0.5 flex flex-wrap gap-4">
+                                        <span>شرکت: <b>{receipt.dalkamCompanyName || receipt.companyName || '-'}</b></span>
+                                        <span>شماره سند حسابداری دلکام: <b>#{toPersianDigits(receipt.dalkamVoucherNo || receipt.erpVoucherNo || '-')}</b></span>
+                                        {Array.isArray(receipt.dalkamTreasuryDocNos) && receipt.dalkamTreasuryDocNos.length > 0 && (
+                                            <span>اسناد خزانه: <b>{receipt.dalkamTreasuryDocNos.join('، ')}</b></span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {receipt.dalkamError && !receipt.dalkamRegistered && (
+                        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                            <div>
+                                <div className="font-black text-rose-800 dark:text-rose-200">خطا در ثبت حسابداری دلکام ({receipt.companyName || 'شرکت منتخب'})</div>
+                                <div className="text-rose-700 dark:text-rose-300 mt-0.5">{receipt.dalkamError}</div>
+                            </div>
+                            {onRegisterInDalkam && (
+                                <button
+                                    type="button"
+                                    onClick={() => onRegisterInDalkam(receipt.id)}
+                                    disabled={actionLoading === receipt.id}
+                                    className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 cursor-pointer"
+                                >
+                                    <Zap className="w-4 h-4" />
+                                    <span>ثبت مجدد در دلکام</span>
+                                </button>
+                            )}
+                        </div>
+                    )}
 
                     {/* Sayan Registered Info Banner (If Registered) */}
                     {(String(receipt.docNo) === '1' || String(receipt.archiveCode) === '1') ? (
@@ -492,6 +571,29 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                             </button>
                         </div>
                     ) : null}
+
+                    {/* Cancellation / Void Banner */}
+                    {receipt.status === 'CANCELLED' && (
+                        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 flex items-start gap-3 text-xs">
+                            <div className="w-8 h-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                                <Ban className="w-4 h-4" />
+                            </div>
+                            <div className="space-y-1 min-w-0">
+                                <div className="font-black text-rose-900 dark:text-rose-200 text-sm">
+                                    این رسید ابطال شده و در بایگانی نگهداری می‌شود (شماره رسید در توالی سیستم محفوظ است)
+                                </div>
+                                {receipt.cancellationInfo?.reason && (
+                                    <div className="text-rose-800 dark:text-rose-300 font-medium leading-relaxed">
+                                        دلیل ابطال: <b>{receipt.cancellationInfo.reason}</b>
+                                    </div>
+                                )}
+                                <div className="text-[11px] text-rose-700/80 dark:text-rose-400/80 font-mono flex flex-wrap gap-3">
+                                    {receipt.cancellationInfo?.name && <span>ابطال‌کننده: {receipt.cancellationInfo.name}</span>}
+                                    {receipt.cancellationInfo?.cancelledAt && <span>تاریخ ابطال: {toShamsiDateStr(receipt.cancellationInfo.cancelledAt)}</span>}
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Description */}
                     {receipt.description && (
@@ -787,7 +889,67 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                 </div>
 
                 {/* Footer Actions (Always Pinned at Bottom with Safe Area) */}
-                <div className="shrink-0 p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-10 shadow-lg pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                <div className="shrink-0 p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-10 shadow-lg pb-[max(0.75rem,env(safe-area-inset-bottom))] space-y-2.5">
+                    {showCancelConfirm && onCancel && (
+                        <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 space-y-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-black text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+                                    <Ban className="w-4 h-4 text-rose-600" />
+                                    <span>ابطال رسید #{toPersianDigits(receipt.receiptNo || receipt.id)} و انتقال به بایگانی</span>
+                                </span>
+                                <span className="text-[10px] text-rose-700 dark:text-rose-300">
+                                    شماره رسید حفظ می‌شود و از کارتابل خارج می‌گردد
+                                </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                {['رسید خالی / ثبت اشتباه', 'رد شدن شماره رسید و ابطال جهت بایگانی', 'تکراری / عدم تحویل چک'].map((preset) => (
+                                    <button
+                                        key={preset}
+                                        type="button"
+                                        onClick={() => setCancelReason(preset)}
+                                        className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                            cancelReason === preset
+                                                ? 'bg-rose-600 text-white border-rose-600'
+                                                : 'bg-white dark:bg-slate-800 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-700 hover:bg-rose-100'
+                                        }`}
+                                    >
+                                        {preset}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                <input
+                                    type="text"
+                                    value={cancelReason}
+                                    onChange={(e) => setCancelReason(e.target.value)}
+                                    placeholder="دلیل ابطال (اختیاری - مثلا: رسید خالی ثبت شده و شماره رد شده است)"
+                                    className="flex-1 bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-rose-500 text-slate-800 dark:text-slate-100"
+                                />
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCancelConfirm(false)}
+                                        className="px-3 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs cursor-pointer"
+                                    >
+                                        انصراف
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={actionLoading === receipt.id}
+                                        onClick={async () => {
+                                            await onCancel(receipt.id, cancelReason);
+                                            setShowCancelConfirm(false);
+                                        }}
+                                        className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                                    >
+                                        <Ban className="w-3.5 h-3.5" />
+                                        <span>{actionLoading === receipt.id ? 'در حال ابطال...' : 'تایید ابطال و بایگانی'}</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="flex flex-col sm:flex-row-reverse sm:items-center sm:justify-between gap-2.5 sm:gap-3">
                         {/* Step Actions (Primary on mobile, prominent at top) */}
                         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
@@ -819,7 +981,7 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                             )}
 
                             {/* Edit button for authorized users on pending/failed receipts (e.g. PENDING_CEO or REJECTED) */}
-                            {receipt.status !== 'REGISTERED_IN_SAYAN' && receipt.status !== 'PENDING_ACCOUNTING' && (canEditReceipt || isFinancialOrAdmin) && (
+                            {receipt.status !== 'REGISTERED_IN_SAYAN' && receipt.status !== 'REGISTERED_IN_DALKAM' && receipt.status !== 'PENDING_ACCOUNTING' && receipt.status !== 'CANCELLED' && (canEditReceipt || isFinancialOrAdmin) && (
                                 <button
                                     type="button"
                                     onClick={() => onOpenAccountingReview(receipt)}
@@ -831,7 +993,7 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                 </button>
                             )}
 
-                            {/* Step 2: CEO Approves and registers in Sayan DB */}
+                            {/* Step 2: CEO Approves and registers according to target mode */}
                             {receipt.status === 'PENDING_CEO' && isCeoOrAdmin && (
                                 <>
                                     <button
@@ -841,7 +1003,15 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                         className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 cursor-pointer active:scale-95"
                                     >
                                         <ShieldCheck className="w-4 h-4" />
-                                        <span>{actionLoading === receipt.id ? 'در حال ثبت در پایگاه سایان...' : 'تایید نهایی مدیرعامل و ثبت در ERP سایان'}</span>
+                                        <span>
+                                            {actionLoading === receipt.id
+                                                ? 'در حال ثبت...'
+                                                : receipt.registrationTargetMode === 'dalkam'
+                                                    ? 'تایید نهایی و ثبت در حسابداری دلکام'
+                                                    : receipt.registrationTargetMode === 'both'
+                                                        ? 'تایید نهایی و ثبت در دلکام و سایان'
+                                                        : 'تایید نهایی مدیرعامل و ثبت در ERP سایان'}
+                                        </span>
                                     </button>
                                     <button
                                         type="button"
@@ -877,7 +1047,7 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                 </button>
                             )}
 
-                            {receipt.archiveCode && (
+                            {receipt.archiveCode && String(receipt.archiveCode) !== '1' && (
                                 <button
                                     type="button"
                                     onClick={() => onOpenRealSayanDoc(receipt.archiveCode, receipt.docNo)}
@@ -897,7 +1067,25 @@ export const ChequeReceiptDetailModal: React.FC<Props> = ({
                                 <span>ارسال به گفتگو</span>
                             </button>
 
-                            {receipt.status !== 'REGISTERED_IN_SAYAN' && canDeleteReceipt && onDelete && (
+                            {onCancel &&
+                                receipt.status !== 'REGISTERED_IN_SAYAN' &&
+                                receipt.status !== 'REGISTERED_IN_DALKAM' &&
+                                receipt.status !== 'CANCELLED' &&
+                                receipt.status !== 'PROCESSING_SAYAN' &&
+                                (isFinancialOrAdmin || isCeoOrAdmin || canEditReceipt || canDeleteReceipt || (receipt.createdBy?.id && receipt.createdBy.id === currentUser?.id)) && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCancelConfirm(v => !v)}
+                                        disabled={actionLoading === receipt.id}
+                                        className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-bold text-xs border border-amber-300 dark:border-amber-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+                                        title="ابطال رسید بدون حذف شماره و ارسال به بایگانی"
+                                    >
+                                        <Ban className="w-3.5 h-3.5" />
+                                        <span>ابطال و ارسال به بایگانی</span>
+                                    </button>
+                                )}
+
+                            {receipt.status !== 'REGISTERED_IN_SAYAN' && receipt.status !== 'REGISTERED_IN_DALKAM' && receipt.status !== 'CANCELLED' && canDeleteReceipt && onDelete && (
                                 <button
                                     type="button"
                                     onClick={() => onDelete(receipt.id)}

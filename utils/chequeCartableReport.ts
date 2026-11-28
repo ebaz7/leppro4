@@ -35,12 +35,25 @@ export interface CartableReportReceipt {
     docDateShamsi?: string;
     personCode?: string;
     personName?: string;
+    companyId?: string;
+    companyName?: string;
+    registrationTargetMode?: string;
+    dalkamRegistered?: boolean;
+    dalkamCompanyName?: string;
+    dalkamVoucherNo?: string | number;
     cashboxCode?: string;
     cashboxTitle?: string;
     totalAmount?: number;
     description?: string;
     createdAt?: string;
     createdByName?: string;
+    cancellationInfo?: {
+        id?: string;
+        name?: string;
+        role?: string;
+        reason?: string;
+        cancelledAt?: string;
+    } | null;
     cheques?: CartableReportChequeItem[];
 }
 
@@ -141,6 +154,16 @@ const resolveSayanStatusMeta = (r: CartableReportReceipt, requireCeoApproval = t
     const effectiveDocNo = r.docNo || r.sayanDocNo;
     const effectiveArchive = r.archiveCode || r.sayanArchiveCode;
 
+    if (r.status === 'CANCELLED') {
+        return {
+            isRegistered: false,
+            label: 'ابطال شده (بایگانی)',
+            subLabel: r.cancellationInfo?.reason || 'حفظ شماره رسید در توالی',
+            bg: '#fff1f2',
+            border: '#be123c',
+            text: '#881337',
+        };
+    }
     if (isDocOne) {
         return {
             isRegistered: false,
@@ -151,13 +174,24 @@ const resolveSayanStatusMeta = (r: CartableReportReceipt, requireCeoApproval = t
             text: '#92400e',
         };
     }
+    if (r.status === 'REGISTERED_IN_DALKAM') {
+        return {
+            isRegistered: true,
+            label: 'ثبت شده در دلکام',
+            subLabel: `سند دلکام #${toPersianDigits(r.dalkamVoucherNo || '-')}${r.dalkamCompanyName || r.companyName ? ` • ${r.dalkamCompanyName || r.companyName}` : ''}`,
+            bg: '#f0fdfa',
+            border: '#0d9488',
+            text: '#115e59',
+        };
+    }
     if (isRegistered) {
         const subParts: string[] = [];
         if (effectiveDocNo) subParts.push(`سند ${toPersianDigits(effectiveDocNo)}`);
         if (effectiveArchive) subParts.push(`بایگانی ${toPersianDigits(effectiveArchive)}`);
+        if (r.dalkamRegistered && r.dalkamVoucherNo) subParts.push(`دلکام #${toPersianDigits(r.dalkamVoucherNo)}`);
         return {
             isRegistered: true,
-            label: 'ثبت شده در سایان',
+            label: r.dalkamRegistered ? 'ثبت در سایان و دلکام' : 'ثبت شده در سایان',
             subLabel: subParts.join(' | ') || 'ثبت نهایی ERP',
             bg: '#ecfdf5',
             border: '#047857',
@@ -407,7 +441,7 @@ export const buildChequeCartableReportHtml = (
                                         ${
                                             isFirstInReceipt
                                                 ? `<div style="font-weight: 800; color: #0f172a;">${escapeHtml(r.personName || '-')}</div>
-                                                   <div style="font-size: 8px; color: #475569;">${r.personCode ? `کد: ${escapeHtml(toPersianDigits(r.personCode))} • ` : ''}${escapeHtml(cashboxTitle)}</div>`
+                                                   <div style="font-size: 8px; color: #475569;">${r.personCode ? `کد: ${escapeHtml(toPersianDigits(r.personCode))} • ` : ''}${escapeHtml(cashboxTitle)}${r.companyName ? ` • ${escapeHtml(r.companyName)}` : ''}</div>`
                                                 : `<span style="font-size: 8px; color: #94a3b8;">— « —</span>`
                                         }
                                     </td>
