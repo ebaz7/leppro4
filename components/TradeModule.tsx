@@ -3215,6 +3215,7 @@ const TradeModule: React.FC<TradeModuleProps> = ({ currentUser }) => {
                         totalCurrency={totalProformaCurrency} 
                         exchangeRate={effectiveRate}
                         grandTotalRial={grandTotalRialProject}
+                        settings={settings}
                         onClose={() => setShowFinalReportPrint(false)} 
                     />
                 )}

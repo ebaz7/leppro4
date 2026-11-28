@@ -15689,29 +15689,61 @@ app.post('/api/restart-bot', async (req, res) => {
 });
 
 app.post('/api/send-bot-message', async (req, res) => {
-    const { platform, chatId, caption, mediaData } = req.body;
+    const { platform, chatId, caption, mediaData } = req.body || {};
     try {
+        if (!platform || !chatId) {
+            return res.status(400).json({ success: false, error: 'پلتفرم و شناسه مقصد الزامی است.' });
+        }
+
+        const safeCaption = caption || '';
+        const hasMedia = Boolean(mediaData && mediaData.data);
+        const filename = String(mediaData?.filename || '');
+        const mimeType = String(mediaData?.mimeType || '');
+        const isDocument = hasMedia && (
+            mimeType === 'application/pdf' ||
+            /\.(pdf|zip|gz|json|xlsx|csv|doc|docx)$/i.test(filename)
+        );
+
         if (platform === 'telegram') {
             const tg = await safeImport('./backend/telegram.js');
-            if (tg && tg.sendBotPhoto && mediaData) {
+            if (!tg) throw new Error('ماژول تلگرام در دسترس نیست.');
+            if (hasMedia) {
                 const buffer = Buffer.from(mediaData.data, 'base64');
-                await tg.sendBotPhoto(chatId, buffer, caption, { filename: mediaData.filename || 'image.png' });
-            } else if (tg && tg.sendBotMessage) {
-                await tg.sendBotMessage(chatId, caption);
+                if (isDocument && tg.sendBotDocument) {
+                    await tg.sendBotDocument(chatId, buffer, filename || 'document.pdf', safeCaption);
+                } else if (tg.sendBotPhoto) {
+                    await tg.sendBotPhoto(chatId, buffer, safeCaption, {
+                        filename: filename || 'image.png',
+                        contentType: mimeType || 'image/png'
+                    });
+                }
+            } else if (tg.sendBotMessage) {
+                await tg.sendBotMessage(chatId, safeCaption);
             }
         } else if (platform === 'bale') {
             const bale = await safeImport('./backend/bale.js');
-            if (bale && bale.sendBotPhoto && mediaData) {
+            if (!bale) throw new Error('ماژول بله در دسترس نیست.');
+            if (hasMedia) {
                 const buffer = Buffer.from(mediaData.data, 'base64');
-                await bale.sendBotPhoto(chatId, buffer, caption, { filename: mediaData.filename || 'image.png' });
-            } else if (bale && bale.sendBotMessage) {
-                await bale.sendBotMessage(chatId, caption);
+                if (isDocument && bale.sendBotDocument) {
+                    await bale.sendBotDocument(chatId, buffer, filename || 'document.pdf', safeCaption);
+                } else if (bale.sendBotPhoto) {
+                    await bale.sendBotPhoto(chatId, buffer, safeCaption, { filename: filename || 'image.png' });
+                }
+            } else if (bale.sendBotMessage) {
+                await bale.sendBotMessage(chatId, safeCaption);
             }
         } else if (platform === 'whatsapp') {
             const wa = await safeImport('./backend/whatsapp.js');
-            if (wa && wa.sendMessage) {
-                await wa.sendMessage(chatId, caption, mediaData);
+            if (!wa || !wa.sendMessage) {
+                return res.status(400).json({ success: false, error: 'سرویس واتساپ در دسترس نیست یا متصل نشده است.' });
             }
+            const waResult = await wa.sendMessage(chatId, safeCaption, mediaData);
+            if (waResult && (waResult.success === false || waResult.delivered === false || waResult.skipped)) {
+                return res.status(400).json({ success: false, error: waResult.warning || 'ارسال پیام واتساپ ناموفق بود.' });
+            }
+        } else {
+            return res.status(400).json({ success: false, error: 'پلتفرم انتخاب‌شده معتبر نیست.' });
         }
         res.json({ success: true });
     } catch (e) {
