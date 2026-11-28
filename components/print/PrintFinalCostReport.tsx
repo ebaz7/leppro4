@@ -220,7 +220,7 @@ const PrintFinalCostReport: React.FC<Props> = ({ record, totalRial, totalCurrenc
               'final-cost-print-area',
               `Final_Cost_Report_${regNumber}.jpg`,
               {
-                  defaultMessage: `گزارش بهای تمام شده نهایی پرونده شماره ${regNumber} - شرکت: ${record.company || '---'} (بهای تمام شده: ${formatCurrency(totalRial)} ریال)`,
+                  defaultMessage: `گزارش بهای تمام شده نهایی پرونده شماره ${regNumber} - شرکت: ${record.company || '---'} (بهای تمام شده: ${formatCurrency(grandTotalRial || totalRial)})`,
                   title: 'ارسال گزارش بهای تمام شده به گفتگو'
               }
           );
@@ -236,6 +236,8 @@ const PrintFinalCostReport: React.FC<Props> = ({ record, totalRial, totalCurrenc
   const costPerKgRial = totalWeight > 0 ? (grandTotalRial / totalWeight) : 0;
 
   const stageKeys = Object.values(TradeStage);
+  const tableTotalRial = stageKeys.reduce((sum, stageKey) => sum + (record.stages?.[stageKey]?.costRial || 0), 0);
+  const tableTotalCurrency = stageKeys.reduce((sum, stageKey) => sum + (record.stages?.[stageKey]?.costCurrency || 0), 0);
 
   const content = (
       <div 
@@ -278,7 +280,7 @@ const PrintFinalCostReport: React.FC<Props> = ({ record, totalRial, totalCurrenc
                 </div>
                 <div>
                     <div className="text-gray-500 font-bold text-[10px]">نرخ تسعیر ارز نهایی</div>
-                    <div className="font-mono font-bold">{exchangeRate > 0 ? formatCurrency(exchangeRate) + ' ریال' : 'تعیین نشده'}</div>
+                    <div className="font-mono font-bold">{exchangeRate > 0 ? formatCurrency(exchangeRate) : 'تعیین نشده'}</div>
                 </div>
                 <div>
                     <div className="text-gray-500 font-bold text-[10px]">وضعیت پرونده</div>
@@ -311,7 +313,7 @@ const PrintFinalCostReport: React.FC<Props> = ({ record, totalRial, totalCurrenc
                                     <td className="p-1 border-r border-black text-center font-mono text-[10px]">{idx + 1}</td>
                                     <td className="p-1 border-r border-black font-bold">{stageKey}</td>
                                     <td className="p-1 border-r border-black text-center font-mono font-bold">{costRial > 0 ? formatCurrency(costRial) : '-'}</td>
-                                    <td className="p-1 border-r border-black text-center font-mono font-bold text-blue-700">{costCurrency > 0 ? formatCurrency(costCurrency) : '-'}</td>
+                                    <td className="p-1 border-r border-black text-center font-mono font-bold text-blue-700">{costCurrency > 0 ? `${formatNumberString(costCurrency)} ${currencyStr}` : '-'}</td>
                                     <td className="p-1 text-[10px] text-gray-600 truncate max-w-[150px]">
                                         {stageData?.isCompleted ? 'تکمیل شده' : 'جاری'} {stageData?.description ? `(${stageData.description})` : ''}
                                     </td>
@@ -321,8 +323,8 @@ const PrintFinalCostReport: React.FC<Props> = ({ record, totalRial, totalCurrenc
                         {/* Subtotals */}
                         <tr className="bg-gray-100 font-bold border-t-2 border-black text-black">
                             <td colSpan={2} className="p-1.5 border-r border-black text-left pl-3">جمع کل هزینه‌های تفکیکی:</td>
-                            <td className="p-1.5 border-r border-black text-center font-mono text-xs">{formatCurrency(totalRial)} ریال</td>
-                            <td className="p-1.5 border-r border-black text-center font-mono text-xs text-blue-800">{formatCurrency(totalCurrency)} {currencyStr}</td>
+                            <td className="p-1.5 border-r border-black text-center font-mono text-xs">{formatCurrency(tableTotalRial)}</td>
+                            <td className="p-1.5 border-r border-black text-center font-mono text-xs text-blue-800">{tableTotalCurrency > 0 ? `${formatNumberString(tableTotalCurrency)} ${currencyStr}` : `۰ ${currencyStr}`}</td>
                             <td className="p-1.5 text-[10px] text-gray-500">مجموع خالص ریالی + ارزی</td>
                         </tr>
                     </tbody>
@@ -339,30 +341,30 @@ const PrintFinalCostReport: React.FC<Props> = ({ record, totalRial, totalCurrenc
                     <div className="space-y-1.5">
                         <div className="flex justify-between border-b border-dashed border-gray-300 pb-1">
                             <span className="text-gray-600">سرجمع هزینه‌های ارزی:</span>
-                            <span className="font-mono font-bold text-blue-700">{formatCurrency(totalCurrency)} {currencyStr}</span>
+                            <span className="font-mono font-bold text-blue-700">{formatNumberString(totalCurrency)} {currencyStr}</span>
                         </div>
                         <div className="flex justify-between border-b border-dashed border-gray-300 pb-1">
                             <span className="text-gray-600">نرخ تسعیر محاسباتی:</span>
-                            <span className="font-mono font-bold">{exchangeRate > 0 ? formatCurrency(exchangeRate) + ' ریال' : 'محاسبه نشده'}</span>
+                            <span className="font-mono font-bold">{exchangeRate > 0 ? formatCurrency(exchangeRate) : 'محاسبه نشده'}</span>
                         </div>
                         <div className="flex justify-between font-bold text-gray-800">
                             <span>ارزش ریالی بخش ارزی:</span>
-                            <span className="font-mono font-bold text-emerald-700">{formatCurrency(totalCurrency * exchangeRate)} ریال</span>
+                            <span className="font-mono font-bold text-emerald-700">{formatCurrency(totalCurrency * exchangeRate)}</span>
                         </div>
                     </div>
 
                     <div className="space-y-1.5 border-r border-gray-300 pr-3">
                         <div className="flex justify-between border-b border-dashed border-gray-300 pb-1">
                             <span className="text-gray-600">سرجمع هزینه‌های مستقیم ریالی:</span>
-                            <span className="font-mono font-bold">{formatCurrency(totalRial)} ریال</span>
+                            <span className="font-mono font-bold">{formatCurrency(totalRial)}</span>
                         </div>
                         <div className="flex justify-between border-b border-black pb-1 bg-amber-100/60 p-1 rounded font-black text-black">
                             <span>بهای تمام‌شده کل پرونده:</span>
-                            <span className="font-mono text-sm">{formatCurrency(grandTotalRial)} ریال</span>
+                            <span className="font-mono text-sm">{formatCurrency(grandTotalRial)}</span>
                         </div>
                         <div className="flex justify-between font-bold text-purple-900 bg-purple-50 p-1 rounded border border-purple-200">
                             <span>بهای تمام‌شده هر کیلوگرم:</span>
-                            <span className="font-mono font-black">{costPerKgRial > 0 ? formatCurrency(costPerKgRial) : '۰'} ریال / kg</span>
+                            <span className="font-mono font-black">{costPerKgRial > 0 ? formatCurrency(costPerKgRial) : '۰ ریال'} / kg</span>
                         </div>
                     </div>
                 </div>
